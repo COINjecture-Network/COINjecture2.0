@@ -187,12 +187,12 @@ graph TB
 ```mermaid
 graph LR
     subgraph "Database Evolution"
-        style OLD fill:#ffe3e3,stroke:#c92a2a,stroke-width:2px
-        style NEW fill:#b2f2bb,stroke:#2b8a3e,stroke-width:3px
+        style OLD fill:#ffe3e3,stroke:#c92a2a,stroke-width:2px,color:#000
+        style NEW fill:#b2f2bb,stroke:#2b8a3e,stroke-width:3px,color:#000
 
         OLD["Sled Database<br/>━━━━━━━━━━━━<br/>⚠️ Unmaintained<br/>⚠️ Partial ACID<br/>⚠️ Implicit Transactions"]
 
-        NEW["redb Database<br/>━━━━━━━━━━━━<br/>✅ Actively Maintained<br/>✅ Full ACID Compliance<br/>✅ Explicit Transactions<br/>✅ Type-Safe Tables<br/>✅ Pure Rust (No C/C++)<br/>✅ Cross-Platform"]
+        NEW["redb Database<br/>━━━━━━━━━━━━<br/>✅ Actively Maintained<br/>✅ Full ACID Compliance<br/>✅ Explicit Transactions<br/>✅ Type-Safe Tables<br/>✅ Pure Rust No C/C++<br/>✅ Cross-Platform"]
 
         OLD -->|"Migration<br/>Nov 2025"| NEW
     end
@@ -297,18 +297,18 @@ This creates **spiral convergence** to equilibrium with golden ratio (φ) emerge
 ```mermaid
 graph TB
     subgraph "State Layer: ACID-Compliant Tables"
-        style ACCOUNT fill:#fff3bf,stroke:#f59f00,stroke-width:2px
-        style POOL fill:#d0bfff,stroke:#7950f2,stroke-width:2px
-        style ADV fill:#c3fae8,stroke:#087f5b,stroke-width:2px
-        style CHAIN fill:#ffc9c9,stroke:#c92a2a,stroke-width:2px
+        style ACCOUNT fill:#fff3bf,stroke:#f59f00,stroke-width:2px,color:#000
+        style POOL fill:#d0bfff,stroke:#7950f2,stroke-width:2px,color:#000
+        style ADV fill:#c3fae8,stroke:#087f5b,stroke-width:2px,color:#000
+        style CHAIN fill:#ffc9c9,stroke:#c92a2a,stroke-width:2px,color:#000
 
-        ACCOUNT["Account Tables<br/>━━━━━━━━━━━━<br/>BALANCES_TABLE<br/>Key: [u8; 32] → Value: u128<br/><br/>NONCES_TABLE<br/>Key: [u8; 32] → Value: u64"]
+        ACCOUNT["Account Tables<br/>━━━━━━━━━━━━<br/>BALANCES_TABLE<br/>Key: u8 32 → Value: u128<br/><br/>NONCES_TABLE<br/>Key: u8 32 → Value: u64"]
 
-        POOL["Pool Tables<br/>━━━━━━━━━━━━<br/>POOL_LIQUIDITY_TABLE<br/>Key: u8 → Value: bytes<br/><br/>SWAP_RECORDS_TABLE<br/>Key: [u8; 32] → Value: bytes"]
+        POOL["Pool Tables<br/>━━━━━━━━━━━━<br/>POOL_LIQUIDITY_TABLE<br/>Key: u8 → Value: bytes<br/><br/>SWAP_RECORDS_TABLE<br/>Key: u8 32 → Value: bytes"]
 
-        ADV["Advanced Transaction Tables<br/>━━━━━━━━━━━━<br/>TIMELOCKS_TABLE<br/>ESCROWS_TABLE<br/>CHANNELS_TABLE<br/>TRUSTLINES_TABLE<br/>Key: [u8; 32] → Value: bytes"]
+        ADV["Advanced Transaction Tables<br/>━━━━━━━━━━━━<br/>TIMELOCKS_TABLE<br/>ESCROWS_TABLE<br/>CHANNELS_TABLE<br/>TRUSTLINES_TABLE<br/>Key: u8 32 → Value: bytes"]
 
-        CHAIN["Chain Storage Tables<br/>━━━━━━━━━━━━<br/>BLOCKS_TABLE<br/>Key: [u8; 32] → Value: bytes<br/><br/>METADATA_TABLE<br/>Key: str → Value: bytes<br/><br/>HEIGHT_INDEX_TABLE<br/>Key: u64 → Value: [u8; 32]"]
+        CHAIN["Chain Storage Tables<br/>━━━━━━━━━━━━<br/>BLOCKS_TABLE<br/>Key: u8 32 → Value: bytes<br/><br/>METADATA_TABLE<br/>Key: str → Value: bytes<br/><br/>HEIGHT_INDEX_TABLE<br/>Key: u64 → Value: u8 32"]
     end
 ```
 
