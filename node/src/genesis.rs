@@ -20,7 +20,7 @@ impl Default for GenesisConfig {
 
         GenesisConfig {
             genesis_address: Address::from_bytes(addr_bytes),
-            initial_supply: 21_000_000_000_000_000, // 21 million BEANS with 9 decimals
+            initial_supply: 0, // No pre-mine, all tokens come from mining rewards
         }
     }
 }

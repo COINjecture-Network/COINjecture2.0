@@ -54,10 +54,8 @@ impl CoinjectNode {
         // Validate configuration
         config.validate()?;
 
-        // Create data directories
+        // Create data directory (parent directory for database files)
         std::fs::create_dir_all(&config.data_dir)?;
-        std::fs::create_dir_all(config.state_db_path())?;
-        std::fs::create_dir_all(config.chain_db_path())?;
 
         // Initialize genesis block
         println!("📦 Loading genesis block...");
@@ -68,14 +66,24 @@ impl CoinjectNode {
 
         // Initialize chain state
         println!("⛓️  Initializing blockchain state...");
-        let chain = Arc::new(ChainState::new(config.chain_db_path(), &genesis)?);
+        // Ensure parent directory exists for chain database file
+        let chain_db_path = config.chain_db_path();
+        if let Some(parent) = chain_db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let chain = Arc::new(ChainState::new(chain_db_path, &genesis)?);
         let best_height = chain.best_block_height().await;
         println!("   Best height: {}", best_height);
         println!();
 
         // Initialize account state and advanced transaction states (sharing same DB)
         println!("💰 Initializing account state...");
-        let state_db = Arc::new(redb::Database::create(config.state_db_path())?);
+        // Ensure parent directory exists for state database file
+        let state_db_path = config.state_db_path();
+        if let Some(parent) = state_db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let state_db = Arc::new(redb::Database::create(state_db_path)?);
         let state = Arc::new(AccountState::from_db(Arc::clone(&state_db)));
         let timelock_state = Arc::new(TimeLockState::new(Arc::clone(&state_db))?);
         let escrow_state = Arc::new(EscrowState::new(Arc::clone(&state_db))?);
@@ -173,6 +181,12 @@ impl CoinjectNode {
         let (mut network_service, mut event_rx) = NetworkService::new(network_config)?;
         network_service.start_listening(&self.config.p2p_addr)?;
         network_service.subscribe_topics()?;
+
+        // Connect to bootnodes if provided
+        if !self.config.bootnodes.is_empty() {
+            println!("   Connecting to {} bootnode(s)...", self.config.bootnodes.len());
+            network_service.connect_to_bootnodes(&self.config.bootnodes)?;
+        }
 
         println!("   Listening on: {}", self.config.p2p_addr);
         println!();

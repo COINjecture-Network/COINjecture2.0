@@ -47,7 +47,7 @@ pub struct BlockValidator {
 impl BlockValidator {
     pub fn new(min_difficulty: u32) -> Self {
         BlockValidator {
-            min_work_score: 1.0,
+            min_work_score: 0.0,  // Allow all work scores (PoW hash is primary validation)
             min_difficulty,
             max_timestamp_drift: 120, // 2 minutes into future
             max_block_age: 7200,      // 2 hours old

@@ -67,11 +67,11 @@ impl NodeConfig {
     }
 
     pub fn state_db_path(&self) -> PathBuf {
-        self.data_dir.join("state")
+        self.data_dir.join("state.db")
     }
 
     pub fn chain_db_path(&self) -> PathBuf {
-        self.data_dir.join("chain")
+        self.data_dir.join("chain.db")
     }
 
     pub fn validate(&self) -> Result<(), String> {

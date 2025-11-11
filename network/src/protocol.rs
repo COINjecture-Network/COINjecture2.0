@@ -282,6 +282,20 @@ impl NetworkService {
         self.peers.len()
     }
 
+    /// Connect to bootstrap nodes
+    pub fn connect_to_bootnodes(&mut self, bootnodes: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+        for bootnode in bootnodes {
+            println!("   Connecting to bootnode: {}", bootnode);
+            let addr: libp2p::Multiaddr = bootnode.parse()
+                .map_err(|e| format!("Failed to parse bootnode address '{}': {:?}", bootnode, e))?;
+
+            // Dial the bootnode
+            self.swarm.dial(addr.clone())
+                .map_err(|e| format!("Failed to dial bootnode '{}': {:?}", bootnode, e))?;
+        }
+        Ok(())
+    }
+
     /// Broadcast GetBlocks request
     pub fn request_blocks(
         &mut self,
