@@ -296,7 +296,7 @@ This creates **spiral convergence** to equilibrium with golden ratio (φ) emerge
 
 ```mermaid
 graph TB
-    subgraph "State Layer: ACID-Compliant Tables"
+    subgraph 
         style ACCOUNT fill:#fff3bf,stroke:#f59f00,stroke-width:2px,color:#000
         style POOL fill:#d0bfff,stroke:#7950f2,stroke-width:2px,color:#000
         style ADV fill:#c3fae8,stroke:#087f5b,stroke-width:2px,color:#000
