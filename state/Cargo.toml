@@ -12,3 +12,4 @@ redb.workspace = true
 serde.workspace = true
 bincode.workspace = true
 chrono.workspace = true
+thiserror.workspace = true

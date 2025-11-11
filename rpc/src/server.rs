@@ -2,10 +2,11 @@
 // Provides wallet and client API access
 
 use coinject_core::{Address, Balance, Block, BlockHeader, Hash, Transaction};
-use coinject_mempool::{MarketplaceStats, ProblemSubmission, ProblemMarketplace, TransactionPool};
+use coinject_mempool::{ProblemMarketplace, TransactionPool};
+use coinject_state::{MarketplaceStats, ProblemSubmission};
 use coinject_state::{
     AccountState, TimeLockState, TimeLock, EscrowState, Escrow,
-    ChannelState, Channel
+    ChannelState, Channel, MarketplaceState
 };
 use jsonrpsee::{
     core::{async_trait, RpcResult},
@@ -201,6 +202,7 @@ pub struct RpcServerState {
     pub timelock_state: Arc<TimeLockState>,
     pub escrow_state: Arc<EscrowState>,
     pub channel_state: Arc<ChannelState>,
+    pub marketplace_state: Arc<MarketplaceState>,
     pub blockchain: Arc<dyn BlockchainReader>,
     pub marketplace: Arc<RwLock<ProblemMarketplace>>,
     pub tx_pool: Arc<RwLock<TransactionPool>>,
@@ -438,22 +440,24 @@ impl CoinjectRpcServer for RpcServerImpl {
     }
 
     async fn get_open_problems(&self) -> RpcResult<Vec<ProblemInfo>> {
-        let marketplace = self.state.marketplace.read().await;
-        let problems = marketplace.get_open_problems();
+        let problems = self.state.marketplace_state.get_open_problems()
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
 
         Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
     }
 
     async fn get_problem(&self, problem_id: String) -> RpcResult<Option<ProblemInfo>> {
         let hash = self.parse_hash(&problem_id)?;
-        let marketplace = self.state.marketplace.read().await;
 
-        Ok(marketplace.get_problem(&hash).map(|p| self.problem_to_info(p)))
+        let problem = self.state.marketplace_state.get_problem(&hash)
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        Ok(problem.map(|p| self.problem_to_info(&p)))
     }
 
     async fn get_marketplace_stats(&self) -> RpcResult<MarketplaceStats> {
-        let marketplace = self.state.marketplace.read().await;
-        Ok(marketplace.get_stats())
+        self.state.marketplace_state.get_stats()
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))
     }
 
     async fn get_timelocks_by_recipient(&self, recipient: String) -> RpcResult<Vec<TimeLockInfo>> {

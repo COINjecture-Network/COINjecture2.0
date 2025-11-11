@@ -10,7 +10,7 @@ use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 use coinject_network::{NetworkConfig, NetworkEvent, NetworkService};
 use coinject_rpc::{RpcServer, RpcServerState};
-use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState};
+use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,6 +35,7 @@ pub struct CoinjectNode {
     channel_state: Arc<ChannelState>,
     trustline_state: Arc<TrustLineState>,
     dimensional_pool_state: Arc<DimensionalPoolState>,
+    marketplace_state: Arc<MarketplaceState>,
     validator: Arc<BlockValidator>,
     marketplace: Arc<RwLock<ProblemMarketplace>>,
     tx_pool: Arc<RwLock<TransactionPool>>,
@@ -90,6 +91,7 @@ impl CoinjectNode {
         let channel_state = Arc::new(ChannelState::new(Arc::clone(&state_db))?);
         let trustline_state = Arc::new(TrustLineState::new(Arc::clone(&state_db))?);
         let dimensional_pool_state = Arc::new(DimensionalPoolState::new(Arc::clone(&state_db))?);
+        let marketplace_state = Arc::new(MarketplaceState::from_db(Arc::clone(&state_db))?);
 
         // Apply genesis if this is a new chain
         if best_height == 0 {
@@ -156,6 +158,7 @@ impl CoinjectNode {
             channel_state,
             trustline_state,
             dimensional_pool_state,
+            marketplace_state,
             validator,
             marketplace,
             tx_pool,
@@ -203,6 +206,7 @@ impl CoinjectNode {
             timelock_state: Arc::clone(&self.timelock_state),
             escrow_state: Arc::clone(&self.escrow_state),
             channel_state: Arc::clone(&self.channel_state),
+            marketplace_state: Arc::clone(&self.marketplace_state),
             blockchain: Arc::clone(&self.chain) as Arc<dyn coinject_rpc::BlockchainReader>,
             marketplace: Arc::clone(&self.marketplace),
             tx_pool: Arc::clone(&self.tx_pool),
@@ -274,6 +278,7 @@ impl CoinjectNode {
         let channel_state = Arc::clone(&self.channel_state);
         let trustline_state = Arc::clone(&self.trustline_state);
         let dimensional_pool_state = Arc::clone(&self.dimensional_pool_state);
+        let marketplace_state = Arc::clone(&self.marketplace_state);
         let validator = Arc::clone(&self.validator);
         let tx_pool = Arc::clone(&self.tx_pool);
         let network_tx_for_events = network_cmd_tx.clone();
@@ -281,7 +286,7 @@ impl CoinjectNode {
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events).await;
+                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events).await;
             }
         });
 
@@ -317,11 +322,12 @@ impl CoinjectNode {
             let channel_state = Arc::clone(&self.channel_state);
             let trustline_state = Arc::clone(&self.trustline_state);
             let dimensional_pool_state = Arc::clone(&self.dimensional_pool_state);
+            let marketplace_state = Arc::clone(&self.marketplace_state);
             let tx_pool = Arc::clone(&self.tx_pool);
             let network_tx = network_cmd_tx.clone();
 
             tokio::spawn(async move {
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, tx_pool, network_tx).await;
+                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx).await;
             });
         }
 
@@ -338,6 +344,7 @@ impl CoinjectNode {
         channel_state: &Arc<ChannelState>,
         trustline_state: &Arc<TrustLineState>,
         dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
         validator: &Arc<BlockValidator>,
         tx_pool: &Arc<RwLock<TransactionPool>>,
         network_tx: &mpsc::UnboundedSender<NetworkCommand>,
@@ -362,7 +369,7 @@ impl CoinjectNode {
                                 Ok(is_new_best) => {
                                     if is_new_best {
                                         // Apply block transactions to state
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state) {
+                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
                                                 println!("✅ Block {} accepted and applied to chain", block.header.height);
 
@@ -382,6 +389,7 @@ impl CoinjectNode {
                                                     channel_state,
                                                     trustline_state,
                                                     dimensional_pool_state,
+                                                    marketplace_state,
                                                     validator,
                                                     tx_pool,
                                                     block_buffer,
@@ -520,6 +528,7 @@ impl CoinjectNode {
         channel_state: &Arc<ChannelState>,
         trustline_state: &Arc<TrustLineState>,
         dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
         validator: &Arc<BlockValidator>,
         tx_pool: &Arc<RwLock<TransactionPool>>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
@@ -547,7 +556,7 @@ impl CoinjectNode {
                             match chain.store_block(&block).await {
                                 Ok(is_new_best) => {
                                     if is_new_best {
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state) {
+                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
                                                 println!("✅ Buffered block {} applied to chain", next_height);
 
@@ -599,6 +608,7 @@ impl CoinjectNode {
         channel_state: &Arc<ChannelState>,
         trustline_state: &Arc<TrustLineState>,
         dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
     ) -> Result<Vec<coinject_core::Hash>, String> {
         // Apply coinbase reward
         let miner = block.header.miner;
@@ -613,7 +623,7 @@ impl CoinjectNode {
         // Apply regular transactions
         for tx in &block.transactions {
             // Apply the transaction
-            match Self::apply_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, block_height) {
+            match Self::apply_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height) {
                 Ok(()) => {
                     applied_txs.push(tx.hash());
                 }
@@ -641,6 +651,7 @@ impl CoinjectNode {
         channel_state: &Arc<ChannelState>,
         trustline_state: &Arc<TrustLineState>,
         dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
         block_height: u64,
     ) -> Result<(), String> {
         use coinject_core::{EscrowType, ChannelType};
@@ -1009,6 +1020,120 @@ impl CoinjectNode {
 
                 Ok(())
             }
+
+            coinject_core::Transaction::Marketplace(marketplace_tx) => {
+                // Web4 PoUW Marketplace transaction processing
+                use coinject_core::MarketplaceOperation;
+
+                // Validate sender has sufficient balance for fee
+                let sender_balance = state.get_balance(&marketplace_tx.from);
+
+                match &marketplace_tx.operation {
+                    MarketplaceOperation::SubmitProblem { problem, bounty, min_work_score, expiration_days } => {
+                        // Need fee + bounty for escrow
+                        let total_needed = marketplace_tx.fee + bounty;
+                        if sender_balance < total_needed {
+                            return Err(format!("Insufficient balance for problem submission: has {}, needs {}",
+                                sender_balance, total_needed));
+                        }
+
+                        // Deduct fee + bounty (bounty goes to escrow)
+                        state.set_balance(&marketplace_tx.from, sender_balance - total_needed)
+                            .map_err(|e| format!("Failed to set sender balance: {}", e))?;
+
+                        // Submit problem to marketplace state
+                        let problem_id = marketplace_state.submit_problem(
+                            problem.clone(),
+                            marketplace_tx.from,
+                            *bounty,
+                            *min_work_score,
+                            *expiration_days,
+                        ).map_err(|e| format!("Failed to submit problem: {}", e))?;
+
+                        println!("✅ Problem submitted to marketplace: {:?} (bounty: {})", problem_id, bounty);
+                    }
+                    MarketplaceOperation::SubmitSolution { problem_id, solution } => {
+                        // WEB4 AUTONOMOUS BOUNTY PAYOUT
+                        // When a valid solution is submitted, automatically claim and payout the bounty
+                        // This makes the marketplace truly self-executing - no manual claim needed!
+
+                        // Just need fee
+                        if sender_balance < marketplace_tx.fee {
+                            return Err(format!("Insufficient balance for marketplace fee: has {}, needs {}",
+                                sender_balance, marketplace_tx.fee));
+                        }
+
+                        // Deduct fee
+                        state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                            .map_err(|e| format!("Failed to set sender balance: {}", e))?;
+
+                        // Submit solution to marketplace state (verifies and marks as solved)
+                        marketplace_state.submit_solution(*problem_id, marketplace_tx.from, solution.clone())
+                            .map_err(|e| format!("Failed to submit solution: {}", e))?;
+
+                        // AUTONOMOUS PAYOUT: Immediately claim and release bounty to solver
+                        let (solver, bounty) = marketplace_state.claim_bounty(*problem_id)
+                            .map_err(|e| format!("Failed to auto-claim bounty: {}", e))?;
+
+                        // Credit bounty to solver atomically in the same block
+                        let solver_balance = state.get_balance(&solver);
+                        state.set_balance(&solver, solver_balance + bounty)
+                            .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
+
+                        println!("✅ Solution accepted! Auto-paid {} tokens to solver {:?}", bounty, solver);
+                    }
+                    MarketplaceOperation::ClaimBounty { problem_id } => {
+                        // Just need fee
+                        if sender_balance < marketplace_tx.fee {
+                            return Err(format!("Insufficient balance for marketplace fee: has {}, needs {}",
+                                sender_balance, marketplace_tx.fee));
+                        }
+
+                        // Deduct fee
+                        state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                            .map_err(|e| format!("Failed to set sender balance: {}", e))?;
+
+                        // Claim bounty from marketplace state
+                        let (solver, bounty) = marketplace_state.claim_bounty(*problem_id)
+                            .map_err(|e| format!("Failed to claim bounty: {}", e))?;
+
+                        // Credit bounty to solver
+                        let solver_balance = state.get_balance(&solver);
+                        state.set_balance(&solver, solver_balance + bounty)
+                            .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
+
+                        println!("✅ Bounty claimed: {} tokens paid to solver {:?}", bounty, solver);
+                    }
+                    MarketplaceOperation::CancelProblem { problem_id } => {
+                        // Just need fee
+                        if sender_balance < marketplace_tx.fee {
+                            return Err(format!("Insufficient balance for marketplace fee: has {}, needs {}",
+                                sender_balance, marketplace_tx.fee));
+                        }
+
+                        // Deduct fee
+                        state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                            .map_err(|e| format!("Failed to set sender balance: {}", e))?;
+
+                        // Cancel problem and refund bounty
+                        let bounty = marketplace_state.cancel_problem(*problem_id, marketplace_tx.from)
+                            .map_err(|e| format!("Failed to cancel problem: {}", e))?;
+
+                        // Refund bounty to submitter
+                        let submitter_balance = state.get_balance(&marketplace_tx.from);
+                        state.set_balance(&marketplace_tx.from, submitter_balance + bounty)
+                            .map_err(|e| format!("Failed to refund bounty to submitter: {}", e))?;
+
+                        println!("✅ Problem cancelled: {} tokens refunded to submitter", bounty);
+                    }
+                }
+
+                // Increment nonce
+                state.set_nonce(&marketplace_tx.from, marketplace_tx.nonce + 1)
+                    .map_err(|e| format!("Failed to set sender nonce: {}", e))?;
+
+                Ok(())
+            }
         }
     }
 
@@ -1022,6 +1147,7 @@ impl CoinjectNode {
         channel_state: Arc<ChannelState>,
         trustline_state: Arc<TrustLineState>,
         dimensional_pool_state: Arc<DimensionalPoolState>,
+        marketplace_state: Arc<MarketplaceState>,
         tx_pool: Arc<RwLock<TransactionPool>>,
         network_tx: mpsc::UnboundedSender<NetworkCommand>,
     ) {
@@ -1059,7 +1185,7 @@ impl CoinjectNode {
                 }
 
                 // Apply block transactions to state
-                let applied_txs = match Self::apply_block_transactions(&block, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state) {
+                let applied_txs = match Self::apply_block_transactions(&block, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state) {
                     Ok(txs) => txs,
                     Err(e) => {
                         println!("❌ Failed to apply mined block transactions: {}", e);

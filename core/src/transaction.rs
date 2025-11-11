@@ -16,6 +16,8 @@ pub enum Transaction {
     TrustLine(TrustLineTransaction),
     /// Dimensional pool swap operations (exponential tokenomics)
     DimensionalPoolSwap(PoolSwapTransaction),
+    /// Problem marketplace operations (PoUW integration)
+    Marketplace(MarketplaceTransaction),
 }
 
 /// Simple transfer transaction (original transaction type)
@@ -268,6 +270,7 @@ impl Transaction {
             Transaction::Channel(tx) => tx.verify_signature(),
             Transaction::TrustLine(tx) => tx.verify_signature(),
             Transaction::DimensionalPoolSwap(tx) => tx.verify_signature(),
+            Transaction::Marketplace(tx) => tx.verify_signature(),
         }
     }
 
@@ -286,6 +289,7 @@ impl Transaction {
             Transaction::Channel(tx) => tx.is_valid(),
             Transaction::TrustLine(tx) => tx.is_valid(),
             Transaction::DimensionalPoolSwap(tx) => tx.is_valid(),
+            Transaction::Marketplace(tx) => tx.is_valid(),
         }
     }
 
@@ -298,6 +302,7 @@ impl Transaction {
             Transaction::Channel(tx) => &tx.from,
             Transaction::TrustLine(tx) => &tx.from,
             Transaction::DimensionalPoolSwap(tx) => &tx.from,
+            Transaction::Marketplace(tx) => &tx.from,
         }
     }
 
@@ -310,6 +315,7 @@ impl Transaction {
             Transaction::Channel(tx) => tx.fee,
             Transaction::TrustLine(tx) => tx.fee,
             Transaction::DimensionalPoolSwap(tx) => tx.fee,
+            Transaction::Marketplace(tx) => tx.fee,
         }
     }
 
@@ -322,6 +328,7 @@ impl Transaction {
             Transaction::Channel(tx) => tx.nonce,
             Transaction::TrustLine(tx) => tx.nonce,
             Transaction::DimensionalPoolSwap(tx) => tx.nonce,
+            Transaction::Marketplace(tx) => tx.nonce,
         }
     }
 
@@ -848,6 +855,177 @@ impl PoolSwapTransaction {
         // Fee should be reasonable
         if self.fee > self.amount_in {
             return false;
+        }
+
+        true
+    }
+}
+
+/// Marketplace transaction for PoUW problem submissions and solutions
+/// Web4 innovation: Blockchain-native useful work marketplace
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MarketplaceTransaction {
+    /// Type of marketplace operation
+    pub operation: MarketplaceOperation,
+    /// Submitter/solver address
+    pub from: Address,
+    /// Transaction fee
+    pub fee: Balance,
+    /// Nonce (replay protection)
+    pub nonce: u64,
+    /// Public key for signature verification
+    pub public_key: PublicKey,
+    /// Transaction signature
+    pub signature: Ed25519Signature,
+}
+
+/// Types of marketplace operations
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum MarketplaceOperation {
+    /// Submit a new problem with bounty
+    SubmitProblem {
+        problem: crate::ProblemType,
+        bounty: Balance,
+        min_work_score: f64,
+        expiration_days: u64,
+    },
+    /// Submit a solution to an open problem
+    SubmitSolution {
+        problem_id: Hash,
+        solution: crate::Solution,
+    },
+    /// Claim bounty for solved problem
+    ClaimBounty {
+        problem_id: Hash,
+    },
+    /// Cancel open problem and refund bounty
+    CancelProblem {
+        problem_id: Hash,
+    },
+}
+
+impl MarketplaceTransaction {
+    /// Create and sign a new problem submission transaction
+    pub fn new_problem_submission(
+        problem: crate::ProblemType,
+        from: Address,
+        bounty: Balance,
+        min_work_score: f64,
+        expiration_days: u64,
+        fee: Balance,
+        nonce: u64,
+        keypair: &crate::crypto::KeyPair,
+    ) -> Self {
+        let public_key = keypair.public_key().clone();
+        let operation = MarketplaceOperation::SubmitProblem {
+            problem,
+            bounty,
+            min_work_score,
+            expiration_days,
+        };
+
+        let mut tx = MarketplaceTransaction {
+            operation,
+            from,
+            fee,
+            nonce,
+            public_key,
+            signature: Ed25519Signature::from_bytes([0u8; 64]),
+        };
+
+        let message = tx.signing_message();
+        tx.signature = keypair.sign(&message);
+        tx
+    }
+
+    /// Create and sign a new solution submission transaction
+    pub fn new_solution_submission(
+        problem_id: Hash,
+        solution: crate::Solution,
+        from: Address,
+        fee: Balance,
+        nonce: u64,
+        keypair: &crate::crypto::KeyPair,
+    ) -> Self {
+        let public_key = keypair.public_key().clone();
+        let operation = MarketplaceOperation::SubmitSolution {
+            problem_id,
+            solution,
+        };
+
+        let mut tx = MarketplaceTransaction {
+            operation,
+            from,
+            fee,
+            nonce,
+            public_key,
+            signature: Ed25519Signature::from_bytes([0u8; 64]),
+        };
+
+        let message = tx.signing_message();
+        tx.signature = keypair.sign(&message);
+        tx
+    }
+
+    /// Generate message to sign
+    fn signing_message(&self) -> Vec<u8> {
+        let mut message = Vec::new();
+        message.extend_from_slice(self.from.as_bytes());
+        message.extend_from_slice(&self.fee.to_le_bytes());
+        message.extend_from_slice(&self.nonce.to_le_bytes());
+        message.extend_from_slice(self.public_key.as_bytes());
+
+        // Serialize operation
+        if let Ok(op_bytes) = bincode::serialize(&self.operation) {
+            message.extend_from_slice(&op_bytes);
+        }
+
+        message
+    }
+
+    /// Verify transaction signature
+    pub fn verify_signature(&self) -> bool {
+        let message = self.signing_message();
+        self.public_key.verify(&message, &self.signature)
+    }
+
+    /// Validate transaction
+    pub fn is_valid(&self) -> bool {
+        // 1. Signature must be valid
+        if !self.verify_signature() {
+            return false;
+        }
+
+        // 2. Address must match public key
+        if self.from != self.public_key.to_address() {
+            return false;
+        }
+
+        // 3. Validate operation-specific constraints
+        match &self.operation {
+            MarketplaceOperation::SubmitProblem { bounty, min_work_score, expiration_days, .. } => {
+                // Bounty must be non-zero
+                if *bounty == 0 {
+                    return false;
+                }
+                // Work score requirement must be positive
+                if *min_work_score <= 0.0 {
+                    return false;
+                }
+                // Expiration must be reasonable (1-365 days)
+                if *expiration_days == 0 || *expiration_days > 365 {
+                    return false;
+                }
+            }
+            MarketplaceOperation::SubmitSolution { .. } => {
+                // Solution validation happens in marketplace state
+            }
+            MarketplaceOperation::ClaimBounty { .. } => {
+                // Bounty validation happens in marketplace state
+            }
+            MarketplaceOperation::CancelProblem { .. } => {
+                // Authorization happens in marketplace state
+            }
         }
 
         true

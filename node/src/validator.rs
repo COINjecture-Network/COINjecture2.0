@@ -489,6 +489,78 @@ impl BlockValidator {
                     // Pool swap execution is handled in service.rs apply_single_transaction
                     // Validator only checks balance, nonce, and basic transaction validity
                 }
+                coinject_core::Transaction::Marketplace(marketplace_tx) => {
+                    // Web4 PoUW Marketplace transactions: problem submissions and solutions
+                    use coinject_core::MarketplaceOperation;
+
+                    let sender_balance = state.get_balance(&marketplace_tx.from);
+
+                    // Check balance requirements based on operation type
+                    match &marketplace_tx.operation {
+                        MarketplaceOperation::SubmitProblem { bounty, .. } => {
+                            // Need fee + bounty for escrow
+                            let total_cost = marketplace_tx.fee + bounty;
+                            if sender_balance < total_cost {
+                                return Err(ValidationError::InvalidTransaction(format!(
+                                    "Insufficient balance for problem submission: has {}, needs {}",
+                                    sender_balance, total_cost
+                                )));
+                            }
+                        }
+                        _ => {
+                            // Other operations (SubmitSolution, ClaimBounty, CancelProblem) only need fee
+                            if sender_balance < marketplace_tx.fee {
+                                return Err(ValidationError::InvalidTransaction(format!(
+                                    "Insufficient balance for marketplace fee: has {}, needs {}",
+                                    sender_balance, marketplace_tx.fee
+                                )));
+                            }
+                        }
+                    }
+
+                    // Verify nonce
+                    let expected_nonce = state.get_nonce(&marketplace_tx.from);
+                    if marketplace_tx.nonce != expected_nonce {
+                        return Err(ValidationError::InvalidTransaction(format!(
+                            "Invalid nonce: expected {}, got {}",
+                            expected_nonce, marketplace_tx.nonce
+                        )));
+                    }
+
+                    // Deduct appropriate amount from sender
+                    match &marketplace_tx.operation {
+                        MarketplaceOperation::SubmitProblem { bounty, .. } => {
+                            // Deduct fee + bounty (bounty goes to escrow)
+                            let total_cost = marketplace_tx.fee + bounty;
+                            state
+                                .set_balance(&marketplace_tx.from, sender_balance - total_cost)
+                                .map_err(|e| ValidationError::StateError(format!("{:?}", e)))?;
+                        }
+                        _ => {
+                            // Just deduct fee for other operations
+                            state
+                                .set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                                .map_err(|e| ValidationError::StateError(format!("{:?}", e)))?;
+                        }
+                    }
+
+                    // Transfer fee to miner (maintains economic incentives)
+                    let miner_balance = state.get_balance(&block.header.miner);
+                    state
+                        .set_balance(&block.header.miner, miner_balance + marketplace_tx.fee)
+                        .map_err(|e| ValidationError::StateError(format!("{:?}", e)))?;
+
+                    // Increment nonce
+                    state
+                        .increment_nonce(&marketplace_tx.from)
+                        .map_err(|e| ValidationError::StateError(format!("{:?}", e)))?;
+
+                    // TODO: Execute marketplace operations in MarketplaceState
+                    // SubmitProblem: create problem and escrow bounty
+                    // SubmitSolution: verify solution and mark problem solved
+                    // ClaimBounty: release escrowed bounty to solver
+                    // CancelProblem: refund escrowed bounty to submitter
+                }
             }
         }
 
