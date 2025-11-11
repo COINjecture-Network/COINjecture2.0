@@ -1,0 +1,30 @@
+[package]
+name = "coinject-node"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "coinject"
+path = "src/main.rs"
+
+[dependencies]
+coinject-core = { path = "../core" }
+coinject-consensus = { path = "../consensus" }
+coinject-network = { path = "../network" }
+coinject-state = { path = "../state" }
+coinject-mempool = { path = "../mempool" }
+coinject-rpc = { path = "../rpc" }
+coinject-tokenomics = { path = "../tokenomics" }
+
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow.workspace = true
+redb.workspace = true
+thiserror.workspace = true
+bincode.workspace = true
+hex.workspace = true
