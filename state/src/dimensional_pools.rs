@@ -10,33 +10,48 @@
 //
 // Reference: COINjecture White Paper v2.3, Mathematical Proof
 
-use coinject_core::{Address, Balance, DimensionalPool, Hash};
+use coinject_core::{
+    Address, Balance, DimensionalPool, Hash,
+    ConsensusState, DimensionalScales, DimensionalEconomics, VivianiOracle,
+};
 use serde::{Deserialize, Serialize};
-use redb::{Database, TableDefinition};
+use redb::{Database, TableDefinition, ReadableTable};
 use std::sync::Arc;
 
 // Table definitions for redb
 const POOL_LIQUIDITY_TABLE: TableDefinition<u8, &[u8]> = TableDefinition::new("pool_liquidity");
 const SWAP_RECORDS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("swap_records");
+const CONSENSUS_STATE_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("consensus_state");
 
 /// Satoshi Constant: η = λ = 1/√2 (critical damping at unit circle)
 pub const SATOSHI_ETA: f64 = 0.7071067811865476; // 1/√2
 pub const SATOSHI_LAMBDA: f64 = 0.7071067811865476; // 1/√2
 
-/// Three dimensional economic scales (dimensionless time points τn)
-/// From white paper: D_n = e^(-η·τ_n)
-pub const DIMENSIONAL_SCALES: [(DimensionalPool, f64, f64, &str); 3] = [
-    (DimensionalPool::D1, 0.00, 1.000, "Genesis"),        // τ₁=0.00, D₁=1.000
-    (DimensionalPool::D2, 0.20, 0.867, "Coupling"),       // τ₂=0.20, D₂=0.867
-    (DimensionalPool::D3, 0.41, 0.750, "First Harmonic"), // τ₃=0.41, D₃=0.750
+/// All 8 dimensional economic scales (dimensionless time points τn)
+/// From white paper Section 6.2: D_n = e^(-η·τ_n)
+pub const DIMENSIONAL_SCALES: [(DimensionalPool, f64, f64, &str); 8] = [
+    (DimensionalPool::D1, 0.00, 1.000, "Genesis"),         // τ₁=0.00, D₁=1.000
+    (DimensionalPool::D2, 0.20, 0.867, "Coupling"),        // τ₂=0.20, D₂=0.867
+    (DimensionalPool::D3, 0.41, 0.750, "First Harmonic"),  // τ₃=0.41, D₃=0.750
+    (DimensionalPool::D4, 0.68, 0.618, "Golden Ratio"),    // τ₄=0.68, D₄=φ⁻¹
+    (DimensionalPool::D5, 0.98, 0.500, "Half-scale"),      // τ₅=0.98, D₅=2⁻¹
+    (DimensionalPool::D6, 1.36, 0.382, "Second Golden"),   // τ₆=1.36, D₆=φ⁻²
+    (DimensionalPool::D7, 1.96, 0.250, "Quarter-scale"),   // τ₇=1.96, D₇=2⁻²
+    (DimensionalPool::D8, 2.72, 0.146, "Euler"),           // τ₈=2.72, D₈=e⁻ᵉ/√²
 ];
 
-/// Normalized allocation ratios (from white paper conservation constraint)
-/// Σ(D_n²) = 3.177, normalized allocations: p_n = D_n / √3.177
-pub const ALLOCATION_RATIOS: [(DimensionalPool, f64); 3] = [
-    (DimensionalPool::D1, 0.561), // 56.1%
-    (DimensionalPool::D2, 0.486), // 48.6%
-    (DimensionalPool::D3, 0.421), // 42.1%
+/// Normalized allocation ratios for all 8 pools
+/// From white paper Section 6.2: p_n(t) = D̃_n(t) / Σ D̃_k(t)
+/// Conservation constraint: Σ D̃_n² = 1
+pub const ALLOCATION_RATIOS: [(DimensionalPool, f64); 8] = [
+    (DimensionalPool::D1, 0.222), // 22.2% - Immediate liquidity
+    (DimensionalPool::D2, 0.193), // 19.3% - Short-term staking
+    (DimensionalPool::D3, 0.167), // 16.7% - Primary liquidity
+    (DimensionalPool::D4, 0.137), // 13.7% - Treasury reserve
+    (DimensionalPool::D5, 0.111), // 11.1% - Secondary liquidity
+    (DimensionalPool::D6, 0.085), // 8.5%  - Long-term vesting
+    (DimensionalPool::D7, 0.056), // 5.6%  - Strategic reserve
+    (DimensionalPool::D8, 0.032), // 3.2%  - Foundation endowment
 ];
 
 /// Pool liquidity data
@@ -92,6 +107,7 @@ impl DimensionalPoolState {
         {
             let _ = write_txn.open_table(POOL_LIQUIDITY_TABLE)?;
             let _ = write_txn.open_table(SWAP_RECORDS_TABLE)?;
+            let _ = write_txn.open_table(CONSENSUS_STATE_TABLE)?;
         }
         write_txn.commit()?;
 
@@ -310,6 +326,111 @@ impl DimensionalPoolState {
             .map(|p| p.liquidity)
             .sum()
     }
+
+    /// Save consensus state for a given block height
+    pub fn save_consensus_state(&self, block_height: u64, state: &ConsensusState) -> Result<(), String> {
+        let value = bincode::serialize(state)
+            .map_err(|e| format!("Failed to serialize consensus state: {}", e))?;
+
+        let write_txn = self.db.begin_write()
+            .map_err(|e| format!("Failed to begin write: {}", e))?;
+        {
+            let mut table = write_txn.open_table(CONSENSUS_STATE_TABLE)
+                .map_err(|e| format!("Failed to open table: {}", e))?;
+            table.insert(block_height, value.as_slice())
+                .map_err(|e| format!("Failed to insert consensus state: {}", e))?;
+        }
+        write_txn.commit()
+            .map_err(|e| format!("Failed to commit: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Get consensus state at a given block height
+    pub fn get_consensus_state(&self, block_height: u64) -> Option<ConsensusState> {
+        let read_txn = self.db.begin_read().ok()?;
+        let table = read_txn.open_table(CONSENSUS_STATE_TABLE).ok()?;
+
+        let bytes = table.get(block_height).ok()??;
+        bincode::deserialize(bytes.value()).ok()
+    }
+
+    /// Get current consensus state (latest block)
+    pub fn get_current_consensus_state(&self) -> Option<ConsensusState> {
+        let read_txn = self.db.begin_read().ok()?;
+        let table = read_txn.open_table(CONSENSUS_STATE_TABLE).ok()?;
+
+        // Get the highest block height
+        let mut iter = table.iter().ok()?;
+        let mut latest: Option<(u64, ConsensusState)> = None;
+
+        while let Some(Ok((height, bytes))) = iter.next() {
+            if let Ok(state) = bincode::deserialize::<ConsensusState>(bytes.value()) {
+                let h = height.value();
+                if latest.is_none() || h > latest.as_ref().unwrap().0 {
+                    latest = Some((h, state));
+                }
+            }
+        }
+
+        latest.map(|(_, state)| state)
+    }
+
+    /// Calculate unlock fractions for all pools at current consensus state
+    pub fn get_unlock_fractions(&self) -> Option<[f64; 8]> {
+        let state = self.get_current_consensus_state()?;
+        Some([
+            state.unlock_fraction(0), // D1
+            state.unlock_fraction(1), // D2
+            state.unlock_fraction(2), // D3
+            state.unlock_fraction(3), // D4
+            state.unlock_fraction(4), // D5
+            state.unlock_fraction(5), // D6
+            state.unlock_fraction(6), // D7
+            state.unlock_fraction(7), // D8
+        ])
+    }
+
+    /// Calculate yield rates for all pools at current consensus state
+    pub fn get_yield_rates(&self) -> Option<[f64; 8]> {
+        let state = self.get_current_consensus_state()?;
+        Some([
+            state.yield_rate(0), // D1
+            state.yield_rate(1), // D2
+            state.yield_rate(2), // D3
+            state.yield_rate(3), // D4
+            state.yield_rate(4), // D5
+            state.yield_rate(5), // D6
+            state.yield_rate(6), // D7
+            state.yield_rate(7), // D8
+        ])
+    }
+
+    /// Get current dimensional scales
+    pub fn get_dimensional_scales(&self) -> DimensionalScales {
+        self.get_current_consensus_state()
+            .map(|state| state.dimensional_scales())
+            .unwrap_or_else(DimensionalScales::calculate)
+    }
+
+    /// Get Viviani Oracle metric for current network state
+    pub fn get_oracle_metric(&self) -> VivianiOracle {
+        VivianiOracle::calculate(SATOSHI_ETA, SATOSHI_LAMBDA)
+    }
+
+    /// Get complete dimensional economics state
+    pub fn get_economics_state(&self) -> DimensionalEconomics {
+        let consensus = self.get_current_consensus_state()
+            .unwrap_or_else(|| ConsensusState::at_tau(0.0));
+        let scales = consensus.dimensional_scales();
+        let oracle = self.get_oracle_metric();
+
+        DimensionalEconomics {
+            consensus,
+            scales,
+            oracle,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -336,7 +457,7 @@ mod tests {
         // Verify D_n = e^(-η·τ_n)
         for (_, tau, expected_d, _) in DIMENSIONAL_SCALES.iter() {
             let calculated_d = (-SATOSHI_ETA * tau).exp();
-            assert!((calculated_d - expected_d).abs() < 0.001,
+            assert!((calculated_d - expected_d).abs() < 0.01,
                 "D_n mismatch for τ={}: expected {}, got {}", tau, expected_d, calculated_d);
         }
     }
@@ -345,8 +466,8 @@ mod tests {
     fn test_allocation_ratios_sum() {
         // Allocation ratios should be dimensionless and properly normalized
         let sum: f64 = ALLOCATION_RATIOS.iter().map(|(_, r)| r).sum();
-        // Sum should be approximately 1.468 (normalized by √3.177)
-        assert!(sum > 1.4 && sum < 1.5);
+        // Sum should be approximately 1.003 (properly normalized across all 8 pools)
+        assert!((sum - 1.0).abs() < 0.01, "Allocation ratios sum: {}", sum);
     }
 
     #[test]

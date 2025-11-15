@@ -3,7 +3,11 @@
 
 mod chain;
 mod config;
+mod faucet;
 mod genesis;
+mod keystore;
+mod metrics;
+mod metrics_server;
 mod service;
 mod validator;
 
@@ -27,8 +31,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Display banner
     print_banner();
 
+    // Initialize Prometheus metrics
+    metrics::init();
+
     // Parse configuration
     let config = NodeConfig::parse_args();
+
+    // Start metrics server
+    let metrics_addr = config.metrics_socket_addr()?;
+    tokio::spawn(async move {
+        if let Err(e) = metrics_server::start_metrics_server(metrics_addr).await {
+            tracing::error!("Metrics server error: {}", e);
+        }
+    });
 
     // Create LocalSet for spawn_local tasks
     let local = LocalSet::new();

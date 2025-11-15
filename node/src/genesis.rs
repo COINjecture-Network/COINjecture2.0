@@ -20,7 +20,7 @@ impl Default for GenesisConfig {
 
         GenesisConfig {
             genesis_address: Address::from_bytes(addr_bytes),
-            initial_supply: 0, // No pre-mine, all tokens come from mining rewards
+            initial_supply: 1_000_000_000, // 1B tokens for testnet validation of dimensional economics
         }
     }
 }
@@ -55,6 +55,13 @@ pub fn create_genesis_block(config: GenesisConfig) -> Block {
         work_score: 1.0, // Genesis has minimal work score
         miner: config.genesis_address,
         nonce: 0,
+        // Genesis block has nominal PoUW metrics (trivially solvable)
+        solve_time_ms: 1,
+        verify_time_ms: 1,
+        time_asymmetry_ratio: 1.0,
+        solution_quality: 1.0, // Perfect solution
+        complexity_weight: 1.0, // Minimal complexity
+        energy_estimate_joules: 0.001, // Negligible energy
     };
 
     // Genesis coinbase: Issue initial supply

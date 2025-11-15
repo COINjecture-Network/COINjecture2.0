@@ -310,7 +310,26 @@ impl Miner {
         let commitment = Commitment::create(&problem, &solution, &epoch_salt);
         println!("Commitment created: {:?}", commitment.hash);
 
-        // 6. Build block header with commitment
+        // 6. Calculate PoUW transparency metrics
+        let solve_time_ms = solve_time.as_millis() as u64;
+        let verify_time_ms = verify_time.as_millis().max(1) as u64; // Minimum 1ms to avoid div by zero
+        let time_asymmetry_ratio = solve_time_ms as f64 / verify_time_ms as f64;
+        let solution_quality = solution.quality(&problem);
+        let complexity_weight = problem.difficulty_weight();
+
+        // Estimate energy: Assume 100W TDP CPU, energy = power * time
+        // 100W = 100 J/s, so energy_joules = 100 * (solve_time in seconds)
+        let energy_estimate_joules = 100.0 * solve_time.as_secs_f64();
+
+        println!("PoUW Metrics:");
+        println!("  Solve time: {}ms", solve_time_ms);
+        println!("  Verify time: {}ms", verify_time_ms);
+        println!("  Time asymmetry: {:.2}x", time_asymmetry_ratio);
+        println!("  Solution quality: {:.4}", solution_quality);
+        println!("  Complexity weight: {:.2}", complexity_weight);
+        println!("  Energy estimate: {:.2} J", energy_estimate_joules);
+
+        // 7. Build block header with commitment and PoUW metrics
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -330,25 +349,32 @@ impl Miner {
             work_score,
             miner: self.config.miner_address,
             nonce: 0,
+            // PoUW Transparency Metrics
+            solve_time_ms,
+            verify_time_ms,
+            time_asymmetry_ratio,
+            solution_quality,
+            complexity_weight,
+            energy_estimate_joules,
         };
 
-        // 7. Mine the header (find nonce that meets difficulty)
+        // 8. Mine the header (find nonce that meets difficulty)
         let header_hash = self.mine_header(&mut header)?;
         println!("Header mined: {:?}", header_hash);
 
-        // 8. Calculate block reward and create coinbase transaction
+        // 9. Calculate block reward and create coinbase transaction
         let reward_amount = self.reward_calculator.calculate_reward(work_score);
         let coinbase = CoinbaseTransaction::new(self.config.miner_address, reward_amount, height);
         println!("Block reward: {} tokens", reward_amount);
 
-        // 9. Create solution reveal
+        // 10. Create solution reveal
         let solution_reveal = SolutionReveal {
             problem: problem.clone(),
             solution: solution.clone(),
             commitment,
         };
 
-        // 10. Update stats
+        // 11. Update stats
         self.update_stats(work_score, solve_time).await;
 
         Some(Block {

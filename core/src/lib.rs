@@ -7,6 +7,7 @@ pub mod transaction;
 pub mod block;
 pub mod problem;
 pub mod commitment;
+pub mod dimensional;
 
 // Re-exports
 pub use types::*;
@@ -15,3 +16,4 @@ pub use transaction::*;
 pub use block::*;
 pub use problem::*;
 pub use commitment::*;
+pub use dimensional::*;

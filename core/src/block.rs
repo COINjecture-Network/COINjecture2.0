@@ -27,6 +27,20 @@ pub struct BlockHeader {
     pub miner: Address,
     /// Nonce for header mining
     pub nonce: u64,
+
+    // PoUW Transparency Metrics (WEB4)
+    /// Time to find solution (milliseconds)
+    pub solve_time_ms: u64,
+    /// Time to verify solution (milliseconds) - should be fast!
+    pub verify_time_ms: u64,
+    /// Time asymmetry ratio (solve_time / verify_time) - proves useful work
+    pub time_asymmetry_ratio: f64,
+    /// Solution quality (0.0 to 1.0) - optimality measure
+    pub solution_quality: f64,
+    /// Problem complexity weight - difficulty measure
+    pub complexity_weight: f64,
+    /// Estimated energy consumption (Joules) - transparency metric
+    pub energy_estimate_joules: f64,
 }
 
 impl BlockHeader {
@@ -80,6 +94,13 @@ impl Block {
             work_score: 0.0,
             miner: genesis_address,
             nonce: 0,
+            // Genesis block has no PoUW metrics (no mining required)
+            solve_time_ms: 0,
+            verify_time_ms: 0,
+            time_asymmetry_ratio: 0.0,
+            solution_quality: 0.0,
+            complexity_weight: 0.0,
+            energy_estimate_joules: 0.0,
         };
 
         let coinbase = CoinbaseTransaction::new(genesis_address, 0, 0);

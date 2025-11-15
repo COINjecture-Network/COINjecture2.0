@@ -244,18 +244,18 @@ mod tests {
     #[test]
     fn test_transfer() {
         let state = AccountState::new("test_transfer_db").unwrap();
-        let alice = Address::from_bytes([1u8; 32]);
-        let bob = Address::from_bytes([2u8; 32]);
+        let sender = Address::from_bytes([1u8; 32]);
+        let receiver = Address::from_bytes([2u8; 32]);
 
         // Setup
-        state.set_balance(&alice, 1000).unwrap();
-        state.set_balance(&bob, 0).unwrap();
+        state.set_balance(&sender, 1000).unwrap();
+        state.set_balance(&receiver, 0).unwrap();
 
         // Transfer
-        state.transfer(&alice, &bob, 300).unwrap();
+        state.transfer(&sender, &receiver, 300).unwrap();
 
-        assert_eq!(state.get_balance(&alice), 700);
-        assert_eq!(state.get_balance(&bob), 300);
+        assert_eq!(state.get_balance(&sender), 700);
+        assert_eq!(state.get_balance(&receiver), 300);
 
         // Cleanup
         std::fs::remove_file("test_transfer_db").ok();

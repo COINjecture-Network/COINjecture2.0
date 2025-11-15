@@ -13,3 +13,6 @@ serde.workspace = true
 bincode.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"

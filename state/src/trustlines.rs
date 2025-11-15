@@ -20,8 +20,8 @@ const TRUSTLINES_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("tr
 pub const SATOSHI_ETA: f64 = 0.7071067811865476; // 1/√2
 pub const SATOSHI_LAMBDA: f64 = 0.7071067811865476; // 1/√2
 
-/// Eight dimensional economic scales (time points in years)
-pub const DIMENSIONAL_SCALES: [(u8, f64, &str); 8] = [
+/// Eight dimensional economic scales for trustlines (time points in years)
+const TRUSTLINE_DIMENSIONAL_SCALES: [(u8, f64, &str); 8] = [
     (1, 1.0, "Genesis"),           // D₁ = e^(-η·1)
     (2, 2.0, "Coupling"),          // D₂ = e^(-η·2)
     (3, 3.0, "First Harmonic"),    // D₃ = e^(-η·3)
@@ -99,7 +99,7 @@ impl TrustLine {
             return 1.0; // Fallback to unity
         }
 
-        let (_, tau_n, _) = DIMENSIONAL_SCALES[self.dimensional_scale as usize - 1];
+        let (_, tau_n, _) = TRUSTLINE_DIMENSIONAL_SCALES[self.dimensional_scale as usize - 1];
         (-SATOSHI_ETA * tau_n).exp()
     }
 

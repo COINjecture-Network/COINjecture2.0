@@ -199,14 +199,25 @@ pub enum TrustLineType {
 
 /// Dimensional pool types based on exponential tokenomics
 /// Mathematics: Dn = e^(-η·τn) where η = λ = 1/√2 (Satoshi Constant)
+/// Complete implementation of all 8 dimensional scales from COINjecture whitepaper
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Copy)]
 pub enum DimensionalPool {
-    /// D₁: Genesis scale (τ=0.00, D=1.000) - Immediate liquidity
+    /// D₁: Genesis scale (τ=0.00, D=1.000) - Immediate liquidity / Consensus rewards
     D1,
     /// D₂: Coupling scale (τ=0.20, D=0.867) - Short-term staking
     D2,
     /// D₃: First Harmonic (τ=0.41, D=0.750) - Primary liquidity
     D3,
+    /// D₄: Golden Ratio scale (τ=0.68, D=0.618) - Treasury reserve (φ⁻¹)
+    D4,
+    /// D₅: Half-scale (τ=0.98, D=0.500) - Secondary liquidity (2⁻¹)
+    D5,
+    /// D₆: Second Golden scale (τ=1.36, D=0.382) - Long-term vesting (φ⁻²)
+    D6,
+    /// D₇: Quarter-scale (τ=1.96, D=0.250) - Strategic reserve (2⁻²)
+    D7,
+    /// D₈: Euler scale (τ=2.72, D=0.146) - Foundation endowment (e⁻ᵉ/√²)
+    D8,
 }
 
 /// Dimensional pool swap transaction

@@ -3,6 +3,7 @@
 
 use crate::chain::ChainState;
 use crate::config::NodeConfig;
+use crate::faucet::{Faucet, FaucetConfig};
 use crate::genesis::{create_genesis_block, GenesisConfig};
 use crate::validator::BlockValidator;
 use coinject_consensus::{Miner, MiningConfig};
@@ -40,6 +41,7 @@ pub struct CoinjectNode {
     marketplace: Arc<RwLock<ProblemMarketplace>>,
     tx_pool: Arc<RwLock<TransactionPool>>,
     miner: Option<Arc<RwLock<Miner>>>,
+    faucet: Option<Arc<Faucet>>,
     network_cmd_tx: Option<mpsc::UnboundedSender<NetworkCommand>>,
     rpc: Option<RpcServer>,
     shutdown_tx: mpsc::Sender<()>,
@@ -117,7 +119,9 @@ impl CoinjectNode {
         // Initialize miner if enabled
         let miner = if config.mine {
             println!("⛏️  Initializing miner...");
+
             let miner_address = if let Some(ref addr_hex) = config.miner_address {
+                // Use explicitly provided miner address
                 let addr_bytes = hex::decode(addr_hex)?;
                 if addr_bytes.len() != 32 {
                     return Err("Invalid miner address length".into());
@@ -126,8 +130,11 @@ impl CoinjectNode {
                 bytes.copy_from_slice(&addr_bytes);
                 Address::from_bytes(bytes)
             } else {
-                // Use genesis address as default
-                genesis.header.miner
+                // Load or generate validator key from data directory
+                let keystore = crate::keystore::ValidatorKeystore::new(&config.data_dir);
+                let validator_key = keystore.get_or_create_key()
+                    .map_err(|e| format!("Failed to get validator key: {}", e))?;
+                validator_key.address()
             };
 
             let mining_config = MiningConfig {
@@ -142,6 +149,23 @@ impl CoinjectNode {
             println!();
 
             Some(Arc::new(RwLock::new(Miner::new(mining_config))))
+        } else {
+            None
+        };
+
+        // Initialize faucet if enabled
+        let faucet = if config.enable_faucet {
+            println!("💧 Faucet enabled:");
+            println!("   Amount per request: {} tokens", config.faucet_amount);
+            println!("   Cooldown: {} seconds", config.faucet_cooldown);
+            println!();
+
+            let faucet_config = FaucetConfig {
+                enabled: true,
+                amount: config.faucet_amount,
+                cooldown: config.faucet_cooldown,
+            };
+            Some(Arc::new(Faucet::new(faucet_config)))
         } else {
             None
         };
@@ -163,6 +187,7 @@ impl CoinjectNode {
             marketplace,
             tx_pool,
             miner,
+            faucet,
             network_cmd_tx: None,
             rpc: None,
             shutdown_tx,
@@ -201,6 +226,15 @@ impl CoinjectNode {
         println!("🔌 Starting JSON-RPC server...");
         let rpc_addr = self.config.rpc_socket_addr()?;
 
+        // Create faucet handler if faucet is enabled
+        let faucet_handler = self.faucet.as_ref().map(|faucet| {
+            let faucet_clone = Arc::clone(faucet);
+            let state_clone = Arc::clone(&self.state);
+            Arc::new(move |addr: &Address| -> Result<u128, String> {
+                faucet_clone.request_tokens(addr).map_err(|e| e.to_string())
+            }) as coinject_rpc::FaucetHandler
+        });
+
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
             timelock_state: Arc::clone(&self.timelock_state),
@@ -215,6 +249,7 @@ impl CoinjectNode {
             best_hash: self.chain.best_hash_ref(),
             genesis_hash: self.chain.genesis_hash(),
             peer_count: Arc::new(RwLock::new(0)),
+            faucet_handler,
         });
 
         let rpc_server = RpcServer::new(rpc_addr, rpc_state).await?;
@@ -312,6 +347,62 @@ impl CoinjectNode {
             }
         });
 
+        // Spawn periodic metrics update task
+        let chain_for_metrics = Arc::clone(&self.chain);
+        let state_for_metrics = Arc::clone(&self.state);
+        let dimensional_pool_state_for_metrics = Arc::clone(&self.dimensional_pool_state);
+        let tx_pool_for_metrics = Arc::clone(&self.tx_pool);
+
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(15));
+            loop {
+                interval.tick().await;
+
+                // Update blockchain metrics
+                let block_height = chain_for_metrics.best_block_height().await;
+                crate::metrics::BLOCK_HEIGHT.set(block_height as i64);
+
+                // Update pool balance metrics
+                use coinject_core::DimensionalPool;
+                for pool_id in 1..=3 {  // Only D1, D2, D3 exist
+                    let pool = match pool_id {
+                        1 => DimensionalPool::D1,
+                        2 => DimensionalPool::D2,
+                        3 => DimensionalPool::D3,
+                        _ => continue,
+                    };
+
+                    if let Some(liquidity) = dimensional_pool_state_for_metrics.get_pool_liquidity(&pool) {
+                        crate::metrics::POOL_BALANCE
+                            .with_label_values(&[&format!("D{}", pool_id)])
+                            .set(liquidity.liquidity as f64);
+                    }
+                }
+
+                // Update mempool metrics
+                let pool = tx_pool_for_metrics.read().await;
+                let mempool_size = pool.len();
+                drop(pool);
+                crate::metrics::MEMPOOL_SIZE.set(mempool_size as i64);
+
+                // Calculate and update Satoshi constants (η and λ)
+                // These would be derived from actual pool dynamics
+                // For now, we set the theoretical values
+                crate::metrics::MEASURED_ETA.set(0.7071067811865476); // 1/√2
+                crate::metrics::MEASURED_LAMBDA.set(0.7071067811865476); // 1/√2
+
+                // Update unit circle constraint: |μ|² = η² + λ² should equal 1
+                let eta = 0.7071067811865476;
+                let lambda = 0.7071067811865476;
+                let constraint = eta * eta + lambda * lambda;
+                crate::metrics::UNIT_CIRCLE_CONSTRAINT.set(constraint);
+
+                // Update damping coefficient: ζ = η/√2
+                let damping = eta / 2.0_f64.sqrt();
+                crate::metrics::DAMPING_COEFFICIENT.set(damping);
+            }
+        });
+
         // Start mining loop if enabled
         if let Some(ref miner) = self.miner {
             let miner = Arc::clone(miner);
@@ -380,6 +471,9 @@ impl CoinjectNode {
                                                 }
                                                 drop(pool);
 
+                                                // Update block metrics
+                                                crate::metrics::BLOCK_HEIGHT.set(block.header.height as i64);
+
                                                 // After applying this block, try to apply buffered blocks sequentially
                                                 Self::process_buffered_blocks(
                                                     chain,
@@ -443,9 +537,11 @@ impl CoinjectNode {
             }
             NetworkEvent::PeerConnected(peer) => {
                 println!("🤝 Peer connected: {:?}", peer);
+                // TODO: Update peer count metric when network_service is accessible
             }
             NetworkEvent::PeerDisconnected(peer) => {
                 println!("👋 Peer disconnected: {:?}", peer);
+                // TODO: Update peer count metric when network_service is accessible
             }
             NetworkEvent::StatusUpdate { peer, best_height, best_hash } => {
                 let our_height = chain.best_block_height().await;

@@ -32,6 +32,10 @@ pub struct NodeConfig {
     #[arg(long, default_value = "127.0.0.1:9933")]
     pub rpc_addr: String,
 
+    /// Prometheus metrics listen address
+    #[arg(long, default_value = "127.0.0.1:9090")]
+    pub metrics_addr: String,
+
     /// Bootstrap peers (multiaddr format)
     #[arg(long)]
     pub bootnodes: Vec<String>,
@@ -55,6 +59,18 @@ pub struct NodeConfig {
     /// Enable verbose logging
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Enable testnet faucet (allows free token requests for testing)
+    #[arg(long)]
+    pub enable_faucet: bool,
+
+    /// Faucet amount (tokens per request)
+    #[arg(long, default_value = "10000")]
+    pub faucet_amount: u128,
+
+    /// Faucet cooldown (seconds between requests per address)
+    #[arg(long, default_value = "3600")]
+    pub faucet_cooldown: u64,
 }
 
 impl NodeConfig {
@@ -64,6 +80,10 @@ impl NodeConfig {
 
     pub fn rpc_socket_addr(&self) -> Result<SocketAddr, Box<dyn std::error::Error>> {
         Ok(self.rpc_addr.parse()?)
+    }
+
+    pub fn metrics_socket_addr(&self) -> Result<SocketAddr, Box<dyn std::error::Error>> {
+        Ok(self.metrics_addr.parse()?)
     }
 
     pub fn state_db_path(&self) -> PathBuf {
@@ -112,12 +132,16 @@ mod tests {
             miner_address: Some("0000000000000000000000000000000000000000000000000000000000000001".to_string()),
             p2p_addr: "/ip4/0.0.0.0/tcp/30333".to_string(),
             rpc_addr: "127.0.0.1:9933".to_string(),
+            metrics_addr: "127.0.0.1:9090".to_string(),
             bootnodes: vec![],
             chain_id: "test".to_string(),
             difficulty: 4,
             block_time: 60,
             max_peers: 50,
             verbose: false,
+            enable_faucet: false,
+            faucet_amount: 10000,
+            faucet_cooldown: 3600,
         };
 
         assert!(config.validate().is_ok());
@@ -132,12 +156,16 @@ mod tests {
             miner_address: Some("invalid".to_string()),
             p2p_addr: "/ip4/0.0.0.0/tcp/30333".to_string(),
             rpc_addr: "127.0.0.1:9933".to_string(),
+            metrics_addr: "127.0.0.1:9090".to_string(),
             bootnodes: vec![],
             chain_id: "test".to_string(),
             difficulty: 4,
             block_time: 60,
             max_peers: 50,
             verbose: false,
+            enable_faucet: false,
+            faucet_amount: 10000,
+            faucet_cooldown: 3600,
         };
 
         assert!(config.validate().is_err());
