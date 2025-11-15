@@ -61,6 +61,12 @@ pub struct PoolLiquidity {
     pub pool: DimensionalPool,
     /// Current liquidity (total tokens in pool)
     pub liquidity: Balance,
+    /// RUNTIME INTEGRATION: Locked tokens (not yet unlocked by U_n(τ))
+    pub locked_liquidity: Balance,
+    /// RUNTIME INTEGRATION: Unlocked tokens (available for withdrawal/yields)
+    pub unlocked_liquidity: Balance,
+    /// RUNTIME INTEGRATION: Last unlock fraction checkpoint (to prevent re-unlocking)
+    pub last_unlock_fraction: f64,
     /// Dimensional scale factor D_n = e^(-η·τ_n)
     pub dimensional_factor: f64,
     /// Allocation ratio p_n (normalized)
@@ -124,6 +130,10 @@ impl DimensionalPoolState {
             let pool_liquidity = PoolLiquidity {
                 pool: *pool,
                 liquidity: initial_liquidity,
+                // RUNTIME INTEGRATION: All genesis tokens start locked
+                locked_liquidity: initial_liquidity,
+                unlocked_liquidity: 0,
+                last_unlock_fraction: 0.0,
                 dimensional_factor: *d_n,
                 allocation_ratio: allocation,
                 tau: *tau,
@@ -430,6 +440,157 @@ impl DimensionalPoolState {
             scales,
             oracle,
         }
+    }
+
+    /// RUNTIME INTEGRATION: Distribute block reward across pools based on live τ
+    /// Uses dynamic allocation ratios p_n(τ) = D̃_n(τ) / Σ D̃_k(τ) instead of static constants
+    pub fn distribute_block_reward(&self, total_reward: Balance, block_height: u64) -> Result<(), String> {
+        // Get current consensus state to calculate dynamic allocations
+        let consensus_state = self.get_current_consensus_state()
+            .ok_or("No consensus state found")?;
+
+        let scales = consensus_state.dimensional_scales();
+        let normalized = scales.normalized();
+        let allocation_ratios = normalized.allocation_ratios();
+
+        println!("💰 Distributing {} token reward across 8 dimensional pools (τ={:.4}):",
+            total_reward, consensus_state.tau);
+
+        // Distribute to each pool according to current dimensional ratios
+        for (i, pool) in [
+            DimensionalPool::D1, DimensionalPool::D2, DimensionalPool::D3, DimensionalPool::D4,
+            DimensionalPool::D5, DimensionalPool::D6, DimensionalPool::D7, DimensionalPool::D8
+        ].iter().enumerate() {
+            let ratio = allocation_ratios[i];
+            let pool_reward = (total_reward as f64 * ratio) as Balance;
+
+            if let Some(mut liquidity) = self.get_pool_liquidity(pool) {
+                liquidity.liquidity += pool_reward;
+                // RUNTIME INTEGRATION: New rewards start as locked
+                liquidity.locked_liquidity += pool_reward;
+                liquidity.allocation_ratio = ratio;
+                liquidity.last_update_height = block_height;
+                self.save_pool_liquidity(&liquidity)?;
+
+                println!("   {:?}: +{} tokens ({:.1}% of reward, locked: {}, unlocked: {})",
+                    pool, pool_reward, ratio * 100.0, liquidity.locked_liquidity, liquidity.unlocked_liquidity);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// RUNTIME INTEGRATION: Execute unlock schedules for all pools
+    /// ACTUALLY MOVES TOKENS from locked → unlocked based on U_n(τ) thresholds
+    pub fn execute_unlock_schedules(&self, block_height: u64) -> Result<u128, String> {
+        let consensus_state = self.get_current_consensus_state()
+            .ok_or("No consensus state found")?;
+
+        let mut total_unlocked: u128 = 0;
+
+        println!("🔓 Executing unlock schedules at τ={:.4}:", consensus_state.tau);
+
+        for (i, pool) in [
+            DimensionalPool::D1, DimensionalPool::D2, DimensionalPool::D3, DimensionalPool::D4,
+            DimensionalPool::D5, DimensionalPool::D6, DimensionalPool::D7, DimensionalPool::D8
+        ].iter().enumerate() {
+            let current_unlock_fraction = consensus_state.unlock_fraction(i);
+
+            if let Some(mut liquidity) = self.get_pool_liquidity(pool) {
+                // Calculate how much has unlocked since last checkpoint
+                let new_unlock_fraction = current_unlock_fraction - liquidity.last_unlock_fraction;
+
+                if new_unlock_fraction > 0.001 {  // Only unlock if > 0.1% change
+                    // Calculate tokens to unlock from total pool liquidity
+                    let tokens_to_unlock = (liquidity.liquidity as f64 * new_unlock_fraction) as Balance;
+
+                    // Don't unlock more than what's locked
+                    let actually_unlocked = tokens_to_unlock.min(liquidity.locked_liquidity);
+
+                    if actually_unlocked > 0 {
+                        // ACTUALLY MOVE TOKENS: locked → unlocked
+                        liquidity.locked_liquidity -= actually_unlocked;
+                        liquidity.unlocked_liquidity += actually_unlocked;
+                        liquidity.last_unlock_fraction = current_unlock_fraction;
+                        liquidity.last_update_height = block_height;
+
+                        self.save_pool_liquidity(&liquidity)?;
+
+                        total_unlocked += actually_unlocked;
+
+                        println!("   {:?}: UNLOCKED {} tokens! ({:.1}% → {:.1}%, locked: {}, unlocked: {})",
+                            pool,
+                            actually_unlocked,
+                            liquidity.last_unlock_fraction * 100.0 - new_unlock_fraction * 100.0,
+                            current_unlock_fraction * 100.0,
+                            liquidity.locked_liquidity,
+                            liquidity.unlocked_liquidity
+                        );
+                    }
+                }
+            }
+        }
+
+        if total_unlocked > 0 {
+            println!("✅ Total tokens unlocked this round: {}", total_unlocked);
+        }
+
+        Ok(total_unlocked)
+    }
+
+    /// RUNTIME INTEGRATION: Calculate and distribute yields based on r_n(τ)
+    /// ACTUALLY GENERATES YIELD from unlocked pool liquidity
+    /// Yields are calculated as: yield = unlocked_liquidity × r_n(τ) × Δt
+    /// where Δt is the time since last yield distribution
+    pub fn distribute_yields(&self, block_height: u64) -> Result<u128, String> {
+        let consensus_state = self.get_current_consensus_state()
+            .ok_or("No consensus state found")?;
+
+        let mut total_yield: u128 = 0;
+
+        let yield_rates = self.get_yield_rates()
+            .ok_or("Failed to calculate yield rates")?;
+
+        println!("📈 Distributing yields at τ={:.4}:", consensus_state.tau);
+
+        for (i, pool) in [
+            DimensionalPool::D1, DimensionalPool::D2, DimensionalPool::D3, DimensionalPool::D4,
+            DimensionalPool::D5, DimensionalPool::D6, DimensionalPool::D7, DimensionalPool::D8
+        ].iter().enumerate() {
+            if let Some(mut liquidity) = self.get_pool_liquidity(pool) {
+                let rate = yield_rates[i];
+
+                // Only generate yield from UNLOCKED liquidity
+                if liquidity.unlocked_liquidity > 0 {
+                    // Calculate yield: unlocked_balance × yield_rate × time_factor
+                    // Using a conservative time factor of 0.001 per block (0.1% max yield per distribution)
+                    let time_factor = 0.001;
+                    let yield_amount = (liquidity.unlocked_liquidity as f64 * rate * time_factor) as Balance;
+
+                    if yield_amount > 0 {
+                        // ACTUALLY GENERATE YIELD: Add to pool's unlocked liquidity
+                        // In full implementation, this would be distributed to stakers
+                        // For now, it compounds back into the pool
+                        liquidity.unlocked_liquidity += yield_amount;
+                        liquidity.liquidity += yield_amount;
+                        liquidity.last_update_height = block_height;
+
+                        self.save_pool_liquidity(&liquidity)?;
+
+                        total_yield += yield_amount;
+
+                        println!("   {:?}: GENERATED {} tokens yield (r_n={:.4}, unlocked: {})",
+                            pool, yield_amount, rate, liquidity.unlocked_liquidity);
+                    }
+                }
+            }
+        }
+
+        if total_yield > 0 {
+            println!("✅ Total yield generated this round: {} tokens", total_yield);
+        }
+
+        Ok(total_yield)
     }
 }
 

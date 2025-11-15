@@ -67,11 +67,21 @@ impl Miner {
     }
 
     /// Generate a random NP-hard problem for mining
+    /// RUNTIME INTEGRATION: Uses dimensional complexity |ψ(τ)| to modulate difficulty
     pub fn generate_problem(&self, block_height: u64) -> ProblemType {
+        use coinject_core::{TAU_C, ConsensusState};
         let mut rng = rand::thread_rng();
 
-        // Use block height to seed problem complexity
-        let problem_size = 10 + (block_height % 10) as usize;
+        // Calculate dimensionless time τ = block_height / τ_c
+        let tau = (block_height as f64) / TAU_C;
+        let consensus_state = ConsensusState::at_tau(tau);
+
+        // Use dimensional magnitude |ψ(τ)| = e^(-ητ) to modulate problem size
+        // As τ increases, magnitude decreases exponentially, reducing problem complexity
+        // Base size: 10-20, scaled by magnitude (1.0 at genesis, decays over time)
+        let base_size = 10 + (block_height % 10) as usize;
+        let scaled_size = (base_size as f64 * consensus_state.magnitude.max(0.1)) as usize;
+        let problem_size = scaled_size.max(5).min(25); // Clamp to reasonable range
 
         // Randomly choose problem type
         match rng.gen_range(0..3) {
@@ -275,8 +285,15 @@ impl Miner {
     ) -> Option<Block> {
         println!("\n=== Mining Block {} ===", height);
 
-        // 1. Generate NP-hard problem
+        // 1. Generate NP-hard problem (uses dimensional complexity)
         let problem = self.generate_problem(height);
+
+        // Calculate and display dimensional state
+        use coinject_core::{TAU_C, ConsensusState};
+        let tau = (height as f64) / TAU_C;
+        let consensus_state = ConsensusState::at_tau(tau);
+        println!("Dimensional state: τ={:.4}, |ψ|={:.4}, θ={:.4} rad",
+            consensus_state.tau, consensus_state.magnitude, consensus_state.phase);
         println!("Generated problem: {:?}", problem);
 
         // 2. Solve the problem and measure performance

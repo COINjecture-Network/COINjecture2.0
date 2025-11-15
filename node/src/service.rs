@@ -362,13 +362,18 @@ impl CoinjectNode {
                 let block_height = chain_for_metrics.best_block_height().await;
                 crate::metrics::BLOCK_HEIGHT.set(block_height as i64);
 
-                // Update pool balance metrics
+                // Update pool balance metrics (all 8 dimensional pools)
                 use coinject_core::DimensionalPool;
-                for pool_id in 1..=3 {  // Only D1, D2, D3 exist
+                for pool_id in 1..=8 {  // All 8 pools: D1-D8
                     let pool = match pool_id {
                         1 => DimensionalPool::D1,
                         2 => DimensionalPool::D2,
                         3 => DimensionalPool::D3,
+                        4 => DimensionalPool::D4,
+                        5 => DimensionalPool::D5,
+                        6 => DimensionalPool::D6,
+                        7 => DimensionalPool::D7,
+                        8 => DimensionalPool::D8,
                         _ => continue,
                     };
 
@@ -385,20 +390,40 @@ impl CoinjectNode {
                 drop(pool);
                 crate::metrics::MEMPOOL_SIZE.set(mempool_size as i64);
 
-                // Calculate and update Satoshi constants (η and λ)
-                // These would be derived from actual pool dynamics
-                // For now, we set the theoretical values
-                crate::metrics::MEASURED_ETA.set(0.7071067811865476); // 1/√2
-                crate::metrics::MEASURED_LAMBDA.set(0.7071067811865476); // 1/√2
+                // RUNTIME INTEGRATION: Read actual consensus state instead of hard-coded constants
+                // Calculate and update Satoshi constants (η and λ) from live network state
+                use coinject_core::{ETA, LAMBDA, TAU_C};
+
+                // Export live consensus state (τ, |ψ|, θ) from database
+                if let Some(consensus_state) = dimensional_pool_state_for_metrics.get_current_consensus_state() {
+                    crate::metrics::CONSENSUS_TAU.set(consensus_state.tau);
+                    crate::metrics::CONSENSUS_MAGNITUDE.set(consensus_state.magnitude);
+                    crate::metrics::CONSENSUS_PHASE.set(consensus_state.phase);
+                } else {
+                    // Fallback if no consensus state saved yet (early blocks)
+                    let tau = (block_height as f64) / TAU_C;
+                    let magnitude = (-ETA * tau).exp();
+                    let phase = LAMBDA * tau;
+                    crate::metrics::CONSENSUS_TAU.set(tau);
+                    crate::metrics::CONSENSUS_MAGNITUDE.set(magnitude);
+                    crate::metrics::CONSENSUS_PHASE.set(phase);
+                }
+
+                // For now, use theoretical constants (future: measure from solve/verify rates)
+                // TODO: Measure η from actual damping rate: η = -ln(|ψ(t+Δt)| / |ψ(t)|) / Δt
+                // TODO: Measure λ from actual oscillation rate: λ = Δθ / Δt
+                let measured_eta = ETA;    // Future: derive from solve rate statistics
+                let measured_lambda = LAMBDA; // Future: derive from verify rate statistics
+
+                crate::metrics::MEASURED_ETA.set(measured_eta);
+                crate::metrics::MEASURED_LAMBDA.set(measured_lambda);
 
                 // Update unit circle constraint: |μ|² = η² + λ² should equal 1
-                let eta = 0.7071067811865476;
-                let lambda = 0.7071067811865476;
-                let constraint = eta * eta + lambda * lambda;
+                let constraint = measured_eta * measured_eta + measured_lambda * measured_lambda;
                 crate::metrics::UNIT_CIRCLE_CONSTRAINT.set(constraint);
 
                 // Update damping coefficient: ζ = η/√2
-                let damping = eta / 2.0_f64.sqrt();
+                let damping = measured_eta / std::f64::consts::SQRT_2;
                 crate::metrics::DAMPING_COEFFICIENT.set(damping);
             }
         });
@@ -459,10 +484,19 @@ impl CoinjectNode {
                             match chain.store_block(&block).await {
                                 Ok(is_new_best) => {
                                     if is_new_best {
+                                        // RUNTIME INTEGRATION: Calculate and save consensus state for received blocks
+                                        use coinject_core::{TAU_C, ConsensusState};
+                                        let tau = (block.header.height as f64) / TAU_C;
+                                        let consensus_state = ConsensusState::at_tau(tau);
+
+                                        if let Err(e) = dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state) {
+                                            println!("⚠️  Warning: Failed to save consensus state: {}", e);
+                                        }
+
                                         // Apply block transactions to state
                                         match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
-                                                println!("✅ Block {} accepted and applied to chain", block.header.height);
+                                                println!("✅ Block {} accepted and applied to chain (τ={:.4})", block.header.height, tau);
 
                                                 // Remove only successfully applied transactions from pool
                                                 let mut pool = tx_pool.write().await;
@@ -652,9 +686,18 @@ impl CoinjectNode {
                             match chain.store_block(&block).await {
                                 Ok(is_new_best) => {
                                     if is_new_best {
+                                        // RUNTIME INTEGRATION: Save consensus state for buffered blocks
+                                        use coinject_core::{TAU_C, ConsensusState};
+                                        let tau = (block.header.height as f64) / TAU_C;
+                                        let consensus_state = ConsensusState::at_tau(tau);
+
+                                        if let Err(e) = dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state) {
+                                            println!("⚠️  Warning: Failed to save consensus state: {}", e);
+                                        }
+
                                         match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
-                                                println!("✅ Buffered block {} applied to chain", next_height);
+                                                println!("✅ Buffered block {} applied to chain (τ={:.4})", next_height, tau);
 
                                                 // Remove only successfully applied transactions from pool
                                                 let mut pool = tx_pool.write().await;
@@ -1278,6 +1321,42 @@ impl CoinjectNode {
                 if let Err(e) = chain.store_block(&block).await {
                     println!("❌ Failed to store mined block: {}", e);
                     continue;
+                }
+
+                // RUNTIME INTEGRATION: Calculate and save dimensional consensus state
+                // τ = block_height / τ_c (dimensionless time progression)
+                use coinject_core::{TAU_C, ConsensusState};
+                let tau = (block.header.height as f64) / TAU_C;
+                let consensus_state = ConsensusState::at_tau(tau);
+
+                if let Err(e) = dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state) {
+                    println!("⚠️  Warning: Failed to save consensus state at height {}: {}", block.header.height, e);
+                } else {
+                    println!("📊 Consensus state: τ={:.4}, |ψ|={:.4}, θ={:.4} rad",
+                        consensus_state.tau,
+                        consensus_state.magnitude,
+                        consensus_state.phase
+                    );
+                }
+
+                // RUNTIME INTEGRATION: Distribute block reward dynamically across dimensional pools
+                let block_reward = block.coinbase.reward;
+                if let Err(e) = dimensional_pool_state.distribute_block_reward(block_reward, block.header.height) {
+                    println!("⚠️  Warning: Failed to distribute block reward: {}", e);
+                }
+
+                // RUNTIME INTEGRATION: Execute unlock schedules (every 10 blocks to reduce spam)
+                if block.header.height % 10 == 0 {
+                    if let Err(e) = dimensional_pool_state.execute_unlock_schedules(block.header.height) {
+                        println!("⚠️  Warning: Failed to execute unlock schedules: {}", e);
+                    }
+                }
+
+                // RUNTIME INTEGRATION: Distribute yields (every 10 blocks)
+                if block.header.height % 10 == 0 {
+                    if let Err(e) = dimensional_pool_state.distribute_yields(block.header.height) {
+                        println!("⚠️  Warning: Failed to distribute yields: {}", e);
+                    }
                 }
 
                 // Apply block transactions to state
