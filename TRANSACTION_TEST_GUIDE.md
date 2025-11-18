@@ -5,8 +5,8 @@ This guide demonstrates institutional-grade transaction broadcasting and inclusi
 ## Prerequisites
 
 You've already created wallet accounts:
-- **Alice**: `3d49786cd6249a3689ed38fbd033c7871974d7ea596af8c9e5d3657022adc4bf`
-- **Bob**: `9de41d9ba4506045e3490e98ffe383471fbe78932a8554701e80c7ab73055507`
+- **Receiver-A**: `3d49786cd6249a3689ed38fbd033c7871974d7ea596af8c9e5d3657022adc4bf`
+- **Receiver-B**: `9de41d9ba4506045e3490e98ffe383471fbe78932a8554701e80c7ab73055507`
 - **Faucet**: `e0e2547212b9273e006f7731340c38c0cb6c81fa5b5bd7c385212d76adf0afcd`
 
 ## Step-by-Step Test Procedure
@@ -53,7 +53,7 @@ Watch for:
 
 You should see mining rewards (varies based on work done).
 
-### Step 5: Send Transaction (Faucet → Alice)
+### Step 5: Send Transaction (Faucet → Receiver-A)
 
 ```powershell
 .\target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 transaction send --from faucet --to 3d49786cd6249a3689ed38fbd033c7871974d7ea596af8c9e5d3657022adc4bf --amount 1000 --fee 10
@@ -84,7 +84,7 @@ Both nodes should show:
 ✅ Block X accepted and applied to chain
 ```
 
-### Step 9: Check Alice's Balance
+### Step 9: Check Receiver-A's Balance
 
 ```powershell
 .\target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 account balance 3d49786cd6249a3689ed38fbd033c7871974d7ea596af8c9e5d3657022adc4bf
@@ -92,21 +92,21 @@ Both nodes should show:
 
 Should show: **1000 tokens**
 
-### Step 10: Send Another Transaction (Alice → Bob)
+### Step 10: Send Another Transaction (Receiver-A → Receiver-B)
 
 ```powershell
-.\target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 transaction send --from alice --to 9de41d9ba4506045e3490e98ffe383471fbe78932a8554701e80c7ab73055507 --amount 500 --fee 5
+.\target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 transaction send --from receiver-a --to 9de41d9ba4506045e3490e98ffe383471fbe78932a8554701e80c7ab73055507 --amount 500 --fee 5
 ```
 
 ### Step 11: Verify Final Balances
 
-**Bob's balance:**
+**Receiver-B's balance:**
 ```powershell
 .\target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 account balance 9de41d9ba4506045e3490e98ffe383471fbe78932a8554701e80c7ab73055507
 ```
 Should show: **500 tokens**
 
-**Alice's balance:**
+**Receiver-A's balance:**
 ```powershell
 .\target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 account balance 3d49786cd6249a3689ed38fbd033c7871974d7ea596af8c9e5d3657022adc4bf
 ```

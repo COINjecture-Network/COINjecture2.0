@@ -1,7 +1,7 @@
 // Marketplace State Management with Database Persistence
 // Web4 PoUW marketplace integrated into blockchain state
 
-use coinject_core::{Address, Balance, Hash, ProblemType, Solution};
+use coinject_core::{Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -24,7 +24,13 @@ pub enum ProblemStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProblemSubmission {
     pub problem_id: Hash,
-    pub problem: ProblemType,
+
+    /// Two-mode submission: Public (full problem visible) or Private (commitment only)
+    pub submission_mode: SubmissionMode,
+
+    /// Optional reveal for private bounties
+    pub problem_reveal: Option<ProblemReveal>,
+
     pub submitter: Address,
     pub bounty: Balance,
     pub min_work_score: f64,
@@ -55,18 +61,63 @@ impl MarketplaceState {
         Ok(MarketplaceState { db })
     }
 
-    /// Submit a new problem with bounty (escrow funds)
-    pub fn submit_problem(
+    /// Submit a public problem with bounty (backward compatible helper)
+    /// For private problems, use `submit_problem()` directly with `SubmissionMode::Private`
+    pub fn submit_public_problem(
         &self,
-        problem: ProblemType,
+        problem: coinject_core::ProblemType,
         submitter: Address,
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
     ) -> Result<Hash, MarketplaceError> {
-        // Generate problem ID
-        let problem_data = bincode::serialize(&problem)?;
-        let problem_id = Hash::new(&problem_data);
+        let mode = SubmissionMode::Public { problem };
+        self.submit_problem(mode, submitter, bounty, min_work_score, expiration_days)
+    }
+
+    /// Submit a new problem with bounty (escrow funds)
+    /// Supports both Public (full problem visible) and Private (commitment only) modes
+    pub fn submit_problem(
+        &self,
+        mode: SubmissionMode,
+        submitter: Address,
+        bounty: Balance,
+        min_work_score: f64,
+        expiration_days: u64,
+    ) -> Result<Hash, MarketplaceError> {
+        // Validate mode-specific requirements
+        match &mode {
+            SubmissionMode::Public { problem: _ } => {
+                // Public mode: Current validation logic
+                // No additional checks needed
+            }
+            SubmissionMode::Private {
+                problem_commitment,
+                zk_wellformed_proof,
+                public_params,
+            } => {
+                // Private mode: Verify ZK proof
+                if !zk_wellformed_proof.verify(problem_commitment, public_params) {
+                    return Err(MarketplaceError::InvalidProof);
+                }
+
+                // Verify complexity estimate matches min_work_score
+                if public_params.complexity_estimate < min_work_score {
+                    return Err(MarketplaceError::InvalidParameters);
+                }
+            }
+        }
+
+        // Generate problem_id from mode
+        let problem_id = match &mode {
+            SubmissionMode::Public { problem } => {
+                let problem_data = bincode::serialize(problem)?;
+                Hash::new(&problem_data)
+            }
+            SubmissionMode::Private { problem_commitment, .. } => {
+                *problem_commitment
+            }
+        };
 
         // Check for duplicates
         if self.problem_exists(&problem_id)? {
@@ -82,7 +133,8 @@ impl MarketplaceState {
 
         let submission = ProblemSubmission {
             problem_id,
-            problem,
+            submission_mode: mode,
+            problem_reveal: None,
             submitter,
             bounty,
             min_work_score,
@@ -117,6 +169,7 @@ impl MarketplaceState {
     }
 
     /// Submit solution for a problem
+    /// Handles both public and private (revealed) submissions
     pub fn submit_solution(
         &self,
         problem_id: Hash,
@@ -143,13 +196,26 @@ impl MarketplaceState {
             return Err(MarketplaceError::ProblemExpired);
         }
 
-        // Verify solution
-        if !solution.verify(&submission.problem) {
+        // Get problem for verification
+        let problem = match &submission.submission_mode {
+            SubmissionMode::Public { problem } => problem,
+            SubmissionMode::Private { .. } => {
+                // Require problem to be revealed before accepting solutions
+                submission
+                    .problem_reveal
+                    .as_ref()
+                    .map(|r| &r.problem)
+                    .ok_or(MarketplaceError::ProblemNotRevealed)?
+            }
+        };
+
+        // Verify solution against revealed problem
+        if !solution.verify(problem) {
             return Err(MarketplaceError::InvalidSolution);
         }
 
         // Calculate quality score
-        let quality = solution.quality(&submission.problem);
+        let quality = solution.quality(problem);
         let work_score_estimate = quality * 100.0; // Simplified
 
         if work_score_estimate < submission.min_work_score {
@@ -161,6 +227,39 @@ impl MarketplaceState {
         submission.solver = Some(solver);
         submission.status = ProblemStatus::Solved;
 
+        self.update_problem(&submission)?;
+
+        Ok(())
+    }
+
+    /// Reveal problem for private bounty
+    /// Allows submitter to reveal the actual problem after solution or expiration
+    pub fn reveal_problem(
+        &self,
+        problem_id: Hash,
+        reveal: ProblemReveal,
+    ) -> Result<(), MarketplaceError> {
+        let mut submission = self
+            .get_problem(&problem_id)?
+            .ok_or(MarketplaceError::ProblemNotFound)?;
+
+        // Verify this is a private submission
+        let commitment = match &submission.submission_mode {
+            SubmissionMode::Private {
+                problem_commitment, ..
+            } => problem_commitment,
+            SubmissionMode::Public { .. } => {
+                return Err(MarketplaceError::NotPrivateSubmission);
+            }
+        };
+
+        // Verify reveal matches commitment
+        if !reveal.verify(commitment) {
+            return Err(MarketplaceError::RevealMismatch);
+        }
+
+        // Store reveal
+        submission.problem_reveal = Some(reveal);
         self.update_problem(&submission)?;
 
         Ok(())
@@ -357,6 +456,16 @@ pub enum MarketplaceError {
     Unauthorized,
     #[error("Cannot cancel problem")]
     CannotCancel,
+    #[error("Invalid proof")]
+    InvalidProof,
+    #[error("Invalid parameters")]
+    InvalidParameters,
+    #[error("Problem not revealed yet")]
+    ProblemNotRevealed,
+    #[error("Reveal does not match commitment")]
+    RevealMismatch,
+    #[error("Not a private submission")]
+    NotPrivateSubmission,
     #[error("Database error: {0}")]
     Database(#[from] redb::Error),
     #[error("Database transaction error: {0}")]

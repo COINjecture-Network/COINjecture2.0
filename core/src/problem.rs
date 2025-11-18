@@ -2,7 +2,7 @@ use crate::Hash;
 use serde::{Deserialize, Serialize};
 
 /// NP-hard problem types supported by the network
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProblemType {
     /// Subset Sum: Given a set of integers, find subset that sums to target
     SubsetSum {
@@ -27,13 +27,13 @@ pub enum ProblemType {
 }
 
 /// SAT clause (disjunction of literals)
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clause {
     pub literals: Vec<i32>, // Positive = variable, negative = negated variable
 }
 
 /// Solution to an NP-hard problem
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Solution {
     /// Subset Sum solution (indices of selected numbers)
     SubsetSum(Vec<usize>),

@@ -1,7 +1,8 @@
-// Problem Submission Marketplace
+// Problem Submission Marketplace with Privacy Support
 // Users submit NP-hard problems with escrowed bounties
+// Supports both public and private (commitment-based) submissions
 
-use coinject_core::{Address, Balance, Hash, ProblemType, Solution};
+use coinject_core::{Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,8 +12,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct ProblemSubmission {
     /// Unique problem ID
     pub problem_id: Hash,
-    /// The NP-hard problem
-    pub problem: ProblemType,
+
+    /// Two-mode submission: Public (full problem visible) or Private (commitment only)
+    pub submission_mode: SubmissionMode,
+
+    /// Optional reveal for private bounties
+    pub problem_reveal: Option<ProblemReveal>,
+
     /// Submitter's address
     pub submitter: Address,
     /// Bounty amount (escrowed)
@@ -74,16 +80,31 @@ impl ProblemMarketplace {
         }
     }
 
-    /// Submit a new problem with bounty
-    pub fn submit_problem(
+    /// Submit a public problem with bounty (backward compatible helper)
+    /// For private problems, use `submit_problem()` directly with `SubmissionMode::Private`
+    pub fn submit_public_problem(
         &mut self,
-        problem: ProblemType,
+        problem: coinject_core::ProblemType,
         submitter: Address,
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
     ) -> Result<Hash, MarketplaceError> {
-        // Validate problem
+        let mode = SubmissionMode::Public { problem };
+        self.submit_problem(mode, submitter, bounty, min_work_score, expiration_days)
+    }
+
+    /// Submit a new problem with bounty
+    /// Supports both Public (full problem visible) and Private (commitment only) modes
+    pub fn submit_problem(
+        &mut self,
+        mode: SubmissionMode,
+        submitter: Address,
+        bounty: Balance,
+        min_work_score: f64,
+        expiration_days: u64,
+    ) -> Result<Hash, MarketplaceError> {
+        // Validate bounty
         if bounty == 0 {
             return Err(MarketplaceError::InvalidBounty);
         }
@@ -92,10 +113,40 @@ impl ProblemMarketplace {
             return Err(MarketplaceError::InvalidWorkScore);
         }
 
-        // Generate problem ID
-        let problem_data = bincode::serialize(&problem)
-            .map_err(|_| MarketplaceError::SerializationError)?;
-        let problem_id = Hash::new(&problem_data);
+        // Validate mode-specific requirements
+        match &mode {
+            SubmissionMode::Public { problem: _ } => {
+                // Public mode: Current validation logic
+                // No additional checks needed
+            }
+            SubmissionMode::Private {
+                problem_commitment,
+                zk_wellformed_proof,
+                public_params,
+            } => {
+                // Private mode: Verify ZK proof
+                if !zk_wellformed_proof.verify(problem_commitment, public_params) {
+                    return Err(MarketplaceError::InvalidProof);
+                }
+
+                // Verify complexity estimate matches min_work_score
+                if public_params.complexity_estimate < min_work_score {
+                    return Err(MarketplaceError::InvalidParameters);
+                }
+            }
+        }
+
+        // Generate problem_id from mode
+        let problem_id = match &mode {
+            SubmissionMode::Public { problem } => {
+                let problem_data = bincode::serialize(problem)
+                    .map_err(|_| MarketplaceError::SerializationError)?;
+                Hash::new(&problem_data)
+            }
+            SubmissionMode::Private { problem_commitment, .. } => {
+                *problem_commitment
+            }
+        };
 
         // Check for duplicates
         if self.problems.contains_key(&problem_id) {
@@ -111,7 +162,8 @@ impl ProblemMarketplace {
 
         let submission = ProblemSubmission {
             problem_id,
-            problem,
+            submission_mode: mode,
+            problem_reveal: None,
             submitter,
             bounty,
             min_work_score,
@@ -143,6 +195,7 @@ impl ProblemMarketplace {
     }
 
     /// Submit solution for a problem
+    /// Handles both public and private (revealed) submissions
     pub fn submit_solution(
         &mut self,
         problem_id: Hash,
@@ -170,13 +223,26 @@ impl ProblemMarketplace {
             return Err(MarketplaceError::ProblemExpired);
         }
 
-        // Verify solution
-        if !solution.verify(&problem.problem) {
+        // Get problem for verification
+        let problem_type = match &problem.submission_mode {
+            SubmissionMode::Public { problem } => problem,
+            SubmissionMode::Private { .. } => {
+                // Require problem to be revealed before accepting solutions
+                problem
+                    .problem_reveal
+                    .as_ref()
+                    .map(|r| &r.problem)
+                    .ok_or(MarketplaceError::ProblemNotRevealed)?
+            }
+        };
+
+        // Verify solution against revealed problem
+        if !solution.verify(problem_type) {
             return Err(MarketplaceError::InvalidSolution);
         }
 
         // Calculate quality score
-        let quality = solution.quality(&problem.problem);
+        let quality = solution.quality(problem_type);
         let work_score_estimate = quality * 100.0; // Simplified
 
         if work_score_estimate < problem.min_work_score {
@@ -189,6 +255,41 @@ impl ProblemMarketplace {
         problem.status = ProblemStatus::Solved;
 
         println!("Solution accepted for problem {:?} by {:?}", problem_id, solver);
+
+        Ok(())
+    }
+
+    /// Reveal problem for private bounty
+    /// Allows submitter to reveal the actual problem after solution or expiration
+    pub fn reveal_problem(
+        &mut self,
+        problem_id: Hash,
+        reveal: ProblemReveal,
+    ) -> Result<(), MarketplaceError> {
+        let problem = self
+            .problems
+            .get_mut(&problem_id)
+            .ok_or(MarketplaceError::ProblemNotFound)?;
+
+        // Verify this is a private submission
+        let commitment = match &problem.submission_mode {
+            SubmissionMode::Private {
+                problem_commitment, ..
+            } => problem_commitment,
+            SubmissionMode::Public { .. } => {
+                return Err(MarketplaceError::NotPrivateSubmission);
+            }
+        };
+
+        // Verify reveal matches commitment
+        if !reveal.verify(commitment) {
+            return Err(MarketplaceError::RevealMismatch);
+        }
+
+        // Store reveal
+        problem.problem_reveal = Some(reveal);
+
+        println!("Problem revealed: {:?}", problem_id);
 
         Ok(())
     }
@@ -361,6 +462,16 @@ pub enum MarketplaceError {
     CannotCancel,
     #[error("Serialization error")]
     SerializationError,
+    #[error("Invalid proof")]
+    InvalidProof,
+    #[error("Invalid parameters")]
+    InvalidParameters,
+    #[error("Problem not revealed yet")]
+    ProblemNotRevealed,
+    #[error("Reveal does not match commitment")]
+    RevealMismatch,
+    #[error("Not a private submission")]
+    NotPrivateSubmission,
 }
 
 #[cfg(test)]
@@ -372,7 +483,7 @@ mod tests {
     fn test_submit_problem() {
         let mut marketplace = ProblemMarketplace::new();
 
-        let problem = ProblemType::SubsetSum {
+        let problem = coinject_core::ProblemType::SubsetSum {
             numbers: vec![1, 2, 3, 4, 5],
             target: 9,
         };
@@ -380,7 +491,7 @@ mod tests {
         let submitter = Address::from_bytes([1u8; 32]);
         let bounty = 1000;
 
-        let result = marketplace.submit_problem(problem, submitter, bounty, 10.0, 7);
+        let result = marketplace.submit_public_problem(problem, submitter, bounty, 10.0, 7);
         assert!(result.is_ok());
 
         let problem_id = result.unwrap();
@@ -393,14 +504,14 @@ mod tests {
     fn test_submit_solution() {
         let mut marketplace = ProblemMarketplace::new();
 
-        let problem = ProblemType::SubsetSum {
+        let problem = coinject_core::ProblemType::SubsetSum {
             numbers: vec![1, 2, 3, 4, 5],
             target: 9,
         };
 
         let submitter = Address::from_bytes([1u8; 32]);
         let problem_id = marketplace
-            .submit_problem(problem, submitter, 1000, 1.0, 7)
+            .submit_public_problem(problem, submitter, 1000, 1.0, 7)
             .unwrap();
 
         let solver = Address::from_bytes([2u8; 32]);
@@ -418,14 +529,14 @@ mod tests {
     fn test_claim_bounty() {
         let mut marketplace = ProblemMarketplace::new();
 
-        let problem = ProblemType::SubsetSum {
+        let problem = coinject_core::ProblemType::SubsetSum {
             numbers: vec![1, 2, 3, 4, 5],
             target: 9,
         };
 
         let submitter = Address::from_bytes([1u8; 32]);
         let problem_id = marketplace
-            .submit_problem(problem, submitter, 1000, 1.0, 7)
+            .submit_public_problem(problem, submitter, 1000, 1.0, 7)
             .unwrap();
 
         let solver = Address::from_bytes([2u8; 32]);
@@ -442,14 +553,14 @@ mod tests {
     fn test_cancel_problem() {
         let mut marketplace = ProblemMarketplace::new();
 
-        let problem = ProblemType::SubsetSum {
+        let problem = coinject_core::ProblemType::SubsetSum {
             numbers: vec![1, 2, 3, 4, 5],
             target: 9,
         };
 
         let submitter = Address::from_bytes([1u8; 32]);
         let problem_id = marketplace
-            .submit_problem(problem, submitter, 1000, 10.0, 7)
+            .submit_public_problem(problem, submitter, 1000, 10.0, 7)
             .unwrap();
 
         let bounty = marketplace.cancel_problem(problem_id, submitter).unwrap();
@@ -463,19 +574,19 @@ mod tests {
     fn test_marketplace_stats() {
         let mut marketplace = ProblemMarketplace::new();
 
-        let problem1 = ProblemType::SubsetSum {
+        let problem1 = coinject_core::ProblemType::SubsetSum {
             numbers: vec![1, 2, 3],
             target: 6,
         };
 
-        let problem2 = ProblemType::SubsetSum {
+        let problem2 = coinject_core::ProblemType::SubsetSum {
             numbers: vec![4, 5, 6],
             target: 11,
         };
 
         let submitter = Address::from_bytes([1u8; 32]);
-        marketplace.submit_problem(problem1, submitter, 1000, 10.0, 7).unwrap();
-        marketplace.submit_problem(problem2, submitter, 2000, 10.0, 7).unwrap();
+        marketplace.submit_public_problem(problem1, submitter, 1000, 10.0, 7).unwrap();
+        marketplace.submit_public_problem(problem2, submitter, 2000, 10.0, 7).unwrap();
 
         let stats = marketplace.get_stats();
         assert_eq!(stats.total_problems, 2);

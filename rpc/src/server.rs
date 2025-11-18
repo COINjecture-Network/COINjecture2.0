@@ -1,7 +1,10 @@
 // JSON-RPC Server for COINjecture Network B
 // Provides wallet and client API access
 
-use coinject_core::{Address, Balance, Block, BlockHeader, Hash, Transaction};
+use coinject_core::{
+    Address, Balance, Block, BlockHeader, Hash, Transaction,
+    ProblemType, SubmissionMode, ProblemReveal, WellformednessProof, ProblemParameters,
+};
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 use coinject_state::{MarketplaceStats, ProblemSubmission};
 use coinject_state::{
@@ -67,6 +70,33 @@ pub struct ProblemInfo {
     pub status: String,
     pub submitted_at: i64,
     pub expires_at: i64,
+    pub is_private: bool,
+    pub problem_type: Option<String>,
+    pub problem_size: Option<usize>,
+    pub is_revealed: bool,
+}
+
+/// Private problem submission parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateProblemParams {
+    pub commitment: String,
+    pub proof_bytes: String,
+    pub vk_hash: String,
+    pub public_inputs: Vec<String>,
+    pub problem_type: String,
+    pub size: usize,
+    pub complexity_estimate: f64,
+    pub bounty: Balance,
+    pub min_work_score: f64,
+    pub expiration_days: u64,
+}
+
+/// Problem reveal parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevealParams {
+    pub problem_id: String,
+    pub problem: String, // JSON-encoded ProblemType
+    pub salt: String,    // Hex-encoded 32-byte salt
 }
 
 /// TimeLock information response
@@ -110,6 +140,16 @@ pub struct ChannelInfo {
     pub status: String,
     pub opened_at_height: u64,
     pub closed_at_height: Option<u64>,
+}
+
+/// Faucet request response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaucetResponse {
+    pub success: bool,
+    pub amount: Option<Balance>,
+    pub new_balance: Option<Balance>,
+    pub message: String,
+    pub cooldown_remaining: Option<u64>,
 }
 
 /// JSON-RPC API definition
@@ -163,6 +203,14 @@ pub trait CoinjectRpc {
     #[method(name = "marketplace_getStats")]
     async fn get_marketplace_stats(&self) -> RpcResult<MarketplaceStats>;
 
+    /// Submit private problem with commitment and ZK proof
+    #[method(name = "marketplace_submitPrivateProblem")]
+    async fn submit_private_problem(&self, params: PrivateProblemParams) -> RpcResult<String>;
+
+    /// Reveal problem for private bounty
+    #[method(name = "marketplace_revealProblem")]
+    async fn reveal_problem(&self, params: RevealParams) -> RpcResult<bool>;
+
     /// Get timelocks for a recipient address
     #[method(name = "timelock_getByRecipient")]
     async fn get_timelocks_by_recipient(&self, recipient: String) -> RpcResult<Vec<TimeLockInfo>>;
@@ -194,7 +242,14 @@ pub trait CoinjectRpc {
     /// Get disputed channels
     #[method(name = "channel_getDisputed")]
     async fn get_disputed_channels(&self) -> RpcResult<Vec<ChannelInfo>>;
+
+    /// Request testnet tokens from faucet (testnet only)
+    #[method(name = "faucet_requestTokens")]
+    async fn faucet_request_tokens(&self, address: String) -> RpcResult<FaucetResponse>;
 }
+
+/// Faucet handler callback type
+pub type FaucetHandler = Arc<dyn Fn(&Address) -> Result<Balance, String> + Send + Sync>;
 
 /// RPC server state
 pub struct RpcServerState {
@@ -211,6 +266,7 @@ pub struct RpcServerState {
     pub best_hash: Arc<RwLock<Hash>>,
     pub genesis_hash: Hash,
     pub peer_count: Arc<RwLock<usize>>,
+    pub faucet_handler: Option<FaucetHandler>,
 }
 
 /// RPC server implementation
@@ -307,6 +363,36 @@ impl RpcServerImpl {
 
     /// Convert ProblemSubmission to ProblemInfo
     fn problem_to_info(&self, problem: &ProblemSubmission) -> ProblemInfo {
+        let (is_private, problem_type, problem_size, is_revealed) = match &problem.submission_mode {
+            SubmissionMode::Public { problem } => {
+                let problem_type_name = match problem {
+                    ProblemType::SubsetSum { numbers, .. } => {
+                        Some(format!("SubsetSum({})", numbers.len()))
+                    }
+                    ProblemType::SAT { variables, clauses } => {
+                        Some(format!("SAT(vars={}, clauses={})", variables, clauses.len()))
+                    }
+                    ProblemType::TSP { cities, .. } => {
+                        Some(format!("TSP(cities={})", cities))
+                    }
+                    ProblemType::Custom { .. } => Some("Custom".to_string()),
+                };
+                let size = match problem {
+                    ProblemType::SubsetSum { numbers, .. } => Some(numbers.len()),
+                    ProblemType::SAT { variables, .. } => Some(*variables),
+                    ProblemType::TSP { cities, .. } => Some(*cities),
+                    ProblemType::Custom { .. } => None,
+                };
+                (false, problem_type_name, size, true)
+            }
+            SubmissionMode::Private { public_params, .. } => {
+                let problem_type_name = Some(public_params.problem_type.clone());
+                let size = Some(public_params.size);
+                let is_revealed = problem.problem_reveal.is_some();
+                (true, problem_type_name, size, is_revealed)
+            }
+        };
+
         ProblemInfo {
             problem_id: hex::encode(problem.problem_id.as_bytes()),
             submitter: hex::encode(problem.submitter.as_bytes()),
@@ -315,6 +401,10 @@ impl RpcServerImpl {
             status: format!("{:?}", problem.status),
             submitted_at: problem.submitted_at,
             expires_at: problem.expires_at,
+            is_private,
+            problem_type,
+            problem_size,
+            is_revealed,
         }
     }
 }
@@ -344,11 +434,18 @@ impl CoinjectRpcServer for RpcServerImpl {
     }
 
     async fn submit_transaction(&self, tx_hex: String) -> RpcResult<String> {
-        let tx_bytes = hex::decode(tx_hex.trim_start_matches("0x"))
-            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, e.to_string(), None::<()>))?;
-
-        let tx: Transaction = bincode::deserialize(&tx_bytes)
-            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, e.to_string(), None::<()>))?;
+        // Check if it's JSON format (from web wallet) or hex-encoded bincode (from CLI)
+        let tx: Transaction = if tx_hex.trim().starts_with('{') {
+            // JSON format (from web wallet)
+            serde_json::from_str(&tx_hex)
+                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("JSON deserialize error: {}", e), None::<()>))?
+        } else {
+            // Hex-encoded bincode format (from CLI wallet)
+            let tx_bytes = hex::decode(tx_hex.trim_start_matches("0x"))
+                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Hex decode error: {}", e), None::<()>))?;
+            bincode::deserialize(&tx_bytes)
+                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Bincode deserialize error: {}", e), None::<()>))?
+        };
 
         // Basic validation
         if !tx.verify_signature() {
@@ -460,6 +557,94 @@ impl CoinjectRpcServer for RpcServerImpl {
             .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))
     }
 
+    async fn submit_private_problem(&self, params: PrivateProblemParams) -> RpcResult<String> {
+        // Parse commitment hash
+        let commitment = self.parse_hash(&params.commitment)?;
+
+        // Parse proof bytes
+        let proof_bytes = hex::decode(params.proof_bytes.trim_start_matches("0x"))
+            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, e.to_string(), None::<()>))?;
+
+        // Parse VK hash
+        let vk_hash = self.parse_hash(&params.vk_hash)?;
+
+        // Parse public inputs
+        let mut public_inputs = Vec::new();
+        for input_hex in params.public_inputs {
+            let input_bytes = hex::decode(input_hex.trim_start_matches("0x"))
+                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, e.to_string(), None::<()>))?;
+            public_inputs.push(input_bytes);
+        }
+
+        // Construct ZK proof
+        let zk_proof = WellformednessProof {
+            proof_bytes,
+            vk_hash,
+            public_inputs,
+        };
+
+        // Construct public parameters
+        let public_params = ProblemParameters {
+            problem_type: params.problem_type,
+            size: params.size,
+            complexity_estimate: params.complexity_estimate,
+        };
+
+        // Construct private submission mode
+        let submission_mode = SubmissionMode::Private {
+            problem_commitment: commitment,
+            zk_wellformed_proof: zk_proof,
+            public_params,
+        };
+
+        // Submit to marketplace state (using placeholder address - in production this would come from authenticated session)
+        let submitter = Address::from_bytes([0u8; 32]); // TODO: Get from authenticated user session
+
+        let problem_id = self.state.marketplace_state.submit_problem(
+            submission_mode,
+            submitter,
+            params.bounty,
+            params.min_work_score,
+            params.expiration_days,
+        )
+        .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        Ok(hex::encode(problem_id.as_bytes()))
+    }
+
+    async fn reveal_problem(&self, params: RevealParams) -> RpcResult<bool> {
+        // Parse problem ID
+        let problem_id = self.parse_hash(&params.problem_id)?;
+
+        // Parse problem (deserialize from JSON)
+        let problem: ProblemType = serde_json::from_str(&params.problem)
+            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Invalid problem JSON: {}", e), None::<()>))?;
+
+        // Parse salt
+        let salt_bytes = hex::decode(params.salt.trim_start_matches("0x"))
+            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, e.to_string(), None::<()>))?;
+
+        if salt_bytes.len() != 32 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Salt must be 32 bytes",
+                None::<()>,
+            ));
+        }
+
+        let mut salt = [0u8; 32];
+        salt.copy_from_slice(&salt_bytes);
+
+        // Create reveal
+        let reveal = ProblemReveal::new(problem, salt);
+
+        // Submit reveal to marketplace state
+        self.state.marketplace_state.reveal_problem(problem_id, reveal)
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        Ok(true)
+    }
+
     async fn get_timelocks_by_recipient(&self, recipient: String) -> RpcResult<Vec<TimeLockInfo>> {
         let addr = self.parse_address(&recipient)?;
         let timelocks = self.state.timelock_state.get_timelocks_for_recipient(&addr);
@@ -502,6 +687,72 @@ impl CoinjectRpcServer for RpcServerImpl {
     async fn get_disputed_channels(&self) -> RpcResult<Vec<ChannelInfo>> {
         let channels = self.state.channel_state.get_disputed_channels();
         Ok(channels.into_iter().map(|c| self.channel_to_info(&c)).collect())
+    }
+
+    async fn faucet_request_tokens(&self, address: String) -> RpcResult<FaucetResponse> {
+        // Check if faucet is enabled
+        let faucet_handler = match &self.state.faucet_handler {
+            Some(handler) => handler,
+            None => {
+                return Ok(FaucetResponse {
+                    success: false,
+                    amount: None,
+                    new_balance: None,
+                    message: "Faucet is not enabled on this node. Use --enable-faucet flag to enable.".to_string(),
+                    cooldown_remaining: None,
+                });
+            }
+        };
+
+        // Parse address
+        let addr = self.parse_address(&address)?;
+
+        // Call faucet handler
+        match faucet_handler(&addr) {
+            Ok(amount) => {
+                // Credit the account by adding to current balance
+                let current_balance = self.state.account_state.get_balance(&addr);
+                let new_balance = current_balance + amount;
+
+                if let Err(e) = self.state.account_state.set_balance(&addr, new_balance) {
+                    return Ok(FaucetResponse {
+                        success: false,
+                        amount: None,
+                        new_balance: None,
+                        message: format!("Failed to credit account: {}", e),
+                        cooldown_remaining: None,
+                    });
+                }
+
+                Ok(FaucetResponse {
+                    success: true,
+                    amount: Some(amount),
+                    new_balance: Some(new_balance),
+                    message: format!("Successfully credited {} tokens to your account!", amount),
+                    cooldown_remaining: None,
+                })
+            }
+            Err(error_msg) => {
+                // Parse cooldown from error message if present
+                let cooldown_remaining = if error_msg.contains("Try again in") {
+                    error_msg
+                        .split("Try again in ")
+                        .nth(1)
+                        .and_then(|s| s.split(" seconds").next())
+                        .and_then(|s| s.parse::<u64>().ok())
+                } else {
+                    None
+                };
+
+                Ok(FaucetResponse {
+                    success: false,
+                    amount: None,
+                    new_balance: None,
+                    message: error_msg,
+                    cooldown_remaining,
+                })
+            }
+        }
     }
 }
 
@@ -573,6 +824,10 @@ mod tests {
 
         let state = Arc::new(RpcServerState {
             account_state: Arc::new(AccountState::new(&temp_dir).unwrap()),
+            timelock_state: Arc::new(TimeLockState::new()),
+            escrow_state: Arc::new(EscrowState::new()),
+            channel_state: Arc::new(ChannelState::new()),
+            marketplace_state: Arc::new(MarketplaceState::new()),
             blockchain: Arc::new(MockBlockchainReader) as Arc<dyn BlockchainReader>,
             marketplace: Arc::new(RwLock::new(ProblemMarketplace::new())),
             tx_pool: Arc::new(RwLock::new(TransactionPool::new())),
@@ -581,6 +836,7 @@ mod tests {
             best_hash: Arc::new(RwLock::new(Hash::ZERO)),
             genesis_hash: Hash::ZERO,
             peer_count: Arc::new(RwLock::new(0)),
+            faucet_handler: None,
         });
 
         let rpc = RpcServerImpl::new(state);
@@ -600,6 +856,10 @@ mod tests {
 
         let state = Arc::new(RpcServerState {
             account_state: Arc::new(AccountState::new(&temp_dir).unwrap()),
+            timelock_state: Arc::new(TimeLockState::new()),
+            escrow_state: Arc::new(EscrowState::new()),
+            channel_state: Arc::new(ChannelState::new()),
+            marketplace_state: Arc::new(MarketplaceState::new()),
             blockchain: Arc::new(MockBlockchainReader) as Arc<dyn BlockchainReader>,
             marketplace: Arc::new(RwLock::new(ProblemMarketplace::new())),
             tx_pool: Arc::new(RwLock::new(TransactionPool::new())),
@@ -608,6 +868,7 @@ mod tests {
             best_hash: Arc::new(RwLock::new(Hash::ZERO)),
             genesis_hash: Hash::ZERO,
             peer_count: Arc::new(RwLock::new(0)),
+            faucet_handler: None,
         });
 
         let rpc = RpcServerImpl::new(state);

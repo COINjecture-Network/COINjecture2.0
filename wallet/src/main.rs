@@ -46,6 +46,10 @@ enum Commands {
     /// Chain information commands
     #[command(subcommand)]
     Chain(ChainCommands),
+
+    /// Testnet faucet commands
+    #[command(subcommand)]
+    Faucet(FaucetCommands),
 }
 
 #[derive(Subcommand)]
@@ -234,6 +238,51 @@ enum TransactionCommands {
         #[arg(short = 'b', long)]
         final_balance_b: u128,
     },
+
+    /// Create a bilateral trustline with dimensional economics
+    TrustlineCreate {
+        /// Account name or address (participant A)
+        #[arg(short, long)]
+        from: String,
+
+        /// Participant B address
+        to: String,
+
+        /// Credit limit from A to B
+        #[arg(long)]
+        limit_a_to_b: u128,
+
+        /// Credit limit from B to A
+        #[arg(long)]
+        limit_b_to_a: u128,
+
+        /// Dimensional scale (1-8)
+        #[arg(short = 'd', long, default_value = "3")]
+        dimensional_scale: u8,
+    },
+
+    /// Swap tokens between dimensional pools
+    PoolSwap {
+        /// Account name or address
+        #[arg(short, long)]
+        from: String,
+
+        /// Pool to swap from (D1, D2, D3)
+        #[arg(long)]
+        pool_from: String,
+
+        /// Pool to swap to (D1, D2, D3)
+        #[arg(long)]
+        pool_to: String,
+
+        /// Amount to swap in
+        #[arg(long)]
+        amount_in: u128,
+
+        /// Minimum amount expected out (slippage protection)
+        #[arg(long)]
+        min_amount_out: u128,
+    },
 }
 
 #[derive(Subcommand)]
@@ -277,6 +326,16 @@ enum ChainCommands {
     Latest,
 }
 
+#[derive(Subcommand)]
+enum FaucetCommands {
+    /// Request testnet tokens from faucet
+    Request {
+        /// Account name or address to credit
+        #[arg(short, long)]
+        account: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -298,6 +357,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Transaction(cmd) => handle_transaction_command(cmd, &client).await?,
         Commands::Marketplace(cmd) => handle_marketplace_command(cmd, &client).await?,
         Commands::Chain(cmd) => handle_chain_command(cmd, &client).await?,
+        Commands::Faucet(cmd) => handle_faucet_command(cmd, &client).await?,
     }
 
     Ok(())
@@ -395,6 +455,40 @@ async fn handle_transaction_command(
             )
             .await?
         }
+        TransactionCommands::TrustlineCreate {
+            from,
+            to,
+            limit_a_to_b,
+            limit_b_to_a,
+            dimensional_scale,
+        } => {
+            println!("{}", "⚠️  TrustLine transactions are not yet fully implemented".yellow());
+            println!("{}", "This feature will be available in a future update.".dimmed());
+            println!();
+            println!("Parameters would be:");
+            println!("  From: {}", from);
+            println!("  To: {}", to);
+            println!("  Limit A→B: {}", limit_a_to_b);
+            println!("  Limit B→A: {}", limit_b_to_a);
+            println!("  Dimensional Scale: {}", dimensional_scale);
+        }
+        TransactionCommands::PoolSwap {
+            from,
+            pool_from,
+            pool_to,
+            amount_in,
+            min_amount_out,
+        } => {
+            println!("{}", "⚠️  Pool Swap transactions are not yet fully implemented".yellow());
+            println!("{}", "This feature will be available in a future update.".dimmed());
+            println!();
+            println!("Parameters would be:");
+            println!("  From: {}", from);
+            println!("  Pool From: {}", pool_from);
+            println!("  Pool To: {}", pool_to);
+            println!("  Amount In: {}", amount_in);
+            println!("  Min Amount Out: {}", min_amount_out);
+        }
     }
     Ok(())
 }
@@ -462,6 +556,53 @@ async fn handle_chain_command(cmd: ChainCommands, client: &RpcClient) -> anyhow:
                 println!("Reward:     {} tokens", block.coinbase.reward);
             } else {
                 println!("{}", "No blocks found".red());
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_faucet_command(cmd: FaucetCommands, client: &RpcClient) -> anyhow::Result<()> {
+    match cmd {
+        FaucetCommands::Request { account } => {
+            println!("{}", "💧 Requesting tokens from testnet faucet...".dimmed());
+            println!();
+
+            // Load account from keystore or use as address directly
+            let address = if account.len() == 64 && account.chars().all(|c| c.is_ascii_hexdigit()) {
+                account.clone()
+            } else {
+                // Try to load from keystore
+                let keystore = crate::keystore::Keystore::new()?;
+                let acc = keystore.get_account(&account)?;
+                acc.address
+            };
+
+            // Call faucet RPC method
+            match client.faucet_request(&address).await {
+                Ok(response) => {
+                    if response.success {
+                        println!("{}", "✅ Faucet Request Successful".green().bold());
+                        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        println!("Amount credited: {} tokens", response.amount.unwrap_or(0));
+                        println!("New balance:     {} tokens", response.new_balance.unwrap_or(0));
+                        println!();
+                        println!("{}", response.message.green());
+                    } else {
+                        println!("{}", "❌ Faucet Request Failed".red().bold());
+                        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        println!("{}", response.message.yellow());
+                        if let Some(cooldown) = response.cooldown_remaining {
+                            println!();
+                            println!("Try again in: {} seconds", cooldown);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("{}", "❌ Failed to contact faucet".red().bold());
+                    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    println!("Error: {}", e);
+                }
             }
         }
     }

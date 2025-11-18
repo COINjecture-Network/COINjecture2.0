@@ -103,8 +103,8 @@ All should show the same `best_height`.
 
 ### Create Accounts
 ```bash
-target\release\coinject-wallet.exe account new --name alice
-target\release\coinject-wallet.exe account new --name bob
+target\release\coinject-wallet.exe account new --name sender
+target\release\coinject-wallet.exe account new --name receiver
 ```
 
 ### Get Genesis Address Balance
@@ -115,7 +115,7 @@ target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 account balance <
 
 ### Send Transaction
 ```bash
-target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 transaction send --from <account> --to <bob-address> --amount 1000
+target\release\coinject-wallet.exe --rpc http://127.0.0.1:9933 transaction send --from <sender-account> --to <receiver-address> --amount 1000
 ```
 
 Watch all node terminals for:

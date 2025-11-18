@@ -3,7 +3,7 @@
 
 use anyhow::{anyhow, Result};
 use coinject_core::{Balance, Block, BlockHeader};
-use coinject_rpc::{AccountInfo, ChainInfo, ProblemInfo, TransactionStatus};
+use coinject_rpc::{AccountInfo, ChainInfo, FaucetResponse, ProblemInfo, TransactionStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -170,6 +170,15 @@ impl RpcClient {
     /// Get marketplace statistics
     pub async fn get_marketplace_stats(&self) -> Result<serde_json::Value> {
         self.call("marketplace_getStats", json!([])).await
+    }
+
+    // ========================================
+    // Faucet methods
+    // ========================================
+
+    /// Request tokens from testnet faucet
+    pub async fn faucet_request(&self, address: &str) -> Result<FaucetResponse> {
+        self.call("faucet_requestTokens", json!([address])).await
     }
 }
 

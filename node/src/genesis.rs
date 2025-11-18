@@ -5,6 +5,7 @@ use coinject_core::{
     Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, ProblemType, Solution,
     SolutionReveal,
 };
+use sha2::{Sha256, Digest};
 
 /// Genesis block configuration
 pub struct GenesisConfig {
@@ -14,13 +15,29 @@ pub struct GenesisConfig {
 
 impl Default for GenesisConfig {
     fn default() -> Self {
-        // Default genesis address (all zeros except last byte = 1)
+        // Genesis address from genesis_wallet.json
+        // Derive address from public key using SHA256 (same as keystore.rs)
+        // Public key: df52ac77a92607b348f742aa3542a3f4e72c7dff49c07819d98b459111979090
+        // Description: Genesis Wallet - Controls D₈ (Foundation Endowment, 8.2% normalized)
+        let public_key_hex = "df52ac77a92607b348f742aa3542a3f4e72c7dff49c07819d98b459111979090";
+        let public_key_bytes = hex::decode(public_key_hex)
+            .expect("Failed to decode public key from hex");
+        
+        if public_key_bytes.len() != 32 {
+            panic!("Public key must be 32 bytes, got {}", public_key_bytes.len());
+        }
+        
+        // Derive address using SHA256 (same as wallet/src/keystore.rs derive_address)
+        let mut hasher = Sha256::new();
+        hasher.update(&public_key_bytes);
+        let address_hash = hasher.finalize();
+        
         let mut addr_bytes = [0u8; 32];
-        addr_bytes[31] = 1;
+        addr_bytes.copy_from_slice(&address_hash[..32]);
 
         GenesisConfig {
             genesis_address: Address::from_bytes(addr_bytes),
-            initial_supply: 1_000_000_000, // 1B tokens for testnet validation of dimensional economics
+            initial_supply: 0, // Zero initial supply - tokens created through mining rewards only
         }
     }
 }

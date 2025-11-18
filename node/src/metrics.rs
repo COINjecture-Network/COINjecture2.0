@@ -28,6 +28,38 @@ lazy_static! {
     )
     .unwrap();
 
+    /// Locked liquidity per pool (not yet unlocked by U_n(τ))
+    pub static ref POOL_LOCKED: GaugeVec = register_gauge_vec!(
+        "coinject_pool_locked",
+        "Locked tokens in each dimensional pool",
+        &["dimension"]
+    )
+    .unwrap();
+
+    /// Unlocked liquidity per pool (available for withdrawal/yields)
+    pub static ref POOL_UNLOCKED: GaugeVec = register_gauge_vec!(
+        "coinject_pool_unlocked",
+        "Unlocked tokens in each dimensional pool",
+        &["dimension"]
+    )
+    .unwrap();
+
+    /// Unlock fraction per pool: U_n(τ) = 1 - e^(-η(τ - τ_n))
+    pub static ref POOL_UNLOCK_FRACTION: GaugeVec = register_gauge_vec!(
+        "coinject_pool_unlock_fraction",
+        "Unlock fraction (0.0 to 1.0) for each pool",
+        &["dimension"]
+    )
+    .unwrap();
+
+    /// Yield rate per pool: r_n(τ) = η · e^(-ητ_n)
+    pub static ref POOL_YIELD_RATE: GaugeVec = register_gauge_vec!(
+        "coinject_pool_yield_rate",
+        "Yield generation rate for each pool",
+        &["dimension"]
+    )
+    .unwrap();
+
     /// Dimensional decay rates: D_n = e^(-η·τ_n)
     /// Should converge to η = 1/√2 ≈ 0.7071
     pub static ref DIMENSIONAL_DECAY_RATE: GaugeVec = register_gauge_vec!(
@@ -250,6 +282,34 @@ lazy_static! {
     )
     .unwrap();
 
+    /// Convergence confidence (R² from exponential fitting)
+    pub static ref CONVERGENCE_CONFIDENCE: Gauge = register_gauge!(
+        "coinject_convergence_confidence",
+        "R² coefficient from exponential fitting (0.0-1.0)"
+    )
+    .unwrap();
+
+    /// Measured oracle delta (Viviani distance metric)
+    pub static ref MEASURED_ORACLE_DELTA: Gauge = register_gauge!(
+        "coinject_measured_oracle_delta",
+        "Oracle delta computed from measured η and λ"
+    )
+    .unwrap();
+
+    /// Eta convergence error |η_measured - η_theoretical|
+    pub static ref ETA_CONVERGENCE_ERROR: Gauge = register_gauge!(
+        "coinject_eta_convergence_error",
+        "Absolute error between measured and theoretical η"
+    )
+    .unwrap();
+
+    /// Lambda convergence error |λ_measured - λ_theoretical|
+    pub static ref LAMBDA_CONVERGENCE_ERROR: Gauge = register_gauge!(
+        "coinject_lambda_convergence_error",
+        "Absolute error between measured and theoretical λ"
+    )
+    .unwrap();
+
     /// Unit circle constraint: |μ|² = η² + λ²
     /// Should equal 1.0 if theory is correct
     pub static ref UNIT_CIRCLE_CONSTRAINT: Gauge = register_gauge!(
@@ -297,6 +357,18 @@ pub fn init() {
     REGISTRY
         .register(Box::new(POOL_BALANCE.clone()))
         .expect("Failed to register pool_balance");
+    REGISTRY
+        .register(Box::new(POOL_LOCKED.clone()))
+        .expect("Failed to register pool_locked");
+    REGISTRY
+        .register(Box::new(POOL_UNLOCKED.clone()))
+        .expect("Failed to register pool_unlocked");
+    REGISTRY
+        .register(Box::new(POOL_UNLOCK_FRACTION.clone()))
+        .expect("Failed to register pool_unlock_fraction");
+    REGISTRY
+        .register(Box::new(POOL_YIELD_RATE.clone()))
+        .expect("Failed to register pool_yield_rate");
     REGISTRY
         .register(Box::new(DIMENSIONAL_DECAY_RATE.clone()))
         .expect("Failed to register dimensional_decay_rate");

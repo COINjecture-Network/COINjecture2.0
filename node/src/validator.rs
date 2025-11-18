@@ -83,7 +83,9 @@ impl BlockValidator {
         }
 
         // 5. Validate commitment-reveal
-        let epoch_salt = Hash::new(&block.header.height.to_le_bytes());
+        // CRITICAL: Epoch salt must be derived from parent block hash (prev_hash)
+        // This prevents pre-mining attacks where miners compute problems before parent block exists
+        let epoch_salt = block.header.prev_hash; // Use parent block hash as epoch salt
         if !block.solution_reveal.commitment.verify(
             &block.solution_reveal.problem,
             &block.solution_reveal.solution,

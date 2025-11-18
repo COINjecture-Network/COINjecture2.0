@@ -323,9 +323,11 @@ impl Miner {
         println!("Work score: {}", work_score);
 
         // 5. Create commitment (prevents grinding)
-        let epoch_salt = Hash::new(&height.to_le_bytes());
+        // CRITICAL: Epoch salt derived from parent block hash to prevent pre-mining
+        // This ensures problems cannot be pre-computed before parent block is mined
+        let epoch_salt = prev_hash; // Use parent block hash as epoch salt
         let commitment = Commitment::create(&problem, &solution, &epoch_salt);
-        println!("Commitment created: {:?}", commitment.hash);
+        println!("Commitment created: {:?} (epoch_salt from parent: {:?})", commitment.hash, prev_hash);
 
         // 6. Calculate PoUW transparency metrics
         let solve_time_ms = solve_time.as_millis() as u64;

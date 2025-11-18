@@ -79,6 +79,19 @@ impl MiningIncentives {
         let mut max_value = 0.0;
 
         for problem in open_problems {
+            // Extract problem type from submission mode
+            // Only consider public problems or revealed private problems
+            let problem_type = match &problem.submission_mode {
+                coinject_core::SubmissionMode::Public { problem } => problem,
+                coinject_core::SubmissionMode::Private { .. } => {
+                    // Private problem - check if revealed
+                    match &problem.problem_reveal {
+                        Some(reveal) => &reveal.problem,
+                        None => continue, // Skip unrevealed private problems
+                    }
+                }
+            };
+
             // Calculate value score: bounty + expected D3 bonus - time penalty
             let time_factor = self.calculate_time_factor(problem.submitted_at, problem.expires_at);
             let value = (problem.bounty as f64) * time_factor;
@@ -87,7 +100,7 @@ impl MiningIncentives {
                 max_value = value;
                 best_problem = Some((
                     problem.problem_id,
-                    problem.problem.clone(),
+                    problem_type.clone(),
                     problem.bounty,
                 ));
             }

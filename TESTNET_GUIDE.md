@@ -108,7 +108,7 @@ curl -X POST http://127.0.0.1:9933 \
 ./target/release/coinject-wallet --rpc http://127.0.0.1:9933 chain block 10
 
 # Create new account
-./target/release/coinject-wallet account new --name alice
+./target/release/coinject-wallet account new --name myaccount
 
 # Check balance
 ./target/release/coinject-wallet --rpc http://127.0.0.1:9933 account balance <address>
@@ -178,15 +178,15 @@ curl -X POST http://127.0.0.1:9933 \
 1. Start 3 nodes (at least 1 mining)
 2. Create accounts using wallet:
    ```bash
-   ./target/release/coinject-wallet account new --name alice
-   ./target/release/coinject-wallet account new --name bob
+   ./target/release/coinject-wallet account new --name sender
+   ./target/release/coinject-wallet account new --name receiver
    ```
 3. Send transaction from node with funds:
    ```bash
    ./target/release/coinject-wallet --rpc http://127.0.0.1:9933 \
      transaction send \
-     --from alice \
-     --to <bob-address> \
+     --from sender \
+     --to <receiver-address> \
      --amount 1000
    ```
 4. Observe:

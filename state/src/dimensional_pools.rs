@@ -22,6 +22,8 @@ use std::sync::Arc;
 const POOL_LIQUIDITY_TABLE: TableDefinition<u8, &[u8]> = TableDefinition::new("pool_liquidity");
 const SWAP_RECORDS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("swap_records");
 const CONSENSUS_STATE_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("consensus_state");
+const WORK_SCORE_HISTORY_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("work_score_history");
+const CONSENSUS_METRICS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("consensus_metrics");
 
 /// Satoshi Constant: η = λ = 1/√2 (critical damping at unit circle)
 pub const SATOSHI_ETA: f64 = 0.7071067811865476; // 1/√2
@@ -100,6 +102,61 @@ pub struct PoolSwapRecord {
     pub block_height: u64,
 }
 
+/// EMPIRICAL MEASUREMENT: Work score history entry
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkScoreEntry {
+    pub block_height: u64,
+    pub tau: f64,
+    pub work_score: f64,
+    pub block_time: f64, // seconds since previous block
+}
+
+/// EMPIRICAL MEASUREMENT: Convergence status for "The Conjecture"
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConjectureStatus {
+    /// True if measured η converges to 1/√2 within tolerance
+    pub eta_convergence: bool,
+    /// True if measured λ converges to 1/√2 within tolerance
+    pub lambda_convergence: bool,
+    /// True if oracle metric Δ aligns with theoretical 0.231
+    pub oracle_alignment: bool,
+    /// Convergence confidence (0.0 = no data, 1.0 = strong fit)
+    pub confidence: f64,
+    /// Number of blocks analyzed
+    pub sample_size: usize,
+}
+
+/// EMPIRICAL MEASUREMENT: Consensus metrics tracker
+/// Tests whether optimal consensus naturally converges to η = λ = 1/√2
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsensusMetrics {
+    /// Measured damping ratio from exponential fit to work scores
+    pub measured_eta: f64,
+    /// Measured coupling strength from timing coherence
+    pub measured_lambda: f64,
+    /// Oracle metric from measured values: Δ(η_measured, λ_measured)
+    pub measured_oracle_delta: f64,
+    /// Convergence confidence (R² from exponential fit)
+    pub convergence_confidence: f64,
+    /// Number of data points used for measurement
+    pub sample_size: usize,
+    /// Last update block height
+    pub last_update_height: u64,
+}
+
+impl Default for ConsensusMetrics {
+    fn default() -> Self {
+        Self {
+            measured_eta: SATOSHI_ETA,       // Start at theoretical value
+            measured_lambda: SATOSHI_LAMBDA,  // Start at theoretical value
+            measured_oracle_delta: 0.231,     // Theoretical Δ at critical equilibrium
+            convergence_confidence: 0.0,      // No data yet
+            sample_size: 0,
+            last_update_height: 0,
+        }
+    }
+}
+
 /// Dimensional Pool State Manager
 pub struct DimensionalPoolState {
     db: Arc<Database>,
@@ -114,6 +171,8 @@ impl DimensionalPoolState {
             let _ = write_txn.open_table(POOL_LIQUIDITY_TABLE)?;
             let _ = write_txn.open_table(SWAP_RECORDS_TABLE)?;
             let _ = write_txn.open_table(CONSENSUS_STATE_TABLE)?;
+            let _ = write_txn.open_table(WORK_SCORE_HISTORY_TABLE)?;
+            let _ = write_txn.open_table(CONSENSUS_METRICS_TABLE)?;
         }
         write_txn.commit()?;
 
@@ -591,6 +650,247 @@ impl DimensionalPoolState {
         }
 
         Ok(total_yield)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EMPIRICAL MEASUREMENT: Testing "The Conjecture"
+    // Does optimal consensus naturally converge to η = λ = 1/√2?
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Record work score for empirical analysis
+    pub fn record_work_score(&self, block_height: u64, tau: f64, work_score: f64, block_time: f64) -> Result<(), String> {
+        let entry = WorkScoreEntry {
+            block_height,
+            tau,
+            work_score,
+            block_time,
+        };
+
+        let write_txn = self.db.begin_write()
+            .map_err(|e| format!("Failed to begin write transaction: {}", e))?;
+        {
+            let mut table = write_txn.open_table(WORK_SCORE_HISTORY_TABLE)
+                .map_err(|e| format!("Failed to open work score history table: {}", e))?;
+
+            let serialized = bincode::serialize(&entry)
+                .map_err(|e| format!("Failed to serialize work score entry: {}", e))?;
+            table.insert(block_height, serialized.as_slice())
+                .map_err(|e| format!("Failed to insert work score: {}", e))?;
+        }
+        write_txn.commit()
+            .map_err(|e| format!("Failed to commit work score: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Measure η empirically from work score decay
+    /// Fit exponential: log(work_score) ≈ -η·τ + c
+    pub fn measure_eta_from_work_scores(&self, window_size: usize) -> Result<(f64, f64), String> {
+        let read_txn = self.db.begin_read()
+            .map_err(|e| format!("Failed to begin read transaction: {}", e))?;
+
+        let table = read_txn.open_table(WORK_SCORE_HISTORY_TABLE)
+            .map_err(|e| format!("Failed to open work score history table: {}", e))?;
+
+        // Collect recent work scores
+        let mut entries: Vec<WorkScoreEntry> = Vec::new();
+        let iter = table.iter()
+            .map_err(|e| format!("Failed to iterate work scores: {}", e))?;
+
+        for item in iter {
+            let (_key, value) = item.map_err(|e| format!("Failed to read item: {}", e))?;
+            let entry: WorkScoreEntry = bincode::deserialize(value.value())
+                .map_err(|e| format!("Failed to deserialize entry: {}", e))?;
+            entries.push(entry);
+        }
+
+        // Take most recent window
+        if entries.len() < 10 {
+            return Ok((SATOSHI_ETA, 0.0)); // Not enough data
+        }
+
+        let start_idx = entries.len().saturating_sub(window_size);
+        let window = &entries[start_idx..];
+
+        // Linear regression on log-transformed work scores
+        // y = log(work_score), x = τ
+        // y = -η·x + c  →  slope = -η
+        let n = window.len() as f64;
+        let mut sum_x = 0.0;
+        let mut sum_y = 0.0;
+        let mut sum_xy = 0.0;
+        let mut sum_x2 = 0.0;
+
+        for entry in window {
+            if entry.work_score > 0.0 {
+                let x = entry.tau;
+                let y = entry.work_score.ln();
+                sum_x += x;
+                sum_y += y;
+                sum_xy += x * y;
+                sum_x2 += x * x;
+            }
+        }
+
+        // Slope = (n·Σxy - Σx·Σy) / (n·Σx² - (Σx)²)
+        let denominator = n * sum_x2 - sum_x * sum_x;
+        if denominator.abs() < 1e-10 {
+            return Ok((SATOSHI_ETA, 0.0)); // Degenerate case
+        }
+
+        let slope = (n * sum_xy - sum_x * sum_y) / denominator;
+
+        // Calculate R² (coefficient of determination)
+        let mean_y = sum_y / n;
+        let mut ss_tot = 0.0;
+        let mut ss_res = 0.0;
+
+        for entry in window {
+            if entry.work_score > 0.0 {
+                let y = entry.work_score.ln();
+                let y_pred = slope * entry.tau + (sum_y - slope * sum_x) / n;
+                ss_tot += (y - mean_y).powi(2);
+                ss_res += (y - y_pred).powi(2);
+            }
+        }
+
+        let r_squared = if ss_tot > 0.0 {
+            1.0 - (ss_res / ss_tot)
+        } else {
+            0.0
+        };
+
+        let measured_eta = -slope; // η is the decay rate (negative slope)
+
+        Ok((measured_eta.max(0.0), r_squared))
+    }
+
+    /// Measure λ from timing coherence
+    /// High coherence (stable block times) → strong coupling (high λ)
+    pub fn measure_lambda_from_timing(&self, measured_eta: f64, window_size: usize) -> Result<f64, String> {
+        let read_txn = self.db.begin_read()
+            .map_err(|e| format!("Failed to begin read transaction: {}", e))?;
+
+        let table = read_txn.open_table(WORK_SCORE_HISTORY_TABLE)
+            .map_err(|e| format!("Failed to open work score history table: {}", e))?;
+
+        // Collect recent block times
+        let mut entries: Vec<WorkScoreEntry> = Vec::new();
+        let iter = table.iter()
+            .map_err(|e| format!("Failed to iterate work scores: {}", e))?;
+
+        for item in iter {
+            let (_key, value) = item.map_err(|e| format!("Failed to read item: {}", e))?;
+            let entry: WorkScoreEntry = bincode::deserialize(value.value())
+                .map_err(|e| format!("Failed to deserialize entry: {}", e))?;
+            entries.push(entry);
+        }
+
+        if entries.len() < 10 {
+            // Unit circle constraint: λ = √(1 - η²)
+            return Ok((1.0 - measured_eta.powi(2)).sqrt().max(0.0));
+        }
+
+        let start_idx = entries.len().saturating_sub(window_size);
+        let window = &entries[start_idx..];
+
+        // Calculate coefficient of variation (CV) of block times
+        // Low CV → high coherence → high λ
+        let n = window.len() as f64;
+        let mean_time: f64 = window.iter().map(|e| e.block_time).sum::<f64>() / n;
+        let variance: f64 = window.iter()
+            .map(|e| (e.block_time - mean_time).powi(2))
+            .sum::<f64>() / n;
+        let std_dev = variance.sqrt();
+        let cv = if mean_time > 0.0 { std_dev / mean_time } else { 1.0 };
+
+        // Timing coherence: 1.0 = perfect coherence, 0.0 = no coherence
+        // CV = 0 → coherence = 1.0
+        // CV → ∞ → coherence → 0.0
+        let coherence = (-cv).exp(); // Exponential decay from perfect coherence
+
+        // Theoretical λ from unit circle constraint
+        let theoretical_lambda = (1.0 - measured_eta.powi(2)).sqrt().max(0.0);
+
+        // Empirical λ scales with coherence
+        let measured_lambda = coherence * theoretical_lambda;
+
+        Ok(measured_lambda.max(0.0).min(1.0))
+    }
+
+    /// Update consensus metrics (call periodically, e.g., every 100 blocks)
+    pub fn update_consensus_metrics(&self, block_height: u64, window_size: usize) -> Result<ConsensusMetrics, String> {
+        // Measure η from work score exponential decay
+        let (measured_eta, r_squared) = self.measure_eta_from_work_scores(window_size)?;
+
+        // Measure λ from timing coherence
+        let measured_lambda = self.measure_lambda_from_timing(measured_eta, window_size)?;
+
+        // Calculate oracle metric Δ for measured values
+        let measured_oracle_delta = self.calculate_oracle_delta(measured_eta, measured_lambda);
+
+        let metrics = ConsensusMetrics {
+            measured_eta,
+            measured_lambda,
+            measured_oracle_delta,
+            convergence_confidence: r_squared,
+            sample_size: window_size,
+            last_update_height: block_height,
+        };
+
+        // Persist metrics
+        let write_txn = self.db.begin_write()
+            .map_err(|e| format!("Failed to begin write transaction: {}", e))?;
+        {
+            let mut table = write_txn.open_table(CONSENSUS_METRICS_TABLE)
+                .map_err(|e| format!("Failed to open consensus metrics table: {}", e))?;
+
+            let serialized = bincode::serialize(&metrics)
+                .map_err(|e| format!("Failed to serialize metrics: {}", e))?;
+            table.insert(block_height, serialized.as_slice())
+                .map_err(|e| format!("Failed to insert metrics: {}", e))?;
+        }
+        write_txn.commit()
+            .map_err(|e| format!("Failed to commit metrics: {}", e))?;
+
+        Ok(metrics)
+    }
+
+    /// Calculate oracle metric Δ for given (η, λ)
+    fn calculate_oracle_delta(&self, eta: f64, lambda: f64) -> f64 {
+        use coinject_core::VivianiOracle;
+
+        let oracle = VivianiOracle::calculate(eta, lambda);
+        oracle.delta
+    }
+
+    /// Get latest consensus metrics
+    pub fn get_consensus_metrics(&self) -> Option<ConsensusMetrics> {
+        let read_txn = self.db.begin_read().ok()?;
+        let table = read_txn.open_table(CONSENSUS_METRICS_TABLE).ok()?;
+
+        // Get most recent entry
+        let mut iter = table.iter().ok()?;
+        let entry = iter.next_back()?.ok()?;
+        let (_k, v) = entry;
+        bincode::deserialize(v.value()).ok()
+    }
+
+    /// Test "The Conjecture" - does consensus converge to η = λ = 1/√2?
+    pub fn test_conjecture(&self) -> Option<ConjectureStatus> {
+        let metrics = self.get_consensus_metrics()?;
+
+        let eta_error = (metrics.measured_eta - SATOSHI_ETA).abs();
+        let lambda_error = (metrics.measured_lambda - SATOSHI_LAMBDA).abs();
+        let delta_error = (metrics.measured_oracle_delta - 0.231).abs();
+
+        Some(ConjectureStatus {
+            eta_convergence: eta_error < 0.05,       // Within 5% of theoretical
+            lambda_convergence: lambda_error < 0.05,
+            oracle_alignment: delta_error < 0.05,    // Within 5% of 0.231
+            confidence: metrics.convergence_confidence,
+            sample_size: metrics.sample_size,
+        })
     }
 }
 

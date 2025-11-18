@@ -11,6 +11,7 @@ members = [
     "tokenomics",
     "node",
     "wallet",
+    "marketplace-export",
 ]
 
 [workspace.package]
