@@ -18,6 +18,7 @@ coinject-state = { path = "../state" }
 coinject-mempool = { path = "../mempool" }
 coinject-rpc = { path = "../rpc" }
 coinject-tokenomics = { path = "../tokenomics" }
+coinject-huggingface = { path = "../huggingface" }
 
 tokio.workspace = true
 clap.workspace = true

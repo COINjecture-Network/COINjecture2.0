@@ -12,6 +12,7 @@ members = [
     "node",
     "wallet",
     "marketplace-export",
+    "huggingface",
 ]
 
 [workspace.package]
