@@ -1,0 +1,43 @@
+[package]
+name = "coinject-huggingface"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Core dependencies
+coinject-core = { path = "../core" }
+coinject-state = { path = "../state" }
+coinject-consensus = { path = "../consensus" }
+
+# Async runtime
+tokio.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+
+# HTTP client for Hugging Face API
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Utilities
+hex.workspace = true
+base64 = "0.22"
+
+# System info for energy measurement
+sysinfo = "0.31"
+
+# Logging
+tracing.workspace = true
+
+[dev-dependencies]
+tokio-test = "0.4"

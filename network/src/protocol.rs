@@ -143,7 +143,7 @@ impl NetworkService {
             .heartbeat_interval(Duration::from_secs(1))
             .validation_mode(ValidationMode::Strict)
             .mesh_outbound_min(1)  // Minimum outbound peers in mesh
-            .mesh_n_low(2)  // Minimum mesh size before trying to add more
+            .mesh_n_low(1)  // Minimum mesh size before trying to add more (FIXED: was 2)
             .mesh_n(2)  // Desired mesh size (for 2-peer network)
             .mesh_n_high(4)  // Maximum mesh size before pruning
             .message_id_fn(|message| {
