@@ -12,6 +12,7 @@ use coinject_mempool::{ProblemMarketplace, TransactionPool};
 use coinject_network::{NetworkConfig, NetworkEvent, NetworkService};
 use coinject_rpc::{RpcServer, RpcServerState};
 use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
+use coinject_huggingface::{HuggingFaceSync, HuggingFaceConfig, EnergyConfig, EnergyMeasurementMethod, SyncConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,6 +45,7 @@ pub struct CoinjectNode {
     faucet: Option<Arc<Faucet>>,
     network_cmd_tx: Option<mpsc::UnboundedSender<NetworkCommand>>,
     rpc: Option<RpcServer>,
+    hf_sync: Option<Arc<HuggingFaceSync>>,
     shutdown_tx: mpsc::Sender<()>,
     shutdown_rx: mpsc::Receiver<()>,
 }
@@ -170,6 +172,51 @@ impl CoinjectNode {
             None
         };
 
+        // Initialize Hugging Face sync if configured
+        let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) = (&config.hf_token, &config.hf_dataset_name) {
+            println!("🤗 Initializing Hugging Face sync...");
+            println!("   Dataset: {}", hf_dataset_name);
+
+            let hf_config = HuggingFaceConfig {
+                token: hf_token.clone(),
+                dataset_name: hf_dataset_name.clone(),
+                dataset_config: config.hf_dataset_config.clone(),
+                ..Default::default()
+            };
+
+            let energy_method = match config.energy_measurement_method.as_str() {
+                "rapl" => EnergyMeasurementMethod::RAPL,
+                "powermetrics" => EnergyMeasurementMethod::PowerMetrics,
+                _ => EnergyMeasurementMethod::Estimate,
+            };
+
+            let energy_config = EnergyConfig {
+                enabled: config.energy_measurement_enabled,
+                method: energy_method,
+                cpu_tdp_watts: config.cpu_tdp_watts,
+            };
+
+            let sync_config = SyncConfig {
+                enabled: true,
+                include_submitter_address: config.include_submitter_address,
+                include_solver_address: config.include_solver_address,
+                ..Default::default()
+            };
+
+            match HuggingFaceSync::new(hf_config, energy_config, sync_config) {
+                Ok(sync) => {
+                    println!("   ✅ Hugging Face sync initialized");
+                    Some(Arc::new(sync))
+                }
+                Err(e) => {
+                    eprintln!("   ⚠️  Failed to initialize Hugging Face sync: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
 
@@ -190,6 +237,7 @@ impl CoinjectNode {
             faucet,
             network_cmd_tx: None,
             rpc: None,
+            hf_sync,
             shutdown_tx,
             shutdown_rx,
         })
@@ -199,11 +247,13 @@ impl CoinjectNode {
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Start P2P network
         println!("🌐 Starting P2P network...");
+        let genesis_hash = self.chain.genesis_hash();
         let network_config = NetworkConfig {
             listen_addr: self.config.p2p_addr.clone(),
             chain_id: self.config.chain_id.clone(),
             max_peers: self.config.max_peers,
             enable_mdns: true,
+            genesis_hash,
         };
 
         let (mut network_service, mut event_rx) = NetworkService::new(network_config)?;
@@ -318,10 +368,11 @@ impl CoinjectNode {
         let tx_pool = Arc::clone(&self.tx_pool);
         let network_tx_for_events = network_cmd_tx.clone();
         let buffer_for_events = Arc::clone(&block_buffer);
+        let hf_sync_for_events = self.hf_sync.clone();
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events).await;
+                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, hf_sync_for_events.as_ref().map(|s| Arc::clone(s))).await;
             }
         });
 
@@ -441,9 +492,10 @@ impl CoinjectNode {
             let marketplace_state = Arc::clone(&self.marketplace_state);
             let tx_pool = Arc::clone(&self.tx_pool);
             let network_tx = network_cmd_tx.clone();
+            let hf_sync_for_mining = self.hf_sync.clone();
 
             tokio::spawn(async move {
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx).await;
+                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining).await;
             });
         }
 
@@ -465,6 +517,7 @@ impl CoinjectNode {
         tx_pool: &Arc<RwLock<TransactionPool>>,
         network_tx: &mpsc::UnboundedSender<NetworkCommand>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
+        hf_sync: Option<Arc<HuggingFaceSync>>,
     ) {
         match event {
             NetworkEvent::BlockReceived { block, peer } => {
@@ -493,8 +546,30 @@ impl CoinjectNode {
                                             println!("⚠️  Warning: Failed to save consensus state: {}", e);
                                         }
 
+                                        // Push consensus block to Hugging Face (fire-and-forget)
+                                        if let Some(ref hf_sync) = hf_sync {
+                                            let hf_sync_clone = Arc::clone(hf_sync);
+                                            let block_clone = block.clone();
+                                            tokio::spawn(async move {
+                                                if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
+                                                    eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
+                                                }
+                                            });
+                                        }
+
+                                        // Push consensus block to Hugging Face (fire-and-forget)
+                                        if let Some(ref hf_sync) = hf_sync {
+                                            let hf_sync_clone = Arc::clone(hf_sync);
+                                            let block_clone = block.clone();
+                                            tokio::spawn(async move {
+                                                if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
+                                                    eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
+                                                }
+                                            });
+                                        }
+
                                         // Apply block transactions to state
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
+                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, hf_sync.as_ref().map(|s| Arc::clone(s))) {
                                             Ok(applied_txs) => {
                                                 println!("✅ Block {} accepted and applied to chain (τ={:.4})", block.header.height, tau);
 
@@ -521,6 +596,7 @@ impl CoinjectNode {
                                                     validator,
                                                     tx_pool,
                                                     block_buffer,
+                                                    hf_sync.as_ref().map(|s| Arc::clone(s)),
                                                 ).await;
                                             }
                                             Err(e) => {
@@ -662,6 +738,7 @@ impl CoinjectNode {
         validator: &Arc<BlockValidator>,
         tx_pool: &Arc<RwLock<TransactionPool>>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
+        hf_sync: Option<Arc<HuggingFaceSync>>,
     ) {
         loop {
             let best_height = chain.best_block_height().await;
@@ -695,7 +772,18 @@ impl CoinjectNode {
                                             println!("⚠️  Warning: Failed to save consensus state: {}", e);
                                         }
 
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
+                                        // Push consensus block to Hugging Face (fire-and-forget)
+                                        if let Some(ref hf_sync) = hf_sync {
+                                            let hf_sync_clone = Arc::clone(hf_sync);
+                                            let block_clone = block.clone();
+                                            tokio::spawn(async move {
+                                                if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
+                                                    eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
+                                                }
+                                            });
+                                        }
+
+                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, hf_sync.as_ref().map(|s| Arc::clone(s))) {
                                             Ok(applied_txs) => {
                                                 println!("✅ Buffered block {} applied to chain (τ={:.4})", next_height, tau);
 
@@ -748,6 +836,7 @@ impl CoinjectNode {
         trustline_state: &Arc<TrustLineState>,
         dimensional_pool_state: &Arc<DimensionalPoolState>,
         marketplace_state: &Arc<MarketplaceState>,
+        hf_sync: Option<Arc<HuggingFaceSync>>,
     ) -> Result<Vec<coinject_core::Hash>, String> {
         // Apply coinbase reward
         let miner = block.header.miner;
@@ -762,7 +851,7 @@ impl CoinjectNode {
         // Apply regular transactions
         for tx in &block.transactions {
             // Apply the transaction
-            match Self::apply_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height) {
+            match Self::apply_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height, hf_sync.as_ref().map(|s| Arc::clone(s))) {
                 Ok(()) => {
                     applied_txs.push(tx.hash());
                 }
@@ -792,6 +881,7 @@ impl CoinjectNode {
         dimensional_pool_state: &Arc<DimensionalPoolState>,
         marketplace_state: &Arc<MarketplaceState>,
         block_height: u64,
+        hf_sync: Option<Arc<HuggingFaceSync>>,
     ) -> Result<(), String> {
         use coinject_core::{EscrowType, ChannelType};
         use coinject_state::{Escrow, EscrowStatus, TimeLock, Channel, ChannelStatus};
@@ -1190,6 +1280,21 @@ impl CoinjectNode {
                         ).map_err(|e| format!("Failed to submit problem: {}", e))?;
 
                         println!("✅ Problem submitted to marketplace: {:?} (bounty: {})", problem_id, bounty);
+
+                        // Push to Hugging Face if configured (fire-and-forget)
+                        if let Some(ref hf_sync) = hf_sync {
+                            let hf_sync_clone = Arc::clone(hf_sync);
+                            let marketplace_state_clone = Arc::clone(marketplace_state);
+                            let problem_id_clone = problem_id;
+                            let block_height_clone = block_height;
+                            tokio::spawn(async move {
+                                if let Ok(Some(submission)) = marketplace_state_clone.get_problem(&problem_id_clone) {
+                                    if let Err(e) = hf_sync_clone.push_problem_submission(&submission, block_height_clone).await {
+                                        eprintln!("⚠️  Failed to push problem to Hugging Face: {}", e);
+                                    }
+                                }
+                            });
+                        }
                     }
                     MarketplaceOperation::SubmitSolution { problem_id, solution } => {
                         // WEB4 AUTONOMOUS BOUNTY PAYOUT
@@ -1206,6 +1311,29 @@ impl CoinjectNode {
                         state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
 
+                        // Get problem for verification timing
+                        let problem_opt = marketplace_state.get_problem(problem_id)
+                            .map_err(|e| format!("Failed to get problem: {}", e))?;
+                        let problem = problem_opt.ok_or("Problem not found")?;
+
+                        // Extract problem for verification
+                        let problem_type = match &problem.submission_mode {
+                            coinject_core::SubmissionMode::Public { problem } => problem,
+                            coinject_core::SubmissionMode::Private { .. } => {
+                                problem.problem_reveal.as_ref()
+                                    .map(|r| &r.problem)
+                                    .ok_or("Private problem not revealed")?
+                            }
+                        };
+
+                        // Measure verify time
+                        let verify_start = std::time::Instant::now();
+                        if !solution.verify(problem_type) {
+                            return Err("Invalid solution".to_string());
+                        }
+                        let verify_time = verify_start.elapsed();
+                        let verify_memory = 1024; // Approximate verification memory
+
                         // Submit solution to marketplace state (verifies and marks as solved)
                         marketplace_state.submit_solution(*problem_id, marketplace_tx.from, solution.clone())
                             .map_err(|e| format!("Failed to submit solution: {}", e))?;
@@ -1220,6 +1348,36 @@ impl CoinjectNode {
                             .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
 
                         println!("✅ Solution accepted! Auto-paid {} tokens to solver {:?}", bounty, solver);
+
+                        // Push to Hugging Face if configured (fire-and-forget)
+                        if let Some(ref hf_sync) = hf_sync {
+                            let hf_sync_clone = Arc::clone(hf_sync);
+                            let marketplace_state_clone = Arc::clone(marketplace_state);
+                            let problem_id_clone = *problem_id;
+                            let block_height_clone = block_height;
+                            let verify_time_clone = verify_time;
+                            let verify_memory_clone = verify_memory;
+                            tokio::spawn(async move {
+                                // Get updated submission with solution
+                                if let Ok(Some(submission)) = marketplace_state_clone.get_problem(&problem_id_clone) {
+                                    // Estimate solve time (solver did it off-chain, we don't have actual time)
+                                    // Use a default estimate or set to 0
+                                    let solve_time = Duration::from_secs(10); // Default estimate
+                                    let solve_memory = 1024 * 1024; // Default estimate
+
+                                    if let Err(e) = hf_sync_clone.push_solution_submission(
+                                        &submission,
+                                        block_height_clone,
+                                        solve_time,
+                                        verify_time_clone,
+                                        solve_memory,
+                                        verify_memory_clone,
+                                    ).await {
+                                        eprintln!("⚠️  Failed to push solution to Hugging Face: {}", e);
+                                    }
+                                }
+                            });
+                        }
                     }
                     MarketplaceOperation::ClaimBounty { problem_id } => {
                         // Just need fee
@@ -1289,6 +1447,7 @@ impl CoinjectNode {
         marketplace_state: Arc<MarketplaceState>,
         tx_pool: Arc<RwLock<TransactionPool>>,
         network_tx: mpsc::UnboundedSender<NetworkCommand>,
+        hf_sync: Option<Arc<HuggingFaceSync>>,
     ) {
         let mut interval = time::interval(Duration::from_secs(10));
 
@@ -1369,7 +1528,7 @@ impl CoinjectNode {
                 }
 
                 // Apply block transactions to state
-                let applied_txs = match Self::apply_block_transactions(&block, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state) {
+                let applied_txs = match Self::apply_block_transactions(&block, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, hf_sync.as_ref().map(|s| Arc::clone(s))) {
                     Ok(txs) => txs,
                     Err(e) => {
                         println!("❌ Failed to apply mined block transactions: {}", e);
@@ -1383,6 +1542,22 @@ impl CoinjectNode {
                     pool.remove(tx_hash);
                 }
                 drop(pool);
+
+                // Push consensus block to Hugging Face (fire-and-forget)
+                if let Some(ref hf_sync) = hf_sync {
+                    eprintln!("📦 Hugging Face: Preparing to upload mined block {}", block.header.height);
+                    let hf_sync_clone = Arc::clone(hf_sync);
+                    let block_clone = block.clone();
+                    tokio::spawn(async move {
+                        eprintln!("📦 Hugging Face: Starting async upload for block {}", block_clone.header.height);
+                        match hf_sync_clone.push_consensus_block(&block_clone, true).await {
+                            Ok(()) => eprintln!("✅ Hugging Face: Successfully queued block {} for upload", block_clone.header.height),
+                            Err(e) => eprintln!("❌ Failed to push consensus block {} to Hugging Face: {}", block_clone.header.height, e),
+                        }
+                    });
+                } else {
+                    eprintln!("⚠️  Hugging Face sync not initialized - skipping block upload");
+                }
 
                 // Broadcast to network
                 if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block)) {

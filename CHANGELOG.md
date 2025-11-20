@@ -5,6 +5,50 @@ All notable changes to COINjecture Network B will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.6.2] - 2025-11-20
+
+### Fixed
+- **Hugging Face API Integration**
+  - Updated to use new commit endpoint (`POST /api/datasets/{repo_id}/commit/main`) instead of deprecated `/upload` endpoint
+  - Changed from multipart form data to JSON body with base64-encoded content
+  - Fixed API base URL to `https://huggingface.co/api`
+  - Changed logging from `println!` to `eprintln!` to ensure messages are captured in logs
+- **P2P Network Mesh Formation**
+  - Fixed Kademlia bootstrap by adding bootnode address to routing table before dialing
+  - Updated gossipsub mesh configuration for small networks:
+    - Set `mesh_outbound_min=1`, `mesh_n_low=2`, `mesh_n=2`, `mesh_n_high=4`
+    - Satisfies gossipsub inequality: `mesh_outbound_min <= mesh_n_low <= mesh_n <= mesh_n_high`
+  - Improved error handling in `broadcast_status` to properly handle gossipsub publish errors
+  - Added detailed connection logging for debugging P2P issues
+
+### Changed
+- Hugging Face client now uses commit-based API for dataset uploads
+- Enhanced network logging for connection establishment and mesh formation
+- Improved error messages for gossipsub mesh formation issues
+
+### Known Issues
+- **Gossipsub Mesh Formation**: Mesh may not form immediately after connection establishment
+  - TCP/libp2p connections are established successfully
+  - Gossipsub mesh formation is asynchronous and occurs during heartbeats (1s intervals)
+  - "InsufficientPeers" errors may persist until mesh fully forms
+  - **Workaround**: Wait 30-60 seconds after node startup for mesh to stabilize
+- **Node Stability**: Node2 may not start consistently
+  - **Workaround**: Manually restart node2 if it fails to start
+- **Hugging Face Uploads**: Data may not appear in dataset immediately
+  - Uploads are buffered (10 records) before flushing
+  - Requires successful mesh formation for blocks to be processed
+  - **Workaround**: Ensure both nodes are connected and mesh is formed before expecting uploads
+
+## [4.6.1] - 2025-11-19
+
+### Fixed
+- **Web Wallet cryptography**
+  - Switched to the ESM-friendly `@noble/curves/ed25519.js` entry point and unified key generation via `ed25519.keygen()` to match the on-chain address format.
+  - Explicitly disables `zip215` during signature verification so browser-side checks align with the Rust validator.
+- **Privacy commitment utilities**
+  - Passes the underlying `ArrayBuffer` into `crypto.subtle.digest` to prevent `DataCloneError`/Safari failures.
+  - Adds defensive checks for optional `ProblemType` variants when estimating complexity to avoid undefined access.
+
 ## [4.6.0] - 2025-11-19
 
 ### Added
@@ -45,6 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[4.6.2]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.2
+[4.6.1]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.1
 [4.6.0]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.0
 [4.5.0]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.5.0
 
