@@ -46,20 +46,45 @@ pub fn serialize_problem(problem: &ProblemType) -> Result<Value, SerializationEr
 }
 
 /// Serialize solution to JSON
+/// Returns a consistent structure to avoid Arrow schema conflicts:
+/// All data is serialized as JSON string to ensure type consistency
+/// {
+///   "type": "SubsetSum" | "SAT" | "TSP" | "Custom",
+///   "data": "<JSON string of normalized data>"
+/// }
 pub fn serialize_solution(solution: &Solution) -> Result<Value, SerializationError> {
     match solution {
         Solution::SubsetSum(indices) => {
-            Ok(json!(indices))
+            // Serialize as JSON string to ensure consistency
+            let data_json = json!(indices);
+            Ok(json!({
+                "type": "SubsetSum",
+                "data": serde_json::to_string(&data_json).unwrap_or_else(|_| "[]".to_string())
+            }))
         }
         Solution::SAT(assignments) => {
-            Ok(json!(assignments))
+            // Convert booleans to array of numbers (0/1) for consistency, then serialize as JSON string
+            let normalized: Vec<u8> = assignments.iter().map(|&b| if b { 1 } else { 0 }).collect();
+            let data_json = json!(normalized);
+            Ok(json!({
+                "type": "SAT",
+                "data": serde_json::to_string(&data_json).unwrap_or_else(|_| "[]".to_string())
+            }))
         }
         Solution::TSP(tour) => {
-            Ok(json!(tour))
+            // Serialize as JSON string to ensure consistency
+            let data_json = json!(tour);
+            Ok(json!({
+                "type": "TSP",
+                "data": serde_json::to_string(&data_json).unwrap_or_else(|_| "[]".to_string())
+            }))
         }
         Solution::Custom(data) => {
             let data_b64 = STANDARD.encode(data);
-            Ok(json!(data_b64))
+            Ok(json!({
+                "type": "Custom",
+                "data": data_b64
+            }))
         }
     }
 }
