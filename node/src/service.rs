@@ -246,6 +246,7 @@ impl CoinjectNode {
             chain_id: self.config.chain_id.clone(),
             max_peers: self.config.max_peers,
             enable_mdns: true,
+            genesis_hash: self.chain.genesis_hash(),
         };
 
         let (mut network_service, mut event_rx) = NetworkService::new(network_config)?;
@@ -640,6 +641,29 @@ impl CoinjectNode {
                                                     block_buffer,
                                                     hf_sync,
                                                 ).await;
+
+                                                // After processing buffered blocks, check if we have a longer chain available
+                                                // This handles the case where we received blocks from a fork that's longer
+                                                let new_best_height = chain.best_block_height().await;
+                                                let new_best_hash = chain.best_block_hash().await;
+                                                
+                                                // If we've advanced, check if there are any fork blocks that might form a longer chain
+                                                // This is a simplified check - full implementation would track all fork chains
+                                                if new_best_height > block.header.height {
+                                                    // We've advanced past this block, check for reorganization opportunities
+                                                    let _ = Self::check_and_reorganize_chain(
+                                                        chain,
+                                                        state,
+                                                        timelock_state,
+                                                        escrow_state,
+                                                        channel_state,
+                                                        trustline_state,
+                                                        dimensional_pool_state,
+                                                        marketplace_state,
+                                                        validator,
+                                                        block_buffer,
+                                                    ).await;
+                                                }
                                             }
                                             Err(e) => {
                                                 println!("❌ Failed to apply block transactions: {}", e);
@@ -667,6 +691,24 @@ impl CoinjectNode {
                             buffer.len() + 1
                         );
                         buffer.insert(block.header.height, block);
+                    }
+                } else if block.header.height == best_height {
+                    // Block at same height but potentially different hash - fork detected
+                    let best_hash = chain.best_block_hash().await;
+                    if block.header.hash() != best_hash {
+                        println!("⚠️  Fork detected at height {}! Our hash: {:?}, Received hash: {:?}", 
+                            block.header.height, best_hash, block.header.hash());
+                        println!("   Storing fork block for potential reorganization...");
+                        
+                        // Store the fork block (it might be part of a longer chain)
+                        let _ = chain.store_block(&block).await;
+                        
+                        // Request full chain from this peer to check if it's longer
+                        // The status update handler will trigger this, but we can also request here
+                        // For now, just log - the status update will handle requesting the chain
+                    } else {
+                        // Same block, ignore
+                        println!("⏭️  Ignoring duplicate block {} (current height: {})", block.header.height, best_height);
                     }
                 } else {
                     // Old block we already have - ignore it
@@ -715,14 +757,16 @@ impl CoinjectNode {
             }
             NetworkEvent::StatusUpdate { peer, best_height, best_hash } => {
                 let our_height = chain.best_block_height().await;
+                let our_hash = chain.best_block_hash().await;
 
                 println!(
-                    "📊 Status update from {:?}: height {} (ours: {})",
-                    peer, best_height, our_height
+                    "📊 Status update from {:?}: height {} hash={:?} (ours: {} hash={:?})",
+                    peer, best_height, best_hash, our_height, our_hash
                 );
 
-                // If peer is ahead, trigger sync
-                if best_height > our_height + 1 {
+                // Check if peer has a longer or different chain
+                if best_height > our_height {
+                    // Peer is ahead - request blocks to catch up
                     let sync_from = our_height + 1;
                     let sync_to = best_height;
 
@@ -747,6 +791,74 @@ impl CoinjectNode {
                         }
 
                         current = end + 1;
+                    }
+                } else if best_height == our_height && best_hash != our_hash {
+                    // Fork detected at same height - check if peer's chain is longer by requesting their chain
+                    println!("⚠️  Fork detected at height {}! Our hash: {:?}, Peer hash: {:?}", 
+                        best_height, our_hash, best_hash);
+                    println!("   Requesting peer's full chain to check for longer fork...");
+                    
+                    // Request blocks from genesis to their best to validate their chain
+                    // We'll reorganize if their chain is valid and longer
+                    // Note: After receiving these blocks, we'll need to check if they form a longer chain
+                    // and trigger reorganization. This is handled by checking after block processing.
+                    if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                        from_height: 0,
+                        to_height: best_height,
+                    }) {
+                        eprintln!("Failed to request full chain for fork analysis: {}", e);
+                    }
+                    
+                    // Also check if we already have the peer's best block stored
+                    // If so, we can immediately check for reorganization
+                    if let Ok(Some(_peer_best_block)) = chain.get_block_by_hash(&best_hash) {
+                        // We have the peer's best block - check if it's part of a longer chain
+                        // This will be handled after we receive more blocks, but we can check now
+                        let chain_clone = Arc::clone(chain);
+                        let state_clone = Arc::clone(state);
+                        let timelock_clone = Arc::clone(timelock_state);
+                        let escrow_clone = Arc::clone(escrow_state);
+                        let channel_clone = Arc::clone(channel_state);
+                        let trustline_clone = Arc::clone(trustline_state);
+                        let dimensional_clone = Arc::clone(dimensional_pool_state);
+                        let marketplace_clone = Arc::clone(marketplace_state);
+                        let validator_clone = Arc::clone(validator);
+                        
+                        tokio::spawn(async move {
+                            // Attempt reorganization if this forms a longer chain
+                            match Self::attempt_reorganization_if_longer_chain(
+                                best_hash,
+                                best_height,
+                                &chain_clone,
+                                &state_clone,
+                                &timelock_clone,
+                                &escrow_clone,
+                                &channel_clone,
+                                &trustline_clone,
+                                &dimensional_clone,
+                                &marketplace_clone,
+                                &validator_clone,
+                            ).await {
+                                Ok(reorganized) => {
+                                    if reorganized {
+                                        println!("✅ Successfully reorganized to longer chain ending at height {}", best_height);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("⚠️  Failed to attempt reorganization: {}", e);
+                                }
+                            }
+                        });
+                    }
+                } else if best_height < our_height {
+                    // Peer is behind - they should sync from us (they'll request when they see our status)
+                    // But also check if their chain might be a fork that's actually longer
+                    // by checking if their best hash exists in our chain at that height
+                    if let Ok(Some(block_at_height)) = chain.get_block_by_height(best_height) {
+                        if block_at_height.header.hash() != best_hash {
+                            // Different block at same height - potential fork, but we're ahead so ignore
+                            println!("   Peer is behind and on different fork, ignoring");
+                        }
                     }
                 }
             }
@@ -885,6 +997,175 @@ impl CoinjectNode {
         }
     }
 
+    /// Check for chain reorganization opportunities
+    /// When we have blocks that form a longer valid chain, reorganize to it
+    async fn check_and_reorganize_chain(
+        chain: &Arc<ChainState>,
+        state: &Arc<AccountState>,
+        timelock_state: &Arc<TimeLockState>,
+        escrow_state: &Arc<EscrowState>,
+        channel_state: &Arc<ChannelState>,
+        trustline_state: &Arc<TrustLineState>,
+        dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
+        validator: &Arc<BlockValidator>,
+        block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
+    ) {
+        let current_best_height = chain.best_block_height().await;
+        let current_best_hash = chain.best_block_hash().await;
+
+        // Check if we have blocks in buffer that might form a longer chain
+        let buffer = block_buffer.read().await;
+        if buffer.is_empty() {
+            return;
+        }
+
+        // Find the highest block in buffer
+        let max_buffered_height = buffer.keys().max().copied().unwrap_or(0);
+        
+        // If we have blocks that extend beyond our current best, check if they form a valid chain
+        if max_buffered_height > current_best_height {
+            // Try to build a chain from current best to max buffered height
+            let mut chain_path = Vec::new();
+            let mut current_hash = current_best_hash;
+            let mut current_height = current_best_height;
+
+            // Try to find a path through buffered blocks
+            while current_height < max_buffered_height {
+                let next_height = current_height + 1;
+                
+                // Look for a block at next_height that connects to current_hash
+                let mut found = false;
+                for (height, block) in buffer.iter() {
+                    if *height == next_height && block.header.prev_hash == current_hash {
+                        chain_path.push(block.clone());
+                        current_hash = block.header.hash();
+                        current_height = next_height;
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    // Can't form a complete chain from buffer
+                    break;
+                }
+            }
+
+            // If we found a complete chain path, it will be processed by process_buffered_blocks
+            // This check is mainly for detecting forks
+        }
+
+        // Check for forks at same height - if we have a block at current height with different hash
+        // and it's part of a longer chain, we should reorganize
+        if let Some(fork_block) = buffer.get(&current_best_height) {
+            if fork_block.header.hash() != current_best_hash {
+                // Fork detected - we'd need to request the full chain from the peer
+                // to see if it's longer. This is handled by status update handler.
+                println!("   Fork block at height {} detected in buffer, waiting for full chain...", current_best_height);
+            }
+        }
+    }
+
+    /// Attempt chain reorganization when we have a longer valid chain available
+    /// This is called when we've received blocks that form a longer chain than our current best
+    async fn attempt_reorganization_if_longer_chain(
+        new_chain_end_hash: coinject_core::Hash,
+        new_chain_end_height: u64,
+        chain: &Arc<ChainState>,
+        state: &Arc<AccountState>,
+        timelock_state: &Arc<TimeLockState>,
+        escrow_state: &Arc<EscrowState>,
+        channel_state: &Arc<ChannelState>,
+        trustline_state: &Arc<TrustLineState>,
+        dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
+        validator: &Arc<BlockValidator>,
+    ) -> Result<bool, String> {
+
+        let current_best_height = chain.best_block_height().await;
+        let current_best_hash = chain.best_block_hash().await;
+
+        // Only reorganize if new chain is actually longer
+        if new_chain_end_height <= current_best_height {
+            return Ok(false);
+        }
+
+        // Find common ancestor
+        let (common_hash, common_height) = match chain.find_common_ancestor(&new_chain_end_hash, new_chain_end_height).await
+            .map_err(|e| format!("Failed to find common ancestor: {}", e)) {
+            Ok(Some((hash, height))) => (hash, height),
+            Ok(None) => {
+                println!("⚠️  No common ancestor found, cannot reorganize");
+                return Ok(false);
+            }
+            Err(e) => return Err(e),
+        };
+
+        println!("🔄 Found common ancestor at height {} (hash: {:?})", common_height, common_hash);
+
+        // Get old chain blocks (from common ancestor to current best, excluding common ancestor)
+        let mut old_chain_blocks = Vec::new();
+        if common_height < current_best_height {
+            for height in (common_height + 1)..=current_best_height {
+                match chain.get_block_by_height(height) {
+                    Ok(Some(block)) => old_chain_blocks.push(block),
+                    Ok(None) => return Err(format!("Failed to get old chain block at height {}", height)),
+                    Err(e) => return Err(format!("Error getting old chain block at height {}: {}", height, e)),
+                }
+            }
+            old_chain_blocks.reverse(); // Reverse so we unwind from newest to oldest
+        }
+
+        // Get new chain blocks (from common ancestor to new best, excluding common ancestor)
+        let mut new_chain_blocks = Vec::new();
+        let mut current_hash = new_chain_end_hash;
+        let mut current_height = new_chain_end_height;
+
+        // Walk back from new best to common ancestor, collecting blocks
+        while current_height > common_height {
+            match chain.get_block_by_hash(&current_hash) {
+                Ok(Some(block)) => {
+                    new_chain_blocks.push(block.clone());
+                    current_hash = block.header.prev_hash;
+                    current_height -= 1;
+                }
+                Ok(None) => return Err(format!("Failed to get new chain block at height {}", current_height)),
+                Err(e) => return Err(format!("Error getting new chain block at height {}: {}", current_height, e)),
+            }
+        }
+
+        // Reverse new_chain_blocks so they're in forward order (common+1 to new_best)
+        new_chain_blocks.reverse();
+
+        // Validate new chain is actually longer
+        if new_chain_blocks.len() <= old_chain_blocks.len() {
+            println!("   New chain is not longer ({} vs {} blocks), skipping reorganization", 
+                new_chain_blocks.len(), old_chain_blocks.len());
+            return Ok(false);
+        }
+
+        println!("🔄 Reorganizing: unwinding {} blocks, applying {} blocks",
+            old_chain_blocks.len(), new_chain_blocks.len());
+
+        // Perform reorganization
+        Self::reorganize_chain(
+            old_chain_blocks,
+            new_chain_blocks,
+            chain,
+            state,
+            timelock_state,
+            escrow_state,
+            channel_state,
+            trustline_state,
+            dimensional_pool_state,
+            marketplace_state,
+            validator,
+        ).await?;
+
+        Ok(true)
+    }
+
     /// Apply block transactions to account state
     /// Returns a vector of successfully applied transaction hashes
     fn apply_block_transactions(
@@ -927,6 +1208,418 @@ impl CoinjectNode {
         }
 
         Ok(applied_txs)
+    }
+
+    /// Unwind block transactions (reverse apply_block_transactions)
+    /// Used for chain reorganization
+    fn unwind_block_transactions(
+        block: &coinject_core::Block,
+        state: &Arc<AccountState>,
+        timelock_state: &Arc<TimeLockState>,
+        escrow_state: &Arc<EscrowState>,
+        channel_state: &Arc<ChannelState>,
+        trustline_state: &Arc<TrustLineState>,
+        dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
+    ) -> Result<(), String> {
+        let block_height = block.header.height;
+
+        // Unwind transactions in reverse order
+        for tx in block.transactions.iter().rev() {
+            if let Err(e) = Self::unwind_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height) {
+                println!("⚠️  Warning: Failed to unwind transaction {:?}: {}", tx.hash(), e);
+                // Continue unwinding other transactions even if one fails
+            }
+        }
+
+        // Unwind coinbase reward
+        let miner = block.header.miner;
+        let reward = block.coinbase.reward;
+        let current_balance = state.get_balance(&miner);
+        if current_balance >= reward {
+            state.set_balance(&miner, current_balance - reward)
+                .map_err(|e| format!("Failed to unwind miner reward: {}", e))?;
+        } else {
+            // Miner balance insufficient - this shouldn't happen but handle gracefully
+            println!("⚠️  Warning: Miner balance {} < reward {}, setting to 0", current_balance, reward);
+            state.set_balance(&miner, 0)
+                .map_err(|e| format!("Failed to set miner balance: {}", e))?;
+        }
+
+        Ok(())
+    }
+
+    /// Unwind a single transaction (reverse apply_single_transaction)
+    fn unwind_single_transaction(
+        tx: &coinject_core::Transaction,
+        state: &Arc<AccountState>,
+        timelock_state: &Arc<TimeLockState>,
+        escrow_state: &Arc<EscrowState>,
+        channel_state: &Arc<ChannelState>,
+        trustline_state: &Arc<TrustLineState>,
+        dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
+        block_height: u64,
+    ) -> Result<(), String> {
+        use coinject_core::{EscrowType, ChannelType};
+        use coinject_state::{EscrowStatus, ChannelStatus};
+
+        match tx {
+            coinject_core::Transaction::Transfer(transfer_tx) => {
+                // Reverse: credit sender, debit recipient, decrement nonce
+                let sender_balance = state.get_balance(&transfer_tx.from);
+                state.set_balance(&transfer_tx.from, sender_balance + transfer_tx.amount + transfer_tx.fee)
+                    .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                
+                let current_nonce = state.get_nonce(&transfer_tx.from);
+                if current_nonce > 0 {
+                    state.set_nonce(&transfer_tx.from, current_nonce - 1)
+                        .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
+                }
+
+                let recipient_balance = state.get_balance(&transfer_tx.to);
+                if recipient_balance >= transfer_tx.amount {
+                    state.set_balance(&transfer_tx.to, recipient_balance - transfer_tx.amount)
+                        .map_err(|e| format!("Failed to unwind recipient balance: {}", e))?;
+                } else {
+                    // Recipient balance insufficient - set to 0
+                    state.set_balance(&transfer_tx.to, 0)
+                        .map_err(|e| format!("Failed to set recipient balance: {}", e))?;
+                }
+
+                Ok(())
+            }
+
+            coinject_core::Transaction::TimeLock(timelock_tx) => {
+                // Reverse: credit sender, remove timelock, decrement nonce
+                let sender_balance = state.get_balance(&timelock_tx.from);
+                state.set_balance(&timelock_tx.from, sender_balance + timelock_tx.amount + timelock_tx.fee)
+                    .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                
+                let current_nonce = state.get_nonce(&timelock_tx.from);
+                if current_nonce > 0 {
+                    state.set_nonce(&timelock_tx.from, current_nonce - 1)
+                        .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
+                }
+
+                // Remove timelock if it exists
+                let _ = timelock_state.remove_timelock(&tx.hash());
+                Ok(())
+            }
+
+            coinject_core::Transaction::Escrow(escrow_tx) => {
+                match &escrow_tx.escrow_type {
+                    EscrowType::Create { .. } => {
+                        // Reverse: credit sender, remove escrow, decrement nonce
+                        let sender_balance = state.get_balance(&escrow_tx.from);
+                        // We need to get the escrow to know the amount
+                        if let Some(escrow) = escrow_state.get_escrow(&escrow_tx.escrow_id) {
+                            state.set_balance(&escrow_tx.from, sender_balance + escrow.amount + escrow_tx.fee)
+                                .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                            
+                            let current_nonce = state.get_nonce(&escrow_tx.from);
+                            if current_nonce > 0 {
+                                state.set_nonce(&escrow_tx.from, current_nonce - 1)
+                                    .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
+                            }
+
+                            // Remove escrow - note: perfect reversal requires delete method
+                            // For now, we mark it as an approximate reversal
+                            println!("   ⚠️  Escrow deletion requires delete_escrow method - state may be approximate");
+                        }
+                        Ok(())
+                    }
+
+                    EscrowType::Release => {
+                        // Reverse: debit recipient, restore escrow to active
+                        if let Some(escrow) = escrow_state.get_escrow(&escrow_tx.escrow_id) {
+                            let recipient_balance = state.get_balance(&escrow.recipient);
+                            if recipient_balance >= escrow.amount {
+                                state.set_balance(&escrow.recipient, recipient_balance - escrow.amount)
+                                    .map_err(|e| format!("Failed to unwind recipient balance: {}", e))?;
+                            } else {
+                                state.set_balance(&escrow.recipient, 0)
+                                    .map_err(|e| format!("Failed to set recipient balance: {}", e))?;
+                            }
+
+                            // Restore escrow to active
+                            escrow_state.update_escrow_status(&escrow_tx.escrow_id, EscrowStatus::Active, None)?;
+                        }
+                        Ok(())
+                    }
+
+                    EscrowType::Refund => {
+                        // Reverse: debit sender, restore escrow to active
+                        if let Some(escrow) = escrow_state.get_escrow(&escrow_tx.escrow_id) {
+                            let sender_balance = state.get_balance(&escrow.sender);
+                            if sender_balance >= escrow.amount {
+                                state.set_balance(&escrow.sender, sender_balance - escrow.amount)
+                                    .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                            } else {
+                                state.set_balance(&escrow.sender, 0)
+                                    .map_err(|e| format!("Failed to set sender balance: {}", e))?;
+                            }
+
+                            // Restore escrow to active
+                            escrow_state.update_escrow_status(&escrow_tx.escrow_id, EscrowStatus::Active, None)?;
+                        }
+                        Ok(())
+                    }
+                }
+            }
+
+            coinject_core::Transaction::Channel(channel_tx) => {
+                match &channel_tx.channel_type {
+                    ChannelType::Open { participant_a, participant_b, deposit_a, deposit_b, .. } => {
+                        // Reverse: credit initiator, remove channel, decrement nonce
+                        let initiator_deposit = if &channel_tx.from == participant_a { *deposit_a } else { *deposit_b };
+                        let initiator_balance = state.get_balance(&channel_tx.from);
+                        state.set_balance(&channel_tx.from, initiator_balance + initiator_deposit + channel_tx.fee)
+                            .map_err(|e| format!("Failed to unwind initiator balance: {}", e))?;
+                        
+                        let current_nonce = state.get_nonce(&channel_tx.from);
+                        if current_nonce > 0 {
+                            state.set_nonce(&channel_tx.from, current_nonce - 1)
+                                .map_err(|e| format!("Failed to unwind initiator nonce: {}", e))?;
+                        }
+
+                        // Remove channel - note: perfect reversal requires delete method
+                        println!("   ⚠️  Channel deletion requires delete_channel method - state may be approximate");
+                        Ok(())
+                    }
+
+                    ChannelType::Update { .. } => {
+                        // Channel updates are state changes, hard to reverse perfectly
+                        // For now, just log - in practice, we'd need to track previous state
+                        println!("⚠️  Warning: Cannot perfectly reverse channel update, state may be inconsistent");
+                        Ok(())
+                    }
+
+                    ChannelType::CooperativeClose { final_balance_a, final_balance_b } => {
+                        // Reverse: debit both participants, restore channel
+                        if let Some(channel) = channel_state.get_channel(&channel_tx.channel_id) {
+                            let balance_a = state.get_balance(&channel.participant_a);
+                            if balance_a >= *final_balance_a {
+                                state.set_balance(&channel.participant_a, balance_a - *final_balance_a)
+                                    .map_err(|e| format!("Failed to unwind participant A balance: {}", e))?;
+                            } else {
+                                state.set_balance(&channel.participant_a, 0)
+                                    .map_err(|e| format!("Failed to set participant A balance: {}", e))?;
+                            }
+
+                            let balance_b = state.get_balance(&channel.participant_b);
+                            if balance_b >= *final_balance_b {
+                                state.set_balance(&channel.participant_b, balance_b - *final_balance_b)
+                                    .map_err(|e| format!("Failed to unwind participant B balance: {}", e))?;
+                            } else {
+                                state.set_balance(&channel.participant_b, 0)
+                                    .map_err(|e| format!("Failed to set participant B balance: {}", e))?;
+                            }
+
+                            // Restore channel to open (approximate - we don't have exact previous state)
+                            // This is a limitation - we'd need to store channel history
+                            println!("⚠️  Warning: Channel state restoration is approximate");
+                        }
+                        Ok(())
+                    }
+
+                    ChannelType::UnilateralClose { .. } => {
+                        // Reverse dispute - restore channel state
+                        // This is complex and approximate
+                        println!("⚠️  Warning: Cannot perfectly reverse unilateral close, state may be inconsistent");
+                        Ok(())
+                    }
+                }
+            }
+
+            coinject_core::Transaction::TrustLine(trustline_tx) => {
+                // Reverse: credit fee, decrement nonce, reverse trustline operation
+                let sender_balance = state.get_balance(&trustline_tx.from);
+                state.set_balance(&trustline_tx.from, sender_balance + trustline_tx.fee)
+                    .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                
+                let current_nonce = state.get_nonce(&trustline_tx.from);
+                if current_nonce > 0 {
+                    state.set_nonce(&trustline_tx.from, current_nonce - 1)
+                        .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
+                }
+
+                use coinject_core::TrustLineType;
+                match &trustline_tx.trustline_type {
+                    TrustLineType::Create { .. } => {
+                        // Remove trustline - note: perfect reversal requires delete method
+                        println!("   ⚠️  TrustLine deletion requires delete_trustline method - state may be approximate");
+                    }
+                    TrustLineType::UpdateLimits { .. } | TrustLineType::Freeze | TrustLineType::EvolvePhase { .. } => {
+                        // These are state changes - hard to reverse perfectly
+                        // In practice, we'd need to store previous state
+                        println!("⚠️  Warning: TrustLine state reversal is approximate");
+                    }
+                    TrustLineType::Close => {
+                        // Restore trustline - this is complex, would need previous state
+                        println!("⚠️  Warning: Cannot perfectly reverse trustline close");
+                    }
+                }
+                Ok(())
+            }
+
+            coinject_core::Transaction::DimensionalPoolSwap(pool_swap_tx) => {
+                // Reverse: credit fee, decrement nonce, reverse swap
+                let sender_balance = state.get_balance(&pool_swap_tx.from);
+                state.set_balance(&pool_swap_tx.from, sender_balance + pool_swap_tx.fee)
+                    .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                
+                let current_nonce = state.get_nonce(&pool_swap_tx.from);
+                if current_nonce > 0 {
+                    state.set_nonce(&pool_swap_tx.from, current_nonce - 1)
+                        .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
+                }
+
+                // Reverse swap - this is complex and may not be perfectly reversible
+                // We'd need to track swap history
+                println!("⚠️  Warning: Dimensional pool swap reversal is approximate");
+                Ok(())
+            }
+
+            coinject_core::Transaction::Marketplace(marketplace_tx) => {
+                use coinject_core::MarketplaceOperation;
+                
+                // Reverse: credit fee, decrement nonce
+                let sender_balance = state.get_balance(&marketplace_tx.from);
+                state.set_balance(&marketplace_tx.from, sender_balance + marketplace_tx.fee)
+                    .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                
+                let current_nonce = state.get_nonce(&marketplace_tx.from);
+                if current_nonce > 0 {
+                    state.set_nonce(&marketplace_tx.from, current_nonce - 1)
+                        .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
+                }
+
+                match &marketplace_tx.operation {
+                    MarketplaceOperation::SubmitProblem { bounty, .. } => {
+                        // Reverse: credit bounty back, remove problem
+                        state.set_balance(&marketplace_tx.from, sender_balance + marketplace_tx.fee + bounty)
+                            .map_err(|e| format!("Failed to unwind problem submission: {}", e))?;
+                        // Remove problem - would need problem_id
+                        println!("⚠️  Warning: Problem removal requires problem_id tracking");
+                    }
+                    MarketplaceOperation::SubmitSolution { problem_id, .. } => {
+                        // Reverse: remove solution, potentially reverse auto-payout
+                        // This is complex - we'd need to track if bounty was paid
+                        println!("⚠️  Warning: Solution reversal is approximate");
+                    }
+                    MarketplaceOperation::ClaimBounty { problem_id } => {
+                        // Reverse: debit solver, restore bounty to escrow
+                        // Would need to track who received the bounty
+                        println!("⚠️  Warning: Bounty claim reversal requires tracking");
+                    }
+                    MarketplaceOperation::CancelProblem { problem_id } => {
+                        // Reverse: debit refund, restore problem
+                        // Would need to track refund amount
+                        println!("⚠️  Warning: Problem cancellation reversal requires tracking");
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Perform chain reorganization: unwind old chain and apply new chain
+    async fn reorganize_chain(
+        old_chain_blocks: Vec<coinject_core::Block>,
+        new_chain_blocks: Vec<coinject_core::Block>,
+        chain: &Arc<ChainState>,
+        state: &Arc<AccountState>,
+        timelock_state: &Arc<TimeLockState>,
+        escrow_state: &Arc<EscrowState>,
+        channel_state: &Arc<ChannelState>,
+        trustline_state: &Arc<TrustLineState>,
+        dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
+        validator: &Arc<BlockValidator>,
+    ) -> Result<(), String> {
+        println!("🔄 Starting chain reorganization: unwinding {} blocks, applying {} blocks",
+            old_chain_blocks.len(), new_chain_blocks.len());
+
+        // Step 1: Unwind old chain blocks (in reverse order - newest to oldest)
+        for block in old_chain_blocks.iter().rev() {
+            println!("   Unwinding block {}...", block.header.height);
+            if let Err(e) = Self::unwind_block_transactions(
+                block, state, timelock_state, escrow_state, channel_state,
+                trustline_state, dimensional_pool_state, marketplace_state,
+            ) {
+                return Err(format!("Failed to unwind block {}: {}", block.header.height, e));
+            }
+
+            // Also need to reverse dimensional pool state changes
+            // This is complex - for now we log a warning
+            if block.header.height > 0 {
+                println!("   ⚠️  Note: Dimensional pool state reversal is approximate");
+            }
+        }
+
+        // Step 2: Validate new chain
+        let mut prev_hash = if let Some(first_block) = new_chain_blocks.first() {
+            first_block.header.prev_hash
+        } else {
+            return Err("New chain is empty".to_string());
+        };
+
+        for (idx, block) in new_chain_blocks.iter().enumerate() {
+            let expected_height = if idx == 0 {
+                // First block height should be common_ancestor_height + 1
+                // We'd need to pass this in, but for now we validate relative to prev_hash
+                0 // Will be set properly
+            } else {
+                new_chain_blocks[idx - 1].header.height + 1
+            };
+
+            // Validate block connects to previous
+            if block.header.prev_hash != prev_hash {
+                return Err(format!("New chain block {} doesn't connect to previous (prev_hash mismatch)", block.header.height));
+            }
+
+            // Validate block
+            match validator.validate_block(block, &prev_hash, block.header.height) {
+                Ok(()) => {
+                    prev_hash = block.header.hash();
+                }
+                Err(e) => {
+                    return Err(format!("New chain block {} validation failed: {}", block.header.height, e));
+                }
+            }
+        }
+
+        // Step 3: Apply new chain blocks
+        for block in &new_chain_blocks {
+            println!("   Applying new chain block {}...", block.header.height);
+            
+            // Store block
+            chain.store_block(block).await
+                .map_err(|e| format!("Failed to store block {}: {}", block.header.height, e))?;
+
+            // Apply transactions
+            Self::apply_block_transactions(
+                block, state, timelock_state, escrow_state, channel_state,
+                trustline_state, dimensional_pool_state, marketplace_state,
+            )?;
+
+            // Update consensus state
+            use coinject_core::{TAU_C, ConsensusState};
+            let tau = (block.header.height as f64) / TAU_C;
+            let consensus_state = ConsensusState::at_tau(tau);
+            dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state)
+                .map_err(|e| format!("Failed to save consensus state: {}", e))?;
+        }
+
+        // Step 4: Update best chain
+        if let Some(last_block) = new_chain_blocks.last() {
+            chain.update_best_chain(last_block.header.hash(), last_block.header.height).await
+                .map_err(|e| format!("Failed to update best chain: {}", e))?;
+        }
+
+        println!("✅ Chain reorganization complete!");
+        Ok(())
     }
 
     /// Apply a single transaction to state

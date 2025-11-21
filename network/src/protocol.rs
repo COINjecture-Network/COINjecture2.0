@@ -73,6 +73,7 @@ pub struct NetworkConfig {
     pub chain_id: String,
     pub max_peers: usize,
     pub enable_mdns: bool,
+    pub genesis_hash: Hash,
 }
 
 impl Default for NetworkConfig {
@@ -82,6 +83,7 @@ impl Default for NetworkConfig {
             chain_id: "coinject-network-b".to_string(),
             max_peers: 50,
             enable_mdns: true,
+            genesis_hash: Hash::ZERO,
         }
     }
 }
@@ -93,6 +95,7 @@ pub struct NetworkService {
     peers: HashSet<PeerId>,
     peer_scores: HashMap<PeerId, f64>,
     event_tx: mpsc::UnboundedSender<NetworkEvent>,
+    genesis_hash: Hash,
 }
 
 /// Events emitted by the network service
@@ -132,9 +135,17 @@ impl NetworkService {
         println!("Network node PeerId: {}", local_peer_id);
 
         // Create gossipsub behaviour
+        // Configure mesh parameters for small networks:
+        // Requirements: mesh_outbound_min <= mesh_n_low <= mesh_n <= mesh_n_high
+        // Defaults: mesh_n=6, mesh_n_low=4, mesh_n_high=12, mesh_outbound_min=2
+        // For 2-peer network, we need: mesh_outbound_min=1, mesh_n_low=2, mesh_n=2, mesh_n_high=4
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(1))
             .validation_mode(ValidationMode::Strict)
+            .mesh_outbound_min(1)  // Minimum outbound peers in mesh
+            .mesh_n_low(1)  // Minimum mesh size before trying to add more (FIXED: was 2)
+            .mesh_n(2)  // Desired mesh size (for 2-peer network)
+            .mesh_n_high(4)  // Maximum mesh size before pruning
             .message_id_fn(|message| {
                 // Use message content hash as ID
                 let hash = blake3::hash(&message.data);
@@ -200,6 +211,7 @@ impl NetworkService {
                 peers: HashSet::new(),
                 peer_scores: HashMap::new(),
                 event_tx,
+                genesis_hash: config.genesis_hash,
             },
             event_rx,
         ))
@@ -264,17 +276,39 @@ impl NetworkService {
         best_hash: Hash,
         genesis_hash: Hash,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // Only broadcast if we have peers
+        if self.peers.is_empty() {
+            return Err("InsufficientPeers".into());
+        }
+        
+        // Check if gossipsub has peers in the mesh for the status topic
+        // Note: We can't directly query mesh peers, but we can try to publish and handle errors
         let message = NetworkMessage::Status {
             best_height,
             best_hash,
             genesis_hash,
         };
         let data = bincode::serialize(&message)?;
-        self.swarm
+        
+        // Try to publish - gossipsub will return an error if there are no peers in the mesh
+        match self.swarm
             .behaviour_mut()
             .gossipsub
-            .publish(self.topics.status.clone(), data)?;
-        Ok(())
+            .publish(self.topics.status.clone(), data) {
+            Ok(message_id) => {
+                println!("📤 Status broadcast queued, message_id: {:?}", message_id);
+                Ok(())
+            }
+            Err(e) => {
+                // Check if it's an "insufficient peers" error
+                let error_str = format!("{:?}", e);
+                if error_str.contains("insufficient") || error_str.contains("no peers") || error_str.contains("NotEnoughPeers") {
+                    Err("InsufficientPeers".into())
+                } else {
+                    Err(format!("Gossipsub publish error: {:?}", e).into())
+                }
+            }
+        }
     }
 
     /// Get connected peer count
@@ -289,9 +323,31 @@ impl NetworkService {
             let addr: libp2p::Multiaddr = bootnode.parse()
                 .map_err(|e| format!("Failed to parse bootnode address '{}': {:?}", bootnode, e))?;
 
+            // Extract peer ID from multiaddr and add to Kademlia before dialing
+            if let Some(peer_id) = addr.iter().find_map(|proto| {
+                if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                    Some(peer_id)
+                } else {
+                    None
+                }
+            }) {
+                // Create address without peer ID for Kademlia
+                let mut addr_without_p2p = addr.clone();
+                addr_without_p2p.pop();
+                println!("   Adding bootnode address {} to Kademlia for peer {}", addr_without_p2p, peer_id);
+                self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr_without_p2p);
+            }
+
             // Dial the bootnode
-            self.swarm.dial(addr.clone())
-                .map_err(|e| format!("Failed to dial bootnode '{}': {:?}", bootnode, e))?;
+            match self.swarm.dial(addr.clone()) {
+                Ok(()) => {
+                    println!("   ✅ Dial initiated successfully for bootnode: {}", bootnode);
+                }
+                Err(e) => {
+                    eprintln!("   ❌ Failed to initiate dial to '{}': {:?}", bootnode, e);
+                    return Err(format!("Failed to dial bootnode '{}': {:?}", bootnode, e).into());
+                }
+            }
         }
         Ok(())
     }
@@ -329,13 +385,18 @@ impl NetworkService {
             Ok(NetworkMessage::Status {
                 best_height,
                 best_hash,
-                genesis_hash: _,
+                genesis_hash,
             }) => {
-                let _ = self.event_tx.send(NetworkEvent::StatusUpdate {
-                    peer,
-                    best_height,
-                    best_hash,
-                });
+                // Verify peer is on the same chain by checking genesis hash
+                if genesis_hash == self.genesis_hash {
+                    let _ = self.event_tx.send(NetworkEvent::StatusUpdate {
+                        peer,
+                        best_height,
+                        best_hash,
+                    });
+                } else {
+                    println!("⚠️  Rejecting status from peer {:?}: genesis hash mismatch (ours: {:?}, theirs: {:?})", peer, self.genesis_hash, genesis_hash);
+                }
             }
             Ok(NetworkMessage::GetBlocks { from, to }) => {
                 let _ = self.event_tx.send(NetworkEvent::BlocksRequested {
@@ -363,6 +424,15 @@ impl NetworkService {
                     ..
                 }) => {
                     self.handle_gossipsub_message(propagation_source, message.data);
+                }
+                CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { peer_id, topic }) => {
+                    println!("📰 Peer {} subscribed to topic: {}", peer_id, topic);
+                }
+                CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Unsubscribed { peer_id, topic }) => {
+                    println!("📰 Peer {} unsubscribed from topic: {}", peer_id, topic);
+                }
+                CoinjectBehaviourEvent::Gossipsub(_) => {
+                    // Other gossipsub events
                 }
                 CoinjectBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                     for (peer, addr) in peers {
@@ -392,36 +462,137 @@ impl NetworkService {
                     ..
                 }) => {
                     println!(
-                        "Identified peer: {} - protocol: {}",
-                        peer_id, info.protocol_version
+                        "✅ Identified peer: {} - protocol: {}, agent: {}, observed_addr: {:?}",
+                        peer_id, info.protocol_version, info.agent_version, info.observed_addr
                     );
                     for addr in info.listen_addrs {
+                        println!("   Adding address {} to Kademlia for peer {}", addr, peer_id);
                         self.swarm
                             .behaviour_mut()
                             .kademlia
                             .add_address(&peer_id, addr);
                     }
                 }
+                CoinjectBehaviourEvent::Identify(identify::Event::Sent { peer_id, .. }) => {
+                    println!("📤 Sent identify info to peer: {}", peer_id);
+                }
+                CoinjectBehaviourEvent::Identify(identify::Event::Error { peer_id, error, connection_id }) => {
+                    eprintln!("❌ Identify protocol error with peer {} on connection {:?}: {:?}", peer_id, connection_id, error);
+                }
+                CoinjectBehaviourEvent::Identify(identify::Event::Pushed { peer_id, connection_id, info }) => {
+                    println!("📤 Pushed identify info to peer: {} on connection {:?}, info: {:?}", peer_id, connection_id, info);
+                }
                 CoinjectBehaviourEvent::Kademlia(kad::Event::RoutingUpdated {
                     peer,
                     ..
                 }) => {
-                    println!("Kademlia routing updated for peer: {}", peer);
+                    println!("🌐 Kademlia routing updated for peer: {}", peer);
+                }
+                CoinjectBehaviourEvent::Kademlia(kad::Event::OutboundQueryProgressed {
+                    result,
+                    ..
+                }) => {
+                    match result {
+                        kad::QueryResult::Bootstrap(Ok(kad::BootstrapOk { peer, .. })) => {
+                            println!("🌐 Kademlia bootstrap successful with peer: {}", peer);
+                        }
+                        kad::QueryResult::Bootstrap(Err(e)) => {
+                            eprintln!("⚠️  Kademlia bootstrap failed: {:?}", e);
+                        }
+                        kad::QueryResult::GetRecord(Ok(ok)) => {
+                            println!("🌐 Kademlia GetRecord successful: {:?}", ok);
+                        }
+                        kad::QueryResult::GetRecord(Err(e)) => {
+                            eprintln!("⚠️  Kademlia GetRecord failed: {:?}", e);
+                        }
+                        kad::QueryResult::PutRecord(Ok(ok)) => {
+                            println!("🌐 Kademlia PutRecord successful: {:?}", ok);
+                        }
+                        kad::QueryResult::PutRecord(Err(e)) => {
+                            eprintln!("⚠️  Kademlia PutRecord failed: {:?}", e);
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             },
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                println!("Connection established with peer: {}", peer_id);
+            SwarmEvent::NewListenAddr { address, .. } => {
+                println!("📡 Listening on: {}", address);
+            }
+            SwarmEvent::ListenerClosed { addresses, reason, .. } => {
+                eprintln!("⚠️  Listener closed on {:?}: {:?}", addresses, reason);
+            }
+            SwarmEvent::ListenerError { error, .. } => {
+                eprintln!("⚠️  Listener error: {:?}", error);
+            }
+            SwarmEvent::IncomingConnection { local_addr, send_back_addr, .. } => {
+                println!("🔌 Incoming connection from {} to {}", send_back_addr, local_addr);
+            }
+            SwarmEvent::IncomingConnectionError { error, local_addr, send_back_addr, .. } => {
+                eprintln!("❌ Failed to accept incoming connection from {} to {}: {:?}", send_back_addr, local_addr, error);
+            }
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                if let Some(peer) = peer_id {
+                    eprintln!("❌ Failed to connect to peer {}: {:?}", peer, error);
+                } else {
+                    eprintln!("❌ Failed to establish outgoing connection: {:?}", error);
+                }
+            }
+            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                println!("✅ Connection established with peer: {} via {:?}", peer_id, endpoint);
+                println!("   Connection info: {:?}", endpoint);
                 self.peers.insert(peer_id);
+                println!("   Peer added to peers set (total: {})", self.peers.len());
+                
+                // Add peer to gossipsub as explicit peer so we can exchange messages
+                // Note: This doesn't immediately add them to the mesh - gossipsub will do that
+                // during its next heartbeat if both peers are subscribed to the same topics
+                self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                println!("   Added peer {} as explicit peer to gossipsub (mesh will form on next heartbeat)", peer_id);
+                
+                // Bootstrap Kademlia to discover more peers (only if we have at least one peer in routing table)
+                if self.peers.len() == 1 {
+                    // First peer - bootstrap Kademlia
+                    println!("   Bootstrapping Kademlia DHT...");
+                    match self.swarm.behaviour_mut().kademlia.bootstrap() {
+                        Ok(_) => println!("   Kademlia bootstrap initiated"),
+                        Err(e) => eprintln!("⚠️  Failed to bootstrap Kademlia: {:?}", e),
+                    }
+                }
                 let _ = self.event_tx.send(NetworkEvent::PeerConnected(peer_id));
             }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                println!("Connection closed with peer: {}", peer_id);
+            SwarmEvent::ConnectionClosed { peer_id, cause, endpoint, .. } => {
+                println!("🔌 Connection closed with peer: {} via {:?}", peer_id, endpoint);
+                println!("   Cause: {:?}", cause);
+                if let Some(error) = cause.as_ref() {
+                    eprintln!("   Error details: {:?}", error);
+                }
                 self.peers.remove(&peer_id);
                 let _ = self.event_tx.send(NetworkEvent::PeerDisconnected(peer_id));
             }
-            SwarmEvent::NewListenAddr { address, .. } => {
-                println!("Listening on: {}", address);
+            SwarmEvent::Dialing { peer_id, .. } => {
+                if let Some(peer) = peer_id {
+                    println!("🔄 Dialing peer: {}", peer);
+                } else {
+                    println!("🔄 Dialing unknown peer...");
+                }
+            }
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                if let Some(peer) = peer_id {
+                    eprintln!("❌ Failed to connect to peer {}: {:?}", peer, error);
+                } else {
+                    eprintln!("❌ Failed to establish outgoing connection: {:?}", error);
+                }
+            }
+            SwarmEvent::IncomingConnectionError { error, .. } => {
+                eprintln!("❌ Failed to accept incoming connection: {:?}", error);
+            }
+            SwarmEvent::Dialing { peer_id, .. } => {
+                if let Some(peer) = peer_id {
+                    println!("🔄 Dialing peer: {}", peer);
+                } else {
+                    println!("🔄 Dialing unknown peer...");
+                }
             }
             _ => {}
         }
