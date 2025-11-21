@@ -269,6 +269,191 @@ impl ChainState {
             genesis_hash: self.genesis_hash,
         }
     }
+
+    /// Find common ancestor between current best chain and a target block
+    /// Returns (common_ancestor_hash, common_ancestor_height)
+    pub async fn find_common_ancestor(&self, target_hash: &Hash, target_height: u64) -> Result<Option<(Hash, u64)>, ChainError> {
+        let current_best_hash = self.best_block_hash().await;
+        let current_best_height = self.best_block_height().await;
+
+        // If target is at same or lower height, check if it's on our chain
+        if target_height <= current_best_height {
+            // Walk back from current best to target height
+            let mut current_hash = current_best_hash;
+            let mut current_height = current_best_height;
+
+            while current_height > target_height {
+                if let Some(block) = self.get_block_by_hash(&current_hash)? {
+                    current_hash = block.header.prev_hash;
+                    current_height -= 1;
+                } else {
+                    return Ok(None);
+                }
+            }
+
+            // Check if we reached the target
+            if current_hash == *target_hash {
+                return Ok(Some((current_hash, current_height)));
+            }
+        }
+
+        // Walk back both chains to find common ancestor
+        let mut our_hash = current_best_hash;
+        let mut our_height = current_best_height;
+        let mut their_hash = *target_hash;
+        let mut their_height = target_height;
+
+        // Align heights
+        while our_height > their_height {
+            if let Some(block) = self.get_block_by_hash(&our_hash)? {
+                our_hash = block.header.prev_hash;
+                our_height -= 1;
+            } else {
+                return Ok(None);
+            }
+        }
+
+        while their_height > our_height {
+            if let Some(block) = self.get_block_by_hash(&their_hash)? {
+                their_hash = block.header.prev_hash;
+                their_height -= 1;
+            } else {
+                return Ok(None);
+            }
+        }
+
+        // Now both at same height, walk back until we find common ancestor
+        while our_height > 0 && our_hash != their_hash {
+            if let Some(our_block) = self.get_block_by_hash(&our_hash)? {
+                our_hash = our_block.header.prev_hash;
+            } else {
+                return Ok(None);
+            }
+
+            if let Some(their_block) = self.get_block_by_hash(&their_hash)? {
+                their_hash = their_block.header.prev_hash;
+            } else {
+                return Ok(None);
+            }
+
+            our_height -= 1;
+        }
+
+        if our_hash == their_hash {
+            Ok(Some((our_hash, our_height)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get chain path from start_hash to end_hash (inclusive)
+    /// Returns blocks in order from start to end
+    pub fn get_chain_path(&self, start_hash: &Hash, start_height: u64, end_hash: &Hash, end_height: u64) -> Result<Vec<Block>, ChainError> {
+        if start_height > end_height {
+            return Ok(Vec::new());
+        }
+
+        let mut path = Vec::new();
+        let mut current_hash = *start_hash;
+        let mut current_height = start_height;
+
+        // If start == end, return single block
+        if start_hash == end_hash {
+            if let Some(block) = self.get_block_by_hash(start_hash)? {
+                path.push(block);
+            }
+            return Ok(path);
+        }
+
+        // Walk forward from start to end
+        while current_height <= end_height {
+            if let Some(block) = self.get_block_by_hash(&current_hash)? {
+                path.push(block.clone());
+                
+                if current_hash == *end_hash {
+                    break;
+                }
+
+                // Move to next block
+                current_hash = block.header.hash();
+                current_height += 1;
+
+                // Find next block by height (since we don't have next_hash)
+                if current_height <= end_height {
+                    if let Some(next_block) = self.get_block_by_height(current_height)? {
+                        // Verify it connects
+                        if next_block.header.prev_hash == current_hash {
+                            current_hash = next_block.header.hash();
+                        } else {
+                            // Chain broken, return what we have
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(path)
+    }
+
+    /// Reorganize chain to a new best block
+    /// Returns (old_chain_blocks, new_chain_blocks) for state unwinding/reapplying
+    pub async fn prepare_reorganization(&self, new_best_hash: &Hash, new_best_height: u64) -> Result<(Vec<Block>, Vec<Block>), ChainError> {
+        let current_best_hash = self.best_block_hash().await;
+        let current_best_height = self.best_block_height().await;
+
+        // Find common ancestor
+        let (common_hash, common_height) = match self.find_common_ancestor(new_best_hash, new_best_height).await? {
+            Some((hash, height)) => (hash, height),
+            None => {
+                // No common ancestor found, can't reorganize
+                return Err(ChainError::GenesisMismatch);
+            }
+        };
+
+        // Get old chain blocks (from common ancestor to current best, excluding common ancestor)
+        let old_chain = if common_height < current_best_height {
+            // Get blocks from common+1 to current best
+            let mut old_blocks = Vec::new();
+            for height in (common_height + 1)..=current_best_height {
+                if let Some(block) = self.get_block_by_height(height)? {
+                    old_blocks.push(block);
+                }
+            }
+            old_blocks.reverse(); // Reverse so we unwind from newest to oldest
+            old_blocks
+        } else {
+            Vec::new()
+        };
+
+        // Get new chain blocks (from common ancestor to new best, excluding common ancestor)
+        // Note: We need to get these from the network, so this will be called after blocks are received
+        // For now, return empty new_chain - caller will populate it
+        let new_chain = Vec::new();
+
+        Ok((old_chain, new_chain))
+    }
+
+    /// Update best chain to new block (after reorganization validation)
+    pub async fn update_best_chain(&self, new_best_hash: Hash, new_best_height: u64) -> Result<(), ChainError> {
+        *self.best_height.write().await = new_best_height;
+        *self.best_hash.write().await = new_best_hash;
+
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(METADATA_TABLE)?;
+            table.insert("best_height", new_best_height.to_le_bytes().as_ref())?;
+            table.insert("best_hash", new_best_hash.as_bytes() as &[u8])?;
+        }
+        write_txn.commit()?;
+
+        println!("🔄 Chain reorganized: new best block height={} hash={:?}", new_best_height, new_best_hash);
+        Ok(())
+    }
 }
 
 /// Chain statistics

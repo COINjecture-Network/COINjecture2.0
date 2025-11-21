@@ -229,37 +229,170 @@ impl MetricsCollector {
             .unwrap()
             .as_secs() as i64;
 
-        // Create a simple record for consensus block
-        // We'll use placeholder values for marketplace-specific fields
+        // Serialize all transactions with their details
+        let transactions_json: Vec<serde_json::Value> = block.transactions
+            .iter()
+            .map(|tx| {
+                // Serialize transaction to JSON
+                serde_json::to_value(tx).unwrap_or_else(|_| {
+                    serde_json::json!({
+                        "error": "Failed to serialize transaction",
+                        "hash": hex::encode(tx.hash().as_bytes())
+                    })
+                })
+            })
+            .collect();
+
+        // Extract marketplace transactions (problem/solution submissions)
+        let mut marketplace_problems = Vec::new();
+        let mut marketplace_solutions = Vec::new();
+        
+        for tx in &block.transactions {
+            if let Transaction::Marketplace(marketplace_tx) = tx {
+                match &marketplace_tx.operation {
+                    coinject_core::MarketplaceOperation::SubmitProblem { problem, bounty, min_work_score, expiration_days } => {
+                        let problem_json = serialize_problem(problem)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        marketplace_problems.push(serde_json::json!({
+                            "problem": problem_json,
+                            "bounty": bounty,
+                            "min_work_score": min_work_score,
+                            "expiration_days": expiration_days,
+                            "submitter": hex::encode(marketplace_tx.from.as_bytes()),
+                            "tx_hash": hex::encode(tx.hash().as_bytes()),
+                        }));
+                    }
+                    coinject_core::MarketplaceOperation::SubmitSolution { problem_id, solution } => {
+                        let solution_json = serialize_solution(solution)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        marketplace_solutions.push(serde_json::json!({
+                            "problem_id": hex::encode(problem_id.as_bytes()),
+                            "solution": solution_json,
+                            "solver": hex::encode(marketplace_tx.from.as_bytes()),
+                            "tx_hash": hex::encode(tx.hash().as_bytes()),
+                        }));
+                    }
+                    _ => {} // ClaimBounty, CancelProblem don't need special handling
+                }
+            }
+        }
+
+        // Serialize solution reveal
+        let solution_reveal_json = serde_json::json!({
+            "problem": serialize_problem(&block.solution_reveal.problem).unwrap_or_else(|_| serde_json::json!({})),
+            "solution": serialize_solution(&block.solution_reveal.solution).unwrap_or_else(|_| serde_json::json!({})),
+            "commitment_hash": hex::encode(block.solution_reveal.commitment.hash.as_bytes()),
+            "problem_hash": hex::encode(block.solution_reveal.commitment.problem_hash.as_bytes()),
+        });
+
+        // Calculate time asymmetry from PoUW metrics (if available)
+        let time_asymmetry = if block.header.verify_time_ms > 0 {
+            Some(block.header.solve_time_ms as f64 / block.header.verify_time_ms as f64)
+        } else {
+            Some(block.header.time_asymmetry_ratio)
+        };
+
+        // Calculate energy asymmetry
+        let energy_asymmetry = if block.header.energy_estimate_joules > 0.0 {
+            // For consensus blocks, we use the estimated energy
+            // Energy asymmetry would be solve_energy / verify_energy, but we only have total estimate
+            // We can estimate based on time asymmetry
+            time_asymmetry.map(|ta| ta * 0.1) // Rough estimate: verify is ~10% of solve energy
+        } else {
+            None
+        };
+
+        // Build comprehensive problem_data with ALL block information
+        let problem_data = serde_json::json!({
+            // Block header - all fields
+            "version": block.header.version,
+            "height": block.header.height,
+            "prev_hash": hex::encode(block.header.prev_hash.as_bytes()),
+            "timestamp": block.header.timestamp,
+            "transactions_root": hex::encode(block.header.transactions_root.as_bytes()),
+            "solutions_root": hex::encode(block.header.solutions_root.as_bytes()),
+            "commitment": {
+                "hash": hex::encode(block.header.commitment.hash.as_bytes()),
+                "problem_hash": hex::encode(block.header.commitment.problem_hash.as_bytes()),
+            },
+            "work_score": block.header.work_score,
+            "miner": hex::encode(block.header.miner.as_bytes()),
+            "nonce": block.header.nonce,
+            
+            // PoUW Transparency Metrics (WEB4)
+            "solve_time_ms": block.header.solve_time_ms,
+            "verify_time_ms": block.header.verify_time_ms,
+            "time_asymmetry_ratio": block.header.time_asymmetry_ratio,
+            "solution_quality": block.header.solution_quality,
+            "complexity_weight": block.header.complexity_weight,
+            "energy_estimate_joules": block.header.energy_estimate_joules,
+            
+            // Coinbase transaction
+            "coinbase": {
+                "reward": block.coinbase.reward,
+                "height": block.coinbase.height,
+                "to": hex::encode(block.coinbase.to.as_bytes()),
+            },
+            
+            // All transactions with full details
+            "transactions": transactions_json,
+            "transactions_count": block.transactions.len(),
+            
+            // Marketplace data extracted from transactions
+            "marketplace_problems": marketplace_problems,
+            "marketplace_solutions": marketplace_solutions,
+            
+            // Solution reveal
+            "solution_reveal": solution_reveal_json,
+        });
+
+        // Build comprehensive solution_data
+        let solution_data = serde_json::json!({
+            "hash": hex::encode(block.hash().as_bytes()),
+            "header_hash": hex::encode(block.header.hash().as_bytes()),
+            "timestamp": block.header.timestamp,
+            "total_fees": block.total_fees(),
+        });
+
         Ok(DatasetRecord {
             problem_id: format!("consensus_block_{}", block.header.height),
             problem_type: "ConsensusBlock".to_string(),
-            problem_data: serde_json::json!({
-                "height": block.header.height,
-                "prev_hash": hex::encode(block.header.prev_hash.as_bytes()),
-                "transactions_count": block.transactions.len(),
-                "miner": hex::encode(block.header.miner.as_bytes()),
-                "nonce": block.header.nonce,
-                "work_score": block.header.work_score,
-            }),
+            problem_data,
             problem_complexity: block.header.work_score,
             bounty: block.coinbase.reward,
             submitter: Some(hex::encode(block.header.miner.as_bytes())),
             solver: if is_mined { Some(hex::encode(block.header.miner.as_bytes())) } else { None },
-            solution_data: Some(serde_json::json!({
-                "hash": hex::encode(block.hash().as_bytes()),
-                "timestamp": block.header.timestamp,
-            })),
-            time_asymmetry: None,
-            space_asymmetry: None,
-            solve_energy_joules: None,
-            verify_energy_joules: None,
-            total_energy_joules: None,
-            energy_per_operation: None,
-            energy_asymmetry: None,
-            energy_efficiency: None,
-            solution_quality: None,
-            work_score: None,
+            solution_data: Some(solution_data),
+            // Use PoUW metrics from block header
+            time_asymmetry,
+            space_asymmetry: None, // Not available in block header
+            solve_energy_joules: if block.header.energy_estimate_joules > 0.0 {
+                // Estimate solve energy as 90% of total (verify is fast)
+                Some(block.header.energy_estimate_joules * 0.9)
+            } else {
+                None
+            },
+            verify_energy_joules: if block.header.energy_estimate_joules > 0.0 {
+                // Estimate verify energy as 10% of total
+                Some(block.header.energy_estimate_joules * 0.1)
+            } else {
+                None
+            },
+            total_energy_joules: if block.header.energy_estimate_joules > 0.0 {
+                Some(block.header.energy_estimate_joules)
+            } else {
+                None
+            },
+            energy_per_operation: None, // Would need operation count
+            energy_asymmetry,
+            energy_efficiency: if block.header.energy_estimate_joules > 0.0 {
+                // Efficiency = work_score / energy
+                Some(block.header.work_score / block.header.energy_estimate_joules)
+            } else {
+                None
+            },
+            solution_quality: Some(block.header.solution_quality),
+            work_score: Some(block.header.work_score),
             block_height: block.header.height,
             timestamp,
             status: if is_mined { "Mined".to_string() } else { "Validated".to_string() },

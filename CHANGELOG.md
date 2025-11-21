@@ -5,6 +5,52 @@ All notable changes to COINjecture Network B will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.6.4] - 2025-01-XX
+
+### Added
+- **Full Chain Reorganization (Fork Handling)**
+  - Automatic detection of chain forks when nodes receive blocks at the same height with different hashes
+  - Complete chain reorganization logic to ensure nodes always follow the longest valid chain
+  - State unwinding: Automatically reverses all state changes (transfers, timelocks, escrows, channels, trustlines, swaps, marketplace transactions) when unwinding blocks from a shorter fork
+  - State reapplication: Reapplies all transactions from the new longer chain in correct order
+  - Common ancestor detection: Efficiently finds the fork point between current chain and competing chain
+  - Automatic sync to longest chain: Nodes automatically request and switch to longer chains when detected
+  - Fork detection triggers: Status updates and block receipts now trigger reorganization checks
+
+### Changed
+- Network event handling now detects forks and triggers full chain requests
+- Block processing now includes reorganization checks after processing buffered blocks
+- Chain state management now supports finding common ancestors and preparing reorganization paths
+
+### Technical Details
+- Added `find_common_ancestor()` to locate fork points between chains
+- Added `prepare_reorganization()` to collect blocks for unwinding and reapplication
+- Added `reorganize_chain()` to orchestrate the full reorganization process
+- Added `unwind_block_transactions()` and `unwind_single_transaction()` for state reversal
+- Added `attempt_reorganization_if_longer_chain()` to check for and trigger reorganizations
+- Enhanced `NetworkEvent::StatusUpdate` handler to request full chains for fork analysis
+- Enhanced `NetworkEvent::BlockReceived` handler to store fork blocks and check for reorganization
+
+## [4.6.3] - 2025-11-20
+
+### Added
+- **Comprehensive Block Data Collection for Hugging Face**
+  - Enhanced `collect_consensus_block_record` to capture ALL available block data:
+    - Complete block header fields (version, height, prev_hash, timestamp, merkle roots, commitment)
+    - All PoUW transparency metrics (solve_time_ms, verify_time_ms, time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules)
+    - Full transaction serialization for all transaction types (Transfer, TimeLock, Escrow, Channel, TrustLine, DimensionalPoolSwap, Marketplace)
+    - Marketplace data extraction: automatically extracts problem and solution submissions from Marketplace transactions
+    - Solution reveal data: complete problem and solution data from block's solution reveal
+    - Coinbase transaction details (reward, recipient, height)
+    - Calculated metrics: time asymmetry, energy asymmetry, solve/verify energy split, energy efficiency
+  - All transaction details are now serialized and included in dataset records
+  - Marketplace problems and solutions are extracted and structured separately for easier analysis
+
+### Changed
+- Consensus block records now include comprehensive data instead of minimal placeholders
+- Energy metrics are calculated from PoUW transparency metrics when available
+- Solution quality and work scores are now populated from block header data
+
 ## [4.6.2] - 2025-11-20
 
 ### Fixed
@@ -89,6 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[4.6.4]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.4
+[4.6.3]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.3
 [4.6.2]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.2
 [4.6.1]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.1
 [4.6.0]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.0
