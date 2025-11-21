@@ -1090,12 +1090,13 @@ impl CoinjectNode {
 
         // Find common ancestor
         let (common_hash, common_height) = match chain.find_common_ancestor(&new_chain_end_hash, new_chain_end_height).await
-            .map_err(|e| format!("Failed to find common ancestor: {}", e))? {
-            Some((hash, height)) => (hash, height),
-            None => {
+            .map_err(|e| format!("Failed to find common ancestor: {}", e)) {
+            Ok(Some((hash, height))) => (hash, height),
+            Ok(None) => {
                 println!("⚠️  No common ancestor found, cannot reorganize");
                 return Ok(false);
             }
+            Err(e) => return Err(e),
         };
 
         println!("🔄 Found common ancestor at height {} (hash: {:?})", common_height, common_hash);
