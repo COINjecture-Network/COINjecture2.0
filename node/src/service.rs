@@ -620,6 +620,9 @@ impl CoinjectNode {
                                                             eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
                                                         }
                                                     });
+
+                                                    // Upload marketplace transactions from this block
+                                                    Self::upload_marketplace_transactions(&block, marketplace_state, hf_sync);
                                                 }
 
                                                 // After applying this block, try to apply buffered blocks sequentially
@@ -1599,9 +1602,107 @@ impl CoinjectNode {
                             Err(e) => eprintln!("❌ Failed to push consensus block {} to Hugging Face: {}", block_clone.header.height, e),
                         }
                     });
+
+                    // Upload marketplace transactions from this mined block
+                    Self::upload_marketplace_transactions(&block, &marketplace_state, hf_sync);
                 }
             } else {
                 println!("❌ Mining failed");
+            }
+        }
+    }
+
+    /// Upload marketplace transactions from a block to Hugging Face
+    fn upload_marketplace_transactions(
+        block: &coinject_core::Block,
+        marketplace_state: &Arc<MarketplaceState>,
+        hf_sync: &Arc<HuggingFaceSync>,
+    ) {
+        use coinject_core::{Transaction, MarketplaceOperation};
+
+        // Scan block for marketplace transactions
+        for tx in &block.transactions {
+            if let Transaction::Marketplace(marketplace_tx) = tx {
+                match &marketplace_tx.operation {
+                    MarketplaceOperation::SubmitProblem { problem, .. } => {
+                        // Calculate problem_id from problem data (same as marketplace state does)
+                        let problem_id = match bincode::serialize(problem) {
+                            Ok(problem_data) => coinject_core::Hash::new(&problem_data),
+                            Err(e) => {
+                                eprintln!("❌ Failed to serialize problem for hash: {}", e);
+                                return;
+                            }
+                        };
+
+                        // Retrieve the submission from marketplace state
+                        let marketplace_clone = Arc::clone(marketplace_state);
+                        let hf_clone = Arc::clone(hf_sync);
+                        let block_height = block.header.height;
+
+                        tokio::spawn(async move {
+                            match marketplace_clone.get_problem(&problem_id) {
+                                Ok(Some(submission)) => {
+                                    eprintln!("📊 Uploading problem submission {:?} to Hugging Face", problem_id);
+                                    if let Err(e) = hf_clone.push_problem_submission(&submission, block_height).await {
+                                        eprintln!("❌ Failed to upload problem submission: {}", e);
+                                    } else {
+                                        eprintln!("✅ Successfully uploaded problem submission {:?}", problem_id);
+                                    }
+                                }
+                                Ok(None) => {
+                                    eprintln!("⚠️  Problem {:?} not found in marketplace state", problem_id);
+                                }
+                                Err(e) => {
+                                    eprintln!("❌ Failed to retrieve problem {:?}: {}", problem_id, e);
+                                }
+                            }
+                        });
+                    }
+                    MarketplaceOperation::SubmitSolution { problem_id, .. } => {
+                        // Retrieve the updated submission (now has solution) from marketplace state
+                        let marketplace_clone = Arc::clone(marketplace_state);
+                        let hf_clone = Arc::clone(hf_sync);
+                        let problem_id = *problem_id;
+                        let block_height = block.header.height;
+
+                        tokio::spawn(async move {
+                            match marketplace_clone.get_problem(&problem_id) {
+                                Ok(Some(submission)) => {
+                                    eprintln!("📊 Uploading solution submission for problem {:?} to Hugging Face", problem_id);
+
+                                    // For now, use estimated timing (we'll refine this later with actual measurements)
+                                    // Estimate based on problem complexity
+                                    let solve_time = std::time::Duration::from_secs((submission.min_work_score * 10.0) as u64);
+                                    let verify_time = std::time::Duration::from_millis(100);
+                                    let solve_memory = 1024 * 1024; // 1 MB estimate
+                                    let verify_memory = 512 * 1024; // 512 KB estimate
+
+                                    if let Err(e) = hf_clone.push_solution_submission(
+                                        &submission,
+                                        block_height,
+                                        solve_time,
+                                        verify_time,
+                                        solve_memory,
+                                        verify_memory,
+                                    ).await {
+                                        eprintln!("❌ Failed to upload solution submission: {}", e);
+                                    } else {
+                                        eprintln!("✅ Successfully uploaded solution submission for problem {:?}", problem_id);
+                                    }
+                                }
+                                Ok(None) => {
+                                    eprintln!("⚠️  Problem {:?} not found in marketplace state", problem_id);
+                                }
+                                Err(e) => {
+                                    eprintln!("❌ Failed to retrieve problem {:?}: {}", problem_id, e);
+                                }
+                            }
+                        });
+                    }
+                    _ => {
+                        // ClaimBounty and CancelProblem don't need uploads
+                    }
+                }
             }
         }
     }

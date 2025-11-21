@@ -221,50 +221,96 @@ impl MetricsCollector {
         block: &coinject_core::Block,
         is_mined: bool,
     ) -> Result<DatasetRecord, MetricsError> {
-        use coinject_core::Transaction;
-
         // Extract consensus block data
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
 
-        // Create a simple record for consensus block
-        // We'll use placeholder values for marketplace-specific fields
+        // Extract mining problem and solution from the block
+        let problem = &block.solution_reveal.problem;
+        let solution = &block.solution_reveal.solution;
+
+        // Serialize the problem and solution
+        let problem_data = serialize_problem(problem)?;
+        let solution_data = serialize_solution(solution)?;
+
+        // Determine problem type
+        let problem_type = format!("{:?}", problem).split('{').next().unwrap_or("Unknown").to_string();
+
+        // Calculate problem complexity (difficulty weight)
+        let problem_complexity = problem.difficulty_weight();
+
+        // Calculate solution quality
+        let solution_quality = solution.quality(problem);
+
+        // Estimate timing metrics for mining operations
+        // These are rough estimates since we don't track actual mining time per block
+        let estimated_solve_time = Duration::from_secs((problem_complexity * 10.0) as u64);
+        let estimated_verify_time = Duration::from_millis(100);
+
+        // Calculate time asymmetry
+        let time_asymmetry = estimated_solve_time.as_secs_f64() / estimated_verify_time.as_secs_f64().max(0.001);
+
+        // Estimate space asymmetry (mining typically uses more memory than verification)
+        let space_asymmetry = 1.5; // Rough estimate
+
+        // Measure estimated energy
+        let energy_measurement = self.energy_measurer
+            .measure_solve_verify_energy(estimated_solve_time, estimated_verify_time)?;
+        let solve_energy = energy_measurement.solve_energy_joules;
+        let verify_energy = energy_measurement.verify_energy_joules;
+        let total_energy = solve_energy + verify_energy;
+        let energy_asymmetry = if verify_energy > 0.0 {
+            solve_energy / verify_energy
+        } else {
+            0.0
+        };
+
+        // Estimate energy per operation
+        let operations_estimate = estimated_solve_time.as_secs_f64() * 1_000_000_000.0;
+        let energy_per_operation = if operations_estimate > 0.0 {
+            solve_energy / operations_estimate
+        } else {
+            0.0
+        };
+        let energy_efficiency = 1.0 / (energy_per_operation + 1.0);
+
+        // Calculate work score using the same method as marketplace
+        let work_score = self.work_calculator.calculate(
+            problem,
+            solution,
+            estimated_solve_time,
+            estimated_verify_time,
+            1024 * 1024, // 1 MB estimate for solve memory
+            512 * 1024,  // 512 KB estimate for verify memory
+            energy_per_operation,
+        );
+
         Ok(DatasetRecord {
-            problem_id: format!("consensus_block_{}", block.header.height),
-            problem_type: "ConsensusBlock".to_string(),
-            problem_data: serde_json::json!({
-                "height": block.header.height,
-                "prev_hash": hex::encode(block.header.prev_hash.as_bytes()),
-                "transactions_count": block.transactions.len(),
-                "miner": hex::encode(block.header.miner.as_bytes()),
-                "nonce": block.header.nonce,
-                "work_score": block.header.work_score,
-            }),
-            problem_complexity: block.header.work_score,
+            problem_id: format!("mining_block_{}", block.header.height),
+            problem_type,
+            problem_data,
+            problem_complexity,
             bounty: block.coinbase.reward,
             submitter: Some(hex::encode(block.header.miner.as_bytes())),
             solver: if is_mined { Some(hex::encode(block.header.miner.as_bytes())) } else { None },
-            solution_data: Some(serde_json::json!({
-                "hash": hex::encode(block.hash().as_bytes()),
-                "timestamp": block.header.timestamp,
-            })),
-            time_asymmetry: None,
-            space_asymmetry: None,
-            solve_energy_joules: None,
-            verify_energy_joules: None,
-            total_energy_joules: None,
-            energy_per_operation: None,
-            energy_asymmetry: None,
-            energy_efficiency: None,
-            solution_quality: None,
-            work_score: None,
+            solution_data: Some(solution_data),
+            time_asymmetry: Some(time_asymmetry),
+            space_asymmetry: Some(space_asymmetry),
+            solve_energy_joules: Some(solve_energy),
+            verify_energy_joules: Some(verify_energy),
+            total_energy_joules: Some(total_energy),
+            energy_per_operation: Some(energy_per_operation),
+            energy_asymmetry: Some(energy_asymmetry),
+            energy_efficiency: Some(energy_efficiency),
+            solution_quality: Some(solution_quality),
+            work_score: Some(work_score),
             block_height: block.header.height,
             timestamp,
             status: if is_mined { "Mined".to_string() } else { "Validated".to_string() },
             energy_measurement_method: format!("{:?}", self.energy_measurer.config.method),
-            submission_mode: "consensus".to_string(),
+            submission_mode: "mining".to_string(),
         })
     }
 }
