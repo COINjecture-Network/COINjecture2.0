@@ -172,7 +172,7 @@ impl CoinjectNode {
             None
         };
 
-        // Initialize Hugging Face sync if configured
+        // Initialize HuggingFace sync if configured
         let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) = (&config.hf_token, &config.hf_dataset_name) {
             println!("🤗 Initializing Hugging Face sync...");
             println!("   Dataset: {}", hf_dataset_name);
@@ -180,26 +180,20 @@ impl CoinjectNode {
             let hf_config = HuggingFaceConfig {
                 token: hf_token.clone(),
                 dataset_name: hf_dataset_name.clone(),
-                dataset_config: config.hf_dataset_config.clone(),
+                dataset_config: None,
                 ..Default::default()
             };
 
-            let energy_method = match config.energy_measurement_method.as_str() {
-                "rapl" => EnergyMeasurementMethod::RAPL,
-                "powermetrics" => EnergyMeasurementMethod::PowerMetrics,
-                _ => EnergyMeasurementMethod::Estimate,
-            };
-
             let energy_config = EnergyConfig {
-                enabled: config.energy_measurement_enabled,
-                method: energy_method,
-                cpu_tdp_watts: config.cpu_tdp_watts,
+                enabled: false,
+                method: EnergyMeasurementMethod::Estimate,
+                cpu_tdp_watts: 65.0,
             };
 
             let sync_config = SyncConfig {
                 enabled: true,
-                include_submitter_address: config.include_submitter_address,
-                include_solver_address: config.include_solver_address,
+                include_submitter_address: false,
+                include_solver_address: false,
                 ..Default::default()
             };
 
@@ -247,13 +241,11 @@ impl CoinjectNode {
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Start P2P network
         println!("🌐 Starting P2P network...");
-        let genesis_hash = self.chain.genesis_hash();
         let network_config = NetworkConfig {
             listen_addr: self.config.p2p_addr.clone(),
             chain_id: self.config.chain_id.clone(),
             max_peers: self.config.max_peers,
             enable_mdns: true,
-            genesis_hash,
         };
 
         let (mut network_service, mut event_rx) = NetworkService::new(network_config)?;
@@ -285,6 +277,9 @@ impl CoinjectNode {
             }) as coinject_rpc::FaucetHandler
         });
 
+        // Create shared peer count tracker (used by both RPC and network event handler)
+        let peer_count = Arc::new(RwLock::new(0usize));
+
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
             timelock_state: Arc::clone(&self.timelock_state),
@@ -298,7 +293,7 @@ impl CoinjectNode {
             best_height: self.chain.best_height_ref(),
             best_hash: self.chain.best_hash_ref(),
             genesis_hash: self.chain.genesis_hash(),
-            peer_count: Arc::new(RwLock::new(0)),
+            peer_count: Arc::clone(&peer_count),
             faucet_handler,
         });
 
@@ -368,11 +363,12 @@ impl CoinjectNode {
         let tx_pool = Arc::clone(&self.tx_pool);
         let network_tx_for_events = network_cmd_tx.clone();
         let buffer_for_events = Arc::clone(&block_buffer);
+        let peer_count_for_events = Arc::clone(&peer_count);
         let hf_sync_for_events = self.hf_sync.clone();
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, hf_sync_for_events.as_ref().map(|s| Arc::clone(s))).await;
+                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, &peer_count_for_events, &hf_sync_for_events).await;
             }
         });
 
@@ -415,6 +411,11 @@ impl CoinjectNode {
 
                 // Update pool balance metrics (all 8 dimensional pools)
                 use coinject_core::DimensionalPool;
+
+                // Get unlock fractions and yield rates from consensus state
+                let unlock_fractions = dimensional_pool_state_for_metrics.get_unlock_fractions();
+                let yield_rates = dimensional_pool_state_for_metrics.get_yield_rates();
+
                 for pool_id in 1..=8 {  // All 8 pools: D1-D8
                     let pool = match pool_id {
                         1 => DimensionalPool::D1,
@@ -429,9 +430,36 @@ impl CoinjectNode {
                     };
 
                     if let Some(liquidity) = dimensional_pool_state_for_metrics.get_pool_liquidity(&pool) {
+                        let dimension_label = format!("D{}", pool_id);
+
+                        // Total balance
                         crate::metrics::POOL_BALANCE
-                            .with_label_values(&[&format!("D{}", pool_id)])
+                            .with_label_values(&[&dimension_label])
                             .set(liquidity.liquidity as f64);
+
+                        // Locked liquidity (not yet unlocked)
+                        crate::metrics::POOL_LOCKED
+                            .with_label_values(&[&dimension_label])
+                            .set(liquidity.locked_liquidity as f64);
+
+                        // Unlocked liquidity (available for withdrawal/yields)
+                        crate::metrics::POOL_UNLOCKED
+                            .with_label_values(&[&dimension_label])
+                            .set(liquidity.unlocked_liquidity as f64);
+
+                        // Unlock fraction U_n(τ)
+                        if let Some(ref fractions) = unlock_fractions {
+                            crate::metrics::POOL_UNLOCK_FRACTION
+                                .with_label_values(&[&dimension_label])
+                                .set(fractions[pool_id - 1]);
+                        }
+
+                        // Yield rate r_n(τ)
+                        if let Some(ref rates) = yield_rates {
+                            crate::metrics::POOL_YIELD_RATE
+                                .with_label_values(&[&dimension_label])
+                                .set(rates[pool_id - 1]);
+                        }
                     }
                 }
 
@@ -460,22 +488,43 @@ impl CoinjectNode {
                     crate::metrics::CONSENSUS_PHASE.set(phase);
                 }
 
-                // For now, use theoretical constants (future: measure from solve/verify rates)
-                // TODO: Measure η from actual damping rate: η = -ln(|ψ(t+Δt)| / |ψ(t)|) / Δt
-                // TODO: Measure λ from actual oscillation rate: λ = Δθ / Δt
-                let measured_eta = ETA;    // Future: derive from solve rate statistics
-                let measured_lambda = LAMBDA; // Future: derive from verify rate statistics
+                // EMPIRICAL MEASUREMENT: Get measured η and λ from consensus metrics
+                // These values are computed from actual work score exponential decay and timing coherence
+                if let Some(metrics) = dimensional_pool_state_for_metrics.get_consensus_metrics() {
+                    crate::metrics::MEASURED_ETA.set(metrics.measured_eta);
+                    crate::metrics::MEASURED_LAMBDA.set(metrics.measured_lambda);
+                    crate::metrics::CONVERGENCE_CONFIDENCE.set(metrics.convergence_confidence);
+                    crate::metrics::MEASURED_ORACLE_DELTA.set(metrics.measured_oracle_delta);
 
-                crate::metrics::MEASURED_ETA.set(measured_eta);
-                crate::metrics::MEASURED_LAMBDA.set(measured_lambda);
+                    // Calculate convergence errors
+                    let eta_error = (metrics.measured_eta - ETA).abs();
+                    let lambda_error = (metrics.measured_lambda - LAMBDA).abs();
+                    crate::metrics::ETA_CONVERGENCE_ERROR.set(eta_error);
+                    crate::metrics::LAMBDA_CONVERGENCE_ERROR.set(lambda_error);
 
-                // Update unit circle constraint: |μ|² = η² + λ² should equal 1
-                let constraint = measured_eta * measured_eta + measured_lambda * measured_lambda;
-                crate::metrics::UNIT_CIRCLE_CONSTRAINT.set(constraint);
+                    // Update unit circle constraint: |μ|² = η² + λ² should equal 1
+                    let constraint = metrics.measured_eta * metrics.measured_eta +
+                                   metrics.measured_lambda * metrics.measured_lambda;
+                    crate::metrics::UNIT_CIRCLE_CONSTRAINT.set(constraint);
 
-                // Update damping coefficient: ζ = η/√2
-                let damping = measured_eta / std::f64::consts::SQRT_2;
-                crate::metrics::DAMPING_COEFFICIENT.set(damping);
+                    // Update damping coefficient: ζ = η/√2
+                    let damping = metrics.measured_eta / std::f64::consts::SQRT_2;
+                    crate::metrics::DAMPING_COEFFICIENT.set(damping);
+                } else {
+                    // Fallback to theoretical values until enough data collected
+                    crate::metrics::MEASURED_ETA.set(ETA);
+                    crate::metrics::MEASURED_LAMBDA.set(LAMBDA);
+                    crate::metrics::CONVERGENCE_CONFIDENCE.set(0.0);
+                    crate::metrics::MEASURED_ORACLE_DELTA.set(0.231); // Theoretical value
+                    crate::metrics::ETA_CONVERGENCE_ERROR.set(0.0);
+                    crate::metrics::LAMBDA_CONVERGENCE_ERROR.set(0.0);
+
+                    let constraint = ETA * ETA + LAMBDA * LAMBDA;
+                    crate::metrics::UNIT_CIRCLE_CONSTRAINT.set(constraint);
+
+                    let damping = ETA / std::f64::consts::SQRT_2;
+                    crate::metrics::DAMPING_COEFFICIENT.set(damping);
+                }
             }
         });
 
@@ -517,7 +566,8 @@ impl CoinjectNode {
         tx_pool: &Arc<RwLock<TransactionPool>>,
         network_tx: &mpsc::UnboundedSender<NetworkCommand>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
-        hf_sync: Option<Arc<HuggingFaceSync>>,
+        peer_count: &Arc<RwLock<usize>>,
+        hf_sync: &Option<Arc<HuggingFaceSync>>,
     ) {
         match event {
             NetworkEvent::BlockReceived { block, peer } => {
@@ -546,30 +596,8 @@ impl CoinjectNode {
                                             println!("⚠️  Warning: Failed to save consensus state: {}", e);
                                         }
 
-                                        // Push consensus block to Hugging Face (fire-and-forget)
-                                        if let Some(ref hf_sync) = hf_sync {
-                                            let hf_sync_clone = Arc::clone(hf_sync);
-                                            let block_clone = block.clone();
-                                            tokio::spawn(async move {
-                                                if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
-                                                    eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
-                                                }
-                                            });
-                                        }
-
-                                        // Push consensus block to Hugging Face (fire-and-forget)
-                                        if let Some(ref hf_sync) = hf_sync {
-                                            let hf_sync_clone = Arc::clone(hf_sync);
-                                            let block_clone = block.clone();
-                                            tokio::spawn(async move {
-                                                if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
-                                                    eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
-                                                }
-                                            });
-                                        }
-
                                         // Apply block transactions to state
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, hf_sync.as_ref().map(|s| Arc::clone(s))) {
+                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
                                                 println!("✅ Block {} accepted and applied to chain (τ={:.4})", block.header.height, tau);
 
@@ -582,6 +610,17 @@ impl CoinjectNode {
 
                                                 // Update block metrics
                                                 crate::metrics::BLOCK_HEIGHT.set(block.header.height as i64);
+
+                                                // Push consensus block to Hugging Face (fire-and-forget)
+                                                if let Some(ref hf_sync) = hf_sync {
+                                                    let hf_sync_clone = Arc::clone(hf_sync);
+                                                    let block_clone = block.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
+                                                            eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
+                                                        }
+                                                    });
+                                                }
 
                                                 // After applying this block, try to apply buffered blocks sequentially
                                                 Self::process_buffered_blocks(
@@ -596,7 +635,7 @@ impl CoinjectNode {
                                                     validator,
                                                     tx_pool,
                                                     block_buffer,
-                                                    hf_sync.as_ref().map(|s| Arc::clone(s)),
+                                                    hf_sync,
                                                 ).await;
                                             }
                                             Err(e) => {
@@ -647,11 +686,29 @@ impl CoinjectNode {
             }
             NetworkEvent::PeerConnected(peer) => {
                 println!("🤝 Peer connected: {:?}", peer);
-                // TODO: Update peer count metric when network_service is accessible
+
+                // Update peer count
+                let mut count = peer_count.write().await;
+                *count += 1;
+                let count_value = *count;
+                drop(count);
+
+                // Update Prometheus metric
+                crate::metrics::PEER_COUNT.set(count_value as i64);
             }
             NetworkEvent::PeerDisconnected(peer) => {
                 println!("👋 Peer disconnected: {:?}", peer);
-                // TODO: Update peer count metric when network_service is accessible
+
+                // Update peer count
+                let mut count = peer_count.write().await;
+                if *count > 0 {
+                    *count -= 1;
+                }
+                let count_value = *count;
+                drop(count);
+
+                // Update Prometheus metric
+                crate::metrics::PEER_COUNT.set(count_value as i64);
             }
             NetworkEvent::StatusUpdate { peer, best_height, best_hash } => {
                 let our_height = chain.best_block_height().await;
@@ -738,7 +795,7 @@ impl CoinjectNode {
         validator: &Arc<BlockValidator>,
         tx_pool: &Arc<RwLock<TransactionPool>>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
-        hf_sync: Option<Arc<HuggingFaceSync>>,
+        hf_sync: &Option<Arc<HuggingFaceSync>>,
     ) {
         loop {
             let best_height = chain.best_block_height().await;
@@ -772,18 +829,7 @@ impl CoinjectNode {
                                             println!("⚠️  Warning: Failed to save consensus state: {}", e);
                                         }
 
-                                        // Push consensus block to Hugging Face (fire-and-forget)
-                                        if let Some(ref hf_sync) = hf_sync {
-                                            let hf_sync_clone = Arc::clone(hf_sync);
-                                            let block_clone = block.clone();
-                                            tokio::spawn(async move {
-                                                if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
-                                                    eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
-                                                }
-                                            });
-                                        }
-
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, hf_sync.as_ref().map(|s| Arc::clone(s))) {
+                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
                                                 println!("✅ Buffered block {} applied to chain (τ={:.4})", next_height, tau);
 
@@ -793,6 +839,17 @@ impl CoinjectNode {
                                                     pool.remove(tx_hash);
                                                 }
                                                 drop(pool);
+
+                                                // Push consensus block to Hugging Face (fire-and-forget)
+                                                if let Some(ref hf_sync) = hf_sync {
+                                                    let hf_sync_clone = Arc::clone(hf_sync);
+                                                    let block_clone = block.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
+                                                            eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
+                                                        }
+                                                    });
+                                                }
 
                                                 // Continue loop to check for next sequential block
                                             }
@@ -836,7 +893,6 @@ impl CoinjectNode {
         trustline_state: &Arc<TrustLineState>,
         dimensional_pool_state: &Arc<DimensionalPoolState>,
         marketplace_state: &Arc<MarketplaceState>,
-        hf_sync: Option<Arc<HuggingFaceSync>>,
     ) -> Result<Vec<coinject_core::Hash>, String> {
         // Apply coinbase reward
         let miner = block.header.miner;
@@ -851,7 +907,7 @@ impl CoinjectNode {
         // Apply regular transactions
         for tx in &block.transactions {
             // Apply the transaction
-            match Self::apply_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height, hf_sync.as_ref().map(|s| Arc::clone(s))) {
+            match Self::apply_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height) {
                 Ok(()) => {
                     applied_txs.push(tx.hash());
                 }
@@ -881,7 +937,6 @@ impl CoinjectNode {
         dimensional_pool_state: &Arc<DimensionalPoolState>,
         marketplace_state: &Arc<MarketplaceState>,
         block_height: u64,
-        hf_sync: Option<Arc<HuggingFaceSync>>,
     ) -> Result<(), String> {
         use coinject_core::{EscrowType, ChannelType};
         use coinject_state::{Escrow, EscrowStatus, TimeLock, Channel, ChannelStatus};
@@ -1280,21 +1335,6 @@ impl CoinjectNode {
                         ).map_err(|e| format!("Failed to submit problem: {}", e))?;
 
                         println!("✅ Problem submitted to marketplace: {:?} (bounty: {})", problem_id, bounty);
-
-                        // Push to Hugging Face if configured (fire-and-forget)
-                        if let Some(ref hf_sync) = hf_sync {
-                            let hf_sync_clone = Arc::clone(hf_sync);
-                            let marketplace_state_clone = Arc::clone(marketplace_state);
-                            let problem_id_clone = problem_id;
-                            let block_height_clone = block_height;
-                            tokio::spawn(async move {
-                                if let Ok(Some(submission)) = marketplace_state_clone.get_problem(&problem_id_clone) {
-                                    if let Err(e) = hf_sync_clone.push_problem_submission(&submission, block_height_clone).await {
-                                        eprintln!("⚠️  Failed to push problem to Hugging Face: {}", e);
-                                    }
-                                }
-                            });
-                        }
                     }
                     MarketplaceOperation::SubmitSolution { problem_id, solution } => {
                         // WEB4 AUTONOMOUS BOUNTY PAYOUT
@@ -1311,29 +1351,6 @@ impl CoinjectNode {
                         state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
 
-                        // Get problem for verification timing
-                        let problem_opt = marketplace_state.get_problem(problem_id)
-                            .map_err(|e| format!("Failed to get problem: {}", e))?;
-                        let problem = problem_opt.ok_or("Problem not found")?;
-
-                        // Extract problem for verification
-                        let problem_type = match &problem.submission_mode {
-                            coinject_core::SubmissionMode::Public { problem } => problem,
-                            coinject_core::SubmissionMode::Private { .. } => {
-                                problem.problem_reveal.as_ref()
-                                    .map(|r| &r.problem)
-                                    .ok_or("Private problem not revealed")?
-                            }
-                        };
-
-                        // Measure verify time
-                        let verify_start = std::time::Instant::now();
-                        if !solution.verify(problem_type) {
-                            return Err("Invalid solution".to_string());
-                        }
-                        let verify_time = verify_start.elapsed();
-                        let verify_memory = 1024; // Approximate verification memory
-
                         // Submit solution to marketplace state (verifies and marks as solved)
                         marketplace_state.submit_solution(*problem_id, marketplace_tx.from, solution.clone())
                             .map_err(|e| format!("Failed to submit solution: {}", e))?;
@@ -1348,36 +1365,6 @@ impl CoinjectNode {
                             .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
 
                         println!("✅ Solution accepted! Auto-paid {} tokens to solver {:?}", bounty, solver);
-
-                        // Push to Hugging Face if configured (fire-and-forget)
-                        if let Some(ref hf_sync) = hf_sync {
-                            let hf_sync_clone = Arc::clone(hf_sync);
-                            let marketplace_state_clone = Arc::clone(marketplace_state);
-                            let problem_id_clone = *problem_id;
-                            let block_height_clone = block_height;
-                            let verify_time_clone = verify_time;
-                            let verify_memory_clone = verify_memory;
-                            tokio::spawn(async move {
-                                // Get updated submission with solution
-                                if let Ok(Some(submission)) = marketplace_state_clone.get_problem(&problem_id_clone) {
-                                    // Estimate solve time (solver did it off-chain, we don't have actual time)
-                                    // Use a default estimate or set to 0
-                                    let solve_time = Duration::from_secs(10); // Default estimate
-                                    let solve_memory = 1024 * 1024; // Default estimate
-
-                                    if let Err(e) = hf_sync_clone.push_solution_submission(
-                                        &submission,
-                                        block_height_clone,
-                                        solve_time,
-                                        verify_time_clone,
-                                        solve_memory,
-                                        verify_memory_clone,
-                                    ).await {
-                                        eprintln!("⚠️  Failed to push solution to Hugging Face: {}", e);
-                                    }
-                                }
-                            });
-                        }
                     }
                     MarketplaceOperation::ClaimBounty { problem_id } => {
                         // Just need fee
@@ -1476,15 +1463,6 @@ impl CoinjectNode {
                 println!("🎉 Mined new block {}!", block.header.height);
                 drop(miner_lock);
 
-                // CRITICAL: Check if chain advanced while we were mining
-                // If another node mined a block, our block is now stale
-                let current_best_height = chain.best_block_height().await;
-                if current_best_height >= block.header.height {
-                    println!("⏭️  Skipping stale block {} (chain advanced to height {})", 
-                        block.header.height, current_best_height);
-                    continue;
-                }
-
                 // Store block
                 if let Err(e) = chain.store_block(&block).await {
                     println!("❌ Failed to store mined block: {}", e);
@@ -1505,6 +1483,65 @@ impl CoinjectNode {
                         consensus_state.magnitude,
                         consensus_state.phase
                     );
+                }
+
+                // EMPIRICAL MEASUREMENT: Record work score for convergence analysis
+                let block_time = if block.header.height > 1 {
+                    // Approximate block time from timestamp difference
+                    // In full implementation, track previous block timestamp
+                    60.0 // Default to ~60s target block time
+                } else {
+                    0.0
+                };
+
+                if let Err(e) = dimensional_pool_state.record_work_score(
+                    block.header.height,
+                    consensus_state.tau,
+                    block.header.work_score,
+                    block_time
+                ) {
+                    println!("⚠️  Warning: Failed to record work score: {}", e);
+                }
+
+                // EMPIRICAL MEASUREMENT: Update consensus metrics every 50 blocks (after block 50)
+                // This provides more frequent updates to see convergence trajectory
+                if block.header.height % 50 == 0 && block.header.height >= 50 {
+                    // Use adaptive window: smaller early on, larger later
+                    let window_size = if block.header.height < 200 {
+                        (block.header.height as usize).min(100)
+                    } else {
+                        300
+                    };
+
+                    match dimensional_pool_state.update_consensus_metrics(block.header.height, window_size) {
+                        Ok(metrics) => {
+                            println!("🔬 EMPIRICAL CONSENSUS METRICS (block {}):", block.header.height);
+                            println!("   Measured η = {:.6} (theoretical = 0.707107)", metrics.measured_eta);
+                            println!("   Measured λ = {:.6} (theoretical = 0.707107)", metrics.measured_lambda);
+                            println!("   Oracle Δ = {:.6} (theoretical = 0.231)", metrics.measured_oracle_delta);
+                            println!("   Convergence confidence (R²) = {:.4}", metrics.convergence_confidence);
+                            println!("   Sample size: {} blocks", metrics.sample_size);
+
+                            if let Some(status) = dimensional_pool_state.test_conjecture() {
+                                println!("🧪 THE CONJECTURE STATUS:");
+                                println!("   η convergence: {} (error: {:.4})",
+                                    if status.eta_convergence { "✅" } else { "⏳" },
+                                    (metrics.measured_eta - 0.707107).abs()
+                                );
+                                println!("   λ convergence: {} (error: {:.4})",
+                                    if status.lambda_convergence { "✅" } else { "⏳" },
+                                    (metrics.measured_lambda - 0.707107).abs()
+                                );
+                                println!("   Oracle alignment: {} (Δ error: {:.4})",
+                                    if status.oracle_alignment { "✅" } else { "⏳" },
+                                    (metrics.measured_oracle_delta - 0.231).abs()
+                                );
+                            }
+                        },
+                        Err(e) => {
+                            println!("⚠️  Warning: Failed to update consensus metrics: {}", e);
+                        }
+                    }
                 }
 
                 // RUNTIME INTEGRATION: Distribute block reward dynamically across dimensional pools
@@ -1528,7 +1565,7 @@ impl CoinjectNode {
                 }
 
                 // Apply block transactions to state
-                let applied_txs = match Self::apply_block_transactions(&block, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, hf_sync.as_ref().map(|s| Arc::clone(s))) {
+                let applied_txs = match Self::apply_block_transactions(&block, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state) {
                     Ok(txs) => txs,
                     Err(e) => {
                         println!("❌ Failed to apply mined block transactions: {}", e);
@@ -1543,6 +1580,13 @@ impl CoinjectNode {
                 }
                 drop(pool);
 
+                // Broadcast to network
+                if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block.clone())) {
+                    println!("❌ Failed to send broadcast command: {}", e);
+                } else {
+                    println!("📡 Broadcasted block to network");
+                }
+
                 // Push consensus block to Hugging Face (fire-and-forget)
                 if let Some(ref hf_sync) = hf_sync {
                     eprintln!("📦 Hugging Face: Preparing to upload mined block {}", block.header.height);
@@ -1555,15 +1599,6 @@ impl CoinjectNode {
                             Err(e) => eprintln!("❌ Failed to push consensus block {} to Hugging Face: {}", block_clone.header.height, e),
                         }
                     });
-                } else {
-                    eprintln!("⚠️  Hugging Face sync not initialized - skipping block upload");
-                }
-
-                // Broadcast to network
-                if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block)) {
-                    println!("❌ Failed to send broadcast command: {}", e);
-                } else {
-                    println!("📡 Broadcasted block to network");
                 }
             } else {
                 println!("❌ Mining failed");

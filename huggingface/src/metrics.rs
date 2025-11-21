@@ -214,6 +214,59 @@ impl MetricsCollector {
             },
         })
     }
+
+    /// Collect consensus block record (for mined or validated blocks)
+    pub fn collect_consensus_block_record(
+        &self,
+        block: &coinject_core::Block,
+        is_mined: bool,
+    ) -> Result<DatasetRecord, MetricsError> {
+        use coinject_core::Transaction;
+
+        // Extract consensus block data
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Create a simple record for consensus block
+        // We'll use placeholder values for marketplace-specific fields
+        Ok(DatasetRecord {
+            problem_id: format!("consensus_block_{}", block.header.height),
+            problem_type: "ConsensusBlock".to_string(),
+            problem_data: serde_json::json!({
+                "height": block.header.height,
+                "prev_hash": hex::encode(block.header.prev_hash.as_bytes()),
+                "transactions_count": block.transactions.len(),
+                "miner": hex::encode(block.header.miner.as_bytes()),
+                "nonce": block.header.nonce,
+                "work_score": block.header.work_score,
+            }),
+            problem_complexity: block.header.work_score,
+            bounty: block.coinbase.reward,
+            submitter: Some(hex::encode(block.header.miner.as_bytes())),
+            solver: if is_mined { Some(hex::encode(block.header.miner.as_bytes())) } else { None },
+            solution_data: Some(serde_json::json!({
+                "hash": hex::encode(block.hash().as_bytes()),
+                "timestamp": block.header.timestamp,
+            })),
+            time_asymmetry: None,
+            space_asymmetry: None,
+            solve_energy_joules: None,
+            verify_energy_joules: None,
+            total_energy_joules: None,
+            energy_per_operation: None,
+            energy_asymmetry: None,
+            energy_efficiency: None,
+            solution_quality: None,
+            work_score: None,
+            block_height: block.header.height,
+            timestamp,
+            status: if is_mined { "Mined".to_string() } else { "Validated".to_string() },
+            energy_measurement_method: format!("{:?}", self.energy_measurer.config.method),
+            submission_mode: "consensus".to_string(),
+        })
+    }
 }
 
 /// Metrics collection errors

@@ -71,6 +71,14 @@ pub struct NodeConfig {
     /// Faucet cooldown (seconds between requests per address)
     #[arg(long, default_value = "3600")]
     pub faucet_cooldown: u64,
+
+    /// HuggingFace API token for dataset uploads
+    #[arg(long)]
+    pub hf_token: Option<String>,
+
+    /// HuggingFace dataset name (format: username/dataset-name)
+    #[arg(long)]
+    pub hf_dataset_name: Option<String>,
 }
 
 impl NodeConfig {
@@ -142,6 +150,8 @@ mod tests {
             enable_faucet: false,
             faucet_amount: 10000,
             faucet_cooldown: 3600,
+            hf_token: None,
+            hf_dataset_name: None,
         };
 
         assert!(config.validate().is_ok());
@@ -166,6 +176,8 @@ mod tests {
             enable_faucet: false,
             faucet_amount: 10000,
             faucet_cooldown: 3600,
+            hf_token: None,
+            hf_dataset_name: None,
         };
 
         assert!(config.validate().is_err());

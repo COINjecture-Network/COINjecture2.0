@@ -156,27 +156,39 @@ impl HuggingFaceClient {
         eprintln!("📤 Hugging Face: Uploading {} records as {} to dataset {}", self.buffer.len(), path_in_repo, repo_id);
         eprintln!("   URL: {}", url);
         eprintln!("   Content length: {} bytes (base64: {} bytes)", jsonl_content.len(), content_base64.len());
-        
-        // Create commit request body
-        // The commit API expects JSON with: summary (commit message) and operations array
+
+        // Create NDJSON payload (newline-delimited JSON)
+        // Line 1: Commit header with metadata
+        // Line 2+: File operations
         let commit_message = format!("Add {} consensus block records", self.buffer.len());
-        let commit_body = serde_json::json!({
-            "summary": commit_message,
-            "operations": [
-                {
-                    "operation": "add",
-                    "path_in_repo": path_in_repo,
-                    "content": content_base64
-                }
-            ]
+        let header_line = serde_json::json!({
+            "key": "header",
+            "value": {"summary": commit_message}
         });
-        
+        let file_operation = serde_json::json!({
+            "key": "file",
+            "value": {
+                "content": content_base64,
+                "path": path_in_repo,
+                "encoding": "base64"
+            }
+        });
+
+        // Build NDJSON payload (each JSON object on its own line)
+        let ndjson_payload = format!(
+            "{}\n{}",
+            serde_json::to_string(&header_line).unwrap(),
+            serde_json::to_string(&file_operation).unwrap()
+        );
+
+        eprintln!("📤 Hugging Face: NDJSON payload size: {} bytes", ndjson_payload.len());
+
         // Make HTTP request with authentication
         let response = self.client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.token))
-            .header("Content-Type", "application/json")
-            .json(&commit_body)
+            .header("Content-Type", "application/x-ndjson")
+            .body(ndjson_payload)
             .send()
             .await
             .map_err(|e| {
