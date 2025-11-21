@@ -185,7 +185,7 @@ impl CoinjectNode {
             };
 
             let energy_config = EnergyConfig {
-                enabled: false,
+                enabled: true,
                 method: EnergyMeasurementMethod::Estimate,
                 cpu_tdp_watts: 65.0,
             };
