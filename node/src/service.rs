@@ -175,11 +175,11 @@ impl CoinjectNode {
         // Initialize HuggingFace sync if configured
         let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) = (&config.hf_token, &config.hf_dataset_name) {
             println!("🤗 Initializing Hugging Face sync...");
-            println!("   Dataset: {}", hf_dataset_name);
+            println!("   Dataset prefix: {} (will create type-specific datasets)", hf_dataset_name);
 
             let hf_config = HuggingFaceConfig {
                 token: hf_token.clone(),
-                dataset_name: hf_dataset_name.clone(),
+                dataset_prefix: hf_dataset_name.clone(),
                 dataset_config: None,
                 ..Default::default()
             };
@@ -188,6 +188,7 @@ impl CoinjectNode {
                 enabled: true,
                 method: EnergyMeasurementMethod::Estimate,
                 cpu_tdp_watts: 65.0,
+                min_energy_threshold_joules: 0.000001, // 1 microjoule minimum
             };
 
             let sync_config = SyncConfig {
@@ -241,15 +242,18 @@ impl CoinjectNode {
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Start P2P network
         println!("🌐 Starting P2P network...");
+
+        // Create shared peer count for RPC and network service
+        let peer_count = Arc::new(RwLock::new(0));
+
         let network_config = NetworkConfig {
             listen_addr: self.config.p2p_addr.clone(),
             chain_id: self.config.chain_id.clone(),
             max_peers: self.config.max_peers,
             enable_mdns: true,
-            genesis_hash: self.chain.genesis_hash(),
         };
 
-        let (mut network_service, mut event_rx) = NetworkService::new(network_config)?;
+        let (mut network_service, mut event_rx) = NetworkService::new(network_config, Arc::clone(&peer_count))?;
         network_service.start_listening(&self.config.p2p_addr)?;
         network_service.subscribe_topics()?;
 

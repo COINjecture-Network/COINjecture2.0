@@ -8,6 +8,7 @@ use coinject_core::{
 use coinject_tokenomics::RewardCalculator;
 use crate::WorkScoreCalculator;
 use rand::Rng;
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -86,12 +87,20 @@ impl Miner {
         // Randomly choose problem type
         match rng.gen_range(0..3) {
             0 => {
-                // Subset Sum
+                // Subset Sum - Generate SOLVABLE problem by selecting a random subset first
                 let numbers: Vec<i64> = (0..problem_size)
                     .map(|_| rng.gen_range(1..1000))
                     .collect();
-                let sum: i64 = numbers.iter().sum();
-                let target = rng.gen_range(sum / 3..sum / 2);
+
+                // Randomly select which numbers to include in the solution
+                // This guarantees the problem is solvable
+                let subset_size = rng.gen_range(1..=problem_size.min(problem_size - 1).max(1));
+                let mut selected_indices: Vec<usize> = (0..problem_size).collect();
+                selected_indices.shuffle(&mut rng);
+                selected_indices.truncate(subset_size);
+
+                // Calculate target as sum of selected numbers - guarantees solvability
+                let target: i64 = selected_indices.iter().map(|&i| numbers[i]).sum();
 
                 ProblemType::SubsetSum { numbers, target }
             }

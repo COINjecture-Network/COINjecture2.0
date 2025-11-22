@@ -5,22 +5,16 @@ use coinject_core::{ProblemType, Solution, SubmissionMode, ProblemReveal};
 use serde_json::{json, Value};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-/// Serialize problem to JSON with schema-normalized structure
+/// Serialize problem to JSON with clean, type-specific structure
 ///
-/// Uses discriminated union to maintain type consistency across heterogeneous problem types.
-/// Enables efficient filtering, querying, and schema validation in downstream pipelines.
+/// Each problem type gets its own clean schema without null fields.
+/// Designed for separate datasets per problem type (institutional-grade data organization).
 pub fn serialize_problem(problem: &ProblemType) -> Result<Value, SerializationError> {
     match problem {
         ProblemType::SubsetSum { numbers, target } => {
             Ok(json!({
-                "type": "SubsetSum",
-                "subset_sum": {
-                    "numbers": numbers,
-                    "target": target
-                },
-                "sat": null,
-                "tsp": null,
-                "custom": null
+                "numbers": numbers,
+                "target": target
             }))
         }
         ProblemType::SAT { variables, clauses } => {
@@ -34,86 +28,51 @@ pub fn serialize_problem(problem: &ProblemType) -> Result<Value, SerializationEr
                 .collect();
 
             Ok(json!({
-                "type": "SAT",
-                "subset_sum": null,
-                "sat": {
-                    "variables": variables,
-                    "clauses": clauses_json
-                },
-                "tsp": null,
-                "custom": null
+                "variables": variables,
+                "clauses": clauses_json
             }))
         }
         ProblemType::TSP { cities, distances } => {
             Ok(json!({
-                "type": "TSP",
-                "subset_sum": null,
-                "sat": null,
-                "tsp": {
-                    "cities": cities,
-                    "distances": distances
-                },
-                "custom": null
+                "cities": cities,
+                "distances": distances
             }))
         }
         ProblemType::Custom { problem_id, data } => {
             let data_b64 = STANDARD.encode(data);
             Ok(json!({
-                "type": "Custom",
-                "subset_sum": null,
-                "sat": null,
-                "tsp": null,
-                "custom": {
-                    "problem_id": hex::encode(problem_id.as_bytes()),
-                    "data": data_b64
-                }
+                "problem_id": hex::encode(problem_id.as_bytes()),
+                "data": data_b64
             }))
         }
     }
 }
 
-/// Serialize solution to JSON with schema-normalized structure
+/// Serialize solution to JSON with clean, type-specific structure
 ///
-/// Maintains consistent column types across all records by using a discriminated union.
-/// This ensures HuggingFace dataset viewer can infer types correctly and enables
-/// efficient querying, ML training, and forensic analytics.
+/// Each solution type gets its own clean schema without null fields.
+/// Designed for separate datasets per problem type (institutional-grade data organization).
 pub fn serialize_solution(solution: &Solution) -> Result<Value, SerializationError> {
     match solution {
         Solution::SubsetSum(indices) => {
             Ok(json!({
-                "type": "SubsetSum",
-                "indices": indices,
-                "assignments": null,
-                "tour": null,
-                "custom": null
+                "indices": indices
             }))
         }
         Solution::SAT(assignments) => {
             Ok(json!({
-                "type": "SAT",
-                "indices": null,
-                "assignments": assignments,
-                "tour": null,
-                "custom": null
+                "assignments": assignments
             }))
         }
         Solution::TSP(tour) => {
             Ok(json!({
-                "type": "TSP",
-                "indices": null,
-                "assignments": null,
-                "tour": tour,
-                "custom": null
+                "tour": tour
             }))
         }
         Solution::Custom(data) => {
             let data_b64 = STANDARD.encode(data);
             Ok(json!({
-                "type": "Custom",
-                "indices": null,
-                "assignments": null,
-                "tour": null,
-                "custom": data_b64
+                "data": data_b64
             }))
         }
     }

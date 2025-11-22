@@ -5,11 +5,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+use std::collections::HashMap;
+
 /// Hugging Face client configuration
 #[derive(Debug, Clone)]
 pub struct HuggingFaceConfig {
     pub token: String,
-    pub dataset_name: String,
+    pub dataset_prefix: String, // e.g., "COINjecture" - will append problem type
     pub dataset_config: Option<String>,
     pub api_base: String,
 }
@@ -18,18 +20,18 @@ impl Default for HuggingFaceConfig {
     fn default() -> Self {
         HuggingFaceConfig {
             token: String::new(),
-            dataset_name: String::new(),
+            dataset_prefix: String::new(),
             dataset_config: None,
             api_base: "https://huggingface.co/api".to_string(),
         }
     }
 }
 
-/// Hugging Face API client
+/// Hugging Face API client with per-problem-type routing
 pub struct HuggingFaceClient {
     config: HuggingFaceConfig,
     client: reqwest::Client,
-    buffer: Vec<Value>,
+    buffers: HashMap<String, Vec<Value>>, // problem_type -> buffer
     buffer_size: usize,
 }
 
@@ -72,6 +74,11 @@ pub struct DatasetRecord {
     pub status: String,
     pub energy_measurement_method: String,
     pub submission_mode: String,
+
+    // Institutional-grade data provenance (v2.0)
+    pub metrics_source: String,          // "block_header_actual" or "estimated"
+    pub measurement_confidence: String,  // "high" (from header), "medium" (proxy), "low" (estimate)
+    pub data_version: String,            // "v2.0" - institutional-grade with actual metrics
 }
 
 impl HuggingFaceClient {
@@ -80,8 +87,8 @@ impl HuggingFaceClient {
         if config.token.is_empty() {
             return Err(ClientError::InvalidConfig("Hugging Face token is required".to_string()));
         }
-        if config.dataset_name.is_empty() {
-            return Err(ClientError::InvalidConfig("Dataset name is required".to_string()));
+        if config.dataset_prefix.is_empty() {
+            return Err(ClientError::InvalidConfig("Dataset prefix is required (e.g., 'COINjecture')".to_string()));
         }
 
         let client = reqwest::Client::builder()
@@ -92,75 +99,83 @@ impl HuggingFaceClient {
         Ok(HuggingFaceClient {
             config,
             client,
-            buffer: Vec::new(),
+            buffers: HashMap::new(),
             buffer_size: 10,
         })
     }
 
     /// Push a single record (buffered, flushed when buffer is full)
+    /// Routes to problem-type-specific buffer
     pub async fn push_record(&mut self, record: DatasetRecord) -> Result<(), ClientError> {
+        let problem_type = record.problem_type.clone();
         let value = serde_json::to_value(&record)
             .map_err(|e| ClientError::Serialization(e.to_string()))?;
 
-        self.buffer.push(value);
-        eprintln!("📊 Hugging Face: Buffered record (buffer size: {}/{})", self.buffer.len(), self.buffer_size);
+        // Get or create buffer for this problem type
+        let buffer = self.buffers.entry(problem_type.clone()).or_insert_with(Vec::new);
+        buffer.push(value);
 
-        if self.buffer.len() >= self.buffer_size {
-            eprintln!("📤 Hugging Face: Buffer full, flushing {} records...", self.buffer.len());
-            self.flush().await?;
+        eprintln!("📊 Hugging Face: Buffered {} record (buffer size: {}/{})",
+            problem_type, buffer.len(), self.buffer_size);
+
+        // Check if this specific buffer is full
+        if buffer.len() >= self.buffer_size {
+            eprintln!("📤 Hugging Face: {} buffer full, flushing {} records...",
+                problem_type, buffer.len());
+            self.flush_problem_type(&problem_type).await?;
         }
 
         Ok(())
     }
 
-    /// Flush buffered records to Hugging Face
-    pub async fn flush(&mut self) -> Result<(), ClientError> {
-        if self.buffer.is_empty() {
-            return Ok(());
-        }
+    /// Flush a specific problem type's buffer to its corresponding dataset
+    async fn flush_problem_type(&mut self, problem_type: &str) -> Result<(), ClientError> {
+        // Get the buffer for this problem type
+        let buffer = match self.buffers.get_mut(problem_type) {
+            Some(buf) if !buf.is_empty() => buf,
+            _ => return Ok(()), // No buffer or empty buffer
+        };
 
-        // Push data to Hugging Face using HTTP API
+        // Construct dataset name: prefix/problem_type_Solutions
+        // e.g., "COINjecture/SubsetSum_Solutions"
+        // Trim whitespace from problem_type to handle any formatting issues
+        let dataset_name = format!("{}/{}_Solutions", self.config.dataset_prefix, problem_type.trim());
+
         tracing::info!(
-            "Pushing {} records to Hugging Face dataset: {}",
-            self.buffer.len(),
-            self.config.dataset_name
+            "Pushing {} {} records to Hugging Face dataset: {}",
+            buffer.len(),
+            problem_type,
+            dataset_name
         );
 
-        // Use Hugging Face Hub API commit endpoint to upload dataset data
-        // The new Hub API uses: POST https://huggingface.co/api/datasets/{repo_id}/commit/{revision}
-        // The old /upload endpoint is deprecated
-        let repo_id = &self.config.dataset_name;
-        
-        // Create JSONL content (one JSON object per line) - this is the standard format for datasets
-        let jsonl_content: String = self.buffer
+        // Create JSONL content
+        let jsonl_content: String = buffer
             .iter()
             .map(|record| serde_json::to_string(record).unwrap_or_default())
             .collect::<Vec<_>>()
             .join("\n");
-        
-        // Generate filename with timestamp to avoid conflicts
+
+        // Generate filename with timestamp
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let filename = format!("data_{}.jsonl", timestamp);
         let path_in_repo = format!("data/{}", filename);
-        
-        // Base64 encode the content for the commit API
+
+        // Base64 encode the content
         let content_base64 = STANDARD.encode(jsonl_content.as_bytes());
-        
-        // Hub API commit endpoint for uploading files to datasets
-        // Format: POST {api_base}/datasets/{repo_id}/commit/main
-        let url = format!("{}/datasets/{}/commit/main", self.config.api_base, repo_id);
-        
-        eprintln!("📤 Hugging Face: Uploading {} records as {} to dataset {}", self.buffer.len(), path_in_repo, repo_id);
+
+        // Hub API commit endpoint
+        let url = format!("{}/datasets/{}/commit/main", self.config.api_base, dataset_name);
+
+        eprintln!("📤 Hugging Face: Uploading {} {} records as {} to dataset {}",
+            buffer.len(), problem_type, path_in_repo, dataset_name);
         eprintln!("   URL: {}", url);
         eprintln!("   Content length: {} bytes (base64: {} bytes)", jsonl_content.len(), content_base64.len());
 
-        // Create NDJSON payload (newline-delimited JSON)
-        // Line 1: Commit header with metadata
-        // Line 2+: File operations
-        let commit_message = format!("Add {} consensus block records", self.buffer.len());
+        // Create NDJSON payload
+        let commit_message = format!("Add {} {} records", buffer.len(), problem_type);
         let header_line = serde_json::json!({
             "key": "header",
             "value": {"summary": commit_message}
@@ -174,7 +189,6 @@ impl HuggingFaceClient {
             }
         });
 
-        // Build NDJSON payload (each JSON object on its own line)
         let ndjson_payload = format!(
             "{}\n{}",
             serde_json::to_string(&header_line).unwrap(),
@@ -183,7 +197,7 @@ impl HuggingFaceClient {
 
         eprintln!("📤 Hugging Face: NDJSON payload size: {} bytes", ndjson_payload.len());
 
-        // Make HTTP request with authentication
+        // Make HTTP request
         let response = self.client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.token))
@@ -207,9 +221,29 @@ impl HuggingFaceClient {
             )));
         }
 
-        tracing::info!("Successfully pushed {} records to Hugging Face", self.buffer.len());
-        eprintln!("✅ Hugging Face: Successfully pushed {} records to dataset {}", self.buffer.len(), self.config.dataset_name);
-        self.buffer.clear();
+        tracing::info!("Successfully pushed {} {} records to Hugging Face", buffer.len(), problem_type);
+        eprintln!("✅ Hugging Face: Successfully pushed {} {} records to dataset {}",
+            buffer.len(), problem_type, dataset_name);
+
+        // Clear the buffer after successful upload
+        buffer.clear();
+        Ok(())
+    }
+
+    /// Flush all buffered records to Hugging Face (all problem types)
+    pub async fn flush(&mut self) -> Result<(), ClientError> {
+        if self.buffers.is_empty() {
+            return Ok(());
+        }
+
+        // Collect problem types to flush (to avoid borrow checker issues)
+        let problem_types: Vec<String> = self.buffers.keys().cloned().collect();
+
+        // Flush each problem type's buffer
+        for problem_type in problem_types {
+            self.flush_problem_type(&problem_type).await?;
+        }
+
         Ok(())
     }
 

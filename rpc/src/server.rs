@@ -853,13 +853,18 @@ mod tests {
     fn test_hash_parsing() {
         let temp_dir = std::env::temp_dir().join("coinject-rpc-test-hash");
         let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create test database for state objects
+        let db_path = temp_dir.join("test.db");
+        let db = Arc::new(redb::Database::create(&db_path).unwrap());
 
         let state = Arc::new(RpcServerState {
             account_state: Arc::new(AccountState::new(&temp_dir).unwrap()),
             timelock_state: Arc::new(TimeLockState::new()),
             escrow_state: Arc::new(EscrowState::new()),
-            channel_state: Arc::new(ChannelState::new()),
-            marketplace_state: Arc::new(MarketplaceState::new()),
+            channel_state: Arc::new(ChannelState::new(db.clone()).unwrap()),
+            marketplace_state: Arc::new(MarketplaceState::from_db(db.clone()).unwrap()),
             blockchain: Arc::new(MockBlockchainReader) as Arc<dyn BlockchainReader>,
             marketplace: Arc::new(RwLock::new(ProblemMarketplace::new())),
             tx_pool: Arc::new(RwLock::new(TransactionPool::new())),

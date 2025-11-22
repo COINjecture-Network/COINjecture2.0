@@ -301,7 +301,13 @@ mod tests {
         let bounty = 5000;
 
         let problem_id = marketplace
-            .submit_problem(problem, submitter, bounty, 10.0, 7)
+            .submit_problem(
+                coinject_core::SubmissionMode::Public { problem },
+                submitter,
+                bounty,
+                10.0,
+                7
+            )
             .unwrap();
 
         let mut incentives = MiningIncentives::new(marketplace);
@@ -339,8 +345,8 @@ mod tests {
 
         let submitter = Address::from_bytes([1u8; 32]);
 
-        marketplace.submit_problem(problem1, submitter, 1000, 10.0, 7).unwrap();
-        marketplace.submit_problem(problem2, submitter, 5000, 10.0, 7).unwrap();
+        marketplace.submit_problem(coinject_core::SubmissionMode::Public { problem: problem1 }, submitter, 1000, 10.0, 7).unwrap();
+        marketplace.submit_problem(coinject_core::SubmissionMode::Public { problem: problem2 }, submitter, 5000, 10.0, 7).unwrap();
 
         let incentives = MiningIncentives::new(marketplace);
         let best = incentives.select_best_marketplace_problem();
@@ -365,7 +371,13 @@ mod tests {
         let bounty = 5000;
 
         let problem_id = marketplace
-            .submit_problem(problem, submitter, bounty, 1.0, 7)
+            .submit_problem(
+                coinject_core::SubmissionMode::Public { problem },
+                submitter,
+                bounty,
+                1.0,
+                7
+            )
             .unwrap();
 
         let mut incentives = MiningIncentives::new(marketplace);
@@ -389,7 +401,7 @@ mod tests {
         };
 
         let submitter = Address::from_bytes([1u8; 32]);
-        marketplace.submit_problem(problem, submitter, 1000, 10.0, 7).unwrap();
+        marketplace.submit_problem(coinject_core::SubmissionMode::Public { problem }, submitter, 1000, 10.0, 7).unwrap();
 
         let mut incentives = MiningIncentives::new(marketplace);
         incentives.contribute_to_d3_pool(10000);

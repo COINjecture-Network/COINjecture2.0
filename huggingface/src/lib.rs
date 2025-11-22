@@ -17,7 +17,7 @@ use std::time::Duration;
 /// Main Hugging Face sync service
 pub struct HuggingFaceSync {
     client: tokio::sync::Mutex<HuggingFaceClient>,
-    metrics_collector: MetricsCollector,
+    metrics_collector: tokio::sync::Mutex<MetricsCollector>,
     config: SyncConfig,
 }
 
@@ -55,7 +55,7 @@ impl HuggingFaceSync {
 
         Ok(HuggingFaceSync {
             client: tokio::sync::Mutex::new(client),
-            metrics_collector,
+            metrics_collector: tokio::sync::Mutex::new(metrics_collector),
             config: sync_config,
         })
     }
@@ -70,11 +70,13 @@ impl HuggingFaceSync {
             return Ok(());
         }
 
-        let record = self.metrics_collector.collect_problem_record(
+        let collector = self.metrics_collector.lock().await;
+        let record = collector.collect_problem_record(
             submission,
             block_height,
             &self.config,
         )?;
+        drop(collector);
 
         let mut client = self.client.lock().await;
         client.push_record(record).await?;
@@ -96,11 +98,10 @@ impl HuggingFaceSync {
         }
 
         // Measure energy during verification
-        let (solve_energy, verify_energy) = self
-            .metrics_collector
-            .measure_energy(solve_time, verify_time)?;
+        let mut collector = self.metrics_collector.lock().await;
+        let (solve_energy, verify_energy) = collector.measure_energy(solve_time, verify_time)?;
 
-        let record = self.metrics_collector.collect_solution_record(
+        let record = collector.collect_solution_record(
             submission,
             block_height,
             solve_time,
@@ -111,6 +112,7 @@ impl HuggingFaceSync {
             verify_energy,
             &self.config,
         )?;
+        drop(collector);
 
         let mut client = self.client.lock().await;
         client.push_record(record).await?;
@@ -129,13 +131,15 @@ impl HuggingFaceSync {
         }
 
         eprintln!("📦 Hugging Face: Collecting consensus block data for block {} (mined: {})", block.header.height, is_mined);
-        let record = match self.metrics_collector.collect_consensus_block_record(block, is_mined) {
+        let collector = self.metrics_collector.lock().await;
+        let record = match collector.collect_consensus_block_record(block, is_mined) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("❌ Hugging Face: Failed to collect consensus block record: {}", e);
                 return Err(e.into());
             }
         };
+        drop(collector);
 
         eprintln!("📦 Hugging Face: Record collected, pushing to buffer...");
         let mut client = self.client.lock().await;

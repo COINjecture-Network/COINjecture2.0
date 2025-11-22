@@ -313,7 +313,7 @@ mod tests {
     use coinject_core::{Address, Ed25519Signature, PublicKey};
 
     fn create_test_tx(fee: Balance, nonce: u64) -> Transaction {
-        Transaction {
+        Transaction::Transfer(coinject_core::TransferTransaction {
             from: Address::from_bytes([1u8; 32]),
             to: Address::from_bytes([2u8; 32]),
             amount: 1000,
@@ -321,7 +321,7 @@ mod tests {
             nonce,
             public_key: PublicKey::from_bytes([3u8; 32]),
             signature: Ed25519Signature::from_bytes([4u8; 64]),
-        }
+        })
     }
 
     #[test]
