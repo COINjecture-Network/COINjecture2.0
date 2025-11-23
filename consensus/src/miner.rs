@@ -67,22 +67,37 @@ impl Miner {
         }
     }
 
-    /// Generate a random NP-hard problem for mining
+    /// Generate a deterministic NP-hard problem for mining
     /// RUNTIME INTEGRATION: Uses dimensional complexity |ψ(τ)| to modulate difficulty
-    pub fn generate_problem(&self, block_height: u64) -> ProblemType {
+    /// DETERMINISM: Seeded by parent hash + height to ensure all nodes generate the same problem
+    pub fn generate_problem(&self, block_height: u64, prev_hash: Hash) -> ProblemType {
         use coinject_core::{TAU_C, ConsensusState};
-        let mut rng = rand::thread_rng();
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        // Create deterministic seed from parent hash + height
+        // This ensures all nodes generate the SAME problem for a given (prev_hash, height) pair
+        let mut seed_bytes = [0u8; 32];
+        seed_bytes.copy_from_slice(prev_hash.as_bytes());
+
+        // XOR height into the seed for additional entropy
+        for i in 0..8 {
+            seed_bytes[i] ^= ((block_height >> (i * 8)) & 0xFF) as u8;
+        }
+
+        // Create seeded RNG - deterministic across all nodes
+        let seed = u64::from_le_bytes(seed_bytes[0..8].try_into().unwrap());
+        let mut rng = StdRng::seed_from_u64(seed);
 
         // Calculate dimensionless time τ = block_height / τ_c
         let tau = (block_height as f64) / TAU_C;
         let consensus_state = ConsensusState::at_tau(tau);
 
-        // Use dimensional magnitude |ψ(τ)| = e^(-ητ) to modulate problem size
-        // As τ increases, magnitude decreases exponentially, reducing problem complexity
-        // Base size: 10-20, scaled by magnitude (1.0 at genesis, decays over time)
-        let base_size = 10 + (block_height % 10) as usize;
-        let scaled_size = (base_size as f64 * consensus_state.magnitude.max(0.1)) as usize;
-        let problem_size = scaled_size.max(5).min(25); // Clamp to reasonable range
+        // Problem size varies with block height to ensure complexity diversity
+        // Note: Dimensional magnitude scaling removed as it caused premature convergence
+        // to minimum problem size (magnitude decays too rapidly: e^(-0.5*height))
+        // Base size: 10-20, varies every 10 blocks for consistent complexity variation
+        let problem_size = (10 + (block_height % 10) as usize).max(5).min(25);
 
         // Randomly choose problem type
         match rng.gen_range(0..3) {
@@ -110,12 +125,18 @@ impl Miner {
                 let num_clauses = variables * 3; // 3-SAT
                 let clauses = (0..num_clauses)
                     .map(|_| {
-                        let mut literals = Vec::new();
-                        for _ in 0..3 {
-                            let var = rng.gen_range(0..variables) as i32 + 1;
-                            let literal = if rng.gen_bool(0.5) { var } else { -var };
-                            literals.push(literal);
-                        }
+                        // Select 3 DISTINCT variables for this clause to avoid tautologies
+                        let mut selected_vars: Vec<usize> = (0..variables).collect();
+                        use rand::seq::SliceRandom;
+                        selected_vars.shuffle(&mut rng);
+
+                        let literals: Vec<i32> = selected_vars.iter().take(3)
+                            .map(|&var_idx| {
+                                let var = (var_idx as i32) + 1;
+                                if rng.gen_bool(0.5) { var } else { -var }
+                            })
+                            .collect();
+
                         Clause { literals }
                     })
                     .collect();
@@ -294,8 +315,9 @@ impl Miner {
     ) -> Option<Block> {
         println!("\n=== Mining Block {} ===", height);
 
-        // 1. Generate NP-hard problem (uses dimensional complexity)
-        let problem = self.generate_problem(height);
+        // 1. Generate NP-hard problem (deterministically seeded by parent hash)
+        // All nodes generate the SAME problem for a given (prev_hash, height) pair
+        let problem = self.generate_problem(height, prev_hash);
 
         // Calculate and display dimensional state
         use coinject_core::{TAU_C, ConsensusState};

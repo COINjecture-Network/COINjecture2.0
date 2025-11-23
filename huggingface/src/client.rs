@@ -38,21 +38,38 @@ pub struct HuggingFaceClient {
 /// Dataset record structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetRecord {
+    // PRIMARY CONTENT - Problem and Solution (most important!)
     pub problem_id: String,
     pub problem_type: String,
     pub problem_data: Value,
-    pub problem_complexity: f64,
-    pub bounty: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solution_data: Option<Value>,
+
+    // IDENTIFIERS - Who and when
+    pub block_height: u64,
+    pub timestamp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submitter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solver: Option<String>,
+
+    // PERFORMANCE METRICS - Key results
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub solution_data: Option<Value>,
+    pub work_score: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solution_quality: Option<f64>,
+    pub problem_complexity: f64,
+    pub bounty: u128,
+
+    // ASYMMETRY METRICS - NP-hardness verification
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_asymmetry: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_asymmetry: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_asymmetry: Option<f64>,
+
+    // ENERGY MEASUREMENTS
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solve_energy_joules: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,20 +79,14 @@ pub struct DatasetRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_per_operation: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub energy_asymmetry: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_efficiency: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub solution_quality: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub work_score: Option<f64>,
-    pub block_height: u64,
-    pub timestamp: i64,
-    pub status: String,
-    pub energy_measurement_method: String,
-    pub submission_mode: String,
 
-    // Institutional-grade data provenance (v2.0)
+    // METADATA
+    pub status: String,
+    pub submission_mode: String,
+    pub energy_measurement_method: String,
+
+    // INSTITUTIONAL-GRADE DATA PROVENANCE (v2.0)
     pub metrics_source: String,          // "block_header_actual" or "estimated"
     pub measurement_confidence: String,  // "high" (from header), "medium" (proxy), "low" (estimate)
     pub data_version: String,            // "v2.0" - institutional-grade with actual metrics
