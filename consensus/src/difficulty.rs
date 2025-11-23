@@ -85,7 +85,10 @@ impl DifficultyAdjuster {
         // If we're too fast, increase size; if too slow, decrease size
         // Use square root to avoid oscillations (smooth adjustment)
         // new_size = current_size × (target / actual)^0.5
-        let scale_factor = (1.0 / time_ratio).sqrt();
+        let raw_scale_factor = (1.0 / time_ratio).sqrt();
+
+        // Clamp scale factor to prevent extreme jumps (max 2x increase or 0.5x decrease per adjustment)
+        let scale_factor = raw_scale_factor.clamp(0.5, 2.0);
 
         let new_size = (self.current_size as f64 * scale_factor).round() as usize;
 
