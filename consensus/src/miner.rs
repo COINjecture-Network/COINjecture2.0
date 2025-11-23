@@ -6,7 +6,7 @@ use coinject_core::{
     Solution, SolutionReveal, Transaction,
 };
 use coinject_tokenomics::RewardCalculator;
-use crate::WorkScoreCalculator;
+use crate::{WorkScoreCalculator, DifficultyAdjuster};
 use rand::Rng;
 use rand::seq::SliceRandom;
 use std::sync::Arc;
@@ -48,6 +48,7 @@ pub struct Miner {
     reward_calculator: RewardCalculator,
     stats: Arc<RwLock<MiningStats>>,
     difficulty: u32,
+    difficulty_adjuster: Arc<RwLock<DifficultyAdjuster>>,
 }
 
 impl Miner {
@@ -64,13 +65,14 @@ impl Miner {
                 hash_rate: 0.0,
             })),
             difficulty: starting_difficulty, // Use configured difficulty
+            difficulty_adjuster: Arc::new(RwLock::new(DifficultyAdjuster::new())),
         }
     }
 
     /// Generate a deterministic NP-hard problem for mining
     /// RUNTIME INTEGRATION: Uses dimensional complexity |ψ(τ)| to modulate difficulty
     /// DETERMINISM: Seeded by parent hash + height to ensure all nodes generate the same problem
-    pub fn generate_problem(&self, block_height: u64, prev_hash: Hash) -> ProblemType {
+    pub async fn generate_problem(&self, block_height: u64, prev_hash: Hash) -> ProblemType {
         use coinject_core::{TAU_C, ConsensusState};
         use rand::SeedableRng;
         use rand::rngs::StdRng;
@@ -93,16 +95,15 @@ impl Miner {
         let tau = (block_height as f64) / TAU_C;
         let consensus_state = ConsensusState::at_tau(tau);
 
-        // Problem size varies with block height to ensure complexity diversity
-        // Note: Dimensional magnitude scaling removed as it caused premature convergence
-        // to minimum problem size (magnitude decays too rapidly: e^(-0.5*height))
-        // Base size: 10-20, varies every 10 blocks for consistent complexity variation
-        let problem_size = (10 + (block_height % 10) as usize).max(5).min(25);
+        // Get adaptive problem size from difficulty adjuster
+        // This adjusts based on actual solve times to target 1-10 second solves
+        let adjuster = self.difficulty_adjuster.read().await;
 
         // Randomly choose problem type
         match rng.gen_range(0..3) {
             0 => {
                 // Subset Sum - Generate SOLVABLE problem by selecting a random subset first
+                let problem_size = adjuster.size_for_problem_type("SubsetSum");
                 let numbers: Vec<i64> = (0..problem_size)
                     .map(|_| rng.gen_range(1..1000))
                     .collect();
@@ -121,7 +122,7 @@ impl Miner {
             }
             1 => {
                 // SAT (Boolean Satisfiability)
-                let variables = problem_size;
+                let variables = adjuster.size_for_problem_type("SAT");
                 let num_clauses = variables * 3; // 3-SAT
                 let clauses = (0..num_clauses)
                     .map(|_| {
@@ -145,7 +146,7 @@ impl Miner {
             }
             _ => {
                 // TSP (Traveling Salesman Problem)
-                let cities = problem_size.min(15); // Cap TSP at 15 cities
+                let cities = adjuster.size_for_problem_type("TSP");
                 let mut distances = vec![vec![0u64; cities]; cities];
                 for i in 0..cities {
                     for j in i+1..cities {
@@ -317,7 +318,7 @@ impl Miner {
 
         // 1. Generate NP-hard problem (deterministically seeded by parent hash)
         // All nodes generate the SAME problem for a given (prev_hash, height) pair
-        let problem = self.generate_problem(height, prev_hash);
+        let problem = self.generate_problem(height, prev_hash).await;
 
         // Calculate and display dimensional state
         use coinject_core::{TAU_C, ConsensusState};
@@ -361,9 +362,9 @@ impl Miner {
         println!("Commitment created: {:?} (epoch_salt from parent: {:?})", commitment.hash, prev_hash);
 
         // 6. Calculate PoUW transparency metrics
-        let solve_time_ms = solve_time.as_millis() as u64;
-        let verify_time_ms = verify_time.as_millis().max(1) as u64; // Minimum 1ms to avoid div by zero
-        let time_asymmetry_ratio = solve_time_ms as f64 / verify_time_ms as f64;
+        let solve_time_us = solve_time.as_micros() as u64;
+        let verify_time_us = verify_time.as_micros().max(1) as u64; // Minimum 1ms to avoid div by zero
+        let time_asymmetry_ratio = solve_time_us as f64 / verify_time_us as f64;
         let solution_quality = solution.quality(&problem);
         let complexity_weight = problem.difficulty_weight();
 
@@ -372,8 +373,8 @@ impl Miner {
         let energy_estimate_joules = 100.0 * solve_time.as_secs_f64();
 
         println!("PoUW Metrics:");
-        println!("  Solve time: {}ms", solve_time_ms);
-        println!("  Verify time: {}ms", verify_time_ms);
+        println!("  Solve time: {}µs", solve_time_us);
+        println!("  Verify time: {}µs", verify_time_us);
         println!("  Time asymmetry: {:.2}x", time_asymmetry_ratio);
         println!("  Solution quality: {:.4}", solution_quality);
         println!("  Complexity weight: {:.2}", complexity_weight);
@@ -400,8 +401,8 @@ impl Miner {
             miner: self.config.miner_address,
             nonce: 0,
             // PoUW Transparency Metrics
-            solve_time_ms,
-            verify_time_ms,
+            solve_time_us,
+            verify_time_us,
             time_asymmetry_ratio,
             solution_quality,
             complexity_weight,
@@ -500,6 +501,15 @@ impl Miner {
         let total_time = stats.average_solve_time.as_secs_f64() * (stats.blocks_mined - 1) as f64
             + solve_time.as_secs_f64();
         stats.average_solve_time = Duration::from_secs_f64(total_time / stats.blocks_mined as f64);
+
+        // Record solve time in difficulty adjuster
+        let mut adjuster = self.difficulty_adjuster.write().await;
+        adjuster.record_solve_time(solve_time);
+
+        // Adjust difficulty every 10 blocks
+        if stats.blocks_mined % 10 == 0 {
+            adjuster.adjust_difficulty();
+        }
     }
 
     /// Get current mining stats
@@ -533,7 +543,8 @@ mod tests {
         let config = MiningConfig::default();
         let miner = Miner::new(config);
 
-        let problem = miner.generate_problem(0);
+        let prev_hash = Hash::ZERO;
+        let problem = miner.generate_problem(0, prev_hash).await;
         println!("Generated problem: {:?}", problem);
 
         match problem {

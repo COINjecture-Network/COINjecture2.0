@@ -253,8 +253,8 @@ impl MetricsCollector {
         let solution_quality = block.header.solution_quality;
 
         // Use actual timing metrics from block header
-        let solve_time = Duration::from_millis(block.header.solve_time_ms);
-        let verify_time = Duration::from_millis(block.header.verify_time_ms);
+        let solve_time = Duration::from_micros(block.header.solve_time_us);
+        let verify_time = Duration::from_micros(block.header.verify_time_us);
         let time_asymmetry = block.header.time_asymmetry_ratio;
 
         // Calculate space asymmetry from actual memory usage (if available via header)

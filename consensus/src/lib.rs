@@ -6,3 +6,6 @@ pub mod miner;
 
 pub use work_score::*;
 pub use miner::*;
+
+pub mod difficulty;
+pub use difficulty::*;

@@ -73,8 +73,8 @@ pub fn create_genesis_block(config: GenesisConfig) -> Block {
         miner: config.genesis_address,
         nonce: 0,
         // Genesis block has nominal PoUW metrics (trivially solvable)
-        solve_time_ms: 1,
-        verify_time_ms: 1,
+        solve_time_us: 1,
+        verify_time_us: 1,
         time_asymmetry_ratio: 1.0,
         solution_quality: 1.0, // Perfect solution
         complexity_weight: 1.0, // Minimal complexity

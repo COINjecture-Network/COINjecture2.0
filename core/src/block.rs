@@ -29,10 +29,10 @@ pub struct BlockHeader {
     pub nonce: u64,
 
     // PoUW Transparency Metrics (WEB4)
-    /// Time to find solution (milliseconds)
-    pub solve_time_ms: u64,
-    /// Time to verify solution (milliseconds) - should be fast!
-    pub verify_time_ms: u64,
+    /// Time to find solution (microseconds)
+    pub solve_time_us: u64,
+    /// Time to verify solution (microseconds) - should be fast!
+    pub verify_time_us: u64,
     /// Time asymmetry ratio (solve_time / verify_time) - proves useful work
     pub time_asymmetry_ratio: f64,
     /// Solution quality (0.0 to 1.0) - optimality measure
@@ -95,8 +95,8 @@ impl Block {
             miner: genesis_address,
             nonce: 0,
             // Genesis block has no PoUW metrics (no mining required)
-            solve_time_ms: 0,
-            verify_time_ms: 0,
+            solve_time_us: 0,
+            verify_time_us: 0,
             time_asymmetry_ratio: 0.0,
             solution_quality: 0.0,
             complexity_weight: 0.0,
