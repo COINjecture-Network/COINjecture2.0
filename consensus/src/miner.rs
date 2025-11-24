@@ -13,6 +13,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
+const MAX_MINING_ATTEMPTS: usize = 5;
+const MINING_TIMEOUT: Duration = Duration::from_secs(60);
+const FAILURE_PENALTY_TIME: Duration = Duration::from_secs(60);
+
 /// Mining configuration
 pub struct MiningConfig {
     pub miner_address: Address,
@@ -188,8 +192,14 @@ impl Miner {
                 self.solve_subset_sum(numbers, *target, &mut memory_used)
             }
             ProblemType::SAT { variables, clauses } => {
-                // DPLL algorithm for SAT with 10-second timeout
-                self.solve_sat_with_timeout(*variables, &clauses, &mut memory_used, Duration::from_secs(10), start_time)
+                // For problems ≤32 vars, use brute force (2^32 = ~4.3B possibilities, manageable)
+                // For larger problems, use DPLL with timeout
+                let timeout = Duration::from_secs(30); // Increase timeout for larger problems
+                if *variables <= 32 {
+                    self.solve_sat_brute_force(*variables, &clauses, &mut memory_used, start_time, timeout)
+                } else {
+                    self.solve_sat_with_timeout(*variables, &clauses, &mut memory_used, timeout, start_time)
+                }
             }
             ProblemType::TSP { cities, distances } => {
                 // Greedy nearest neighbor heuristic
@@ -255,7 +265,51 @@ impl Miner {
         Some(Solution::SubsetSum(indices))
     }
 
-    /// SAT solver using random search
+    /// SAT solver using brute force (for problems ≤32 variables)
+    fn solve_sat_brute_force(
+        &self,
+        variables: usize,
+        clauses: &[Clause],
+        memory: &mut usize,
+        start_time: Instant,
+        timeout: Duration,
+    ) -> Option<Solution> {
+        *memory += variables * 8;
+        
+        // Brute force: try all 2^variables assignments
+        // Cap at 2^32 for safety (4.3 billion possibilities)
+        let max_assignments = 1u64 << variables.min(32);
+        for i in 0..max_assignments {
+            if start_time.elapsed() > timeout {
+                break;
+            }
+            
+            let mut assignment = vec![false; variables];
+            for j in 0..variables.min(32) {
+                assignment[j] = (i >> j) & 1 == 1;
+            }
+            
+            // Check if this assignment satisfies all clauses
+            let satisfied = clauses.iter().all(|clause| {
+                clause.literals.iter().any(|&literal| {
+                    let var_idx = (literal.abs() - 1) as usize;
+                    if var_idx < assignment.len() {
+                        (literal > 0) == assignment[var_idx]
+                    } else {
+                        false
+                    }
+                })
+            });
+            
+            if satisfied {
+                return Some(Solution::SAT(assignment));
+            }
+        }
+        
+        None
+    }
+
+    /// SAT solver using random search (legacy, not used)
     fn solve_sat(&self, variables: usize, clauses: &[Clause], memory: &mut usize) -> Option<Solution> {
         // Simple randomized search (not full DPLL for simplicity)
         *memory += variables * 8;
@@ -284,7 +338,7 @@ impl Miner {
         None
     }
 
-    /// SAT solver with timeout protection (prevents infinite loops on unsolvable problems)
+    /// SAT solver with timeout protection using DPLL (Davis-Putnam-Logemann-Loveland) algorithm
     fn solve_sat_with_timeout(
         &self,
         variables: usize,
@@ -293,39 +347,161 @@ impl Miner {
         timeout: Duration,
         start_time: Instant,
     ) -> Option<Solution> {
-        // Simple randomized search with timeout checking
         *memory += variables * 8;
 
-        let mut rng = rand::thread_rng();
-        for i in 0..1000 {
-            // Check timeout every 100 iterations to avoid overhead
-            if i % 100 == 0 && start_time.elapsed() > timeout {
-                println!("⏱️  SAT solver timeout after {:.2}s", start_time.elapsed().as_secs_f64());
-                return None;
+        // DPLL recursive solver - simplified and corrected implementation
+        let mut assignment = vec![None; variables]; // None = unassigned, Some(true/false) = assigned
+        
+        fn is_clause_satisfied(clause: &Clause, assignment: &[Option<bool>]) -> bool {
+            clause.literals.iter().any(|&literal| {
+                let var_idx = (literal.abs() - 1) as usize;
+                if var_idx < assignment.len() {
+                    if let Some(value) = assignment[var_idx] {
+                        return (literal > 0) == value;
+                    }
+                }
+                false
+            })
+        }
+        
+        fn dpll_solve(
+            clauses: &[Clause],
+            assignment: &mut [Option<bool>],
+            start_time: Instant,
+            timeout: Duration,
+        ) -> bool {
+            // Check timeout
+            if start_time.elapsed() > timeout {
+                return false;
             }
 
-            let assignment: Vec<bool> = (0..variables).map(|_| rng.gen_bool(0.5)).collect();
-
-            let satisfied = clauses.iter().all(|clause| {
-                clause.literals.iter().any(|&literal| {
-                    let var_idx = (literal.abs() - 1) as usize;
-                    let value = assignment.get(var_idx).copied().unwrap_or(false);
-                    if literal > 0 {
-                        value
-                    } else {
-                        !value
+            // Unit propagation: repeatedly find and propagate unit clauses
+            loop {
+                let mut propagated = false;
+                for clause in clauses {
+                    if is_clause_satisfied(clause, assignment) {
+                        continue;
                     }
-                })
-            });
+                    
+                    // Count unassigned and assigned literals
+                    let mut unassigned_literal: Option<(usize, bool)> = None;
+                    let mut has_satisfied = false;
+                    
+                    for &literal in &clause.literals {
+                        let var_idx = (literal.abs() - 1) as usize;
+                        if var_idx >= assignment.len() {
+                            continue;
+                        }
+                        
+                        if let Some(value) = assignment[var_idx] {
+                            if (literal > 0) == value {
+                                has_satisfied = true;
+                                break;
+                            }
+                        } else {
+                            if unassigned_literal.is_none() {
+                                unassigned_literal = Some((var_idx, literal > 0));
+                            } else {
+                                // More than one unassigned - not a unit clause
+                                unassigned_literal = None;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if has_satisfied {
+                        continue;
+                    }
+                    
+                    if let Some((var_idx, value)) = unassigned_literal {
+                        // Unit clause found - assign the literal to satisfy the clause
+                        assignment[var_idx] = Some(value);
+                        propagated = true;
+                    } else if unassigned_literal.is_none() {
+                        // All literals assigned but clause not satisfied = conflict
+                        return false;
+                    }
+                }
+                
+                if !propagated {
+                    break;
+                }
+            }
 
-            if satisfied {
-                return Some(Solution::SAT(assignment));
+            // Check if all clauses are satisfied
+            if clauses.iter().all(|clause| is_clause_satisfied(clause, assignment)) {
+                return true;
+            }
+
+            // Find first unassigned variable for decision
+            if let Some(var_idx) = assignment.iter().position(|&a| a.is_none()) {
+                // Try assigning true
+                assignment[var_idx] = Some(true);
+                if dpll_solve(clauses, assignment, start_time, timeout) {
+                    return true;
+                }
+                
+                // Try assigning false
+                assignment[var_idx] = Some(false);
+                if dpll_solve(clauses, assignment, start_time, timeout) {
+                    return true;
+                }
+                
+                // Backtrack
+                assignment[var_idx] = None;
+                false
+            } else {
+                // All variables assigned but not all clauses satisfied
+                false
             }
         }
 
-        // No solution found in 1000 attempts
-        println!("❌ SAT solver exhausted attempts (1000 tries, {} vars, {} clauses)", variables, clauses.len());
-        None
+        if dpll_solve(clauses, &mut assignment, start_time, timeout) {
+            let solution: Vec<bool> = assignment.iter()
+                .map(|&a| a.unwrap_or(false))
+                .collect();
+            Some(Solution::SAT(solution))
+        } else {
+            if start_time.elapsed() > timeout {
+                println!("⏱️  SAT solver timeout after {:.2}s ({} vars, {} clauses)", 
+                    start_time.elapsed().as_secs_f64(), variables, clauses.len());
+            } else {
+                // Debug: Check if problem is actually satisfiable by trying the known solution
+                // (This is only for debugging - in production we'd remove this)
+                println!("❌ SAT solver failed to find solution ({} vars, {} clauses) - checking satisfiability...", variables, clauses.len());
+                
+                // Try brute force check on small problems
+                if variables <= 32 {
+                    let mut test_assignment = vec![false; variables];
+                    let mut found = false;
+                    for i in 0..(1u64 << variables.min(32)) {
+                        for j in 0..variables.min(32) {
+                            test_assignment[j] = (i >> j) & 1 == 1;
+                        }
+                        let satisfied = clauses.iter().all(|clause| {
+                            clause.literals.iter().any(|&literal| {
+                                let var_idx = (literal.abs() - 1) as usize;
+                                if var_idx < test_assignment.len() {
+                                    (literal > 0) == test_assignment[var_idx]
+                                } else {
+                                    false
+                                }
+                            })
+                        });
+                        if satisfied {
+                            found = true;
+                            println!("⚠️  Problem IS satisfiable but DPLL failed! Assignment: {:?}", 
+                                test_assignment.iter().take(10).collect::<Vec<_>>());
+                            break;
+                        }
+                    }
+                    if !found {
+                        println!("⚠️  Problem appears to be UNSATISFIABLE (brute force check)");
+                    }
+                }
+            }
+            None
+        }
     }
 
     /// TSP solver using nearest neighbor heuristic
@@ -374,23 +550,54 @@ impl Miner {
         height: u64,
         transactions: Vec<Transaction>,
     ) -> Option<Block> {
-        println!("\n=== Mining Block {} ===", height);
+        use coinject_core::{ConsensusState, TAU_C};
+        let mining_start = Instant::now();
+        let mut attempts = 0usize;
 
-        // 1. Generate NP-hard problem (deterministically seeded by parent hash)
-        // All nodes generate the SAME problem for a given (prev_hash, height) pair
-        let problem = self.generate_problem(height, prev_hash).await;
+        let (problem, (solution, solve_time, solve_memory)) = loop {
+            attempts += 1;
+            println!("\n=== Mining Block {} (attempt #{}) ===", height, attempts);
 
-        // Calculate and display dimensional state
-        use coinject_core::{TAU_C, ConsensusState};
-        let tau = (height as f64) / TAU_C;
-        let consensus_state = ConsensusState::at_tau(tau);
-        println!("Dimensional state: τ={:.4}, |ψ|={:.4}, θ={:.4} rad",
-            consensus_state.tau, consensus_state.magnitude, consensus_state.phase);
-        println!("Generated problem: {:?}", problem);
+            // 1. Generate NP-hard problem (deterministically seeded by parent hash)
+            // All nodes generate the SAME problem for a given (prev_hash, height) pair
+            let problem = self.generate_problem(height, prev_hash).await;
 
-        // 2. Solve the problem and measure performance
-        let solve_result = self.solve_problem(&problem)?;
-        let (solution, solve_time, solve_memory) = solve_result;
+            // Calculate and display dimensional state
+            let tau = (height as f64) / TAU_C;
+            let consensus_state = ConsensusState::at_tau(tau);
+            println!(
+                "Dimensional state: τ={:.4}, |ψ|={:.4}, θ={:.4} rad",
+                consensus_state.tau, consensus_state.magnitude, consensus_state.phase
+            );
+            println!("Generated problem: {:?}", problem);
+
+            // 2. Solve the problem and measure performance
+            if let Some(result) = self.solve_problem(&problem) {
+                break (problem, result);
+            }
+
+            println!(
+                "❌ Mining attempt #{} failed to find a solution before timeout. Penalizing difficulty...",
+                attempts
+            );
+            {
+                let mut adjuster = self.difficulty_adjuster.write().await;
+                adjuster.record_solve_time(FAILURE_PENALTY_TIME);
+                let new_size = adjuster.penalize_failure();
+                println!("   → New target problem size: {}", new_size);
+            }
+
+            if attempts >= MAX_MINING_ATTEMPTS || mining_start.elapsed() >= MINING_TIMEOUT {
+                println!(
+                    "⏰ Mining aborted after {} attempts ({:.1?}). Waiting for next template.",
+                    attempts,
+                    mining_start.elapsed()
+                );
+                return None;
+            }
+
+            println!("🔁 Retrying with reduced difficulty...");
+        };
         println!("Solved in {:?} using {} bytes", solve_time, solve_memory);
 
         // 3. Verify solution
@@ -563,13 +770,27 @@ impl Miner {
         stats.average_solve_time = Duration::from_secs_f64(total_time / stats.blocks_mined as f64);
 
         // Record solve time in difficulty adjuster
-        let mut adjuster = self.difficulty_adjuster.write().await;
-        adjuster.record_solve_time(solve_time);
+        let (new_size, diff_stats) = {
+            let mut adjuster = self.difficulty_adjuster.write().await;
+            adjuster.record_solve_time(solve_time);
+            let new_size = adjuster.adjust_difficulty();
+            (new_size, adjuster.stats())
+        };
 
-        // Adjust difficulty every 10 blocks
-        if stats.blocks_mined % 10 == 0 {
-            adjuster.adjust_difficulty();
+        println!(
+            "📈 Difficulty stats: size={} avg={:.2}s σ={:.2}s ratio {:.2}x samples {} stall={} recovery={}",
+            diff_stats.current_size,
+            diff_stats.avg_solve_time_secs,
+            diff_stats.std_dev_secs,
+            diff_stats.time_ratio,
+            diff_stats.sample_count,
+            diff_stats.stall_counter,
+            diff_stats.in_recovery_mode
+        );
+        if diff_stats.time_ratio > 2.0 {
+            println!("⚠️  Solve time ratio {:.2}x > 2.0. Network may be underpowered—consider adding miners.", diff_stats.time_ratio);
         }
+        println!("   → Next problem size target: {}", new_size);
     }
 
     /// Get current mining stats

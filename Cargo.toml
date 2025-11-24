@@ -19,8 +19,8 @@ members = [
 authors = ["Quigles1337 <adz@alphx.io>"]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/Quigles1337/COINjecture1337-REFACTOR"
-version = "4.6.4"
+repository = "https://github.com/beanapologist/coinjecture"
+version = "4.7.1"
 
 [workspace.dependencies]
 # Async runtime

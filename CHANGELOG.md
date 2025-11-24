@@ -1,11 +1,96 @@
 # Changelog
 
-All notable changes to COINjecture Network B will be documented in this file.
+All notable changes to COINjecture will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.7.0] - 2025-01-XX
+## [4.7.1] - 2025-11-24
+
+### Added
+- **Adaptive Difficulty Telemetry**
+  - Mining loop now logs per-block difficulty stats (avg / σ / ratio / stall counts) using `DifficultyStats`.
+  - Operators get explicit warnings when solve time ratios exceed 2× and guidance to recruit miners.
+
+### Changed
+- **Dynamic Difficulty Engine**
+  - Introduced stall detection thresholds, high-variance guarding, and recovery mode to prevent two-node stalls.
+  - Penalizes failures immediately, caps per-problem-type sizes adaptively, and scales more aggressively when the network lags.
+- **Mining Loop Reliability**
+  - Mining attempts now retry up to five times with 60s timeout, automatically shrinking problem size between attempts.
+  - Ensures `record_solve_time` and `adjust_difficulty` run for every successful block while timeouts feed the penalty path.
+
+### Fixed
+- Eliminated conditions where SAT problems remained permanently unsolved by auto-reducing problem size on repeated failures.
+- Prevented difficulty oscillations by deferring adjustments when solve-time variance is high.
+
+## [4.0.0] - 2025-11-23
+
+### Added
+- **Complete Rust Rewrite**
+  - Full rewrite from Python to Rust for production-grade performance
+  - Modular architecture with workspace-based crate organization
+  - ACID-compliant redb database for state persistence
+  - libp2p networking with GossipSub, Kademlia, and mDNS
+  - JSON-RPC server with HTTP/WebSocket support
+  - Complete CLI wallet with Ed25519 keystore
+  - Web frontend with React-based explorer and wallet
+  - HuggingFace integration for automatic dataset uploads
+
+- **Proof of Useful Work (PoUW)**
+  - NP-complete problem solving (SubsetSum, SAT, TSP)
+  - Polynomial-time solution verification
+  - Work score calculation with quality metrics
+  - Adaptive difficulty adjustment
+  - Commit-reveal protocol to prevent grinding attacks
+
+- **Autonomous Marketplace**
+  - On-chain problem submission with bounty escrow
+  - Automatic solution verification and payout
+  - Marketplace state persistence in redb
+  - RPC endpoints for problem queries and submission
+  - Support for public and private problem submissions
+
+- **Dimensional Tokenomics**
+  - Multi-tier liquidity pools (D₁, D₂, D₃)
+  - Exponential allocation ratios based on Satoshi constant
+  - Unit circle constraint: |μ|² = η² + λ² = 1
+  - Critical damping: η = λ = 1/√2
+
+- **Advanced Transaction Types**
+  - Transfer transactions
+  - Dimensional pool swaps
+  - Time-locked balances
+  - Multi-party escrow
+  - Payment channels
+  - TrustLine protocol (XRPL-inspired)
+
+- **Infrastructure**
+  - Full chain reorganization (fork handling)
+  - State unwinding and reapplication
+  - Common ancestor detection
+  - Automatic sync to longest chain
+  - Prometheus metrics integration
+  - Docker deployment support
+
+### Changed
+- Complete rewrite from Python to Rust
+- Database migration from Sled to redb for ACID compliance
+- Network protocol upgraded to libp2p
+- RPC interface standardized to JSON-RPC 2.0
+- Architecture refactored to modular workspace structure
+
+### Technical Details
+- **Language**: Rust 1.70+
+- **Database**: redb 2.1 (ACID-compliant)
+- **Networking**: libp2p 0.54 (GossipSub, Kademlia, mDNS)
+- **RPC**: jsonrpsee 0.24 (HTTP/WebSocket)
+- **Cryptography**: Ed25519-dalek 2.1, Blake3, SHA2/SHA3
+- **Build**: Cargo workspace with 11 crates
+
+---
+
+## [4.7.0] - 2025-11-23
 
 ### Added
 - **Enhanced Web Frontend for CloudFront Deployment**
@@ -39,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Build Config**: Vite optimized for production with code splitting and minification
 - **React Query**: Auto-refresh every 10-30 seconds for live data
 
-## [4.6.5] - 2025-11-24
+## [4.6.5] - 2025-11-23
 
 ### Added
 - **Unified HuggingFace Dataset**
@@ -78,7 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bootnode Config**: Updated `deploy-docker.sh` to accept and pass bootnode addresses to containers
 - **README**: Updated HuggingFace README with unified dataset documentation and reorganized schema table
 
-## [4.6.4] - 2025-01-XX
+## [4.6.4] - 2025-11-22
 
 ### Added
 - **Full Chain Reorganization (Fork Handling)**
