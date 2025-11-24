@@ -175,7 +175,7 @@ impl CoinjectNode {
         // Initialize HuggingFace sync if configured
         let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) = (&config.hf_token, &config.hf_dataset_name) {
             println!("🤗 Initializing Hugging Face sync...");
-            println!("   Dataset prefix: {} (will create type-specific datasets)", hf_dataset_name);
+            println!("   Unified dataset: {} (all problem types in one continuous dataset)", hf_dataset_name);
 
             let hf_config = HuggingFaceConfig {
                 token: hf_token.clone(),

@@ -1,11 +1,28 @@
 // Hugging Face API Client
 // Handles communication with Hugging Face Dataset API
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, Deserializer};
 use serde_json::Value;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use std::collections::HashMap;
+
+/// Serialize u128 as string to avoid JSON precision loss
+fn serialize_u128_as_string<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&value.to_string())
+}
+
+/// Deserialize u128 from string
+fn deserialize_u128_from_string<'de, D>(deserializer: D) -> Result<u128, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    s.parse().map_err(serde::de::Error::custom)
+}
 
 /// Hugging Face client configuration
 #[derive(Debug, Clone)]
@@ -59,6 +76,7 @@ pub struct DatasetRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solution_quality: Option<f64>,
     pub problem_complexity: f64,
+    #[serde(serialize_with = "serialize_u128_as_string", deserialize_with = "deserialize_u128_from_string")]
     pub bounty: u128,
 
     // ASYMMETRY METRICS - NP-hardness verification
@@ -129,11 +147,27 @@ impl HuggingFaceClient {
         eprintln!("📊 Hugging Face: Buffered {} record (buffer size: {}/{})",
             problem_type, buffer.len(), self.buffer_size);
 
-        // Check if this specific buffer is full
-        if buffer.len() >= self.buffer_size {
-            eprintln!("📤 Hugging Face: {} buffer full, flushing {} records...",
-                problem_type, buffer.len());
-            self.flush_problem_type(&problem_type).await?;
+        // Check if we should flush
+        // For unified dataset: flush when total records across all types >= buffer_size
+        // For separate datasets: flush when this specific type's buffer is full
+        let use_unified = self.config.dataset_prefix.contains('/');
+        
+        if use_unified {
+            // Count total records across all buffers
+            let total_records: usize = self.buffers.values().map(|b| b.len()).sum();
+            eprintln!("📊 Hugging Face: Unified mode - {} total records across {} problem types (threshold: {})",
+                total_records, self.buffers.len(), self.buffer_size);
+            if total_records >= self.buffer_size {
+                eprintln!("📤 Hugging Face: Unified buffer full ({} total records), flushing all problem types...", total_records);
+                self.flush().await?;
+            }
+        } else {
+            // Legacy: flush individual problem type buffers
+            if buffer.len() >= self.buffer_size {
+                eprintln!("📤 Hugging Face: {} buffer full, flushing {} records...",
+                    problem_type, buffer.len());
+                self.flush_problem_type(&problem_type).await?;
+            }
         }
 
         Ok(())
@@ -147,10 +181,15 @@ impl HuggingFaceClient {
             _ => return Ok(()), // No buffer or empty buffer
         };
 
-        // Construct dataset name: prefix/problem_type_Solutions
-        // e.g., "COINjecture/SubsetSum_Solutions"
-        // Trim whitespace from problem_type to handle any formatting issues
-        let dataset_name = format!("{}/{}_Solutions", self.config.dataset_prefix, problem_type.trim());
+        // Use unified dataset name directly (single continuous dataset for all problem types)
+        // If dataset_prefix contains "/", use it as full dataset name, otherwise append problem type
+        let dataset_name = if self.config.dataset_prefix.contains('/') {
+            // Full dataset name provided (e.g., "COINjecture/NP_Solutions")
+            self.config.dataset_prefix.clone()
+        } else {
+            // Legacy: prefix only, append problem type
+            format!("{}/{}_Solutions", self.config.dataset_prefix, problem_type.trim())
+        };
 
         tracing::info!(
             "Pushing {} {} records to Hugging Face dataset: {}",
@@ -247,12 +286,109 @@ impl HuggingFaceClient {
             return Ok(());
         }
 
-        // Collect problem types to flush (to avoid borrow checker issues)
-        let problem_types: Vec<String> = self.buffers.keys().cloned().collect();
-
-        // Flush each problem type's buffer
-        for problem_type in problem_types {
-            self.flush_problem_type(&problem_type).await?;
+        // Check if using unified dataset (dataset_prefix contains "/")
+        let use_unified = self.config.dataset_prefix.contains('/');
+        
+        if use_unified {
+            // Combine all problem types into one unified dataset
+            let mut all_records = Vec::new();
+            let mut total_count = 0;
+            
+            // Collect all records from all buffers
+            for (problem_type, buffer) in &self.buffers {
+                total_count += buffer.len();
+                for record in buffer {
+                    all_records.push(record.clone());
+                }
+            }
+            
+            if all_records.is_empty() {
+                return Ok(());
+            }
+            
+            // Use unified dataset name
+            let dataset_name = self.config.dataset_prefix.clone();
+            
+            // Create JSONL content from all records
+            let jsonl_content: String = all_records
+                .iter()
+                .map(|record| serde_json::to_string(record).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\n");
+            
+            // Generate filename with timestamp
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let filename = format!("data_{}.jsonl", timestamp);
+            let path_in_repo = format!("data/{}", filename);
+            
+            // Base64 encode the content
+            let content_base64 = STANDARD.encode(jsonl_content.as_bytes());
+            
+            // Hub API commit endpoint
+            let url = format!("{}/datasets/{}/commit/main", self.config.api_base, dataset_name);
+            
+            eprintln!("📤 Hugging Face: Uploading {} total records (all problem types) as {} to unified dataset {}",
+                total_count, path_in_repo, dataset_name);
+            
+            // Create NDJSON payload
+            let commit_message = format!("Add {} records (unified dataset)", total_count);
+            let header_line = serde_json::json!({
+                "key": "header",
+                "value": {"summary": commit_message}
+            });
+            let file_operation = serde_json::json!({
+                "key": "file",
+                "value": {
+                    "content": content_base64,
+                    "path": path_in_repo,
+                    "encoding": "base64"
+                }
+            });
+            
+            let ndjson_payload = format!(
+                "{}\n{}",
+                serde_json::to_string(&header_line).unwrap(),
+                serde_json::to_string(&file_operation).unwrap()
+            );
+            
+            // Make HTTP request
+            let response = self.client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.config.token))
+                .header("Content-Type", "application/x-ndjson")
+                .body(ndjson_payload)
+                .send()
+                .await
+                .map_err(|e| {
+                    eprintln!("❌ Hugging Face network error: {}", e);
+                    ClientError::Network(e.to_string())
+                })?;
+            
+            if !response.status().is_success() {
+                let status = response.status();
+                let error_text = response.text().await.unwrap_or_default();
+                eprintln!("❌ Hugging Face API error: HTTP {} - {}", status, error_text);
+                return Err(ClientError::Api(format!(
+                    "HTTP {}: {}",
+                    status,
+                    error_text
+                )));
+            }
+            
+            eprintln!("✅ Hugging Face: Successfully pushed {} total records to unified dataset {}",
+                total_count, dataset_name);
+            
+            // Clear all buffers after successful upload
+            self.buffers.clear();
+        } else {
+            // Legacy: Flush each problem type to separate datasets
+            let problem_types: Vec<String> = self.buffers.keys().cloned().collect();
+            for problem_type in problem_types {
+                self.flush_problem_type(&problem_type).await?;
+            }
         }
 
         Ok(())

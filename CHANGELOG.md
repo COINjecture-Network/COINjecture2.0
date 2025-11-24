@@ -5,6 +5,45 @@ All notable changes to COINjecture Network B will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.6.5] - 2025-11-24
+
+### Added
+- **Unified HuggingFace Dataset**
+  - Consolidated all problem types (SubsetSum, SAT, TSP, Custom) into single continuous dataset: `COINjecture/NP_Solutions`
+  - Unified buffer system that flushes all problem types together when threshold (10 records) is reached
+  - Enhanced dataset schema with data provenance fields (`metrics_source`, `measurement_confidence`, `data_version`)
+  - Updated HuggingFace README with comprehensive documentation and organized data fields table
+- **Docker Deployment Improvements**
+  - Multi-stage Dockerfile for optimized `linux/amd64` builds
+  - Automated deployment script with bootnode configuration support
+  - Container health checks and automatic restart policies
+  - Deployment verification scripts
+
+### Fixed
+- **Schema Serialization**
+  - Fixed u128 bounty serialization: Now serialized as string to avoid JSON precision loss (JSON integers only safe up to 2^53)
+  - Added custom serialization functions: `serialize_u128_as_string` and `deserialize_u128_from_string`
+- **P2P Network Connectivity**
+  - Added bootnode configuration to deployment script
+  - Node 2 now automatically connects to Node 1 as bootnode: `/ip4/143.110.139.166/tcp/30333`
+  - Fixed peer discovery and network synchronization between nodes
+- **HuggingFace Integration**
+  - Fixed unified dataset buffer logic to count total records across all problem types
+  - Improved logging for unified mode operations
+  - Enhanced error handling for dataset uploads
+
+### Changed
+- HuggingFace client now uses unified dataset approach instead of type-specific datasets
+- Buffer flush logic: Flushes when total records across all types >= 10 (instead of per-type buffers)
+- Deployment script now configures bootnodes automatically for multi-node setups
+- Updated timing precision: Changed from milliseconds to microseconds (`solve_time_us`, `verify_time_us`)
+
+### Technical Details
+- **Unified Dataset**: Modified `huggingface/src/client.rs` to combine all problem types into single dataset
+- **Schema Fix**: Added custom serde serialization for u128 fields in `DatasetRecord`
+- **Bootnode Config**: Updated `deploy-docker.sh` to accept and pass bootnode addresses to containers
+- **README**: Updated HuggingFace README with unified dataset documentation and reorganized schema table
+
 ## [4.6.4] - 2025-01-XX
 
 ### Added
