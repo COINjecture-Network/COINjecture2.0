@@ -5,6 +5,40 @@ All notable changes to COINjecture Network B will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.0] - 2025-01-XX
+
+### Added
+- **Enhanced Web Frontend for CloudFront Deployment**
+  - Complete RPC client integration with all 25+ blockchain endpoints
+  - Real-time marketplace data fetching and display
+  - Live chain information and network metrics
+  - Production-ready build configuration optimized for AWS S3/CloudFront
+  - Automated deployment scripts with CloudFront cache invalidation
+  - Comprehensive deployment documentation (DEPLOYMENT.md, CLOUDFRONT-SETUP.md)
+  - Environment variable support for RPC and metrics endpoints
+  - TypeScript types matching Rust structs for type safety
+
+### Enhanced
+- **Frontend Components**
+  - MarketplaceSection: Real-time problem listings with auto-refresh
+  - MetricsSection: Live chain info and marketplace statistics
+  - RPC Client: Full integration with all endpoints (account, chain, transaction, marketplace, timelock, escrow, channel, faucet)
+  - Build optimization: Code splitting, minification, CloudFront-ready static assets
+
+### Changed
+- Frontend now uses actual RPC API endpoints instead of mock data
+- Data structures updated to match Rust implementation exactly
+- Marketplace stats now show `total_bounty_pool`, `expired_problems`, `cancelled_problems`
+- Problem info uses `submitted_at` and `expires_at` timestamps (i64)
+- Chain info includes `chain_id`, `best_hash`, `genesis_hash`, `peer_count`
+
+### Technical Details
+- **RPC Client**: `web/coinjecture-evolved-main/src/lib/rpc-client.ts` - Complete API client with TypeScript types
+- **Deployment**: Automated `deploy.sh` script for S3/CloudFront deployment
+- **Documentation**: API-INTEGRATION.md, DEPLOYMENT.md, CLOUDFRONT-SETUP.md, README-DEPLOYMENT.md
+- **Build Config**: Vite optimized for production with code splitting and minification
+- **React Query**: Auto-refresh every 10-30 seconds for live data
+
 ## [4.6.5] - 2025-11-24
 
 ### Added
