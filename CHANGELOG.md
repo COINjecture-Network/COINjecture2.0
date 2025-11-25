@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Validator now skips timestamp age checks (2-hour limit) during initial sync to allow historical blocks.
   - Mining loop now waits for peer connections and chain sync before starting to mine, preventing forks from genesis.
   - New nodes will properly sync with the existing chain instead of creating separate chains.
+- **Mining Loop Sync Wait**
+  - Fixed issue where nodes would start mining from genesis before completing chain sync.
+  - Mining loop now waits up to 5 minutes for chain sync to complete, tracking height stability.
+  - Nodes at genesis wait at least 15 seconds for status updates before starting to mine.
+  - Height must be stable for 6 seconds (3 checks) before mining begins, ensuring sync completion.
 
 ### Changed
 - **Block Validation**
