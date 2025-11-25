@@ -683,6 +683,7 @@ impl CoinjectNode {
                                                     tx_pool,
                                                     block_buffer,
                                                     hf_sync,
+                                                    Some(network_tx),
                                                 ).await;
 
                                                 // After processing buffered blocks, check if we have a longer chain available
@@ -750,6 +751,7 @@ impl CoinjectNode {
                             tx_pool,
                             block_buffer,
                             hf_sync,
+                            Some(network_tx),
                         ).await;
                     }
                 } else if block.header.height == best_height {
@@ -971,6 +973,7 @@ impl CoinjectNode {
         tx_pool: &Arc<RwLock<TransactionPool>>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
         hf_sync: &Option<Arc<HuggingFaceSync>>,
+        network_tx: Option<&mpsc::UnboundedSender<NetworkCommand>>,
     ) {
         loop {
             let best_height = chain.best_block_height().await;
@@ -1079,13 +1082,54 @@ impl CoinjectNode {
                         }
                         Err(e) => {
                             println!("❌ Buffered block validation failed: {}", e);
-                            break;
+                            // If validation failed due to invalid prev_hash, the block might have been
+                            // buffered before the previous block was applied. Remove it from buffer
+                            // so it can be re-received with the correct prev_hash.
+                            if e.to_string().contains("Invalid previous hash") {
+                                println!("   Removing invalid buffered block {} - will be re-requested", next_height);
+                                // Block already removed from buffer above, so we can continue
+                            }
+                            // Don't break - continue to check for next sequential block
+                            // The invalid block has been removed, so next iteration will skip it
+                            continue;
                         }
                     }
                 }
                 None => {
                     // No more sequential blocks in buffer
-                    break;
+                    // Check if we have blocks ahead in the buffer - if so, request missing blocks
+                    let buffer = block_buffer.read().await;
+                    if let Some(&max_buffered_height) = buffer.keys().max() {
+                        if max_buffered_height > next_height {
+                            // We have blocks ahead but missing the next one - request missing blocks
+                            let request_from = next_height;
+                            let request_to = std::cmp::min(next_height + 99, max_buffered_height - 1);
+                            
+                            println!("⚠️  Missing block {} (have blocks up to {} in buffer), requesting {}-{}", 
+                                next_height, max_buffered_height, request_from, request_to);
+                            
+                            drop(buffer);
+                            
+                            // Request missing blocks if network_tx is available
+                            if let Some(network_tx) = network_tx {
+                                if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                                    from_height: request_from,
+                                    to_height: request_to,
+                                }) {
+                                    eprintln!("Failed to request missing blocks: {}", e);
+                                }
+                            }
+                            
+                            // Break and wait for blocks to arrive
+                            break;
+                        } else {
+                            // No blocks ahead in buffer - we're caught up or waiting
+                            break;
+                        }
+                    } else {
+                        // Buffer is empty - no blocks to process
+                        break;
+                    }
                 }
             }
         }
