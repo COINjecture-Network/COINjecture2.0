@@ -196,7 +196,8 @@ impl CoinjectNode {
                 include_submitter_address: false,
                 include_solver_address: false,
                 batch_size: 10,
-                batch_interval: Duration::from_secs(60), // Flush every 60 seconds if buffer not full
+                batch_interval: Duration::from_secs(60), // Legacy: not used for block-based flushing
+                flush_interval_blocks: 50, // Flush every 50 blocks instead of every 10 records
             };
 
             match HuggingFaceSync::new(hf_config, energy_config, sync_config.clone()) {
@@ -318,10 +319,18 @@ impl CoinjectNode {
         // Spawn network task (processes events and commands)
         tokio::task::spawn_local(async move {
             let mut network = network_service;
+            let mut bootnode_retry_interval = time::interval(Duration::from_secs(10)); // Retry bootnodes every 10 seconds
+            bootnode_retry_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            
             loop {
                 tokio::select! {
                     // Process network events
                     _ = network.process_events() => {},
+
+                    // Periodic bootnode retry
+                    _ = bootnode_retry_interval.tick() => {
+                        network.retry_bootnodes();
+                    },
 
                     // Handle commands from other tasks
                     Some(cmd) = network_cmd_rx.recv() => {
@@ -567,17 +576,30 @@ impl CoinjectNode {
             });
         }
 
-        // Spawn periodic HuggingFace buffer flush task
+        // Spawn periodic HuggingFace buffer flush task (fallback - block-based flushing is primary)
+        // This ensures data is flushed even if block-based flushing doesn't trigger (e.g., during sync)
         if let Some(ref hf_sync) = self.hf_sync {
             let hf_sync_for_flush = Arc::clone(hf_sync);
+            let chain_for_flush = Arc::clone(&self.chain);
             tokio::spawn(async move {
-                let mut interval = time::interval(Duration::from_secs(60)); // Flush every 60 seconds
+                let mut interval = time::interval(Duration::from_secs(600)); // Check every 10 minutes as fallback
+                let mut last_flush_height = 0u64;
                 loop {
                     interval.tick().await;
-                    if let Err(e) = hf_sync_for_flush.flush().await {
-                        eprintln!("⚠️  Failed to flush Hugging Face buffer: {}", e);
-                    } else {
-                        eprintln!("🔄 Hugging Face: Periodic buffer flush completed");
+                    // Only flush if we haven't seen a new block in a while (fallback safety)
+                    let current_height = chain_for_flush.best_block_height().await;
+                    if current_height > last_flush_height + 600 {
+                        // More than ~10 minutes of blocks since last check - force flush as safety measure
+                        eprintln!(
+                            "🔄 Hugging Face: Fallback flush triggered ({} blocks since last check)",
+                            current_height - last_flush_height
+                        );
+                        if let Err(e) = hf_sync_for_flush.flush().await {
+                            eprintln!("⚠️  Failed to flush Hugging Face buffer: {}", e);
+                        } else {
+                            eprintln!("✅ Hugging Face: Fallback buffer flush completed");
+                        }
+                        last_flush_height = current_height;
                     }
                 }
             });
@@ -935,6 +957,14 @@ impl CoinjectNode {
                 for height in from_height..=to_height {
                     match chain.get_block_by_height(height) {
                         Ok(Some(block)) => {
+                        if height <= 20 {
+                            println!(
+                                "   ↳ Serving requested block {} (hash {:?}) to {:?}",
+                                height,
+                                block.header.hash(),
+                                peer
+                            );
+                        }
                             if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block)) {
                                 eprintln!("Failed to broadcast block {}: {}", height, e);
                                 break;
@@ -942,7 +972,12 @@ impl CoinjectNode {
                             sent_count += 1;
                         }
                         Ok(None) => {
-                            // We don't have this block, stop
+                        if height <= 20 {
+                            println!(
+                                "   ↳ Missing requested block {} (first missing in range {}-{})",
+                                height, from_height, to_height
+                            );
+                        }
                             break;
                         }
                         Err(e) => {

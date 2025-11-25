@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Enhanced connection event handling to track bootnode connections separately
   - Improved error handling for outgoing connection failures with automatic retry
   - Network service now maintains persistent bootnode connection attempts
+- **Hugging Face Flush Cadence**
+  - Increased unified dataset flush window from 50 to 600 unique blocks (~10 minutes at current solve rate) to reduce commit spam.
+  - Fallback timer now checks every 10 minutes and only forces a flush if >600 blocks accumulated without hitting the primary threshold.
+  - Keeps per-block telemetry intact while letting Hugging Face ingestion breathe and batch metadata for downstream analysts.
 
 ### Known Issues
 - **Cloud Run ↔ Node 2 Connectivity**

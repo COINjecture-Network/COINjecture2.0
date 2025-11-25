@@ -50,6 +50,9 @@ pub struct HuggingFaceClient {
     client: reqwest::Client,
     buffers: HashMap<String, Vec<Value>>, // problem_type -> buffer
     buffer_size: usize,
+    blocks_since_flush: u64, // Track blocks since last flush for block-based flushing
+    last_block_height: Option<u64>, // Track last block height we saw to detect new blocks
+    flush_interval_blocks: u64, // Flush every N blocks
 }
 
 /// Dataset record structure
@@ -130,13 +133,17 @@ impl HuggingFaceClient {
             client,
             buffers: HashMap::new(),
             buffer_size: 10,
+            blocks_since_flush: 0,
+            last_block_height: None,
+            flush_interval_blocks: 600, // Default: flush every 600 blocks (~10 min at current rate)
         })
     }
 
-    /// Push a single record (buffered, flushed when buffer is full)
+    /// Push a single record (buffered, flushed every N blocks)
     /// Routes to problem-type-specific buffer
     pub async fn push_record(&mut self, record: DatasetRecord) -> Result<(), ClientError> {
         let problem_type = record.problem_type.clone();
+        let block_height = record.block_height;
         let value = serde_json::to_value(&record)
             .map_err(|e| ClientError::Serialization(e.to_string()))?;
 
@@ -144,33 +151,50 @@ impl HuggingFaceClient {
         let buffer = self.buffers.entry(problem_type.clone()).or_insert_with(Vec::new);
         buffer.push(value);
 
-        eprintln!("📊 Hugging Face: Buffered {} record (buffer size: {}/{})",
-            problem_type, buffer.len(), self.buffer_size);
+        // Track blocks since last flush - increment only when we see a new block
+        let is_new_block = match self.last_block_height {
+            None => {
+                // First record - initialize
+                self.last_block_height = Some(block_height);
+                self.blocks_since_flush = 1;
+                true
+            }
+            Some(last_height) => {
+                if block_height > last_height {
+                    // New block detected - increment counter
+                    self.last_block_height = Some(block_height);
+                    self.blocks_since_flush += 1;
+                    true
+                } else {
+                    // Same block or older - don't increment (might be multiple records per block)
+                    false
+                }
+            }
+        };
 
-        // Check if we should flush
-        // For unified dataset: flush when total records across all types >= buffer_size
-        // For separate datasets: flush when this specific type's buffer is full
-        let use_unified = self.config.dataset_prefix.contains('/');
-        
-        if use_unified {
-            // Count total records across all buffers
-            let total_records: usize = self.buffers.values().map(|b| b.len()).sum();
-            eprintln!("📊 Hugging Face: Unified mode - {} total records across {} problem types (threshold: {})",
-                total_records, self.buffers.len(), self.buffer_size);
-            if total_records >= self.buffer_size {
-                eprintln!("📤 Hugging Face: Unified buffer full ({} total records), flushing all problem types...", total_records);
-                self.flush().await?;
-            }
+        let total_records: usize = self.buffers.values().map(|b| b.len()).sum();
+        if is_new_block {
+            eprintln!("📊 Hugging Face: Buffered {} record (block {}, {} blocks since flush, {} total records)",
+                problem_type, block_height, self.blocks_since_flush, total_records);
         } else {
-            // Legacy: flush individual problem type buffers
-            if buffer.len() >= self.buffer_size {
-                eprintln!("📤 Hugging Face: {} buffer full, flushing {} records...",
-                    problem_type, buffer.len());
-                self.flush_problem_type(&problem_type).await?;
-            }
+            eprintln!("📊 Hugging Face: Buffered {} record (block {}, {} total records)",
+                problem_type, block_height, total_records);
+        }
+
+        // Check if we should flush based on block count
+        if self.blocks_since_flush >= self.flush_interval_blocks {
+            eprintln!("📤 Hugging Face: Flush interval reached ({} blocks), flushing all buffered records...", self.blocks_since_flush);
+            self.flush().await?;
+            // Note: flush() will reset blocks_since_flush, but we also reset last_block_height here
+            self.last_block_height = None;
         }
 
         Ok(())
+    }
+
+    /// Set the flush interval in blocks
+    pub fn set_flush_interval_blocks(&mut self, interval: u64) {
+        self.flush_interval_blocks = interval;
     }
 
     /// Flush a specific problem type's buffer to its corresponding dataset
@@ -285,6 +309,10 @@ impl HuggingFaceClient {
         if self.buffers.is_empty() {
             return Ok(());
         }
+
+        // Reset block counter and last block height when flushing
+        self.blocks_since_flush = 0;
+        self.last_block_height = None;
 
         // Check if using unified dataset (dataset_prefix contains "/")
         let use_unified = self.config.dataset_prefix.contains('/');
