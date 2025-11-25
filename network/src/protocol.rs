@@ -92,6 +92,7 @@ pub struct NetworkService {
     swarm: Swarm<CoinjectBehaviour>,
     topics: NetworkTopics,
     peers: HashSet<PeerId>,
+    mesh_peers: HashSet<PeerId>, // Peers in gossipsub mesh (can receive broadcasts)
     peer_scores: HashMap<PeerId, f64>,
     event_tx: mpsc::UnboundedSender<NetworkEvent>,
     peer_count: Arc<RwLock<usize>>,
@@ -210,6 +211,7 @@ impl NetworkService {
                 swarm,
                 topics,
                 peers: HashSet::new(),
+                mesh_peers: HashSet::new(),
                 peer_scores: HashMap::new(),
                 event_tx,
                 peer_count,
@@ -247,13 +249,23 @@ impl NetworkService {
 
     /// Broadcast a block to the network
     pub fn broadcast_block(&mut self, block: Block) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if we have peers in the mesh before broadcasting
+        if self.mesh_peers.is_empty() {
+            return Err("InsufficientPeers: No peers in gossipsub mesh".into());
+        }
+
         let message = NetworkMessage::NewBlock(block);
         let data = bincode::serialize(&message)?;
-        self.swarm
+        match self.swarm
             .behaviour_mut()
             .gossipsub
-            .publish(self.topics.blocks.clone(), data)?;
-        Ok(())
+            .publish(self.topics.blocks.clone(), data) {
+            Ok(_) => Ok(()),
+            Err(gossipsub::PublishError::InsufficientPeers) => {
+                Err("InsufficientPeers: Not enough peers in mesh for topic".into())
+            }
+            Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
+        }
     }
 
     /// Broadcast a transaction to the network
@@ -261,13 +273,23 @@ impl NetworkService {
         &mut self,
         tx: Transaction,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if we have peers in the mesh before broadcasting
+        if self.mesh_peers.is_empty() {
+            return Err("InsufficientPeers: No peers in gossipsub mesh".into());
+        }
+
         let message = NetworkMessage::NewTransaction(tx);
         let data = bincode::serialize(&message)?;
-        self.swarm
+        match self.swarm
             .behaviour_mut()
             .gossipsub
-            .publish(self.topics.transactions.clone(), data)?;
-        Ok(())
+            .publish(self.topics.transactions.clone(), data) {
+            Ok(_) => Ok(()),
+            Err(gossipsub::PublishError::InsufficientPeers) => {
+                Err("InsufficientPeers: Not enough peers in mesh for topic".into())
+            }
+            Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
+        }
     }
 
     /// Broadcast status to peers
@@ -277,17 +299,27 @@ impl NetworkService {
         best_hash: Hash,
         genesis_hash: Hash,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if we have peers in the mesh before broadcasting
+        if self.mesh_peers.is_empty() {
+            return Err("InsufficientPeers: No peers in gossipsub mesh".into());
+        }
+
         let message = NetworkMessage::Status {
             best_height,
             best_hash,
             genesis_hash,
         };
         let data = bincode::serialize(&message)?;
-        self.swarm
+        match self.swarm
             .behaviour_mut()
             .gossipsub
-            .publish(self.topics.status.clone(), data)?;
-        Ok(())
+            .publish(self.topics.status.clone(), data) {
+            Ok(_) => Ok(()),
+            Err(gossipsub::PublishError::InsufficientPeers) => {
+                Err("InsufficientPeers: Not enough peers in mesh for topic".into())
+            }
+            Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
+        }
     }
 
     /// Get connected peer count
@@ -384,6 +416,23 @@ impl NetworkService {
                 }) => {
                     self.handle_gossipsub_message(propagation_source, message.data);
                 }
+                CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { peer_id, topic }) => {
+                    println!("📡 Peer {} subscribed to topic: {:?}", peer_id, topic);
+                    // When a peer subscribes to blocks topic, they're in the mesh
+                    // Compare topic hashes to check if it's the blocks topic
+                    let blocks_topic_hash = self.topics.blocks.hash();
+                    if topic == blocks_topic_hash {
+                        self.mesh_peers.insert(peer_id);
+                    }
+                }
+                CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Unsubscribed { peer_id, topic }) => {
+                    println!("📡 Peer {} unsubscribed from topic: {:?}", peer_id, topic);
+                    // When a peer unsubscribes from blocks topic, remove from mesh
+                    let blocks_topic_hash = self.topics.blocks.hash();
+                    if topic == blocks_topic_hash {
+                        self.mesh_peers.remove(&peer_id);
+                    }
+                }
                 CoinjectBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                     for (peer, addr) in peers {
                         println!("mDNS discovered peer: {} at {}", peer, addr);
@@ -438,6 +487,7 @@ impl NetworkService {
                     .behaviour_mut()
                     .gossipsub
                     .add_explicit_peer(&peer_id);
+                // Note: Peer will be added to mesh_peers when gossipsub mesh is established
                 // Update shared peer count
                 if let Ok(mut count) = self.peer_count.try_write() {
                     *count = self.peers.len();
@@ -447,6 +497,7 @@ impl NetworkService {
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 println!("Connection closed with peer: {}", peer_id);
                 self.peers.remove(&peer_id);
+                self.mesh_peers.remove(&peer_id);
                 // Remove peer from gossipsub mesh
                 self.swarm
                     .behaviour_mut()

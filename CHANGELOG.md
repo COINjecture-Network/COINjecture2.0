@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Mining loop now waits up to 5 minutes for chain sync to complete, tracking height stability.
   - Nodes at genesis wait at least 15 seconds for status updates before starting to mine.
   - Height must be stable for 6 seconds (3 checks) before mining begins, ensuring sync completion.
+- **P2P Network Improvements**
+  - Added gossipsub mesh peer tracking to prevent "InsufficientPeers" errors.
+  - Broadcast functions now check mesh status before attempting to publish messages.
+  - Improved error handling: "InsufficientPeers" errors are silently ignored (expected when no peers connected).
+  - Mining loop now skips mining cycles when chain advances from peer blocks, preventing stale mining.
+  - Better mesh peer tracking via gossipsub Subscribed/Unsubscribed events.
 
 ### Changed
 - **Block Validation**

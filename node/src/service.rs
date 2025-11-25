@@ -327,8 +327,14 @@ impl CoinjectNode {
                     Some(cmd) = network_cmd_rx.recv() => {
                         match cmd {
                             NetworkCommand::BroadcastBlock(block) => {
-                                if let Err(e) = network.broadcast_block(block) {
-                                    eprintln!("Failed to broadcast block: {}", e);
+                                match network.broadcast_block(block) {
+                                    Err(e) if e.to_string().contains("InsufficientPeers") => {
+                                        // Silently ignore InsufficientPeers - it's expected when no peers are connected
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to broadcast block: {}", e);
+                                    }
+                                    Ok(_) => {}
                                 }
                             }
                             NetworkCommand::BroadcastTransaction(tx) => {
@@ -337,8 +343,14 @@ impl CoinjectNode {
                                 }
                             }
                             NetworkCommand::BroadcastStatus { best_height, best_hash, genesis_hash } => {
-                                if let Err(e) = network.broadcast_status(best_height, best_hash, genesis_hash) {
-                                    eprintln!("Failed to broadcast status: {}", e);
+                                match network.broadcast_status(best_height, best_hash, genesis_hash) {
+                                    Err(e) if e.to_string().contains("InsufficientPeers") => {
+                                        // Silently ignore InsufficientPeers - it's expected when no peers are connected
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to broadcast status: {}", e);
+                                    }
+                                    Ok(_) => {}
                                 }
                             }
                             NetworkCommand::RequestBlocks { from_height, to_height } => {
@@ -2231,6 +2243,7 @@ impl CoinjectNode {
 
         // Start mining loop
         let mut interval = time::interval(Duration::from_secs(10));
+        let mut last_mined_height = chain.best_block_height().await;
 
         loop {
             interval.tick().await;
@@ -2238,6 +2251,15 @@ impl CoinjectNode {
             let best_height = chain.best_block_height().await;
             let best_hash = chain.best_block_hash().await;
 
+            // Check if chain advanced since last mining attempt (block received from peer)
+            if best_height > last_mined_height {
+                println!("📥 Chain advanced from {} to {} (block received from peer), skipping this mining cycle", 
+                    last_mined_height, best_height);
+                last_mined_height = best_height;
+                continue; // Skip mining this cycle, wait for next interval
+            }
+
+            // Only mine if we're still at the same height (no new blocks received)
             println!("⛏️  Mining block {}...", best_height + 1);
 
             // Select transactions from pool (top 100 by fee)
@@ -2256,6 +2278,9 @@ impl CoinjectNode {
             {
                 println!("🎉 Mined new block {}!", block.header.height);
                 drop(miner_lock);
+
+                // Update last mined height to prevent immediate re-mining
+                last_mined_height = block.header.height;
 
                 // Store block
                 if let Err(e) = chain.store_block(&block).await {
