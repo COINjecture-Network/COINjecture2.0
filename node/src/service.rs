@@ -734,6 +734,23 @@ impl CoinjectNode {
                             buffer.len() + 1
                         );
                         buffer.insert(block.header.height, block);
+                        
+                        // After buffering, try to process buffered blocks in case we now have sequential blocks
+                        drop(buffer);
+                        Self::process_buffered_blocks(
+                            chain,
+                            state,
+                            timelock_state,
+                            escrow_state,
+                            channel_state,
+                            trustline_state,
+                            dimensional_pool_state,
+                            marketplace_state,
+                            validator,
+                            tx_pool,
+                            block_buffer,
+                            hf_sync,
+                        ).await;
                     }
                 } else if block.header.height == best_height {
                     // Block at same height but potentially different hash - fork detected
