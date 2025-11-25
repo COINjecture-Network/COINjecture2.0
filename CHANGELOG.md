@@ -5,6 +5,51 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.4] - 2025-11-25
+
+### Added
+- **Bootnode Connection Retry Logic**
+  - Automatic retry mechanism for bootnode connections that drop or fail
+  - Tracks bootnode addresses and their associated PeerIDs for reconnection
+  - Retries disconnected bootnodes every 10 seconds with exponential backoff protection
+  - Handles ephemeral connections common in serverless environments (e.g., Cloud Run)
+  - Detects bootnode disconnections and automatically attempts to reconnect
+  - Logs bootnode connection status and retry attempts for debugging
+  - This fixes the issue where Cloud Run nodes would connect but then immediately disconnect, preventing chain sync
+
+### Changed
+- **Connection Management**
+  - Enhanced connection event handling to track bootnode connections separately
+  - Improved error handling for outgoing connection failures with automatic retry
+  - Network service now maintains persistent bootnode connection attempts
+
+### Known Issues
+- **Cloud Run ↔ Node 2 Connectivity**
+  - Cloud Run is currently dialling both droplet bootnodes (Node 1 + Node 2) using IP-only multiaddrs.
+  - Kademlia has not yet discovered Node 2’s PeerID, so Cloud Run is only peering with Node 1.
+  - We are monitoring the DHT bootstrap to confirm Node 2 is added once its PeerID is advertised.
+- **Cloud Run Block Sync Stall**
+  - Even after a clean redeploy, Cloud Run buffers thousands of blocks (up to height ~10.6k) but never applies them.
+  - Logs show repeated “Missing block 15” requests, which means heights 1‑14 never make it across before higher blocks arrive.
+  - Action item: investigate why early blocks aren’t being served (possible request deduplication) so the buffered backlog can flush and sync can progress.
+
+## [4.7.3] - 2025-11-25
+
+### Fixed
+- **Kademlia DHT Bootstrap**
+  - Added automatic Kademlia bootstrap when peers are identified and when connections are established.
+  - Kademlia DHT now actively queries for peers after connecting to bootnodes, enabling automatic peer discovery.
+  - This allows nodes (like Cloud Run) to discover additional peers (e.g., Node 2) through P2P discovery without requiring explicit bootnode configuration.
+  - Added event handling for Kademlia bootstrap completion and GetClosestPeers queries.
+
+### Changed
+- **HuggingFace Flush Strategy**
+  - Changed from record-based flushing (every 10 records) to block-based flushing (every 50 blocks by default).
+  - This allows data to accumulate and be processed in larger batches, reducing API calls and improving data processing efficiency.
+  - Added `flush_interval_blocks` configuration option (default: 50 blocks).
+  - Block tracking ensures unique blocks are counted correctly, even when multiple records exist per block.
+  - Fallback periodic flush (every 5 minutes) ensures data is flushed even if block-based flushing doesn't trigger during sync.
+
 ## [4.7.2] - 2025-11-25
 
 ### Fixed

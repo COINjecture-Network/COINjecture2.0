@@ -51,19 +51,27 @@ echo "📤 Pushing image to Google Container Registry..."
 docker push "$IMAGE_NAME"
 
 # Bootnodes: Connect to existing droplet nodes
-# Note: Cloud Run --args doesn't support duplicate flags, so we use primary node only
-# The node will discover other peers through the P2P network once connected
+# Note: Using IP addresses only (without PeerID) so libp2p discovers PeerID automatically
+# This makes bootnodes resilient to PeerID changes after node restarts
+# Node 2 will be discovered via Kademlia DHT through Node 1
 DROPLET1="143.110.139.166"
-NODE1_PEER_ID="12D3KooWDcorMhXB4w8xBkvTKyYmLVSvFgZK6KrBPEG5DEBddyHS"
-BOOTNODE1="/ip4/$DROPLET1/tcp/30333/p2p/$NODE1_PEER_ID"
+DROPLET2="68.183.205.12"
+# Use IP addresses only - libp2p will discover PeerIDs on connection
+BOOTNODE1="/ip4/$DROPLET1/tcp/30333"
+BOOTNODE2="/ip4/$DROPLET2/tcp/30333"
 
 # Construct container args. Cloud Run splits comma-separated values into separate args.
-CONTAINER_ARGS="--data-dir=/tmp/data,\
+# Use a unique data dir per deploy so Cloud Run starts from a clean state
+DATA_DIR="/tmp/data-$(date +%s)"
+echo "📁 Using Cloud Run data dir: $DATA_DIR"
+
+# Note: Mining disabled for Cloud Run (RPC-only node to save costs)
+CONTAINER_ARGS="--data-dir=$DATA_DIR,\
 --p2p-addr=/ip4/0.0.0.0/tcp/30333,\
 --rpc-addr=0.0.0.0:9933,\
 --metrics-addr=0.0.0.0:9090,\
---mine,\
---bootnodes,$BOOTNODE1,\
+--bootnodes=$BOOTNODE1,\
+--bootnodes=$BOOTNODE2,\
 --hf-token=$HF_TOKEN,\
 --hf-dataset-name=$HF_DATASET"
 
