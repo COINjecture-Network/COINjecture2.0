@@ -195,10 +195,11 @@ impl CoinjectNode {
                 enabled: true,
                 include_submitter_address: false,
                 include_solver_address: false,
-                ..Default::default()
+                batch_size: 10,
+                batch_interval: Duration::from_secs(60), // Flush every 60 seconds if buffer not full
             };
 
-            match HuggingFaceSync::new(hf_config, energy_config, sync_config) {
+            match HuggingFaceSync::new(hf_config, energy_config, sync_config.clone()) {
                 Ok(sync) => {
                     println!("   ✅ Hugging Face sync initialized");
                     Some(Arc::new(sync))
@@ -547,9 +548,26 @@ impl CoinjectNode {
             let tx_pool = Arc::clone(&self.tx_pool);
             let network_tx = network_cmd_tx.clone();
             let hf_sync_for_mining = self.hf_sync.clone();
+            let peer_count_for_mining = Arc::clone(&peer_count);
 
             tokio::spawn(async move {
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining).await;
+                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining).await;
+            });
+        }
+
+        // Spawn periodic HuggingFace buffer flush task
+        if let Some(ref hf_sync) = self.hf_sync {
+            let hf_sync_for_flush = Arc::clone(hf_sync);
+            tokio::spawn(async move {
+                let mut interval = time::interval(Duration::from_secs(60)); // Flush every 60 seconds
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = hf_sync_for_flush.flush().await {
+                        eprintln!("⚠️  Failed to flush Hugging Face buffer: {}", e);
+                    } else {
+                        eprintln!("🔄 Hugging Face: Periodic buffer flush completed");
+                    }
+                }
             });
         }
 
@@ -586,7 +604,16 @@ impl CoinjectNode {
                     // This is the next block we need - validate and apply immediately
                     let best_hash = chain.best_block_hash().await;
 
-                    match validator.validate_block(&block, &best_hash, expected_height) {
+                    // Skip timestamp age check during sync (when receiving historical blocks)
+                    // Check if block timestamp is older than 2 hours - if so, we're likely syncing
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64;
+                    let block_age = now - block.header.timestamp;
+                    let skip_age_check = block_age > 7200; // 2 hours
+
+                    match validator.validate_block_with_options(&block, &best_hash, expected_height, skip_age_check) {
                         Ok(()) => {
                             // Store and apply block
                             match chain.store_block(&block).await {
@@ -932,8 +959,15 @@ impl CoinjectNode {
 
                     let best_hash = chain.best_block_hash().await;
 
-                    // Validate the buffered block
-                    match validator.validate_block(&block, &best_hash, next_height) {
+                    // Validate the buffered block (skip timestamp age check for historical blocks during sync)
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64;
+                    let block_age = now - block.header.timestamp;
+                    let skip_age_check = block_age > 7200; // 2 hours
+
+                    match validator.validate_block_with_options(&block, &best_hash, next_height, skip_age_check) {
                         Ok(()) => {
                             // Store and apply
                             match chain.store_block(&block).await {
@@ -1583,8 +1617,8 @@ impl CoinjectNode {
                 return Err(format!("New chain block {} doesn't connect to previous (prev_hash mismatch)", block.header.height));
             }
 
-            // Validate block
-            match validator.validate_block(block, &prev_hash, block.header.height) {
+            // Validate block (skip timestamp age check during chain reorganization/sync)
+            match validator.validate_block_with_options(block, &prev_hash, block.header.height, true) {
                 Ok(()) => {
                     prev_hash = block.header.hash();
                 }
@@ -2006,7 +2040,7 @@ impl CoinjectNode {
             }
 
             coinject_core::Transaction::Marketplace(marketplace_tx) => {
-                // Web4 PoUW Marketplace transaction processing
+                // PoUW Marketplace transaction processing
                 use coinject_core::MarketplaceOperation;
 
                 // Validate sender has sufficient balance for fee
@@ -2037,7 +2071,7 @@ impl CoinjectNode {
                         println!("✅ Problem submitted to marketplace: {:?} (bounty: {})", problem_id, bounty);
                     }
                     MarketplaceOperation::SubmitSolution { problem_id, solution } => {
-                        // WEB4 AUTONOMOUS BOUNTY PAYOUT
+                        // AUTONOMOUS BOUNTY PAYOUT
                         // When a valid solution is submitted, automatically claim and payout the bounty
                         // This makes the marketplace truly self-executing - no manual claim needed!
 
@@ -2135,7 +2169,50 @@ impl CoinjectNode {
         tx_pool: Arc<RwLock<TransactionPool>>,
         network_tx: mpsc::UnboundedSender<NetworkCommand>,
         hf_sync: Option<Arc<HuggingFaceSync>>,
+        peer_count: Arc<RwLock<usize>>,
     ) {
+        // Wait for peer connections and initial chain sync before mining
+        println!("⏳ Waiting for peer connections and chain sync before mining...");
+        let mut sync_wait_interval = time::interval(Duration::from_secs(2));
+        let mut sync_attempts = 0;
+        const MAX_SYNC_WAIT_ATTEMPTS: u32 = 30; // Wait up to 60 seconds for peers
+        
+        loop {
+            sync_wait_interval.tick().await;
+            sync_attempts += 1;
+
+            let current_peers = *peer_count.read().await;
+            let best_height = chain.best_block_height().await;
+
+            // Check if we have peers and are synced
+            // For initial sync: if we're at genesis (height 0) and have peers, wait a bit more for status updates
+            // Otherwise, if we have peers, we can start mining (they'll sync us if needed)
+            if current_peers > 0 {
+                if best_height == 0 {
+                    // At genesis - wait a bit more for status updates to determine if we need to sync
+                    if sync_attempts >= 5 {
+                        println!("✅ Connected to {} peer(s), starting mining (will sync if needed)", current_peers);
+                        break;
+                    }
+                } else {
+                    // Not at genesis - we're either synced or will sync via status updates
+                    println!("✅ Connected to {} peer(s) at height {}, starting mining", current_peers, best_height);
+                    break;
+                }
+            }
+
+            if sync_attempts >= MAX_SYNC_WAIT_ATTEMPTS {
+                println!("⚠️  No peers connected after {}s, starting mining anyway (will sync when peers connect)", sync_attempts * 2);
+                break;
+            }
+
+            if sync_attempts % 5 == 0 {
+                println!("   Still waiting for peers... (attempt {}/{}, current peers: {})", 
+                    sync_attempts, MAX_SYNC_WAIT_ATTEMPTS, current_peers);
+            }
+        }
+
+        // Start mining loop
         let mut interval = time::interval(Duration::from_secs(10));
 
         loop {

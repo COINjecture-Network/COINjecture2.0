@@ -5,6 +5,25 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.2] - 2025-11-25
+
+### Fixed
+- **Initial Chain Sync**
+  - Validator now skips timestamp age checks (2-hour limit) during initial sync to allow historical blocks.
+  - Mining loop now waits for peer connections and chain sync before starting to mine, preventing forks from genesis.
+  - New nodes will properly sync with the existing chain instead of creating separate chains.
+
+### Changed
+- **Block Validation**
+  - Added `validate_block_with_options()` to allow skipping timestamp age checks during sync.
+  - Timestamp age checks are automatically skipped for blocks older than 2 hours (indicating sync scenario).
+  - Future timestamp checks are still enforced to prevent invalid blocks.
+- **Cloud Run P2P Networking**
+  - Updated Cloud Run deployment to use `min-instances=1` to maintain P2P connections (prevents scaling to zero).
+  - Added enhanced connection error logging for debugging P2P connectivity issues.
+  - Enabled libp2p debug logging in Cloud Run environment variables for better diagnostics.
+  - Improved bootnode connection error handling with detailed error messages.
+
 ## [4.7.1] - 2025-11-24
 
 ### Added

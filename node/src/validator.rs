@@ -61,6 +61,17 @@ impl BlockValidator {
         prev_hash: &Hash,
         expected_height: u64,
     ) -> Result<(), ValidationError> {
+        self.validate_block_with_options(block, prev_hash, expected_height, false)
+    }
+
+    /// Validate a block with options
+    pub fn validate_block_with_options(
+        &self,
+        block: &Block,
+        prev_hash: &Hash,
+        expected_height: u64,
+        skip_timestamp_age_check: bool,
+    ) -> Result<(), ValidationError> {
         // 1. Validate block height
         if block.header.height != expected_height {
             return Err(ValidationError::InvalidHeight {
@@ -74,8 +85,8 @@ impl BlockValidator {
             return Err(ValidationError::InvalidPrevHash);
         }
 
-        // 3. Validate timestamp
-        self.validate_timestamp(block.header.timestamp)?;
+        // 3. Validate timestamp (skip age check during initial sync)
+        self.validate_timestamp(block.header.timestamp, skip_timestamp_age_check)?;
 
         // 4. Validate NP-hard solution
         if !block.solution_reveal.solution.verify(&block.solution_reveal.problem) {
@@ -115,19 +126,19 @@ impl BlockValidator {
     }
 
     /// Validate block timestamp
-    fn validate_timestamp(&self, timestamp: i64) -> Result<(), ValidationError> {
+    fn validate_timestamp(&self, timestamp: i64, skip_age_check: bool) -> Result<(), ValidationError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
 
-        // Check if block is from the future
+        // Check if block is from the future (always enforce this)
         if timestamp > now + self.max_timestamp_drift {
             return Err(ValidationError::FutureTimestamp);
         }
 
-        // Check if block is too old
-        if timestamp < now - self.max_block_age {
+        // Check if block is too old (skip during initial sync to allow historical blocks)
+        if !skip_age_check && timestamp < now - self.max_block_age {
             return Err(ValidationError::TooOldTimestamp);
         }
 
@@ -492,7 +503,7 @@ impl BlockValidator {
                     // Validator only checks balance, nonce, and basic transaction validity
                 }
                 coinject_core::Transaction::Marketplace(marketplace_tx) => {
-                    // Web4 PoUW Marketplace transactions: problem submissions and solutions
+                    // PoUW Marketplace transactions: problem submissions and solutions
                     use coinject_core::MarketplaceOperation;
 
                     let sender_balance = state.get_balance(&marketplace_tx.from);

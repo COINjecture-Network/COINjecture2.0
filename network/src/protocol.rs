@@ -136,14 +136,16 @@ impl NetworkService {
 
         // Create gossipsub behaviour
         // Configure for small networks: allow broadcasting with just 1 peer
-        // Constraint: mesh_outbound_min <= mesh_n_low <= mesh_n <= mesh_n_high
+        // Constraint: mesh_outbound_min <= mesh_n / 2
+        // For 2-node networks, mesh_n must be 1 (each node needs only 1 peer)
+        // With mesh_n=1, mesh_outbound_min must be <= 0.5, so set to 0
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(1))
             .validation_mode(ValidationMode::Permissive) // Use Permissive to allow message propagation in small networks
-            .mesh_outbound_min(1) // Minimum outbound connections: 1
+            .mesh_outbound_min(0) // Minimum outbound connections: 0 (required when mesh_n=1)
             .mesh_n_low(1) // Low threshold: 1 peer
-            .mesh_n(2) // Target mesh size: 2 peers (minimum for gossipsub)
-            .mesh_n_high(3) // High threshold: 3 peers
+            .mesh_n(1) // Target mesh size: 1 peer (for 2-node networks)
+            .mesh_n_high(2) // High threshold: 2 peers
             .gossip_lazy(1) // Lazy gossip threshold: 1 peer
             .message_id_fn(|message| {
                 // Use message content hash as ID
@@ -301,8 +303,15 @@ impl NetworkService {
                 .map_err(|e| format!("Failed to parse bootnode address '{}': {:?}", bootnode, e))?;
 
             // Dial the bootnode
-            self.swarm.dial(addr.clone())
-                .map_err(|e| format!("Failed to dial bootnode '{}': {:?}", bootnode, e))?;
+            match self.swarm.dial(addr.clone()) {
+                Ok(()) => {
+                    println!("   ✅ Dial initiated to bootnode: {}", bootnode);
+                }
+                Err(e) => {
+                    eprintln!("   ❌ Failed to dial bootnode '{}': {:?}", bootnode, e);
+                    // Continue trying other bootnodes even if one fails
+                }
+            }
         }
         Ok(())
     }
@@ -424,6 +433,11 @@ impl NetworkService {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 println!("Connection established with peer: {}", peer_id);
                 self.peers.insert(peer_id);
+                // Add peer to gossipsub mesh explicitly to ensure it participates in message propagation
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .add_explicit_peer(&peer_id);
                 // Update shared peer count
                 if let Ok(mut count) = self.peer_count.try_write() {
                     *count = self.peers.len();
@@ -433,6 +447,11 @@ impl NetworkService {
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 println!("Connection closed with peer: {}", peer_id);
                 self.peers.remove(&peer_id);
+                // Remove peer from gossipsub mesh
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .remove_explicit_peer(&peer_id);
                 // Update shared peer count
                 if let Ok(mut count) = self.peer_count.try_write() {
                     *count = self.peers.len();
@@ -441,6 +460,19 @@ impl NetworkService {
             }
             SwarmEvent::NewListenAddr { address, .. } => {
                 println!("Listening on: {}", address);
+            }
+            SwarmEvent::OutgoingConnectionError { error, .. } => {
+                eprintln!("❌ Outgoing connection error: {:?}", error);
+            }
+            SwarmEvent::IncomingConnectionError { error, .. } => {
+                eprintln!("❌ Incoming connection error: {:?}", error);
+            }
+            SwarmEvent::Dialing { peer_id, .. } => {
+                if let Some(peer) = peer_id {
+                    println!("🔄 Dialing peer: {}", peer);
+                } else {
+                    println!("🔄 Dialing unknown peer...");
+                }
             }
             _ => {}
         }

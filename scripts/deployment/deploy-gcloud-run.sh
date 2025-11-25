@@ -50,40 +50,63 @@ docker build --platform linux/amd64 -t "$IMAGE_NAME" .
 echo "📤 Pushing image to Google Container Registry..."
 docker push "$IMAGE_NAME"
 
-# Construct container args. Cloud Run expects individual args instead of comma string.
+# Bootnodes: Connect to existing droplet nodes
+# Note: Cloud Run --args doesn't support duplicate flags, so we use primary node only
+# The node will discover other peers through the P2P network once connected
+DROPLET1="143.110.139.166"
+NODE1_PEER_ID="12D3KooWDcorMhXB4w8xBkvTKyYmLVSvFgZK6KrBPEG5DEBddyHS"
+BOOTNODE1="/ip4/$DROPLET1/tcp/30333/p2p/$NODE1_PEER_ID"
+
+# Construct container args. Cloud Run splits comma-separated values into separate args.
 CONTAINER_ARGS="--data-dir=/tmp/data,\
 --p2p-addr=/ip4/0.0.0.0/tcp/30333,\
 --rpc-addr=0.0.0.0:9933,\
 --metrics-addr=0.0.0.0:9090,\
 --mine,\
+--bootnodes,$BOOTNODE1,\
 --hf-token=$HF_TOKEN,\
 --hf-dataset-name=$HF_DATASET"
 
 # Deploy to Cloud Run
-# Note: Cloud Run is HTTP-based, so we'll expose the RPC port (9933) as the main port
-# P2P networking (30333) may have limitations in Cloud Run
-echo "🚀 Deploying to Cloud Run..."
+# Note: Cloud Run is HTTP-based, but we can enable P2P with proper configuration
+# For P2P to work, we need min-instances=1 to keep connections alive
+# P2P networking (30333) uses outbound TCP connections which Cloud Run supports
+echo "🚀 Deploying to Cloud Run (P2P-enabled: min-instances=1, 1 CPU, 1Gi RAM)..."
 gcloud run deploy "$SERVICE_NAME" \
     --image "$IMAGE_NAME" \
     --platform managed \
     --region "$REGION" \
     --allow-unauthenticated \
     --port 9933 \
-    --memory 2Gi \
-    --cpu 2 \
+    --memory 1Gi \
+    --cpu 1 \
     --timeout 3600 \
     --max-instances 1 \
     --min-instances 1 \
-    --set-env-vars "RUST_LOG=info" \
+    --set-env-vars "RUST_LOG=info,libp2p=debug" \
     --set-env-vars "HF_TOKEN=$HF_TOKEN" \
     --set-env-vars "HF_DATASET=$HF_DATASET" \
     --command coinject \
     --args="$CONTAINER_ARGS" \
-    --service-account default \
-    --execution-environment gen2
+    --execution-environment gen2 \
+    --cpu-boost \
+    --cpu-throttling
 
 echo ""
 echo "✅ Deployment complete!"
+echo ""
+echo "🌐 P2P Networking Configuration:"
+echo "   • min-instances=1 (keeps instance running to maintain P2P connections)"
+echo "   • Outbound TCP connections enabled (for P2P to droplets)"
+echo "   • libp2p debug logging enabled (check logs for connection details)"
+echo ""
+echo "💰 Cost Notes:"
+echo "   • min-instances=1 means ~\$0.10/hour base cost (instance always running)"
+echo "   • 1 CPU, 1Gi memory (reduced from 2 CPU/2Gi)"
+echo "   • max-instances=1 (prevents scaling costs)"
+echo ""
+echo "💡 To reduce costs: Set min-instances=0 (but P2P connections will drop when idle)"
+echo "💡 For RPC-only node: Remove '--mine' from CONTAINER_ARGS"
 echo ""
 echo "📋 Service URL:"
 gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format "value(status.url)"
