@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [4.7.2] - 2025-11-25
 
 ### Fixed
+- **Buffered Block Processing During Sync**
+  - Fixed critical bug where `process_buffered_blocks` would stop processing all buffered blocks if `store_block` returned `is_new_best=false`.
+  - During sequential sync, blocks are now applied even if `store_block` doesn't immediately update the best chain (due to race conditions or duplicate storage).
+  - Added logic to check if a buffered block actually extends the current best chain before applying it, and manually update the best chain if needed.
+  - This fixes the issue where Cloud Run and other nodes would get stuck during initial sync, receiving blocks but not applying them.
 - **Initial Chain Sync**
   - Validator now skips timestamp age checks (2-hour limit) during initial sync to allow historical blocks.
   - Mining loop now waits for peer connections and chain sync before starting to mine, preventing forks from genesis.

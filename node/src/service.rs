@@ -982,9 +982,24 @@ impl CoinjectNode {
                     match validator.validate_block_with_options(&block, &best_hash, next_height, skip_age_check) {
                         Ok(()) => {
                             // Store and apply
+                            // During sequential sync, we're processing blocks one by one starting from best_height + 1.
+                            // If validation passed (prev_hash matches best_hash and height is sequential), the block
+                            // should extend the best chain. However, store_block might return false due to race conditions
+                            // or if the block was already stored. In this case, we should still apply it if it extends
+                            // our current best chain.
                             match chain.store_block(&block).await {
                                 Ok(is_new_best) => {
-                                    if is_new_best {
+                                    // Check if this block extends our current best chain
+                                    // Since we validated prev_hash == best_hash and height == best_height + 1,
+                                    // this block should extend the chain. If is_new_best is false, it might be due
+                                    // to a race condition, so we check if it actually extends the chain.
+                                    let current_best = chain.best_block_height().await;
+                                    let current_best_hash = chain.best_block_hash().await;
+                                    
+                                    // Block extends chain if: it's the next height AND prev_hash matches current best
+                                    let extends_chain = block.header.height == current_best + 1 && block.header.prev_hash == current_best_hash;
+                                    
+                                    if is_new_best || extends_chain {
                                         // RUNTIME INTEGRATION: Save consensus state for buffered blocks
                                         use coinject_core::{TAU_C, ConsensusState};
                                         let tau = (block.header.height as f64) / TAU_C;
@@ -997,6 +1012,15 @@ impl CoinjectNode {
                                         match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
                                                 println!("✅ Buffered block {} applied to chain (τ={:.4})", next_height, tau);
+
+                                                // If store_block didn't update best chain, manually update it
+                                                if !is_new_best && extends_chain {
+                                                    if let Err(e) = chain.update_best_chain(block.header.hash(), block.header.height).await {
+                                                        println!("⚠️  Warning: Failed to update best chain after applying buffered block: {}", e);
+                                                    } else {
+                                                        println!("📈 Updated best chain to height {} (was {} before)", block.header.height, current_best);
+                                                    }
+                                                }
 
                                                 // Remove only successfully applied transactions from pool
                                                 let mut pool = tx_pool.write().await;
@@ -1024,7 +1048,10 @@ impl CoinjectNode {
                                             }
                                         }
                                     } else {
-                                        break;
+                                        // Block doesn't extend our chain - might be a fork, duplicate, or out of order
+                                        // Skip it and continue processing (don't break, as there might be other sequential blocks)
+                                        println!("⚠️  Buffered block {} doesn't extend best chain (best: {}), skipping", next_height, current_best);
+                                        // Continue loop to check for next sequential block
                                     }
                                 }
                                 Err(e) => {
