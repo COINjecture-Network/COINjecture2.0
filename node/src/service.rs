@@ -2175,7 +2175,10 @@ impl CoinjectNode {
         println!("⏳ Waiting for peer connections and chain sync before mining...");
         let mut sync_wait_interval = time::interval(Duration::from_secs(2));
         let mut sync_attempts = 0;
-        const MAX_SYNC_WAIT_ATTEMPTS: u32 = 30; // Wait up to 60 seconds for peers
+        const MAX_SYNC_WAIT_ATTEMPTS: u32 = 150; // Wait up to 5 minutes for sync
+        let mut last_height = 0u64;
+        let mut stable_height_count = 0u32;
+        const STABLE_HEIGHT_THRESHOLD: u32 = 3; // Height must be stable for 3 checks (6 seconds)
         
         loop {
             sync_wait_interval.tick().await;
@@ -2184,31 +2187,45 @@ impl CoinjectNode {
             let current_peers = *peer_count.read().await;
             let best_height = chain.best_block_height().await;
 
-            // Check if we have peers and are synced
-            // For initial sync: if we're at genesis (height 0) and have peers, wait a bit more for status updates
-            // Otherwise, if we have peers, we can start mining (they'll sync us if needed)
+            // Check if we have peers
             if current_peers > 0 {
-                if best_height == 0 {
-                    // At genesis - wait a bit more for status updates to determine if we need to sync
-                    if sync_attempts >= 5 {
-                        println!("✅ Connected to {} peer(s), starting mining (will sync if needed)", current_peers);
-                        break;
-                    }
+                // Check if height is stable (not actively syncing)
+                if best_height == last_height {
+                    stable_height_count += 1;
                 } else {
-                    // Not at genesis - we're either synced or will sync via status updates
-                    println!("✅ Connected to {} peer(s) at height {}, starting mining", current_peers, best_height);
+                    stable_height_count = 0;
+                    last_height = best_height;
+                }
+
+                // If we're at genesis, wait longer for status updates (at least 15 seconds = 7-8 attempts)
+                if best_height == 0 {
+                    if sync_attempts >= 8 {
+                        println!("✅ Connected to {} peer(s) at genesis, waiting for status updates...", current_peers);
+                        // Continue waiting - don't break yet
+                    }
+                } else if stable_height_count >= STABLE_HEIGHT_THRESHOLD {
+                    // Height is stable - we're either synced or caught up
+                    println!("✅ Connected to {} peer(s) at height {} (stable), starting mining", current_peers, best_height);
                     break;
+                } else {
+                    // Height is changing - actively syncing
+                    if sync_attempts % 10 == 0 {
+                        println!("   Syncing... current height: {} (attempt {}/{})", 
+                            best_height, sync_attempts, MAX_SYNC_WAIT_ATTEMPTS);
+                    }
+                }
+            } else {
+                // No peers yet
+                if sync_attempts % 5 == 0 {
+                    println!("   Still waiting for peers... (attempt {}/{}, current peers: {})", 
+                        sync_attempts, MAX_SYNC_WAIT_ATTEMPTS, current_peers);
                 }
             }
 
             if sync_attempts >= MAX_SYNC_WAIT_ATTEMPTS {
-                println!("⚠️  No peers connected after {}s, starting mining anyway (will sync when peers connect)", sync_attempts * 2);
+                println!("⚠️  Sync wait timeout after {}s (height: {}), starting mining anyway", 
+                    sync_attempts * 2, best_height);
                 break;
-            }
-
-            if sync_attempts % 5 == 0 {
-                println!("   Still waiting for peers... (attempt {}/{}, current peers: {})", 
-                    sync_attempts, MAX_SYNC_WAIT_ATTEMPTS, current_peers);
             }
         }
 
