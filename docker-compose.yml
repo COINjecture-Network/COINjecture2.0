@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  # Bootnode - first node in the network
+  bootnode:
+    build: .
+    container_name: coinject-bootnode
+    ports:
+      - "30333:30333"  # P2P
+      - "9933:9933"    # RPC
+    volumes:
+      - bootnode-data:/data
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30333
+      --rpc-addr 0.0.0.0:9933
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+      - ADZDB_ENABLED=false  # Disable ADZDB for local testing
+    networks:
+      - coinject-network
+    healthcheck:
+      test: ["CMD", "sh", "-c", "netstat -an | grep 30333 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Node 1 - connects to bootnode
+  node1:
+    build: .
+    container_name: coinject-node1
+    ports:
+      - "30334:30334"  # P2P
+      - "9934:9934"    # RPC
+    volumes:
+      - node1-data:/data
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30334
+      --rpc-addr 0.0.0.0:9934
+      --bootnodes /ip4/bootnode/tcp/30333
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+      - ADZDB_ENABLED=false
+    networks:
+      - coinject-network
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  # Node 2 - connects to bootnode
+  node2:
+    build: .
+    container_name: coinject-node2
+    ports:
+      - "30335:30335"  # P2P
+      - "9935:9935"    # RPC
+    volumes:
+      - node2-data:/data
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30335
+      --rpc-addr 0.0.0.0:9935
+      --bootnodes /ip4/bootnode/tcp/30333
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+      - ADZDB_ENABLED=false
+    networks:
+      - coinject-network
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  # Node 3 - connects to bootnode
+  node3:
+    build: .
+    container_name: coinject-node3
+    ports:
+      - "30336:30336"  # P2P
+      - "9936:9936"    # RPC
+    volumes:
+      - node3-data:/data
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30336
+      --rpc-addr 0.0.0.0:9936
+      --bootnodes /ip4/bootnode/tcp/30333
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+      - ADZDB_ENABLED=false
+    networks:
+      - coinject-network
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+volumes:
+  bootnode-data:
+  node1-data:
+  node2-data:
+  node3-data:
+
+networks:
+  coinject-network:
+    driver: bridge
