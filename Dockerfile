@@ -1,5 +1,6 @@
 # Multi-stage build for COINjecture blockchain node
-FROM rust:1.75-slim as builder
+# Using Rust nightly for edition2024 support required by redb 2.6.3
+FROM rustlang/rust:nightly-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

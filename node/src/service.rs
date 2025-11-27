@@ -248,14 +248,23 @@ impl CoinjectNode {
         // Create shared peer count for RPC and network service
         let peer_count = Arc::new(RwLock::new(0));
 
+        // Keypair path for persistent PeerId
+        let keypair_path = self.config.data_dir.join("network_key");
+        
         let network_config = NetworkConfig {
             listen_addr: self.config.p2p_addr.clone(),
             chain_id: self.config.chain_id.clone(),
             max_peers: self.config.max_peers,
             enable_mdns: true,
+            keypair_path: Some(keypair_path),
         };
 
         let (mut network_service, mut event_rx) = NetworkService::new(network_config, Arc::clone(&peer_count))?;
+        
+        // Get local PeerId for RPC and logging
+        let local_peer_id = network_service.local_peer_id();
+        let local_peer_id_str = local_peer_id.to_string();
+        
         network_service.start_listening(&self.config.p2p_addr)?;
         network_service.subscribe_topics()?;
 
@@ -266,7 +275,11 @@ impl CoinjectNode {
         }
 
         println!("   Listening on: {}", self.config.p2p_addr);
+        println!("   PeerId: {}", local_peer_id_str);
         println!();
+        
+        // Track listen addresses for RPC
+        let listen_addresses: Arc<RwLock<Vec<String>>> = Arc::new(RwLock::new(vec![self.config.p2p_addr.clone()]));
 
         // Create command channel for network operations
         let (network_cmd_tx, mut network_cmd_rx) = mpsc::unbounded_channel::<NetworkCommand>();
@@ -302,6 +315,8 @@ impl CoinjectNode {
             genesis_hash: self.chain.genesis_hash(),
             peer_count: Arc::clone(&peer_count),
             faucet_handler,
+            local_peer_id: Some(local_peer_id_str.clone()),
+            listen_addresses: Arc::clone(&listen_addresses),
         });
 
         let rpc_server = RpcServer::new(rpc_addr, rpc_state).await?;
@@ -363,9 +378,13 @@ impl CoinjectNode {
                                 }
                             }
                             NetworkCommand::RequestBlocks { from_height, to_height } => {
-                                println!("📡 Requesting blocks {}-{} from network", from_height, to_height);
-                                if let Err(e) = network.request_blocks(from_height, to_height) {
-                                    eprintln!("Failed to request blocks: {}", e);
+                                match network.request_blocks(from_height, to_height) {
+                                    Ok(req_id) => {
+                                        println!("📡 Requesting blocks {}-{} from network (req_id={})", from_height, to_height, req_id);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to request blocks: {}", e);
+                                    }
                                 }
                             }
                         }

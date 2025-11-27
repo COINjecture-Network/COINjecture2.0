@@ -44,6 +44,15 @@ pub struct ChainInfo {
     pub peer_count: usize,
 }
 
+/// Network information response (for P2P debugging)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkInfo {
+    pub peer_id: String,
+    pub peer_count: usize,
+    pub listen_addresses: Vec<String>,
+    pub bootnode_address_hint: String,
+}
+
 /// Account information response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountInfo {
@@ -246,6 +255,10 @@ pub trait CoinjectRpc {
     /// Request testnet tokens from faucet (testnet only)
     #[method(name = "faucet_requestTokens")]
     async fn faucet_request_tokens(&self, address: String) -> RpcResult<FaucetResponse>;
+
+    /// Get network information including PeerId (for P2P debugging and bootnode configuration)
+    #[method(name = "network_getInfo")]
+    async fn get_network_info(&self) -> RpcResult<NetworkInfo>;
 }
 
 /// Faucet handler callback type
@@ -267,6 +280,10 @@ pub struct RpcServerState {
     pub genesis_hash: Hash,
     pub peer_count: Arc<RwLock<usize>>,
     pub faucet_handler: Option<FaucetHandler>,
+    /// Local PeerId for network identification
+    pub local_peer_id: Option<String>,
+    /// Listen addresses for the P2P network
+    pub listen_addresses: Arc<RwLock<Vec<String>>>,
 }
 
 /// RPC server implementation
@@ -754,6 +771,27 @@ impl CoinjectRpcServer for RpcServerImpl {
             }
         }
     }
+
+    async fn get_network_info(&self) -> RpcResult<NetworkInfo> {
+        let peer_count = *self.state.peer_count.read().await;
+        let listen_addresses = self.state.listen_addresses.read().await.clone();
+        
+        let peer_id = self.state.local_peer_id.clone().unwrap_or_else(|| "unknown".to_string());
+        
+        // Generate a bootnode address hint for operators
+        let bootnode_hint = if !listen_addresses.is_empty() {
+            format!("{}/p2p/{}", listen_addresses[0], peer_id)
+        } else {
+            format!("/ip4/<YOUR_IP>/tcp/30333/p2p/{}", peer_id)
+        };
+
+        Ok(NetworkInfo {
+            peer_id,
+            peer_count,
+            listen_addresses,
+            bootnode_address_hint: bootnode_hint,
+        })
+    }
 }
 
 /// RPC server handle
@@ -837,6 +875,8 @@ mod tests {
             genesis_hash: Hash::ZERO,
             peer_count: Arc::new(RwLock::new(0)),
             faucet_handler: None,
+            local_peer_id: Some("test-peer-id".to_string()),
+            listen_addresses: Arc::new(RwLock::new(vec![])),
         });
 
         let rpc = RpcServerImpl::new(state);
@@ -874,6 +914,8 @@ mod tests {
             genesis_hash: Hash::ZERO,
             peer_count: Arc::new(RwLock::new(0)),
             faucet_handler: None,
+            local_peer_id: Some("test-peer-id".to_string()),
+            listen_addresses: Arc::new(RwLock::new(vec![])),
         });
 
         let rpc = RpcServerImpl::new(state);

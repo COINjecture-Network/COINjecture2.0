@@ -8,13 +8,18 @@ use libp2p::{
     mdns,
     noise,
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, PeerId, Swarm, Transport,
+    tcp, yamux, Multiaddr, PeerId, Swarm, Transport,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
+
+/// Global atomic counter for unique request IDs to prevent gossipsub deduplication
+static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Network message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,8 +37,8 @@ pub enum NetworkMessage {
     },
     /// Request block by hash
     GetBlock(Hash),
-    /// Request blocks by height range
-    GetBlocks { from: u64, to: u64 },
+    /// Request blocks by height range with unique request_id to prevent gossipsub deduplication
+    GetBlocks { from: u64, to: u64, request_id: u64 },
     /// Peer status announcement
     Status {
         best_height: u64,
@@ -74,6 +79,8 @@ pub struct NetworkConfig {
     pub chain_id: String,
     pub max_peers: usize,
     pub enable_mdns: bool,
+    /// Optional path to persist the keypair (for stable PeerId across restarts)
+    pub keypair_path: Option<PathBuf>,
 }
 
 impl Default for NetworkConfig {
@@ -83,7 +90,52 @@ impl Default for NetworkConfig {
             chain_id: "coinject-network-b".to_string(),
             max_peers: 50,
             enable_mdns: true,
+            keypair_path: None,
         }
+    }
+}
+
+/// Load or generate a persistent Ed25519 keypair
+fn load_or_generate_keypair(path: Option<&PathBuf>) -> Result<identity::Keypair, Box<dyn std::error::Error>> {
+    if let Some(keypair_path) = path {
+        // Try to load existing keypair
+        if keypair_path.exists() {
+            let bytes = std::fs::read(keypair_path)?;
+            // ed25519_from_bytes expects a mutable 32-byte seed
+            let mut seed_bytes = bytes.clone();
+            match identity::Keypair::ed25519_from_bytes(&mut seed_bytes) {
+                Ok(keypair) => {
+                    println!("   ✅ Loaded existing keypair from {:?}", keypair_path);
+                    return Ok(keypair);
+                }
+                Err(e) => {
+                    // Failed to load - delete corrupt file and generate new one
+                    eprintln!("   ⚠️  Failed to load keypair ({}), generating new one", e);
+                    let _ = std::fs::remove_file(keypair_path);
+                }
+            }
+        }
+        
+        // Generate new keypair and save it
+        let keypair = identity::Keypair::generate_ed25519();
+        
+        // Save the 32-byte seed for Ed25519
+        if let Ok(ed25519_keypair) = keypair.clone().try_into_ed25519() {
+            // Get the secret key bytes (first 32 bytes are the seed)
+            let full_bytes = ed25519_keypair.to_bytes();
+            // Save only the 32-byte seed portion
+            let seed: [u8; 32] = full_bytes[..32].try_into().unwrap();
+            if let Some(parent) = keypair_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(keypair_path, seed)?;
+            println!("   ✅ Generated and saved new keypair to {:?}", keypair_path);
+        }
+        
+        Ok(keypair)
+    } else {
+        // Generate ephemeral keypair
+        Ok(identity::Keypair::generate_ed25519())
     }
 }
 
@@ -96,6 +148,12 @@ pub struct NetworkService {
     peer_scores: HashMap<PeerId, f64>,
     event_tx: mpsc::UnboundedSender<NetworkEvent>,
     peer_count: Arc<RwLock<usize>>,
+    /// Local PeerId for this node
+    local_peer_id: PeerId,
+    /// Bootnode addresses to reconnect to if disconnected
+    bootnode_addrs: Vec<Multiaddr>,
+    /// Track which bootnodes are currently connected (by their PeerId if known)
+    connected_bootnodes: HashSet<PeerId>,
 }
 
 /// Events emitted by the network service
@@ -129,11 +187,12 @@ impl NetworkService {
         config: NetworkConfig,
         peer_count: Arc<RwLock<usize>>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<NetworkEvent>), Box<dyn std::error::Error>> {
-        // Generate keypair for this node
-        let local_key = identity::Keypair::generate_ed25519();
+        // Load or generate keypair for this node (persistent if path provided)
+        let local_key = load_or_generate_keypair(config.keypair_path.as_ref())?;
         let local_peer_id = PeerId::from(local_key.public());
 
-        println!("Network node PeerId: {}", local_peer_id);
+        println!("🔑 Network node PeerId: {}", local_peer_id);
+        println!("   (Use this PeerId in bootnode addresses: /ip4/<IP>/tcp/30333/p2p/{})", local_peer_id);
 
         // Create gossipsub behaviour
         // Configure for small networks: allow broadcasting with just 1 peer
@@ -193,12 +252,15 @@ impl NetworkService {
             .multiplex(yamux::Config::default())
             .boxed();
 
-        // Create swarm
+        // Create swarm with connection limits to prevent flapping
+        let swarm_config = libp2p::swarm::Config::with_tokio_executor()
+            .with_idle_connection_timeout(Duration::from_secs(60)); // Keep connections alive
+        
         let swarm = Swarm::new(
             transport,
             behaviour,
             local_peer_id,
-            libp2p::swarm::Config::with_tokio_executor(),
+            swarm_config,
         );
 
         // Create event channel
@@ -215,9 +277,22 @@ impl NetworkService {
                 peer_scores: HashMap::new(),
                 event_tx,
                 peer_count,
+                local_peer_id,
+                bootnode_addrs: Vec::new(),
+                connected_bootnodes: HashSet::new(),
             },
             event_rx,
         ))
+    }
+
+    /// Get the local PeerId for this node
+    pub fn local_peer_id(&self) -> PeerId {
+        self.local_peer_id
+    }
+
+    /// Get the full bootnode multiaddr for this node (IP needs to be provided externally)
+    pub fn bootnode_addr(&self, external_ip: &str, port: u16) -> String {
+        format!("/ip4/{}/tcp/{}/p2p/{}", external_ip, port, self.local_peer_id)
     }
 
     /// Start listening on configured address
@@ -331,13 +406,33 @@ impl NetworkService {
     pub fn connect_to_bootnodes(&mut self, bootnodes: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         for bootnode in bootnodes {
             println!("   Connecting to bootnode: {}", bootnode);
-            let addr: libp2p::Multiaddr = bootnode.parse()
+            let addr: Multiaddr = bootnode.parse()
                 .map_err(|e| format!("Failed to parse bootnode address '{}': {:?}", bootnode, e))?;
+
+            // Store for reconnection attempts
+            if !self.bootnode_addrs.contains(&addr) {
+                self.bootnode_addrs.push(addr.clone());
+            }
+
+            // Extract PeerId from the multiaddr if present
+            let mut peer_id_opt: Option<PeerId> = None;
+            for proto in addr.iter() {
+                if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                    peer_id_opt = Some(peer_id);
+                    // Add to Kademlia routing table
+                    self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
+                    break;
+                }
+            }
 
             // Dial the bootnode
             match self.swarm.dial(addr.clone()) {
                 Ok(()) => {
                     println!("   ✅ Dial initiated to bootnode: {}", bootnode);
+                    if peer_id_opt.is_none() {
+                        println!("   ⚠️  Warning: Bootnode address missing /p2p/<PeerId> suffix");
+                        println!("      For reliable connectivity, use: {}/p2p/<PEER_ID>", bootnode);
+                    }
                 }
                 Err(e) => {
                     eprintln!("   ❌ Failed to dial bootnode '{}': {:?}", bootnode, e);
@@ -345,22 +440,83 @@ impl NetworkService {
                 }
             }
         }
+        
+        // Bootstrap Kademlia DHT to discover peers
+        if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
+            eprintln!("   ⚠️  Kademlia bootstrap warning: {:?}", e);
+        }
+        
         Ok(())
     }
 
-    /// Broadcast GetBlocks request
+    /// Retry connecting to bootnodes that may have disconnected
+    /// Implements connection state check to prevent duplicate dials (v4.7.6 fix)
+    pub fn retry_bootnodes(&mut self) {
+        if self.bootnode_addrs.is_empty() {
+            return;
+        }
+
+        // Check how many peers we have
+        let peer_count = self.peers.len();
+        
+        // If we have no peers, try to reconnect to bootnodes we're not already connected to
+        if peer_count == 0 {
+            println!("📡 No peers connected, retrying {} bootnode(s)...", self.bootnode_addrs.len());
+            for addr in self.bootnode_addrs.clone() {
+                // Extract PeerId from multiaddr to check connection state
+                let mut peer_id_opt: Option<PeerId> = None;
+                for proto in addr.iter() {
+                    if let libp2p::multiaddr::Protocol::P2p(pid) = proto {
+                        peer_id_opt = Some(pid);
+                        break;
+                    }
+                }
+                
+                // Check if we're already connected or dialing this peer
+                if let Some(peer_id) = peer_id_opt {
+                    if self.peers.contains(&peer_id) || self.swarm.is_connected(&peer_id) {
+                        // Already connected, skip
+                        continue;
+                    }
+                }
+                
+                match self.swarm.dial(addr.clone()) {
+                    Ok(()) => {
+                        println!("   🔄 Retry dial to: {}", addr);
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        // Gracefully handle AlreadyDialing/AlreadyConnected errors
+                        if err_str.contains("already pending") || 
+                           err_str.contains("AlreadyDialing") ||
+                           err_str.contains("AlreadyConnected") {
+                            // Connection already in progress or established, this is fine
+                        } else {
+                            eprintln!("   ❌ Retry dial failed: {:?}", e);
+                        }
+                    }
+                }
+            }
+            
+            // Try bootstrapping Kademlia again
+            let _ = self.swarm.behaviour_mut().kademlia.bootstrap();
+        }
+    }
+
+    /// Broadcast GetBlocks request with unique request_id to prevent gossipsub deduplication
     pub fn request_blocks(
         &mut self,
         from: u64,
         to: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let message = NetworkMessage::GetBlocks { from, to };
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let request_id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let message = NetworkMessage::GetBlocks { from, to, request_id };
         let data = bincode::serialize(&message)?;
         self.swarm
             .behaviour_mut()
             .gossipsub
             .publish(self.topics.blocks.clone(), data)?;
-        Ok(())
+        Ok(request_id)
     }
 
     /// Handle incoming gossipsub message
@@ -389,7 +545,8 @@ impl NetworkService {
                     best_hash,
                 });
             }
-            Ok(NetworkMessage::GetBlocks { from, to }) => {
+            Ok(NetworkMessage::GetBlocks { from, to, request_id }) => {
+                println!("📥 GetBlocks request received: heights {}-{} (req_id={})", from, to, request_id);
                 let _ = self.event_tx.send(NetworkEvent::BlocksRequested {
                     peer,
                     from_height: from,
@@ -479,8 +636,11 @@ impl NetworkService {
                 }
                 _ => {}
             },
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                println!("Connection established with peer: {}", peer_id);
+            SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, .. } => {
+                // Enhanced connection logging (v4.7.6)
+                let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
+                println!("🔗 Connection established with peer: {} ({}, {} total connections)", 
+                    peer_id, direction, num_established);
                 self.peers.insert(peer_id);
                 // Add peer to gossipsub mesh explicitly to ensure it participates in message propagation
                 self.swarm
@@ -494,20 +654,28 @@ impl NetworkService {
                 }
                 let _ = self.event_tx.send(NetworkEvent::PeerConnected(peer_id));
             }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                println!("Connection closed with peer: {}", peer_id);
-                self.peers.remove(&peer_id);
-                self.mesh_peers.remove(&peer_id);
-                // Remove peer from gossipsub mesh
-                self.swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .remove_explicit_peer(&peer_id);
-                // Update shared peer count
-                if let Ok(mut count) = self.peer_count.try_write() {
-                    *count = self.peers.len();
+            SwarmEvent::ConnectionClosed { peer_id, endpoint, num_established, cause, .. } => {
+                // Enhanced connection logging with cause (v4.7.6)
+                let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
+                let cause_str = cause.map(|c| format!("{:?}", c)).unwrap_or_else(|| "none".to_string());
+                println!("🔌 Connection closed with peer: {} ({}, {} remaining, cause: {})", 
+                    peer_id, direction, num_established, cause_str);
+                
+                // Only remove from peers if no connections remain
+                if num_established == 0 {
+                    self.peers.remove(&peer_id);
+                    self.mesh_peers.remove(&peer_id);
+                    // Remove peer from gossipsub mesh
+                    self.swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .remove_explicit_peer(&peer_id);
+                    // Update shared peer count
+                    if let Ok(mut count) = self.peer_count.try_write() {
+                        *count = self.peers.len();
+                    }
+                    let _ = self.event_tx.send(NetworkEvent::PeerDisconnected(peer_id));
                 }
-                let _ = self.event_tx.send(NetworkEvent::PeerDisconnected(peer_id));
             }
             SwarmEvent::NewListenAddr { address, .. } => {
                 println!("Listening on: {}", address);

@@ -29,6 +29,8 @@ pub struct SyncConfig {
     pub include_solver_address: bool,
     pub batch_size: usize,
     pub batch_interval: Duration,
+    /// Flush buffer after this many unique blocks (default: 50)
+    pub flush_interval_blocks: usize,
 }
 
 impl Default for SyncConfig {
@@ -39,6 +41,7 @@ impl Default for SyncConfig {
             include_solver_address: true,
             batch_size: 10,
             batch_interval: Duration::from_secs(5),
+            flush_interval_blocks: 50,
         }
     }
 }
@@ -50,7 +53,9 @@ impl HuggingFaceSync {
         energy_config: energy::EnergyConfig,
         sync_config: SyncConfig,
     ) -> Result<Self, SyncError> {
-        let client = HuggingFaceClient::new(hf_config)?;
+        let mut client = HuggingFaceClient::new(hf_config)?;
+        // Apply configured flush interval
+        client.set_flush_interval_blocks(sync_config.flush_interval_blocks as u64);
         let metrics_collector = MetricsCollector::new(energy_config);
 
         Ok(HuggingFaceSync {
