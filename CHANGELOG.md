@@ -7,18 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [4.7.7] - 2025-11-27
 
-### Fixed
-- **Client-Side Mining Commitment Creation**: Updated commitment creation to match server-side byte concatenation format (problem_hash_bytes || epoch_salt_bytes || solution_hash_bytes). However, blocks are still failing validation due to bincode vs JSON serialization mismatch.
+### Added
+- **JSON-Serialized Commitment Support**: Added server-side support for JSON-serialized commitments to enable client-side mining from web browsers
+  - New `Commitment::create_from_json()` method that uses `serde_json::to_vec()` instead of `bincode::serialize()`
+  - Updated `Commitment::verify()` to try both bincode and JSON serialization formats
+  - This allows web-based miners to submit blocks without needing Rust/bincode compatibility
+  - **Benefits**: Makes user submission much easier - users can mine from any web browser without installing Rust toolchain
 
-### Known Issues
-- **Client-Side Block Submission Commitment Validation**: Client-submitted blocks fail with "Invalid commitment" because:
-  - Server uses `bincode::serialize()` (Rust binary format) for problem/solution serialization
-  - Client uses `JSON.stringify()` (text format) which produces different byte sequences
-  - This causes commitment hashes to never match, preventing block acceptance
-  - **Workaround**: Client-side mining is functional but blocks are rejected. Need to either:
-    1. Implement bincode serialization in JavaScript (complex)
-    2. Add server-side support for JSON-serialized commitments (requires protocol change)
-    3. Use a different commitment scheme that's language-agnostic
+### Fixed
+- **Client-Side Mining Commitment Creation**: Updated commitment creation to use JSON serialization matching server-side `create_from_json()` method
+  - Client now uses `JSON.stringify()` which matches server's `serde_json::to_vec()`
+  - Commitment verification now accepts both bincode (server-side) and JSON (client-side) formats
+  - Blocks submitted from web browsers should now pass validation and receive rewards
 
 ## [4.7.6] - 2025-11-27
 
