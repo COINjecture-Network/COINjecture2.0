@@ -38,7 +38,7 @@ export const Footer = () => {
               <a href="https://github.com/beanapologist/coinjecture" target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="GitHub">
                 <Github className="h-5 w-5" />
               </a>
-              <a href="#" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Twitter">
+              <a href="https://x.com/COINjecture" target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Twitter">
                 <Twitter className="h-5 w-5" />
               </a>
               <a href="#" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Discord">

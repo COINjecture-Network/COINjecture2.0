@@ -5,6 +5,80 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.7] - 2025-11-27
+
+### Fixed
+- **Client-Side Mining Commitment Creation**: Updated commitment creation to match server-side byte concatenation format (problem_hash_bytes || epoch_salt_bytes || solution_hash_bytes). However, blocks are still failing validation due to bincode vs JSON serialization mismatch.
+
+### Known Issues
+- **Client-Side Block Submission Commitment Validation**: Client-submitted blocks fail with "Invalid commitment" because:
+  - Server uses `bincode::serialize()` (Rust binary format) for problem/solution serialization
+  - Client uses `JSON.stringify()` (text format) which produces different byte sequences
+  - This causes commitment hashes to never match, preventing block acceptance
+  - **Workaround**: Client-side mining is functional but blocks are rejected. Need to either:
+    1. Implement bincode serialization in JavaScript (complex)
+    2. Add server-side support for JSON-serialized commitments (requires protocol change)
+    3. Use a different commitment scheme that's language-agnostic
+
+## [4.7.6] - 2025-11-27
+
+### Fixed
+- **Client-Side Mining Block Serialization**
+  - Fixed Hash and Address serialization to use byte arrays `[u8; 32]` instead of hex strings
+  - Fixed coinbase transaction field name from `recipient` to `to` to match Rust `CoinbaseTransaction`
+  - Fixed balance type from string to number for u128 serialization
+  - Added automatic block serialization in RPC client to ensure correct format
+  - Fixed hash extraction to handle byte arrays, hex strings, and object formats
+
+- **RPC Block Submission Reward Application**
+  - Fixed bug where blocks not accepted as "new best" would skip transaction application
+  - Now applies coinbase rewards even for fork blocks (will reorganize if needed)
+  - Improved logging to distinguish between new best blocks and fork blocks
+  - Fixed "Duplicate" broadcast errors being treated as failures
+
+- **Frontend Mining Feedback**
+  - Added balance check after block submission to show reward status
+  - Displays reward amount and current balance after successful submission
+  - Better error handling and user feedback for mining operations
+
+### Changed
+- **Block Submission Flow**
+  - RPC-submitted blocks now always apply transactions, even if not immediately the new best
+  - Improved error messages to distinguish between storage failures and fork blocks
+  - Broadcast errors for duplicate blocks are now silently ignored (expected behavior)
+
+## [4.7.5] - 2025-11-27
+
+### Added
+- **Client-Side Mining via Web Terminal**
+  - Full client-side mining implementation in TypeScript/JavaScript
+  - Deterministic problem generation from `prev_hash + height` (matches server-side)
+  - Problem solvers for SubsetSum (DP), SAT (brute force), and TSP (nearest neighbor)
+  - Commitment creation using blake3 hashing with epoch salt
+  - Header mining with nonce search to meet difficulty target
+  - Complete block construction and submission via RPC
+  - Terminal command `mine submit` now performs full mining workflow
+  - Miners can now mine and submit blocks directly from the web interface
+
+- **RPC Block Submission API**
+  - New RPC method `chain_submitBlock(block)` for submitting mined blocks
+  - Block validation, storage, and network broadcasting
+  - Integrated with network event loop for proper block processing
+  - Supports web-based miners submitting blocks via RPC
+
+### Changed
+- **Terminal Mining Commands**
+  - `mine submit` command now performs actual mining instead of showing instructions
+  - Real-time mining progress and block submission feedback
+  - Automatic problem generation, solving, commitment creation, and header mining
+
+### Technical Details
+- Client-side mining uses seeded RNG (LCG) for deterministic problem generation
+- Problem solvers match server-side implementations for compatibility
+- Commitment protocol prevents pre-mining attacks using epoch salt (prev_hash)
+- Header mining searches for nonce meeting difficulty (N leading zeros in hash)
+- Full block structure with PoUW metrics, work score, and solution reveal
+
 ## [4.7.4] - 2025-11-25
 
 ### Added
@@ -380,6 +454,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[4.7.6]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.7.6
+[4.7.5]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.7.5
+[4.7.4]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.7.4
+[4.7.3]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.7.3
 [4.6.4]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.4
 [4.6.3]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.3
 [4.6.2]: https://github.com/beanapologist/COINjecture-NetB-Updates/releases/tag/v4.6.2

@@ -1,9 +1,23 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ArrowRight, Download, Code, Zap, Award, Target, TrendingUp, Database } from "lucide-react";
+import { ArrowRight, Download, Code, Zap, Award, Target, TrendingUp, Database, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { rpcClient } from "@/lib/rpc-client";
 
 export const Hero = () => {
+  const { data: chainInfo } = useQuery({
+    queryKey: ['chain-info'],
+    queryFn: () => rpcClient.getChainInfo(),
+    refetchInterval: 10000,
+  });
+
+  const { data: marketplaceStats } = useQuery({
+    queryKey: ['marketplace-stats'],
+    queryFn: () => rpcClient.getMarketplaceStats(),
+    refetchInterval: 30000,
+  });
+
   return (
     <>
       {/* Hero Section */}
@@ -14,20 +28,26 @@ export const Hero = () => {
           <div className="max-w-6xl mx-auto">
             <div className="text-center mb-16 animate-fade-in">
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-effect mb-6">
-                <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-                <span className="text-sm text-muted-foreground">Network Active • 2,430+ Solutions Verified</span>
+                <div className={`w-2 h-2 rounded-full ${chainInfo ? 'bg-success animate-pulse' : 'bg-muted'}`} />
+                <span className="text-sm text-muted-foreground">
+                  {chainInfo ? (
+                    `Network Active • Block ${chainInfo.best_height.toLocaleString()} • ${chainInfo.peer_count} Peers`
+                  ) : (
+                    'Connecting to Network...'
+                  )}
+                </span>
               </div>
               
               <h1 className="text-5xl md:text-7xl font-bold mb-6">
-                Proof of Useful Work
+                Proof of Computational Work
                 <br />
-                <span className="text-primary">Computational Blockchain</span>
+                <span className="text-primary">Layer 1 Blockchain</span>
               </h1>
               
               <p className="text-xl text-muted-foreground max-w-3xl mx-auto mb-8">
-                COINjecture uses computational problem-solving for blockchain consensus. 
-                Earn <span className="text-primary font-semibold">$BEANS</span> tokens by solving computational challenges, 
-                creating a network where mining provides practical value.
+                COINjecture Network is a Layer 1 blockchain protocol that uses computational 
+                problem-solving for consensus. Earn <span className="text-primary font-semibold">$BEANS</span> tokens 
+                by solving NP-complete problems, creating a computational marketplace where mining provides utility beyond network security.
               </p>
               
               <div className="flex flex-wrap gap-4 justify-center mb-12">
@@ -51,22 +71,78 @@ export const Hero = () => {
 
               {/* Quick Stats */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto">
-                <Card className="p-4 glass-effect">
-                  <div className="text-2xl font-bold text-primary mb-1">2,430</div>
-                  <div className="text-xs text-muted-foreground">Solutions Verified</div>
-                </Card>
-                <Card className="p-4 glass-effect">
-                  <div className="text-2xl font-bold text-primary mb-1">4.73B</div>
-                  <div className="text-xs text-muted-foreground">BEANS Awarded</div>
-                </Card>
-                <Card className="p-4 glass-effect">
-                  <div className="text-2xl font-bold text-primary mb-1">100%</div>
-                  <div className="text-xs text-muted-foreground">Solution Quality</div>
-                </Card>
-                <Card className="p-4 glass-effect">
-                  <div className="text-2xl font-bold text-primary mb-1">1.86J</div>
-                  <div className="text-xs text-muted-foreground">Avg Energy/Solution</div>
-                </Card>
+                {chainInfo ? (
+                  <>
+                    <Card className="p-4 glass-effect">
+                      <div className="text-2xl font-bold text-primary mb-1">
+                        {chainInfo.best_height.toLocaleString()}
+                      </div>
+                      <div className="text-xs text-muted-foreground">Blocks Mined</div>
+                    </Card>
+                    <Card className="p-4 glass-effect">
+                      <div className="text-2xl font-bold text-primary mb-1">{chainInfo.peer_count}</div>
+                      <div className="text-xs text-muted-foreground">Network Peers</div>
+                    </Card>
+                    {marketplaceStats ? (
+                      <>
+                        <Card className="p-4 glass-effect">
+                          <div className="text-2xl font-bold text-primary mb-1">
+                            {marketplaceStats.open_problems}
+                          </div>
+                          <div className="text-xs text-muted-foreground">Open Problems</div>
+                        </Card>
+                        <Card className="p-4 glass-effect">
+                          <div className="text-2xl font-bold text-primary mb-1">
+                            {(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B
+                          </div>
+                          <div className="text-xs text-muted-foreground">Bounty Pool</div>
+                        </Card>
+                      </>
+                    ) : (
+                      <>
+                        <Card className="p-4 glass-effect">
+                          <div className="flex items-center justify-center h-8">
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                          </div>
+                          <div className="text-xs text-muted-foreground">Loading...</div>
+                        </Card>
+                        <Card className="p-4 glass-effect">
+                          <div className="flex items-center justify-center h-8">
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                          </div>
+                          <div className="text-xs text-muted-foreground">Loading...</div>
+                        </Card>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Card className="p-4 glass-effect">
+                      <div className="flex items-center justify-center h-8">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      </div>
+                      <div className="text-xs text-muted-foreground">Loading...</div>
+                    </Card>
+                    <Card className="p-4 glass-effect">
+                      <div className="flex items-center justify-center h-8">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      </div>
+                      <div className="text-xs text-muted-foreground">Loading...</div>
+                    </Card>
+                    <Card className="p-4 glass-effect">
+                      <div className="flex items-center justify-center h-8">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      </div>
+                      <div className="text-xs text-muted-foreground">Loading...</div>
+                    </Card>
+                    <Card className="p-4 glass-effect">
+                      <div className="flex items-center justify-center h-8">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      </div>
+                      <div className="text-xs text-muted-foreground">Loading...</div>
+                    </Card>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -78,9 +154,10 @@ export const Hero = () => {
         <div className="container mx-auto px-6">
           <div className="max-w-4xl mx-auto">
             <div className="text-center mb-12">
-              <h2 className="text-4xl font-bold mb-4">What is COINjecture?</h2>
+              <h2 className="text-4xl font-bold mb-4">What is COINjecture Network?</h2>
               <p className="text-lg text-muted-foreground">
-                A blockchain system that uses computational problem-solving instead of traditional mining
+                A math-backed Layer 1 blockchain protocol that uses computational problem-solving 
+                instead of traditional mining
               </p>
             </div>
 
@@ -96,11 +173,12 @@ export const Hero = () => {
                 </div>
 
                 <div>
-                  <h3 className="text-2xl font-bold mb-3 text-primary">COINjecture Approach</h3>
+                  <h3 className="text-2xl font-bold mb-3 text-primary">COINjecture Network Approach</h3>
                   <p className="text-muted-foreground leading-relaxed">
-                    COINjecture directs computational power toward solving practical problems - subset sum problems, 
-                    optimization challenges, and other NP-complete tasks. Each verified solution contributes to 
-                    algorithm research and practical computation.
+                    COINjecture Network is a Layer 1 blockchain protocol that directs computational power toward 
+                    solving practical NP-complete problems - SubsetSum, Boolean SAT, TSP, and custom problems. 
+                    Each verified solution contributes to algorithm research and practical computation through our 
+                    autonomous on-chain marketplace with instant bounty payouts.
                   </p>
                 </div>
 
@@ -225,7 +303,7 @@ export const Hero = () => {
                       All solutions and metrics are publicly available on HuggingFace
                     </p>
                     <a 
-                      href="https://huggingface.co/datasets/COINjecture/SubsetSum_Solutions" 
+                      href="https://huggingface.co/datasets/COINjecture/NP_Solutions" 
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="text-sm text-primary hover:underline inline-flex items-center gap-1"

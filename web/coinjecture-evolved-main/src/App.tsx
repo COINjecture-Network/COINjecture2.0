@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { WalletProvider } from "@/contexts/WalletContext";
 import Index from "./pages/Index";
 import Terminal from "./pages/Terminal";
 import API from "./pages/API";
@@ -11,30 +12,52 @@ import Metrics from "./pages/Metrics";
 import Marketplace from "./pages/Marketplace";
 import Whitepaper from "./pages/Whitepaper";
 import BountySubmit from "./pages/BountySubmit";
+import Wallet from "./pages/Wallet";
 import NotFound from "./pages/NotFound";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+      refetchOnWindowFocus: false,
+      onError: (error: any) => {
+        // Suppress connection refused errors in console
+        if (error?.message?.includes('Cannot connect to RPC server') ||
+            error?.message?.includes('ERR_CONNECTION_REFUSED') ||
+            error?.message?.includes('Failed to fetch')) {
+          // Silently handle - expected when node isn't running
+          return;
+        }
+        // Log other errors
+        console.error('Query error:', error);
+      },
+    },
+  },
+});
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/terminal" element={<Terminal />} />
-            <Route path="/api" element={<API />} />
-            <Route path="/metrics" element={<Metrics />} />
-            <Route path="/marketplace" element={<Marketplace />} />
-            <Route path="/whitepaper" element={<Whitepaper />} />
-            <Route path="/bounty-submit" element={<BountySubmit />} />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-      </TooltipProvider>
+      <WalletProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route path="/terminal" element={<Terminal />} />
+              <Route path="/api" element={<API />} />
+              <Route path="/metrics" element={<Metrics />} />
+              <Route path="/marketplace" element={<Marketplace />} />
+              <Route path="/whitepaper" element={<Whitepaper />} />
+              <Route path="/bounty-submit" element={<BountySubmit />} />
+              <Route path="/wallet" element={<Wallet />} />
+              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </TooltipProvider>
+      </WalletProvider>
     </ThemeProvider>
   </QueryClientProvider>
 );

@@ -1,7 +1,9 @@
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { useEffect, useState } from "react";
-import { Activity, Zap, Target, Award } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Activity, Zap, Target, Award, Loader2, AlertCircle } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { rpcClient } from "@/lib/rpc-client";
 
 interface Solution {
   block_height: number;
@@ -30,88 +32,130 @@ interface Solution {
 export const LiveSolutionFeed = () => {
   const [solutions, setSolutions] = useState<Solution[]>([]);
   const [newSolutionIndex, setNewSolutionIndex] = useState<number | null>(null);
+  const [previousHeight, setPreviousHeight] = useState<number | null>(null);
 
-  // Simulate live feed with mock data based on actual dataset structure
+  // Fetch chain info to get latest block height
+  const { data: chainInfo } = useQuery({
+    queryKey: ['chain-info'],
+    queryFn: () => rpcClient.getChainInfo(),
+    refetchInterval: 10000, // Refresh every 10 seconds
+  });
+
+  // Fetch recent blocks and extract solution data
   useEffect(() => {
-    const mockSolutions: Solution[] = [
-      {
-        block_height: 40,
-        problem_type: "SubsetSum",
-        solver: "NPOptimizer",
-        bounty: "369M",
-        work_score: 369,
-        solve_energy_joules: 2.89,
-        problem_complexity: 5.2,
-        timestamp: Date.now() - 2000,
-        problem_data: { target: 15823, values: [3241, 5892, 2184, 4506] },
-        solution_data: { indices: [0, 2, 3], sum: 15823 }
-      },
-      {
-        block_height: 39,
-        problem_type: "TSP",
-        solver: "AlgoSolver",
-        bounty: "342M",
-        work_score: 342,
-        solve_energy_joules: 2.71,
-        problem_complexity: 4.8,
-        timestamp: Date.now() - 45000,
-        problem_data: { cities: 25 },
-        solution_data: { route: [0, 3, 7, 12, 18, 24] }
-      },
-      {
-        block_height: 38,
-        problem_type: "SAT",
-        solver: "ComplexityKing",
-        bounty: "318M",
-        work_score: 318,
-        solve_energy_joules: 2.54,
-        problem_complexity: 5.1,
-        timestamp: Date.now() - 98000,
-        problem_data: { clauses: 120, variables: 50 },
-        solution_data: { satisfying_assignment: [true, false, true] }
-      }
-    ];
+    if (!chainInfo) return;
 
-    setSolutions(mockSolutions);
+    const fetchRecentBlocks = async () => {
+      const latestHeight = chainInfo.best_height;
+      const blockCount = 20; // Fetch last 20 blocks
+      const startHeight = Math.max(0, latestHeight - blockCount + 1);
 
-    // Simulate new solutions arriving
-    const interval = setInterval(() => {
-      const problemTypes: ("SubsetSum" | "TSP" | "SAT")[] = ["SubsetSum", "TSP", "SAT"];
-      const selectedType = problemTypes[Math.floor(Math.random() * 3)];
-      
-      const newSolution: Solution = {
-        block_height: 40 + solutions.length + 1,
-        problem_type: selectedType,
-        solver: ["NPOptimizer", "AlgoSolver", "ComplexityKing", "Anonymous"][Math.floor(Math.random() * 4)],
-        bounty: `${Math.floor(Math.random() * 400 + 200)}M`,
-        work_score: Math.floor(Math.random() * 300 + 150),
-        solve_energy_joules: Math.random() * 2 + 1.5,
-        problem_complexity: Math.random() * 2 + 3.5,
-        timestamp: Date.now(),
-        problem_data: selectedType === "SubsetSum" 
-          ? {
-              target: Math.floor(Math.random() * 20000 + 5000),
-              values: Array.from({ length: Math.floor(Math.random() * 5 + 3) }, () => 
-                Math.floor(Math.random() * 5000 + 1000)
-              )
+      const blockPromises: Promise<void>[] = [];
+      const newSolutions: Solution[] = [];
+
+      for (let height = latestHeight; height >= startHeight; height--) {
+        blockPromises.push(
+          rpcClient.getBlock(height).then((block) => {
+            if (!block || !block.solution_reveal) return;
+
+            const header = block.header;
+            const solutionReveal = block.solution_reveal;
+            const problem = solutionReveal.problem;
+            const solution = solutionReveal.solution;
+
+            // Determine problem type
+            let problemType: "SubsetSum" | "TSP" | "SAT" | null = null;
+            let problemData: Solution['problem_data'] = {};
+            let solutionData: Solution['solution_data'] = {};
+
+            // Parse problem and solution based on type
+            const problemObj = problem as any;
+            const solutionObj = solution as any;
+
+            if (problemObj.SubsetSum) {
+              problemType = "SubsetSum";
+              const subsetSum = problemObj.SubsetSum;
+              problemData = {
+                target: subsetSum.target,
+                values: subsetSum.numbers || [],
+              };
+              if (solutionObj.SubsetSum) {
+                const indices = solutionObj.SubsetSum;
+                const sum = indices.reduce((acc: number, idx: number) => acc + (subsetSum.numbers?.[idx] || 0), 0);
+                solutionData = { indices, sum };
+              }
+            } else if (problemObj.SAT) {
+              problemType = "SAT";
+              const sat = problemObj.SAT;
+              problemData = {
+                variables: sat.variables || 0,
+                clauses: Array.isArray(sat.clauses) ? sat.clauses.length : 0,
+              };
+              if (solutionObj.SAT) {
+                const assignment = solutionObj.SAT;
+                solutionData = { satisfying_assignment: assignment };
+              }
+            } else if (problemObj.TSP) {
+              problemType = "TSP";
+              const tsp = problemObj.TSP;
+              problemData = {
+                cities: tsp.cities || 0,
+              };
+              if (solutionObj.TSP) {
+                const route = solutionObj.TSP;
+                solutionData = { route };
+              }
             }
-          : selectedType === "TSP"
-          ? { cities: Math.floor(Math.random() * 15 + 15) }
-          : { clauses: Math.floor(Math.random() * 100 + 80), variables: Math.floor(Math.random() * 40 + 30) },
-        solution_data: selectedType === "SubsetSum"
-          ? { indices: [0, 1], sum: Math.floor(Math.random() * 20000 + 5000) }
-          : selectedType === "TSP"
-          ? { route: Array.from({ length: 6 }, (_, i) => i * 4) }
-          : { satisfying_assignment: [true, false, true] }
-      };
 
-      setSolutions(prev => [newSolution, ...prev].slice(0, 10));
-      setNewSolutionIndex(0);
-      setTimeout(() => setNewSolutionIndex(null), 2000);
-    }, 8000);
+            if (problemType) {
+              // Format miner address as solver name (truncate)
+              const solver = header.miner ? 
+                `${header.miner.slice(0, 8)}...${header.miner.slice(-6)}` : 
+                "Unknown";
 
-    return () => clearInterval(interval);
-  }, []);
+              // Format bounty (work_score in millions)
+              const bounty = header.work_score >= 1000000 
+                ? `${(header.work_score / 1000000).toFixed(0)}M`
+                : header.work_score >= 1000
+                ? `${(header.work_score / 1000).toFixed(0)}K`
+                : header.work_score.toFixed(0);
+
+              newSolutions.push({
+                block_height: header.height,
+                problem_type: problemType,
+                solver,
+                bounty,
+                work_score: header.work_score,
+                solve_energy_joules: header.energy_estimate_joules,
+                problem_complexity: header.complexity_weight,
+                timestamp: header.timestamp * 1000, // Convert to milliseconds
+                problem_data: problemData,
+                solution_data: solutionData,
+              });
+            }
+          }).catch(() => {
+            // Silently skip blocks that fail to fetch
+          })
+        );
+      }
+
+      await Promise.all(blockPromises);
+
+      // Sort by block height (newest first)
+      newSolutions.sort((a, b) => b.block_height - a.block_height);
+
+      // Check if we have a new block
+      if (previousHeight !== null && latestHeight > previousHeight) {
+        setNewSolutionIndex(0);
+        setTimeout(() => setNewSolutionIndex(null), 2000);
+      }
+
+      setSolutions(newSolutions.slice(0, 20)); // Keep top 20
+      setPreviousHeight(latestHeight);
+    };
+
+    fetchRecentBlocks();
+  }, [chainInfo, previousHeight]);
 
   const formatTime = (timestamp: number) => {
     const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -133,6 +177,18 @@ export const LiveSolutionFeed = () => {
       </div>
 
       <div className="space-y-3 max-h-[600px] overflow-y-auto">
+        {!chainInfo && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        )}
+        {chainInfo && solutions.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground">
+            <AlertCircle className="h-8 w-8 mx-auto mb-4 opacity-50" />
+            <p>No solutions found in recent blocks</p>
+            <p className="text-sm mt-2">Blocks will appear here as they are mined</p>
+          </div>
+        )}
         {solutions.map((solution, index) => (
           <Card 
             key={`${solution.block_height}-${solution.timestamp}`}

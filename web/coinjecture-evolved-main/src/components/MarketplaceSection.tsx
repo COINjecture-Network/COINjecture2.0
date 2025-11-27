@@ -123,7 +123,7 @@ export const MarketplaceSection = () => {
     <section id="marketplace" className="py-20">
       <div className="container mx-auto px-6">
         <div className="text-center mb-12">
-          <h2 className="text-4xl font-bold mb-4">PoUW Marketplace</h2>
+          <h2 className="text-4xl font-bold mb-4">PoCW Marketplace</h2>
           <p className="text-muted-foreground">
             Browse open computational problems and earn BEANS by solving them
           </p>
@@ -195,13 +195,18 @@ export const MarketplaceSection = () => {
 
         {/* Data Marketplace Section */}
         <div className="mt-16">
-          <h3 className="text-2xl font-bold mb-6">Data Marketplace</h3>
+          <div className="flex items-center justify-center gap-3 mb-6">
+            <h3 className="text-2xl font-bold">Data Marketplace</h3>
+            <Badge variant="secondary" className="text-xs">
+              Coming Soon
+            </Badge>
+          </div>
           <p className="text-muted-foreground mb-8 text-center">
             Purchase blockchain data, analytics, and computational resources
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-6xl mx-auto">
             {datasets.map((dataset, index) => (
-              <Card key={index} className="glass-effect p-6 hover:scale-[1.02] transition-transform duration-200">
+              <Card key={index} className="glass-effect p-6 hover:scale-[1.02] transition-transform duration-200 opacity-75">
                 <div className="flex items-start gap-4 mb-4">
                   <div className="p-3 rounded-lg bg-primary/10">
                     <dataset.icon className="h-6 w-6 text-primary" />
@@ -226,8 +231,8 @@ export const MarketplaceSection = () => {
                     </div>
                   </div>
                 </div>
-                <Button className="w-full" variant="default">
-                  Purchase Dataset
+                <Button className="w-full" variant="default" disabled>
+                  Coming Soon
                 </Button>
               </Card>
             ))}

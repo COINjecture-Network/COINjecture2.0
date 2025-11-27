@@ -1,11 +1,24 @@
 import { NavLink } from "@/components/NavLink";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Menu, X } from "lucide-react";
+import { Menu, X, Wallet } from "lucide-react";
 import { useState } from "react";
+import { useWallet } from "@/contexts/WalletContext";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 export const Navigation = () => {
   const [isOpen, setIsOpen] = useState(false);
+  const navigate = useNavigate();
+  const { accounts, selectedAccount, setSelectedAccount } = useWallet();
+  const selectedKeyPair = selectedAccount ? accounts[selectedAccount] : null;
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 glass-effect">
@@ -49,9 +62,36 @@ export const Navigation = () => {
               Whitepaper
             </NavLink>
             <ThemeToggle />
-            <Button variant="default" size="sm" className="glow-hover">
-              Connect Wallet
-            </Button>
+            {selectedKeyPair ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="default" size="sm" className="glow-hover">
+                    <Wallet className="h-4 w-4 mr-2" />
+                    {selectedAccount}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>
+                    <div className="text-xs font-mono text-muted-foreground">
+                      {selectedKeyPair.address.slice(0, 16)}...{selectedKeyPair.address.slice(-8)}
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => navigate("/wallet")}>
+                    <Wallet className="h-4 w-4 mr-2" />
+                    Manage Wallet
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSelectedAccount(null)}>
+                    Disconnect
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button variant="default" size="sm" className="glow-hover" onClick={() => navigate("/wallet")}>
+                <Wallet className="h-4 w-4 mr-2" />
+                Connect Wallet
+              </Button>
+            )}
           </div>
 
           {/* Mobile Menu Button */}
@@ -103,8 +143,17 @@ export const Navigation = () => {
             </NavLink>
             <div className="flex items-center gap-2 pt-2">
               <ThemeToggle />
-              <Button variant="default" size="sm" className="flex-1">
-                Connect Wallet
+              <Button 
+                variant="default" 
+                size="sm" 
+                className="flex-1"
+                onClick={() => {
+                  navigate("/wallet");
+                  setIsOpen(false);
+                }}
+              >
+                <Wallet className="h-4 w-4 mr-2" />
+                {selectedKeyPair ? selectedAccount : "Connect Wallet"}
               </Button>
             </div>
           </div>

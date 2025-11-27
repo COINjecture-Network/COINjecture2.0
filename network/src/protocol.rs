@@ -246,6 +246,11 @@ impl NetworkService {
         };
 
         // Create transport
+        // Note: Connections are kept alive by gossipsub heartbeats (1 second interval)
+        // If connections still drop, it may be due to:
+        // 1. Both nodes trying to dial each other simultaneously (connection race)
+        // 2. Network issues between droplets
+        // 3. Gossipsub mesh management closing idle connections
         let transport = tcp::tokio::Transport::default()
             .upgrade(libp2p::core::upgrade::Version::V1)
             .authenticate(noise::Config::new(&local_key)?)
@@ -419,6 +424,11 @@ impl NetworkService {
             for proto in addr.iter() {
                 if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
                     peer_id_opt = Some(peer_id);
+                    // Check if we're already connected to this peer
+                    if self.peers.contains(&peer_id) {
+                        println!("   ⏭️  Already connected to bootnode: {}", peer_id);
+                        continue;
+                    }
                     // Add to Kademlia routing table
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
                     break;
@@ -435,7 +445,13 @@ impl NetworkService {
                     }
                 }
                 Err(e) => {
-                    eprintln!("   ❌ Failed to dial bootnode '{}': {:?}", bootnode, e);
+                    // Check if error is due to already dialing/connected (this is OK)
+                    let error_str = format!("{:?}", e);
+                    if error_str.contains("AlreadyDialing") || error_str.contains("AlreadyConnected") {
+                        println!("   ⏭️  Already dialing/connected to bootnode: {}", bootnode);
+                    } else {
+                        eprintln!("   ❌ Failed to dial bootnode '{}': {:?}", bootnode, e);
+                    }
                     // Continue trying other bootnodes even if one fails
                 }
             }
@@ -647,6 +663,8 @@ impl NetworkService {
                     .behaviour_mut()
                     .gossipsub
                     .add_explicit_peer(&peer_id);
+                // Trigger Kademlia bootstrap to discover more peers
+                self.swarm.behaviour_mut().kademlia.bootstrap();
                 // Note: Peer will be added to mesh_peers when gossipsub mesh is established
                 // Update shared peer count
                 if let Ok(mut count) = self.peer_count.try_write() {

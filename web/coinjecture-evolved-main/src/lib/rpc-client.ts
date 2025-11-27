@@ -67,17 +67,55 @@ export interface TransactionStatus {
   block_height: number | null; // Option<u64>
 }
 
-// Block structure
+// Block structure - matches Block in core/src/block.rs
 export interface Block {
   header: {
+    version: number;
     height: number;
-    previous_hash: string;
-    merkle_root: string;
+    prev_hash: string;
     timestamp: number;
-    difficulty: number;
+    transactions_root: string;
+    solutions_root: string;
+    commitment: {
+      hash: string;
+      problem_hash: string;
+    };
     work_score: number;
+    miner: string; // Address as hex string
+    nonce: number;
+    solve_time_us: number;
+    verify_time_us: number;
+    time_asymmetry_ratio: number;
+    solution_quality: number;
+    complexity_weight: number;
+    energy_estimate_joules: number;
   };
+  coinbase: unknown;
   transactions: unknown[];
+  solution_reveal: {
+    problem: ProblemType;
+    solution: SolutionType;
+    commitment: {
+      hash: string;
+      problem_hash: string;
+    };
+  };
+}
+
+// Problem type from solution_reveal
+export interface ProblemType {
+  SubsetSum?: { numbers: number[]; target: number };
+  SAT?: { variables: number; clauses: any[] };
+  TSP?: { cities: number; distances: number[][] };
+  Custom?: { problem_id: string; data: string };
+}
+
+// Solution type from solution_reveal
+export interface SolutionType {
+  SubsetSum?: number[];
+  SAT?: boolean[];
+  TSP?: number[];
+  Custom?: string;
 }
 
 // Block header
@@ -169,34 +207,44 @@ export class RpcClient {
   }
 
   private async call<T>(method: string, params: unknown[] = []): Promise<T> {
-    const response = await fetch(this.baseUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: this.requestId++,
-        method,
-        params,
-      }),
-    });
+    try {
+      const response = await fetch(this.baseUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: this.requestId++,
+          method,
+          params,
+        }),
+      });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data: RpcResponse<T> = await response.json();
+
+      if (data.error) {
+        throw new Error(data.error.message || 'RPC error');
+      }
+
+      if (data.result === undefined) {
+        throw new Error('No result in RPC response');
+      }
+
+      return data.result;
+    } catch (error: any) {
+      // Handle connection errors gracefully
+      if (error.message?.includes('ERR_CONNECTION_REFUSED') || 
+          error.message?.includes('Failed to fetch') ||
+          error.name === 'TypeError') {
+        throw new Error(`Cannot connect to RPC server at ${this.baseUrl}. Make sure the node is running.`);
+      }
+      throw error;
     }
-
-    const data: RpcResponse<T> = await response.json();
-
-    if (data.error) {
-      throw new Error(data.error.message || 'RPC error');
-    }
-
-    if (data.result === undefined) {
-      throw new Error('No result in RPC response');
-    }
-
-    return data.result;
   }
 
   // ========== Account Methods ==========
