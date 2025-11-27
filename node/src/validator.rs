@@ -3,6 +3,7 @@
 
 use coinject_core::{Block, Hash};
 use coinject_state::AccountState;
+use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -147,15 +148,38 @@ impl BlockValidator {
 
     /// Validate block hash meets difficulty target
     fn validate_difficulty(&self, block: &Block) -> Result<(), ValidationError> {
-        let hash = block.header.hash();
-        let hash_hex = hex::encode(hash.as_bytes());
+        // Try bincode hash first (server-side mining)
+        let hash_bincode = block.header.hash();
+        let hash_bincode_hex = hex::encode(hash_bincode.as_bytes());
+        let leading_zeros_bincode = hash_bincode_hex.chars().take_while(|&c| c == '0').count();
+        
+        println!("🔍 Difficulty check (bincode): hash={}... leading_zeros={}, required={}", 
+            &hash_bincode_hex[..16], leading_zeros_bincode, self.min_difficulty);
+        
+        if leading_zeros_bincode >= self.min_difficulty as usize {
+            println!("✅ Block hash meets difficulty (bincode)");
+            return Ok(());
+        }
 
-        let leading_zeros = hash_hex.chars().take_while(|&c| c == '0').count();
-
-        if leading_zeros < self.min_difficulty as usize {
+        // Try JSON hash (client-side mining from web browsers)
+        let hash_json = block.header.hash_from_json();
+        let hash_json_hex = hex::encode(hash_json.as_bytes());
+        let leading_zeros_json = hash_json_hex.chars().take_while(|&c| c == '0').count();
+        
+        println!("🔍 Difficulty check (JSON): hash={}... leading_zeros={}, required={}", 
+            &hash_json_hex[..16], leading_zeros_json, self.min_difficulty);
+        println!("🔍 Full JSON hash: {}", hash_json_hex);
+        
+        if leading_zeros_json < self.min_difficulty as usize {
+            match serde_json::to_string(&block.header) {
+                Ok(json) => println!("📄 Header JSON (server hashed payload): {}", json),
+                Err(e) => println!("⚠️  Failed to serialize header for debug: {}", e),
+            }
+            println!("❌ Block hash does not meet difficulty (neither bincode nor JSON)");
             return Err(ValidationError::InsufficientDifficulty);
         }
 
+        println!("✅ Block hash meets difficulty (JSON)");
         Ok(())
     }
 

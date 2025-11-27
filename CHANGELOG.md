@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Commitment verification now accepts both bincode (server-side) and JSON (client-side) formats
   - Blocks submitted from web browsers should now pass validation and receive rewards
 
+### Known Issues / Ongoing Work
+- **Chain data persistence on droplets**: Redeploying without restoring `/root/coinject-data` wipes the chain and PeerID. Added a persistence guide (`docs/node-state-persistence.md`), but production deploys still require manual backup/restore until we automate snapshots.
+- **CloudFront RPC 502 errors**: Lambda@Edge proxy occasionally returns `502 Bad Gateway` even though droplet RPC endpoints respond directly. Need to instrument the Lambda to capture upstream errors/timeouts and confirm routing headers.
+- **Client vs. server header hashing mismatch**: Even with JSON commitments, the server logs show `leading_zeros=0` for browser-mined headers, so rewards remain at 0. Added detailed logging on both client and node to capture the exact JSON payloads and will reconcile serialization (likely float formatting/array ordering) next.
+
 ## [4.7.6] - 2025-11-27
 
 ### Fixed

@@ -35,6 +35,24 @@ const MAX_TSP_CITIES = 10;
 
 // Default difficulty (number of leading zeros required in hash)
 const DEFAULT_DIFFICULTY = 2;
+const MINING_DEBUG_FLAG_KEY = 'coinjecture:mining-debug';
+
+function shouldLogMiningDebug(): boolean {
+  // Always allow logging in development builds
+  if (import.meta.env && import.meta.env.DEV) {
+    return true;
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      return window.localStorage?.getItem(MINING_DEBUG_FLAG_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Seeded RNG for deterministic problem generation
@@ -306,7 +324,7 @@ function solveSATBruteForce(variables: number, clauses: Array<{ literals: number
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const assignment: boolean[] = [];
     for (let i = 0; i < variables; i++) {
-      assignment.push((attempt >> i) & 1 === 1);
+      assignment.push(((attempt >> i) & 1) === 1);
     }
     
     // Check if all clauses are satisfied
@@ -469,31 +487,56 @@ export function createCommitment(
 }
 
 /**
- * Calculate block header hash (simplified serialization)
+ * Calculate block header hash using JSON serialization
+ * Matches Rust core/src/block.rs::hash_from_json() which uses serde_json::to_vec()
+ * 
+ * IMPORTANT: Field order must match Rust struct field order for consistent JSON serialization
+ * Rust struct order: version, height, prev_hash, timestamp, transactions_root, solutions_root,
+ *                    commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
+ *                    time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
  */
 function calculateHeaderHash(header: Block['header']): string {
-  // Serialize header fields (matching Rust bincode serialization order)
-  const headerData = [
-    header.version,
-    header.height,
-    header.prev_hash,
-    header.timestamp,
-    header.transactions_root,
-    header.solutions_root,
-    header.commitment.hash,
-    header.commitment.problem_hash,
-    header.work_score,
-    header.miner,
-    header.nonce,
-    header.solve_time_us,
-    header.verify_time_us,
-    header.time_asymmetry_ratio,
-    header.solution_quality,
-    header.complexity_weight,
-    header.energy_estimate_joules
-  ].join('|');
+  // Convert header to match server format (byte arrays for hashes/addresses)
+  // CRITICAL: Field order must match Rust struct field order exactly
+  const headerForHash: any = {
+    version: header.version,
+    height: header.height,
+    prev_hash: typeof header.prev_hash === 'string' ? Array.from(hexToBytes(header.prev_hash)) : header.prev_hash,
+    timestamp: header.timestamp,
+    transactions_root: typeof header.transactions_root === 'string' ? Array.from(hexToBytes(header.transactions_root)) : header.transactions_root,
+    solutions_root: typeof header.solutions_root === 'string' ? Array.from(hexToBytes(header.solutions_root)) : header.solutions_root,
+    commitment: {
+      hash: typeof header.commitment.hash === 'string' ? Array.from(hexToBytes(header.commitment.hash)) : header.commitment.hash,
+      problem_hash: typeof header.commitment.problem_hash === 'string' ? Array.from(hexToBytes(header.commitment.problem_hash)) : header.commitment.problem_hash
+    },
+    work_score: header.work_score,
+    miner: typeof header.miner === 'string' ? Array.from(hexToBytes(header.miner)) : header.miner,
+    nonce: header.nonce,
+    solve_time_us: header.solve_time_us,
+    verify_time_us: header.verify_time_us,
+    time_asymmetry_ratio: header.time_asymmetry_ratio,
+    solution_quality: header.solution_quality,
+    complexity_weight: header.complexity_weight,
+    energy_estimate_joules: header.energy_estimate_joules
+  };
   
-  return hash(new TextEncoder().encode(headerData));
+  // Serialize header using JSON (matches server-side hash_from_json)
+  // Note: JSON.stringify() preserves object key order in modern JavaScript (ES2015+)
+  // But to be safe, we'll use a Map-like approach to ensure exact field order
+  const headerJson = JSON.stringify(headerForHash);
+  const headerBytes = new TextEncoder().encode(headerJson);
+  const calculatedHash = hash(headerBytes);
+  
+  if (shouldLogMiningDebug()) {
+    console.log('🧠 Client header JSON (hashed payload):', headerJson);
+    console.log('🔍 Client header hash calculation:', {
+      jsonLength: headerJson.length,
+      jsonPreview: headerJson.substring(0, 200),
+      hash: calculatedHash
+    });
+  }
+  
+  return calculatedHash;
 }
 
 /**
@@ -705,16 +748,16 @@ export async function createBlock(
   let header: Block['header'] = {
     version: 1,
     height,
-    prev_hash: Array.from(prevHashBytes), // Hash as byte array [u8; 32]
+    prev_hash: bytesToHex(prevHashBytes), // Hash as hex string (will be converted to byte array by serializeBlockForRpc)
     timestamp,
-    transactions_root: Array.from(transactionsRootBytes), // Hash as byte array
-    solutions_root: Array.from(solutionsRootBytes), // Hash as byte array
+    transactions_root: bytesToHex(transactionsRootBytes), // Hash as hex string
+    solutions_root: bytesToHex(solutionsRootBytes), // Hash as hex string
     commitment: {
-      hash: Array.from(commitmentHashBytes), // Hash as byte array
-      problem_hash: Array.from(commitmentProblemHashBytes) // Hash as byte array
+      hash: bytesToHex(commitmentHashBytes), // Hash as hex string
+      problem_hash: bytesToHex(commitmentProblemHashBytes) // Hash as hex string
     },
     work_score: workScore,
-    miner: Array.from(minerAddressBytes), // Address as byte array [u8; 32]
+    miner: bytesToHex(minerAddressBytes), // Address as hex string (will be converted to byte array by serializeBlockForRpc)
     nonce: 0,
     solve_time_us: solveTimeUs,
     verify_time_us: verifyTimeUs,
@@ -743,13 +786,13 @@ export async function createBlock(
     Custom: solution.Custom
   };
   
-  // 7. Create solution reveal (convert commitment hashes to byte arrays)
+  // 7. Create solution reveal (convert commitment hashes to hex strings)
   const solutionReveal: SolutionReveal = {
     problem,
     solution: solutionType,
     commitment: {
-      hash: Array.from(commitmentHashBytes), // Hash as byte array
-      problem_hash: Array.from(commitmentProblemHashBytes) // Hash as byte array
+      hash: bytesToHex(commitmentHashBytes), // Hash as hex string (will be converted to byte array by serializeBlockForRpc)
+      problem_hash: bytesToHex(commitmentProblemHashBytes) // Hash as hex string
     }
   };
   
