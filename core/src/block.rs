@@ -44,16 +44,30 @@ pub struct BlockHeader {
 }
 
 impl BlockHeader {
-    /// Calculate header hash
+    /// Calculate header hash using bincode serialization (server-side)
     pub fn hash(&self) -> Hash {
         let serialized = bincode::serialize(self).unwrap_or_default();
         Hash::new(&serialized)
     }
 
-    /// Check if header meets difficulty target
+    /// Calculate header hash using JSON serialization (client-side compatibility)
+    /// This enables web-based miners to submit blocks without needing bincode
+    pub fn hash_from_json(&self) -> Hash {
+        let serialized = serde_json::to_vec(self).unwrap_or_default();
+        Hash::new(&serialized)
+    }
+
+    /// Check if header meets difficulty target (tries both bincode and JSON)
     pub fn meets_difficulty(&self, target: &Hash) -> bool {
-        let hash = self.hash();
-        hash.as_bytes() < target.as_bytes()
+        // Try bincode hash first (server-side mining)
+        let hash_bincode = self.hash();
+        if hash_bincode.as_bytes() < target.as_bytes() {
+            return true;
+        }
+
+        // Try JSON hash (client-side mining from web browsers)
+        let hash_json = self.hash_from_json();
+        hash_json.as_bytes() < target.as_bytes()
     }
 
     /// Epoch salt derived from parent hash (prevents pre-mining)

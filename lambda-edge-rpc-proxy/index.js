@@ -4,12 +4,28 @@
 const http = require('http');
 
 exports.handler = async (event) => {
-    const request = event.Records[0].cf.request;
-    const uri = request.uri;
+    try {
+        const request = event.Records[0].cf.request;
+        const uri = request.uri;
+        
+        // Only handle /api/rpc requests
+        if (!uri.startsWith('/api/rpc')) {
+            return request;
+        }
     
-    // Only handle /api/rpc requests
-    if (!uri.startsWith('/api/rpc')) {
-        return request;
+    // Handle OPTIONS preflight requests
+    if (request.method === 'OPTIONS') {
+        return {
+            status: '200',
+            statusDescription: 'OK',
+            headers: {
+                'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }],
+                'access-control-allow-methods': [{ key: 'Access-Control-Allow-Methods', value: 'POST, GET, OPTIONS' }],
+                'access-control-allow-headers': [{ key: 'Access-Control-Allow-Headers', value: 'Content-Type' }],
+                'access-control-max-age': [{ key: 'Access-Control-Max-Age', value: '86400' }]
+            },
+            body: ''
+        };
     }
     
     // Parse target RPC endpoint from query string
@@ -27,40 +43,62 @@ exports.handler = async (event) => {
         }
     }
     
-    // Get request body
-    const body = request.body && request.body.data 
-        ? Buffer.from(request.body.data, request.body.encoding === 'base64' ? 'base64' : 'utf8').toString()
-        : '';
+    // Get request body (handles both base64 and text encoding)
+    let body = '';
+    if (request.body) {
+        if (request.body.data) {
+            body = Buffer.from(
+                request.body.data,
+                request.body.encoding === 'base64' ? 'base64' : 'utf8'
+            ).toString('utf8');
+        } else if (request.body.inputTruncated === false) {
+            // Body might be in request.body directly
+            body = typeof request.body === 'string' ? request.body : JSON.stringify(request.body);
+        }
+    }
+    
+    // Log request details (for debugging - will appear in CloudWatch)
+    const requestId = event.Records[0].cf.config.requestId || 'unknown';
+    console.log(`[${requestId}] Proxying ${request.method} to ${targetHost}:${targetPort}`);
     
     // Make HTTP request to target RPC endpoint
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const options = {
             hostname: targetHost,
             port: targetPort,
             path: '/',
-            method: request.method,
+            method: request.method || 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(body)
+                'Content-Length': Buffer.byteLength(body, 'utf8'),
+                'User-Agent': 'COINjecture-CloudFront-Proxy/1.0'
             },
-            timeout: 5000
+            timeout: 10000 // Increased timeout to 10 seconds
         };
         
+        const startTime = Date.now();
         const req = http.request(options, (res) => {
             let responseBody = '';
+            const statusCode = res.statusCode || 500;
+            
+            // Log response status
+            console.log(`[${requestId}] Response: ${statusCode} from ${targetHost}:${targetPort} (${Date.now() - startTime}ms)`);
             
             res.on('data', (chunk) => {
-                responseBody += chunk;
+                responseBody += chunk.toString('utf8');
             });
             
             res.on('end', () => {
+                // Log response size
+                console.log(`[${requestId}] Response body size: ${responseBody.length} bytes`);
+                
                 resolve({
-                    status: res.statusCode.toString(),
+                    status: statusCode.toString(),
                     statusDescription: res.statusMessage || 'OK',
                     headers: {
                         'content-type': [{
                             key: 'Content-Type',
-                            value: 'application/json'
+                            value: res.headers['content-type'] || 'application/json'
                         }],
                         'access-control-allow-origin': [{
                             key: 'Access-Control-Allow-Origin',
@@ -78,32 +116,64 @@ exports.handler = async (event) => {
                     body: responseBody
                 });
             });
+            
+            res.on('error', (error) => {
+                console.error(`[${requestId}] Response stream error:`, error.message);
+                resolve({
+                    status: '502',
+                    statusDescription: 'Bad Gateway',
+                    headers: {
+                        'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+                        'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }]
+                    },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        error: {
+                            code: -32000,
+                            message: `Response stream error: ${error.message}`,
+                            data: { target: `${targetHost}:${targetPort}`, requestId }
+                        },
+                        id: null
+                    })
+                });
+            });
         });
         
         req.on('error', (error) => {
+            const errorMessage = error.message || 'Unknown error';
+            const errorCode = error.code || 'UNKNOWN';
+            console.error(`[${requestId}] Request error:`, {
+                message: errorMessage,
+                code: errorCode,
+                target: `${targetHost}:${targetPort}`,
+                duration: Date.now() - startTime
+            });
+            
             resolve({
                 status: '502',
                 statusDescription: 'Bad Gateway',
                 headers: {
-                    'content-type': [{
-                        key: 'Content-Type',
-                        value: 'application/json'
-                    }],
-                    'access-control-allow-origin': [{
-                        key: 'Access-Control-Allow-Origin',
-                        value: '*'
-                    }]
+                    'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+                    'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }]
                 },
-                body: JSON.stringify({ 
-                    error: { 
-                        code: -32000, 
-                        message: `Failed to connect to RPC endpoint: ${error.message}` 
-                    } 
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    error: {
+                        code: -32000,
+                        message: `Failed to connect to RPC endpoint: ${errorMessage}`,
+                        data: {
+                            target: `${targetHost}:${targetPort}`,
+                            errorCode: errorCode,
+                            requestId
+                        }
+                    },
+                    id: null
                 })
             });
         });
         
-        req.setTimeout(5000, () => {
+        req.setTimeout(10000, () => {
+            console.error(`[${requestId}] Request timeout after 10s to ${targetHost}:${targetPort}`);
             req.destroy();
             resolve({
                 status: '504',
@@ -112,14 +182,91 @@ exports.handler = async (event) => {
                     'content-type': [{ key: 'Content-Type', value: 'application/json' }],
                     'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }]
                 },
-                body: JSON.stringify({ error: { code: -32000, message: 'Request timeout' } })
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    error: {
+                        code: -32000,
+                        message: 'Request timeout after 10 seconds',
+                        data: {
+                            target: `${targetHost}:${targetPort}`,
+                            requestId
+                        }
+                    },
+                    id: null
+                })
             });
         });
         
+        // Write request body
         if (body) {
-            req.write(body);
+            try {
+                req.write(body, 'utf8');
+            } catch (writeError) {
+                console.error(`[${requestId}] Write error:`, writeError.message);
+                req.destroy();
+                resolve({
+                    status: '500',
+                    statusDescription: 'Internal Server Error',
+                    headers: {
+                        'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+                        'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }]
+                    },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        error: {
+                            code: -32603,
+                            message: `Failed to write request body: ${writeError.message}`,
+                            data: { requestId }
+                        },
+                        id: null
+                    })
+                });
+                return;
+            }
         }
+        
         req.end();
+    }).catch((error) => {
+        // Catch any unhandled promise rejections
+        console.error('Unhandled error in Lambda:', error);
+        return {
+            status: '500',
+            statusDescription: 'Internal Server Error',
+            headers: {
+                'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+                'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }]
+            },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32603,
+                    message: `Lambda execution error: ${error.message || 'Unknown error'}`,
+                    data: { errorType: error.name || 'Error' }
+                },
+                id: null
+            })
+        };
     });
+    } catch (error) {
+        // Catch any synchronous errors
+        console.error('Synchronous error in Lambda:', error);
+        return {
+            status: '500',
+            statusDescription: 'Internal Server Error',
+            headers: {
+                'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+                'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }]
+            },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32603,
+                    message: `Lambda execution error: ${error.message || 'Unknown error'}`,
+                    data: { errorType: error.name || 'Error' }
+                },
+                id: null
+            })
+        };
+    }
 };
 

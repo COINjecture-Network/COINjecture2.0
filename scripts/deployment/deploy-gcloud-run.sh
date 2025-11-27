@@ -43,9 +43,15 @@ gcloud services enable cloudbuild.googleapis.com \
     containerregistry.googleapis.com \
     artifactregistry.googleapis.com
 
-# Build and push Docker image
-echo "📦 Building Docker image..."
-docker build --platform linux/amd64 -t "$IMAGE_NAME" .
+# Use existing Docker image or build if not found
+if docker images coinject-node:latest --format "{{.Repository}}:{{.Tag}}" | grep -q "coinject-node:latest"; then
+    echo "📦 Using existing Docker image (coinject-node:latest)..."
+    docker tag coinject-node:latest "$IMAGE_NAME"
+else
+    echo "📦 Building Docker image (coinject-node:latest not found)..."
+    docker build --platform linux/amd64 -t coinject-node:latest .
+    docker tag coinject-node:latest "$IMAGE_NAME"
+fi
 
 echo "📤 Pushing image to Google Container Registry..."
 docker push "$IMAGE_NAME"
@@ -62,8 +68,9 @@ BOOTNODE2="/ip4/$DROPLET2/tcp/30333"
 
 # Construct container args. Cloud Run splits comma-separated values into separate args.
 # Use a unique data dir per deploy so Cloud Run starts from a clean state
+# This ensures a clean sync from genesis
 DATA_DIR="/tmp/data-$(date +%s)"
-echo "📁 Using Cloud Run data dir: $DATA_DIR"
+echo "📁 Using Cloud Run data dir: $DATA_DIR (clean state - will sync from genesis)"
 
 # Note: Mining disabled for Cloud Run (RPC-only node to save costs)
 CONTAINER_ARGS="--data-dir=$DATA_DIR,\

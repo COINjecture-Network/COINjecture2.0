@@ -39,6 +39,8 @@ pub enum NetworkMessage {
     GetBlock(Hash),
     /// Request blocks by height range with unique request_id to prevent gossipsub deduplication
     GetBlocks { from: u64, to: u64, request_id: u64 },
+    /// Sync block response (includes request_id to prevent deduplication during sync)
+    SyncBlock { block: Block, request_id: u64 },
     /// Peer status announcement
     Status {
         best_height: u64,
@@ -348,6 +350,27 @@ impl NetworkService {
         }
     }
 
+    /// Send a block for sync (with request_id to prevent deduplication)
+    pub fn send_sync_block(&mut self, block: Block, request_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if we have peers in the mesh before broadcasting
+        if self.mesh_peers.is_empty() {
+            return Err("InsufficientPeers: No peers in gossipsub mesh".into());
+        }
+
+        let message = NetworkMessage::SyncBlock { block, request_id };
+        let data = bincode::serialize(&message)?;
+        match self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(self.topics.blocks.clone(), data) {
+            Ok(_) => Ok(()),
+            Err(gossipsub::PublishError::InsufficientPeers) => {
+                Err("InsufficientPeers: Not enough peers in mesh for topic".into())
+            }
+            Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
+        }
+    }
+
     /// Broadcast a transaction to the network
     pub fn broadcast_transaction(
         &mut self,
@@ -567,6 +590,13 @@ impl NetworkService {
                     peer,
                     from_height: from,
                     to_height: to,
+                });
+            }
+            Ok(NetworkMessage::SyncBlock { block, request_id: _ }) => {
+                // SyncBlock is treated the same as NewBlock, but with unique message ID to prevent deduplication
+                let _ = self.event_tx.send(NetworkEvent::BlockReceived {
+                    block,
+                    peer,
                 });
             }
             Ok(_) => {

@@ -166,16 +166,20 @@ impl BlockValidator {
         let hash_json_hex = hex::encode(hash_json.as_bytes());
         let leading_zeros_json = hash_json_hex.chars().take_while(|&c| c == '0').count();
         
+        // Get the exact JSON bytes that were hashed (for debugging)
+        let json_bytes = serde_json::to_vec(&block.header).unwrap_or_default();
+        let json_string = String::from_utf8_lossy(&json_bytes);
+        
         println!("🔍 Difficulty check (JSON): hash={}... leading_zeros={}, required={}", 
             &hash_json_hex[..16], leading_zeros_json, self.min_difficulty);
         println!("🔍 Full JSON hash: {}", hash_json_hex);
+        println!("📄 Header JSON (server hashed payload, {} bytes): {}", json_bytes.len(), json_string);
+        println!("📄 Header JSON bytes (first 200): {:?}", &json_bytes[..std::cmp::min(200, json_bytes.len())]);
         
         if leading_zeros_json < self.min_difficulty as usize {
-            match serde_json::to_string(&block.header) {
-                Ok(json) => println!("📄 Header JSON (server hashed payload): {}", json),
-                Err(e) => println!("⚠️  Failed to serialize header for debug: {}", e),
-            }
             println!("❌ Block hash does not meet difficulty (neither bincode nor JSON)");
+            println!("   Bincode hash: {} (leading_zeros={})", hash_bincode_hex, leading_zeros_bincode);
+            println!("   JSON hash: {} (leading_zeros={})", hash_json_hex, leading_zeros_json);
             return Err(ValidationError::InsufficientDifficulty);
         }
 

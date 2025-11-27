@@ -43,6 +43,7 @@ function shouldLogMiningDebug(): boolean {
     return true;
   }
 
+  // Check localStorage flag (set via: localStorage.setItem('coinjecture:mining-debug', 'true'))
   if (typeof window !== 'undefined') {
     try {
       return window.localStorage?.getItem(MINING_DEBUG_FLAG_KEY) === 'true';
@@ -521,8 +522,10 @@ function calculateHeaderHash(header: Block['header']): string {
   };
   
   // Serialize header using JSON (matches server-side hash_from_json)
-  // Note: JSON.stringify() preserves object key order in modern JavaScript (ES2015+)
-  // But to be safe, we'll use a Map-like approach to ensure exact field order
+  // CRITICAL: Field order must match Rust struct field order exactly
+  // Rust struct order: version, height, prev_hash, timestamp, transactions_root, solutions_root,
+  //                    commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
+  //                    time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
   const headerJson = JSON.stringify(headerForHash);
   const headerBytes = new TextEncoder().encode(headerJson);
   const calculatedHash = hash(headerBytes);
@@ -531,9 +534,13 @@ function calculateHeaderHash(header: Block['header']): string {
     console.log('🧠 Client header JSON (hashed payload):', headerJson);
     console.log('🔍 Client header hash calculation:', {
       jsonLength: headerJson.length,
+      jsonBytesLength: headerBytes.length,
       jsonPreview: headerJson.substring(0, 200),
-      hash: calculatedHash
+      jsonBytes: Array.from(headerBytes.slice(0, 200)),
+      hash: calculatedHash,
+      leadingZeros: calculatedHash.match(/^0*/)?.[0].length || 0
     });
+    console.log('🔍 Client header object (before JSON.stringify):', JSON.stringify(headerForHash, null, 2));
   }
   
   return calculatedHash;

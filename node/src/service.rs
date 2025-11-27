@@ -26,6 +26,7 @@ enum NetworkCommand {
     BroadcastTransaction(coinject_core::Transaction),
     BroadcastStatus { best_height: u64, best_hash: coinject_core::Hash, genesis_hash: coinject_core::Hash },
     RequestBlocks { from_height: u64, to_height: u64 },
+    SendSyncBlock { block: coinject_core::Block, request_id: u64 }, // Send block for sync with unique request_id
 }
 
 /// Main node service coordinating all blockchain components
@@ -454,6 +455,17 @@ impl CoinjectNode {
                                     }
                                     Err(e) => {
                                         eprintln!("Failed to broadcast block: {}", e);
+                                    }
+                                    Ok(_) => {}
+                                }
+                            }
+                            NetworkCommand::SendSyncBlock { block, request_id } => {
+                                match network.send_sync_block(block, request_id) {
+                                    Err(e) if e.to_string().contains("InsufficientPeers") => {
+                                        // Silently ignore InsufficientPeers - it's expected when no peers are connected
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send sync block: {}", e);
                                     }
                                     Ok(_) => {}
                                 }
@@ -1068,21 +1080,32 @@ impl CoinjectNode {
                     peer, from_height, to_height
                 );
 
-                // Respond by broadcasting the requested blocks
+                // Generate a unique request_id for this sync response to prevent deduplication
+                let request_id = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64;
+
+                // Respond by sending sync blocks (with unique request_id to bypass gossipsub deduplication)
                 let mut sent_count = 0;
                 for height in from_height..=to_height {
                     match chain.get_block_by_height(height) {
                         Ok(Some(block)) => {
                         if height <= 20 {
                             println!(
-                                "   ↳ Serving requested block {} (hash {:?}) to {:?}",
+                                "   ↳ Serving requested block {} (hash {:?}) to {:?} (req_id={})",
                                 height,
                                 block.header.hash(),
-                                peer
+                                peer,
+                                request_id
                             );
                         }
-                            if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block)) {
-                                eprintln!("Failed to broadcast block {}: {}", height, e);
+                            // Use SendSyncBlock with unique request_id to prevent deduplication
+                            if let Err(e) = network_tx.send(NetworkCommand::SendSyncBlock { 
+                                block, 
+                                request_id: request_id + height // Make each block unique
+                            }) {
+                                eprintln!("Failed to send sync block {}: {}", height, e);
                                 break;
                             }
                             sent_count += 1;
@@ -1104,7 +1127,7 @@ impl CoinjectNode {
                 }
 
                 if sent_count > 0 {
-                    println!("📤 Sent {} blocks in response to sync request", sent_count);
+                    println!("📤 Sent {} blocks in response to sync request (req_id={})", sent_count, request_id);
                 }
             }
         }
