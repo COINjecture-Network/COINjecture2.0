@@ -2,9 +2,46 @@
  * RPC Client for COINjecture Network B
  * Connects to JSON-RPC endpoints for blockchain operations
  * Matches the actual Rust RPC server implementation in rpc/src/server.rs
+ * Supports multiple nodes with failover and parallel querying
  */
 
-const DEFAULT_RPC_URL = import.meta.env.VITE_RPC_URL || 'http://localhost:9933';
+import { hexToBytes } from '@noble/hashes/utils';
+
+// Parse RPC URLs from environment variable (comma-separated)
+const parseRpcUrls = (): string[] => {
+  const envUrl = import.meta.env.VITE_RPC_URL || 'http://localhost:9933';
+  // Support comma-separated list of URLs
+  return envUrl.split(',').map(url => url.trim()).filter(url => url.length > 0);
+};
+
+// In development, use Vite proxy to avoid CORS issues
+// In production (CloudFront), use relative /api/rpc path that CloudFront will proxy
+// The RPC client can specify target node via query parameter or header
+const isDevelopment = import.meta.env.DEV;
+const isProduction = import.meta.env.PROD;
+const isHTTPS = typeof window !== 'undefined' && window.location.protocol === 'https:';
+
+// Parse RPC URLs and create proxy URLs for HTTPS
+const createProxyUrls = (): string[] => {
+  const urls = parseRpcUrls();
+  if (isHTTPS && !isDevelopment) {
+    // In production HTTPS, use CloudFront proxy with target parameter
+    return urls.map(url => {
+      // Extract host:port from URL
+      const match = url.match(/https?:\/\/([^\/]+)/);
+      if (match) {
+        const target = match[1];
+        return `/api/rpc?target=${encodeURIComponent(target)}`;
+      }
+      return '/api/rpc';
+    });
+  }
+  return urls;
+};
+
+const DEFAULT_RPC_URLS = isDevelopment 
+  ? ['/api/rpc'] // Use Vite proxy in development
+  : createProxyUrls(); // Use CloudFront proxy URLs in production HTTPS
 
 export interface RpcError {
   code: number;
@@ -199,52 +236,136 @@ export interface RevealParams {
 }
 
 export class RpcClient {
-  private baseUrl: string;
+  private baseUrls: string[];
   private requestId: number = 1;
+  private currentUrlIndex: number = 0;
 
-  constructor(baseUrl: string = DEFAULT_RPC_URL) {
-    this.baseUrl = baseUrl;
+  constructor(baseUrls: string[] = DEFAULT_RPC_URLS) {
+    this.baseUrls = baseUrls.length > 0 ? baseUrls : ['http://localhost:9933'];
   }
 
+  /**
+   * Get the current active RPC URL (for round-robin)
+   */
+  private getCurrentUrl(): string {
+    return this.baseUrls[this.currentUrlIndex % this.baseUrls.length];
+  }
+
+  /**
+   * Rotate to the next RPC URL (round-robin)
+   */
+  private rotateUrl(): void {
+    this.currentUrlIndex = (this.currentUrlIndex + 1) % this.baseUrls.length;
+  }
+
+  /**
+   * Call RPC method with failover support
+   * Tries each node in order until one succeeds
+   */
   private async call<T>(method: string, params: unknown[] = []): Promise<T> {
-    try {
-      const response = await fetch(this.baseUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: this.requestId++,
-          method,
-          params,
-        }),
-      });
+    const errors: Error[] = [];
+    
+    // Try each URL in order (failover)
+    for (let i = 0; i < this.baseUrls.length; i++) {
+      const url = this.baseUrls[i];
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: this.requestId++,
+            method,
+            params,
+          }),
+        });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data: RpcResponse<T> = await response.json();
+
+        if (data.error) {
+          throw new Error(data.error.message || 'RPC error');
+        }
+
+        if (data.result === undefined) {
+          throw new Error('No result in RPC response');
+        }
+
+        // Success! Rotate to next URL for load balancing
+        this.rotateUrl();
+        return data.result;
+      } catch (error: any) {
+        // Store error and try next URL
+        errors.push(error);
+        // Continue to next URL
       }
-
-      const data: RpcResponse<T> = await response.json();
-
-      if (data.error) {
-        throw new Error(data.error.message || 'RPC error');
-      }
-
-      if (data.result === undefined) {
-        throw new Error('No result in RPC response');
-      }
-
-      return data.result;
-    } catch (error: any) {
-      // Handle connection errors gracefully
-      if (error.message?.includes('ERR_CONNECTION_REFUSED') || 
-          error.message?.includes('Failed to fetch') ||
-          error.name === 'TypeError') {
-        throw new Error(`Cannot connect to RPC server at ${this.baseUrl}. Make sure the node is running.`);
-      }
-      throw error;
     }
+
+    // All URLs failed
+    const errorMessages = errors.map(e => e.message).join('; ');
+    throw new Error(`Cannot connect to any RPC server. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
+  }
+
+  /**
+   * Call RPC method on all nodes in parallel and return the best result
+   * For chain info, returns the node with the highest block height
+   * For other queries, returns the first successful response
+   */
+  private async callAll<T>(method: string, params: unknown[] = [], selector?: (results: T[]) => T): Promise<T> {
+    const promises = this.baseUrls.map(async (url) => {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: this.requestId++,
+            method,
+            params,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data: RpcResponse<T> = await response.json();
+
+        if (data.error) {
+          throw new Error(data.error.message || 'RPC error');
+        }
+
+        if (data.result === undefined) {
+          throw new Error('No result in RPC response');
+        }
+
+        return { success: true, result: data.result, url };
+      } catch (error: any) {
+        return { success: false, error, url };
+      }
+    });
+
+    const results = await Promise.all(promises);
+    const successful = results.filter(r => r.success) as Array<{ success: true; result: T; url: string }>;
+
+    if (successful.length === 0) {
+      const errorMessages = results.map(r => (r as any).error?.message || 'Unknown error').join('; ');
+      throw new Error(`Cannot connect to any RPC server. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
+    }
+
+    // Use selector if provided, otherwise return first successful result
+    if (selector) {
+      return selector(successful.map(r => r.result));
+    }
+
+    return successful[0].result;
   }
 
   // ========== Account Methods ==========
@@ -276,7 +397,60 @@ export class RpcClient {
   }
 
   async getChainInfo(): Promise<ChainInfo> {
-    return this.call<ChainInfo>('chain_getInfo', []);
+    // Query all nodes and return the one with the highest block height
+    return this.callAll<ChainInfo>('chain_getInfo', [], (results) => {
+      // Return the chain info with the highest block height
+      return results.reduce((best, current) => 
+        current.best_height > best.best_height ? current : best
+      );
+    });
+  }
+
+  async submitBlock(block: Block): Promise<string> {
+    // The block needs to match Rust's serialization format exactly
+    // Hash and Address are serialized as byte arrays [u8; 32]
+    // Convert any hex strings to byte arrays before submission
+    const serializedBlock = this.serializeBlockForRpc(block);
+    return this.call<string>('chain_submitBlock', [serializedBlock]);
+  }
+
+  private serializeBlockForRpc(block: Block): any {
+    // Convert block to match Rust serialization format
+    // Hash and Address fields need to be byte arrays
+    const serializeHash = (hash: string | number[]): number[] => {
+      if (Array.isArray(hash)) return hash;
+      const bytes = hexToBytes(hash);
+      return Array.from(bytes);
+    };
+
+    const serializeAddress = (addr: string | number[]): number[] => {
+      if (Array.isArray(addr)) return addr;
+      const bytes = hexToBytes(addr);
+      return Array.from(bytes);
+    };
+
+    return {
+      header: {
+        ...block.header,
+        prev_hash: serializeHash(block.header.prev_hash),
+        transactions_root: serializeHash(block.header.transactions_root),
+        solutions_root: serializeHash(block.header.solutions_root),
+        commitment: {
+          hash: serializeHash(block.header.commitment.hash),
+          problem_hash: serializeHash(block.header.commitment.problem_hash),
+        },
+        miner: serializeAddress(block.header.miner),
+      },
+      coinbase: block.coinbase,
+      transactions: block.transactions,
+      solution_reveal: {
+        ...block.solution_reveal,
+        commitment: {
+          hash: serializeHash(block.solution_reveal.commitment.hash),
+          problem_hash: serializeHash(block.solution_reveal.commitment.problem_hash),
+        },
+      },
+    };
   }
 
   // ========== Transaction Methods ==========

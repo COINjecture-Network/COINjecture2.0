@@ -259,10 +259,17 @@ pub trait CoinjectRpc {
     /// Get network information including PeerId (for P2P debugging and bootnode configuration)
     #[method(name = "network_getInfo")]
     async fn get_network_info(&self) -> RpcResult<NetworkInfo>;
+
+    /// Submit a mined block to the network
+    #[method(name = "chain_submitBlock")]
+    async fn submit_block(&self, block: Block) -> RpcResult<String>;
 }
 
 /// Faucet handler callback type
 pub type FaucetHandler = Arc<dyn Fn(&Address) -> Result<Balance, String> + Send + Sync>;
+
+/// Block submission handler callback type
+pub type BlockSubmissionHandler = Arc<dyn Fn(Block) -> Result<String, String> + Send + Sync>;
 
 /// RPC server state
 pub struct RpcServerState {
@@ -280,6 +287,8 @@ pub struct RpcServerState {
     pub genesis_hash: Hash,
     pub peer_count: Arc<RwLock<usize>>,
     pub faucet_handler: Option<FaucetHandler>,
+    /// Block submission handler (validates and broadcasts blocks)
+    pub block_submission_handler: Option<BlockSubmissionHandler>,
     /// Local PeerId for network identification
     pub local_peer_id: Option<String>,
     /// Listen addresses for the P2P network
@@ -791,6 +800,35 @@ impl CoinjectRpcServer for RpcServerImpl {
             listen_addresses,
             bootnode_address_hint: bootnode_hint,
         })
+    }
+
+    async fn submit_block(&self, block: Block) -> RpcResult<String> {
+        println!("📥 RPC: Received block submission for height {}", block.header.height);
+        
+        let handler = self.state.block_submission_handler.as_ref()
+            .ok_or_else(|| {
+                eprintln!("❌ RPC: Block submission handler not available");
+                ErrorObjectOwned::owned(
+                    INTERNAL_ERROR,
+                    "Block submission not enabled on this node".to_string(),
+                    None::<()>
+                )
+            })?;
+
+        match handler(block) {
+            Ok(block_hash) => {
+                println!("✅ RPC: Block submission successful, hash: {}", block_hash);
+                Ok(block_hash)
+            },
+            Err(e) => {
+                eprintln!("❌ RPC: Block submission handler returned error: {}", e);
+                Err(ErrorObjectOwned::owned(
+                    INTERNAL_ERROR,
+                    format!("Block submission failed: {}", e),
+                    None::<()>
+                ))
+            },
+        }
     }
 }
 

@@ -53,8 +53,8 @@ deploy_to_node() {
     rm -f /tmp/coinject-node.tar
     
     # Deploy and restart on remote node
-    # Pass BOOTNODES as environment variable to SSH session
-    ssh -i "$SSH_KEY" root@$NODE_IP "BOOTNODES_ARG='$BOOTNODES' bash -s" << 'ENDSSH'
+    # Pass variables as environment variables to SSH session
+    ssh -i "$SSH_KEY" root@$NODE_IP "CONTAINER_NAME='$CONTAINER_NAME' IMAGE_NAME='$IMAGE_NAME' DATA_VOLUME='$DATA_VOLUME' HF_TOKEN='$HF_TOKEN' HF_DATASET='$HF_DATASET' BOOTNODES_ARG='$BOOTNODES' bash -s" << 'ENDSSH'
 set -e
 
 # Check and install Docker if needed

@@ -22,6 +22,7 @@ use tokio::time;
 /// Commands that can be sent to the network task
 enum NetworkCommand {
     BroadcastBlock(coinject_core::Block),
+    SubmitBlock(coinject_core::Block), // Submit block from RPC (validates and stores before broadcasting)
     BroadcastTransaction(coinject_core::Transaction),
     BroadcastStatus { best_height: u64, best_hash: coinject_core::Hash, genesis_hash: coinject_core::Hash },
     RequestBlocks { from_height: u64, to_height: u64 },
@@ -300,6 +301,24 @@ impl CoinjectNode {
         // Create shared peer count tracker (used by both RPC and network event handler)
         let peer_count = Arc::new(RwLock::new(0usize));
 
+        // Create block submission handler
+        // This sends the block to the network event loop for processing
+        let network_cmd_tx_for_block_submit = network_cmd_tx.clone();
+        let block_submission_handler: coinject_rpc::BlockSubmissionHandler = Arc::new(move |block: coinject_core::Block| -> Result<String, String> {
+            // Send block to network event loop for validation and processing
+            // SubmitBlock will validate, store, and then broadcast
+            let block_hash = hex::encode(block.hash().as_bytes());
+            
+            println!("📥 RPC block submission handler: received block {} (height: {})", block_hash, block.header.height);
+            
+            // Use SubmitBlock which validates and stores before broadcasting
+            if let Err(e) = network_cmd_tx_for_block_submit.send(NetworkCommand::SubmitBlock(block)) {
+                return Err(format!("Failed to submit block: {}", e));
+            }
+            
+            Ok(block_hash)
+        });
+
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
             timelock_state: Arc::clone(&self.timelock_state),
@@ -315,6 +334,7 @@ impl CoinjectNode {
             genesis_hash: self.chain.genesis_hash(),
             peer_count: Arc::clone(&peer_count),
             faucet_handler,
+            block_submission_handler: Some(block_submission_handler),
             local_peer_id: Some(local_peer_id_str.clone()),
             listen_addresses: Arc::clone(&listen_addresses),
         });
@@ -331,6 +351,20 @@ impl CoinjectNode {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!();
 
+        // Clone state for network task
+        let chain_for_network = Arc::clone(&self.chain);
+        let validator_for_network = Arc::clone(&self.validator);
+        let state_for_network = Arc::clone(&self.state);
+        let timelock_state_for_network = Arc::clone(&self.timelock_state);
+        let escrow_state_for_network = Arc::clone(&self.escrow_state);
+        let channel_state_for_network = Arc::clone(&self.channel_state);
+        let trustline_state_for_network = Arc::clone(&self.trustline_state);
+        let dimensional_pool_state_for_network = Arc::clone(&self.dimensional_pool_state);
+        let marketplace_state_for_network = Arc::clone(&self.marketplace_state);
+        let tx_pool_for_network = Arc::clone(&self.tx_pool);
+        let hf_sync_for_network = self.hf_sync.clone();
+        let block_buffer_for_network: Arc<RwLock<HashMap<u64, coinject_core::Block>>> = Arc::new(RwLock::new(HashMap::new()));
+
         // Spawn network task (processes events and commands)
         tokio::task::spawn_local(async move {
             let mut network = network_service;
@@ -339,7 +373,7 @@ impl CoinjectNode {
             
             loop {
                 tokio::select! {
-                    // Process network events
+                    // Process swarm events
                     _ = network.process_events() => {},
 
                     // Periodic bootnode retry
@@ -350,6 +384,69 @@ impl CoinjectNode {
                     // Handle commands from other tasks
                     Some(cmd) = network_cmd_rx.recv() => {
                         match cmd {
+                            NetworkCommand::SubmitBlock(block) => {
+                                // Validate and store block before broadcasting
+                                let best_height = chain_for_network.best_block_height().await;
+                                let best_hash = chain_for_network.best_block_hash().await;
+                                let expected_height = best_height + 1;
+
+                                if block.header.height != expected_height {
+                                    eprintln!("❌ RPC block submission failed: height {} does not match expected {}", block.header.height, expected_height);
+                                    continue;
+                                }
+
+                                // Validate block (skip age check for fresh submissions)
+                                match validator_for_network.validate_block_with_options(&block, &best_hash, expected_height, false) {
+                                    Ok(()) => {},
+                                    Err(e) => {
+                                        eprintln!("❌ RPC block submission failed validation: {}", e);
+                                        continue;
+                                    }
+                                }
+
+                                // Store block
+                                let is_new_best = match chain_for_network.store_block(&block).await {
+                                    Ok(is_new_best) => {
+                                        if !is_new_best {
+                                            println!("⚠️  RPC block {} was stored but is not the new best block (may be a fork or duplicate)", block.header.height);
+                                        }
+                                        is_new_best
+                                    },
+                                    Err(e) => {
+                                        eprintln!("❌ RPC block submission failed to store: {}", e);
+                                        continue;
+                                    }
+                                };
+
+                                // Apply block transactions (even if not new best, to credit the miner)
+                                // Note: If this block becomes part of a longer chain later, we'll reorganize
+                                match Self::apply_block_transactions(&block, &state_for_network, &timelock_state_for_network, &escrow_state_for_network, &channel_state_for_network, &trustline_state_for_network, &dimensional_pool_state_for_network, &marketplace_state_for_network) {
+                                    Ok(applied_txs) => {
+                                        // Remove applied transactions from pool
+                                        let mut pool = tx_pool_for_network.write().await;
+                                        for tx_hash in &applied_txs {
+                                            pool.remove(tx_hash);
+                                        }
+                                        drop(pool);
+
+                                        if is_new_best {
+                                            println!("✅ RPC block {} submitted and applied successfully (new best block)", block.header.height);
+                                        } else {
+                                            println!("✅ RPC block {} submitted and applied (stored as fork block)", block.header.height);
+                                        }
+
+                                        // Broadcast to network
+                                        if let Err(e) = network.broadcast_block(block) {
+                                            if !e.to_string().contains("InsufficientPeers") && !e.to_string().contains("Duplicate") {
+                                                eprintln!("⚠️  Failed to broadcast submitted block: {}", e);
+                                            }
+                                        }
+                                    },
+                                    Err(e) => {
+                                        eprintln!("❌ RPC block submission failed to apply transactions: {}", e);
+                                    }
+                                }
+                            }
                             NetworkCommand::BroadcastBlock(block) => {
                                 match network.broadcast_block(block) {
                                     Err(e) if e.to_string().contains("InsufficientPeers") => {

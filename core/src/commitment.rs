@@ -12,7 +12,7 @@ pub struct Commitment {
 }
 
 impl Commitment {
-    /// Create commitment from problem, solution, and epoch salt
+    /// Create commitment from problem, solution, and epoch salt (using bincode serialization)
     pub fn create(problem: &ProblemType, solution: &Solution, epoch_salt: &Hash) -> Self {
         let problem_hash = problem.hash();
         let solution_hash = Hash::new(&bincode::serialize(solution).unwrap_or_default());
@@ -31,10 +31,43 @@ impl Commitment {
         }
     }
 
+    /// Create commitment from problem, solution, and epoch salt (using JSON serialization)
+    /// This enables client-side mining from web browsers that can't use bincode
+    pub fn create_from_json(problem: &ProblemType, solution: &Solution, epoch_salt: &Hash) -> Self {
+        // Hash problem using JSON serialization
+        let problem_json = serde_json::to_vec(problem).unwrap_or_default();
+        let problem_hash = Hash::new(&problem_json);
+        
+        // Hash solution using JSON serialization
+        let solution_json = serde_json::to_vec(solution).unwrap_or_default();
+        let solution_hash = Hash::new(&solution_json);
+
+        // commitment = H(problem_hash_bytes || epoch_salt_bytes || solution_hash_bytes)
+        let mut commitment_data = Vec::new();
+        commitment_data.extend_from_slice(problem_hash.as_bytes());
+        commitment_data.extend_from_slice(epoch_salt.as_bytes());
+        commitment_data.extend_from_slice(solution_hash.as_bytes());
+
+        let hash = Hash::new(&commitment_data);
+
+        Commitment {
+            hash,
+            problem_hash,
+        }
+    }
+
     /// Verify that commitment matches revealed problem and solution
+    /// Tries both bincode and JSON serialization to support both server-side and client-side mining
     pub fn verify(&self, problem: &ProblemType, solution: &Solution, epoch_salt: &Hash) -> bool {
-        let expected = Self::create(problem, solution, epoch_salt);
-        self.hash == expected.hash && self.problem_hash == expected.problem_hash
+        // Try bincode serialization first (server-side mining)
+        let expected_bincode = Self::create(problem, solution, epoch_salt);
+        if self.hash == expected_bincode.hash && self.problem_hash == expected_bincode.problem_hash {
+            return true;
+        }
+
+        // Try JSON serialization (client-side mining from web browsers)
+        let expected_json = Self::create_from_json(problem, solution, epoch_salt);
+        self.hash == expected_json.hash && self.problem_hash == expected_json.problem_hash
     }
 
     /// Serialize for block header
@@ -116,5 +149,35 @@ mod tests {
 
         let reveal = SolutionReveal::new(problem, solution, commitment);
         assert!(reveal.verify(&epoch_salt));
+    }
+
+    #[test]
+    fn test_json_commitment_compatibility() {
+        // Test that JSON-based commitments can be verified
+        let problem = ProblemType::SubsetSum {
+            numbers: vec![1, 2, 3, 4, 5],
+            target: 9,
+        };
+
+        let solution = Solution::SubsetSum(vec![1, 2, 3]); // 2 + 3 + 4 = 9
+
+        let epoch_salt = Hash::new(b"parent_block_hash");
+
+        // Create commitment using JSON serialization (client-side)
+        let commitment_json = Commitment::create_from_json(&problem, &solution, &epoch_salt);
+
+        // Verify it can be verified (should work with both methods)
+        assert!(commitment_json.verify(&problem, &solution, &epoch_salt));
+
+        // Create commitment using bincode serialization (server-side)
+        let commitment_bincode = Commitment::create(&problem, &solution, &epoch_salt);
+
+        // They should be different (different serialization formats)
+        assert_ne!(commitment_json.hash, commitment_bincode.hash);
+        assert_ne!(commitment_json.problem_hash, commitment_bincode.problem_hash);
+
+        // But both should verify correctly
+        assert!(commitment_json.verify(&problem, &solution, &epoch_salt));
+        assert!(commitment_bincode.verify(&problem, &solution, &epoch_salt));
     }
 }
