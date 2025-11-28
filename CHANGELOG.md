@@ -24,12 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Better body encoding handling (base64 and utf8)
   - All errors now return proper JSON-RPC 2.0 error format with diagnostic data
 
-- **Header Hashing Mismatch Debugging**: Enhanced logging to diagnose client vs. server JSON serialization differences
-  - Added detailed logging of exact JSON bytes on server side (first 200 bytes)
-  - Added client-side logging of JSON bytes and object structure when debug mode enabled
-  - Server now logs both JSON string and byte array representation for comparison
-  - Client logs JSON object structure before stringification to verify field order
-  - This will help identify serialization differences (float precision, field order, array formatting)
+- **Header Hashing Mismatch**: Fixed JSON field ordering issue causing browser-mined blocks to show `leading_zeros=0`
+  - **Root cause**: `serializeBlockForRpc()` used spread operator `...block.header` followed by field overrides, causing JavaScript to reorder fields
+  - **Impact**: Client calculated hash with correct field order, but RPC submission reordered fields, breaking server-side hash validation
+  - **Fix**: Explicitly construct header object with all fields in exact Rust struct order (matching `BlockHeader` in `core/src/block.rs`)
+  - Field order now matches Rust: `version, height, prev_hash, timestamp, transactions_root, solutions_root, commitment, work_score, miner, nonce, solve_time_us, verify_time_us, time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules`
+  - Enhanced logging to diagnose client vs. server JSON serialization differences
+    - Added detailed logging of exact JSON bytes on server side (first 200 bytes)
+    - Added client-side logging of JSON bytes and object structure when debug mode enabled
+    - Server now logs both JSON string and byte array representation for comparison
 - **Historical Block Sync**: Fixed Cloud Run and other nodes getting stuck during initial sync due to gossipsub message deduplication
   - Added `SyncBlock` message type with unique `request_id` to bypass gossipsub deduplication for historical blocks
   - Implemented `send_sync_block()` method in `NetworkService` to send blocks with unique identifiers
@@ -66,12 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known Issues / Ongoing Work
 - **Chain data persistence on droplets**: Redeploying without restoring `/root/coinject-data` wipes the chain and PeerID. Added a persistence guide (`docs/node-state-persistence.md`), but production deploys still require manual backup/restore until we automate snapshots.
-- **Client vs. server header hashing mismatch (CRITICAL)**: Client-side mining still results in zero balance due to header hash not meeting difficulty. Enhanced debug logging has been added on both client and server to capture exact JSON payloads. **Status**: Debugging infrastructure in place, awaiting comparison of logged JSON payloads to identify serialization differences. The issue is likely:
-  - Float precision differences (JavaScript vs Rust serde_json)
-  - Field ordering in JSON serialization
-  - Array formatting differences
-  - Byte array representation differences
-  - **Next Steps**: Test with debug logging enabled (`localStorage.setItem('coinjecture:mining-debug', 'true')`), compare client and server JSON payloads, then adjust serialization to match exactly.
 
 ## [4.7.6] - 2025-11-27
 
