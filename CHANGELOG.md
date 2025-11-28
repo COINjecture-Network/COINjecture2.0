@@ -5,6 +5,29 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.9] - 2025-11-28
+
+### Fixed
+- **Network Fork Unification**: Resolved critical issue where Node 1 and Node 2 were mining on separate forks
+  - Identified root cause: Node 1 running old code without `SyncBlock` message type
+  - Built and deployed v4.7.8 Docker image with `SyncBlock` fix to Node 1 (143.110.139.166)
+  - Copied chain data from Node 2 to Node 1 to unify the blockchain
+  - All nodes now share same genesis hash (`4a80254b...`)
+
+### Infrastructure
+- **Network Unification Deployment**
+  - Cloned v4.7.8 from `github.com/beanapologist/COINjecture-NetB-Updates`
+  - Compiled new Docker image with historical block sync fix
+  - Deployed to DigitalOcean Node 1
+  - Synchronized chain state across all nodes
+  - Verified 5 nodes with 4+ peers each on unified network
+
+### Status
+- **Before**: 2 separate fork networks, Cloud Run stuck at block 18
+- **After**: 1 unified network, all nodes syncing properly
+- Both DigitalOcean nodes mining and streaming to HuggingFace
+- Cloud Run nodes syncing via `SyncBlock` protocol
+
 ## [4.7.8] - 2025-11-27
 
 ### Fixed
