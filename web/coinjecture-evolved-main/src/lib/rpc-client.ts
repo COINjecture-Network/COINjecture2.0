@@ -429,17 +429,33 @@ export class RpcClient {
       return Array.from(bytes);
     };
 
+    // Explicitly construct header with all fields in exact Rust struct order
+    // This prevents JavaScript from reordering fields when using spread operator
+    // Field order matches BlockHeader in core/src/block.rs:
+    // version, height, prev_hash, timestamp, transactions_root, solutions_root,
+    // commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
+    // time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
     return {
       header: {
-        ...block.header,
+        version: block.header.version,
+        height: block.header.height,
         prev_hash: serializeHash(block.header.prev_hash),
+        timestamp: block.header.timestamp,
         transactions_root: serializeHash(block.header.transactions_root),
         solutions_root: serializeHash(block.header.solutions_root),
         commitment: {
           hash: serializeHash(block.header.commitment.hash),
           problem_hash: serializeHash(block.header.commitment.problem_hash),
         },
+        work_score: block.header.work_score,
         miner: serializeAddress(block.header.miner),
+        nonce: block.header.nonce,
+        solve_time_us: block.header.solve_time_us,
+        verify_time_us: block.header.verify_time_us,
+        time_asymmetry_ratio: block.header.time_asymmetry_ratio,
+        solution_quality: block.header.solution_quality,
+        complexity_weight: block.header.complexity_weight,
+        energy_estimate_joules: block.header.energy_estimate_joules,
       },
       coinbase: block.coinbase,
       transactions: block.transactions,
