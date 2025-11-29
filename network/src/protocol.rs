@@ -97,7 +97,12 @@ fn load_or_generate_keypair(path: Option<&PathBuf>) -> Result<identity::Keypair,
         // Try to load existing keypair
         if keypair_path.exists() {
             let bytes = std::fs::read(keypair_path)?;
-            let keypair = identity::Keypair::ed25519_from_bytes(bytes.clone())
+            // Try protobuf encoding first (new format), fall back to raw ed25519 bytes (old format)
+            let keypair = identity::Keypair::from_protobuf_encoding(&bytes)
+                .or_else(|_| {
+                    // Try legacy ed25519 raw bytes format
+                    identity::Keypair::ed25519_from_bytes(bytes.clone())
+                })
                 .map_err(|e| format!("Failed to parse keypair from bytes: {:?}", e))?;
             println!("   ✅ Loaded existing keypair from {:?}", keypair_path);
             return Ok(keypair);
@@ -106,15 +111,14 @@ fn load_or_generate_keypair(path: Option<&PathBuf>) -> Result<identity::Keypair,
         // Generate new keypair and save it
         let keypair = identity::Keypair::generate_ed25519();
         
-        // Save the secret key bytes for Ed25519
-        if let identity::Keypair::Ed25519(ed25519_keypair) = &keypair {
-            let bytes = ed25519_keypair.to_bytes();
-            if let Some(parent) = keypair_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(keypair_path, bytes)?;
-            println!("   ✅ Generated and saved new keypair to {:?}", keypair_path);
+        // Save the keypair using protobuf encoding (works with all key types)
+        let bytes = keypair.to_protobuf_encoding()
+            .map_err(|e| format!("Failed to encode keypair: {:?}", e))?;
+        if let Some(parent) = keypair_path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+        std::fs::write(keypair_path, bytes)?;
+        println!("   ✅ Generated and saved new keypair to {:?}", keypair_path);
         
         Ok(keypair)
     } else {
