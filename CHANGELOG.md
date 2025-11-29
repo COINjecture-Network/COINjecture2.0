@@ -5,6 +5,36 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.16] - 2025-11-29
+
+### Added
+- **INSTITUTIONAL-GRADE METRICS v3.0**: Comprehensive HuggingFace data collection for academic research
+  - **Block Identity Metrics**: `block_hash`, `prev_block_hash` for chain linkage tracing
+  - **Timing Metrics**: `solve_time_us`, `verify_time_us` (microsecond precision), `block_time_seconds`, `mining_attempts`
+  - **Memory Metrics**: `solve_memory_bytes`, `verify_memory_bytes`, `peak_memory_bytes`
+  - **Network Metrics**: `peer_count`, `propagation_time_ms`, `sync_lag_blocks`
+  - **Mining Metrics**: `difficulty_target`, `nonce`, `hash_rate_estimate`
+  - **Chain Metrics**: `chain_work`, `transaction_count`, `block_size_bytes`
+  - **Economic Metrics**: `block_reward`, `total_fees`, `pool_distributions` (per-pool token allocation)
+  - **Hardware Metrics**: `cpu_model`, `cpu_cores`, `cpu_threads`, `ram_total_bytes`, `os_info`
+  - **Provenance Metrics**: `node_version`, `node_id` (PeerId), `data_version: "v3.0"`
+  
+- **NetworkContext**: New struct for passing network state to metrics collection
+- **HardwareContext**: Automatic hardware detection on node startup
+- **push_consensus_block_with_context()**: Enhanced API for full context metrics
+
+### Changed
+- DatasetRecord upgraded from v2.0 to v3.0 with 30+ new fields
+- All metrics now include hardware provenance (CPU model, cores, RAM)
+- Data provenance tracking now includes node identity and software version
+
+### Nuclear Reset
+- **Complete chain reset performed** due to unfixable chain corruption (blocks 17-18 hash mismatch)
+- Both DigitalOcean droplets reset to fresh genesis
+- New canonical chain started from block 0
+- All nodes now mining on unified fresh chain
+- HuggingFace streaming verified operational
+
 ## [4.7.9] - 2025-11-28
 
 ### Fixed

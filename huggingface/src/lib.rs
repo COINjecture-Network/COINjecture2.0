@@ -1,4 +1,5 @@
-// Hugging Face Dataset Integration
+// Hugging Face Dataset Integration - INSTITUTIONAL GRADE v3.0
+// Comprehensive metrics collection for academic research and transparency
 // Real-time sync of marketplace problem and solution data to Hugging Face
 
 pub mod client;
@@ -6,9 +7,9 @@ pub mod energy;
 pub mod metrics;
 pub mod serialize;
 
-pub use client::{HuggingFaceClient, HuggingFaceConfig};
+pub use client::{HuggingFaceClient, HuggingFaceConfig, DatasetRecord};
 pub use energy::{EnergyMeasurement, EnergyMeasurementMethod, EnergyConfig};
-pub use metrics::MetricsCollector;
+pub use metrics::{MetricsCollector, NetworkContext, HardwareContext};
 pub use serialize::{serialize_problem, serialize_solution};
 
 use coinject_state::ProblemSubmission;
@@ -29,8 +30,6 @@ pub struct SyncConfig {
     pub include_solver_address: bool,
     pub batch_size: usize,
     pub batch_interval: Duration,
-    /// Flush buffer after this many unique blocks (default: 50)
-    pub flush_interval_blocks: usize,
 }
 
 impl Default for SyncConfig {
@@ -41,7 +40,6 @@ impl Default for SyncConfig {
             include_solver_address: true,
             batch_size: 10,
             batch_interval: Duration::from_secs(5),
-            flush_interval_blocks: 50,
         }
     }
 }
@@ -53,9 +51,7 @@ impl HuggingFaceSync {
         energy_config: energy::EnergyConfig,
         sync_config: SyncConfig,
     ) -> Result<Self, SyncError> {
-        let mut client = HuggingFaceClient::new(hf_config)?;
-        // Apply configured flush interval
-        client.set_flush_interval_blocks(sync_config.flush_interval_blocks as u64);
+        let client = HuggingFaceClient::new(hf_config)?;
         let metrics_collector = MetricsCollector::new(energy_config);
 
         Ok(HuggingFaceSync {
@@ -130,6 +126,17 @@ impl HuggingFaceSync {
         block: &coinject_core::Block,
         is_mined: bool,
     ) -> Result<(), SyncError> {
+        self.push_consensus_block_with_context(block, is_mined, None).await
+    }
+    
+    /// Push consensus block with network context - INSTITUTIONAL GRADE v3.0
+    /// Includes peer count, sync lag, and propagation time for comprehensive metrics
+    pub async fn push_consensus_block_with_context(
+        &self,
+        block: &coinject_core::Block,
+        is_mined: bool,
+        network_ctx: Option<NetworkContext>,
+    ) -> Result<(), SyncError> {
         if !self.config.enabled {
             println!("⚠️  Hugging Face sync is disabled");
             return Ok(());
@@ -137,7 +144,7 @@ impl HuggingFaceSync {
 
         eprintln!("📦 Hugging Face: Collecting consensus block data for block {} (mined: {})", block.header.height, is_mined);
         let collector = self.metrics_collector.lock().await;
-        let record = match collector.collect_consensus_block_record(block, is_mined) {
+        let record = match collector.collect_consensus_block_record_with_context(block, is_mined, network_ctx.as_ref()) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("❌ Hugging Face: Failed to collect consensus block record: {}", e);
@@ -158,6 +165,12 @@ impl HuggingFaceSync {
                 Err(e.into())
             }
         }
+    }
+    
+    /// Set the node's PeerId for attribution in metrics
+    pub async fn set_node_id(&self, peer_id: String) {
+        let mut collector = self.metrics_collector.lock().await;
+        collector.set_node_id(peer_id);
     }
 
     /// Force flush any buffered records

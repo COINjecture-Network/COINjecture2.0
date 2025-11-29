@@ -55,25 +55,36 @@ pub struct HuggingFaceClient {
     flush_interval_blocks: u64, // Flush every N blocks
 }
 
-/// Dataset record structure
+/// Dataset record structure - INSTITUTIONAL GRADE v3.0
+/// Comprehensive metrics for academic research and transparency
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetRecord {
+    // ═══════════════════════════════════════════════════════════════════════════
     // PRIMARY CONTENT - Problem and Solution (most important!)
+    // ═══════════════════════════════════════════════════════════════════════════
     pub problem_id: String,
     pub problem_type: String,
     pub problem_data: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solution_data: Option<Value>,
 
-    // IDENTIFIERS - Who and when
+    // ═══════════════════════════════════════════════════════════════════════════
+    // BLOCK IDENTITY - Unique identification and chain linkage
+    // ═══════════════════════════════════════════════════════════════════════════
     pub block_height: u64,
     pub timestamp: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<String>,          // NEW: Hash of this block
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_block_hash: Option<String>,     // NEW: Hash of previous block (chain linkage)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submitter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solver: Option<String>,
 
+    // ═══════════════════════════════════════════════════════════════════════════
     // PERFORMANCE METRICS - Key results
+    // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_score: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,15 +93,41 @@ pub struct DatasetRecord {
     #[serde(serialize_with = "serialize_u128_as_string", deserialize_with = "deserialize_u128_from_string")]
     pub bounty: u128,
 
-    // ASYMMETRY METRICS - NP-hardness verification
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TIMING METRICS - Solve/verify performance (microsecond precision)
+    // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_asymmetry: Option<f64>,
+    pub solve_time_us: Option<u64>,          // NEW: Solve time in microseconds
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub space_asymmetry: Option<f64>,
+    pub verify_time_us: Option<u64>,         // NEW: Verify time in microseconds
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub energy_asymmetry: Option<f64>,
+    pub block_time_seconds: Option<f64>,     // NEW: Time since previous block
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mining_attempts: Option<u64>,        // NEW: Nonce attempts before success
 
-    // ENERGY MEASUREMENTS
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ASYMMETRY METRICS - NP-hardness verification (solve >> verify)
+    // ═══════════════════════════════════════════════════════════════════════════
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_asymmetry: Option<f64>,         // solve_time / verify_time
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_asymmetry: Option<f64>,        // solve_memory / verify_memory
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub energy_asymmetry: Option<f64>,       // solve_energy / verify_energy
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MEMORY METRICS - Space complexity tracking
+    // ═══════════════════════════════════════════════════════════════════════════
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solve_memory_bytes: Option<u64>,     // NEW: Memory used during solve
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_memory_bytes: Option<u64>,    // NEW: Memory used during verify
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_bytes: Option<u64>,      // NEW: Peak memory during block
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ENERGY MEASUREMENTS - Power consumption tracking
+    // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solve_energy_joules: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,15 +139,75 @@ pub struct DatasetRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energy_efficiency: Option<f64>,
 
-    // METADATA
+    // ═══════════════════════════════════════════════════════════════════════════
+    // NETWORK METRICS - P2P network state at block time
+    // ═══════════════════════════════════════════════════════════════════════════
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_count: Option<u32>,             // NEW: Connected peers when block received
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub propagation_time_ms: Option<u64>,    // NEW: Time to receive block from network
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_lag_blocks: Option<i64>,        // NEW: Blocks behind network tip
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DIFFICULTY & MINING METRICS
+    // ═══════════════════════════════════════════════════════════════════════════
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub difficulty_target: Option<u32>,      // NEW: Leading zeros required
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<u64>,                  // NEW: Winning nonce value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash_rate_estimate: Option<f64>,     // NEW: Estimated H/s (nonce/solve_time)
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CHAIN METRICS - Cumulative blockchain state
+    // ═══════════════════════════════════════════════════════════════════════════
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain_work: Option<f64>,             // NEW: Cumulative work score
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transaction_count: Option<u32>,      // NEW: Transactions in this block
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_size_bytes: Option<u64>,       // NEW: Total block size
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ECONOMIC METRICS - Tokenomics tracking
+    // ═══════════════════════════════════════════════════════════════════════════
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_reward: Option<String>,        // NEW: Total coinbase reward (as string for u128)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_fees: Option<String>,          // NEW: Sum of transaction fees (as string)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pool_distributions: Option<Value>,   // NEW: Token distribution to each pool
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // HARDWARE METRICS - Mining infrastructure transparency
+    // ═══════════════════════════════════════════════════════════════════════════
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_model: Option<String>,           // NEW: CPU model string
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_cores: Option<u32>,              // NEW: Number of CPU cores
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_threads: Option<u32>,            // NEW: Number of threads used
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ram_total_bytes: Option<u64>,        // NEW: Total system RAM
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub os_info: Option<String>,             // NEW: Operating system info
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // METADATA & PROVENANCE
+    // ═══════════════════════════════════════════════════════════════════════════
     pub status: String,
     pub submission_mode: String,
     pub energy_measurement_method: String,
 
-    // INSTITUTIONAL-GRADE DATA PROVENANCE (v2.0)
-    pub metrics_source: String,          // "block_header_actual" or "estimated"
-    pub measurement_confidence: String,  // "high" (from header), "medium" (proxy), "low" (estimate)
-    pub data_version: String,            // "v2.0" - institutional-grade with actual metrics
+    // INSTITUTIONAL-GRADE DATA PROVENANCE (v3.0)
+    pub metrics_source: String,              // "block_header_actual", "node_measured", "estimated"
+    pub measurement_confidence: String,      // "very_high", "high", "medium", "low"
+    pub data_version: String,                // "v3.0" - institutional-grade comprehensive
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_version: Option<String>,        // NEW: Node software version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,             // NEW: PeerId of recording node
 }
 
 impl HuggingFaceClient {
