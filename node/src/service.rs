@@ -196,8 +196,7 @@ impl CoinjectNode {
                 include_submitter_address: false,
                 include_solver_address: false,
                 batch_size: 10,
-                batch_interval: Duration::from_secs(60), // Legacy: not used for block-based flushing
-                flush_interval_blocks: 50, // Flush every 50 blocks instead of every 10 records
+                batch_interval: Duration::from_secs(60),
             };
 
             match HuggingFaceSync::new(hf_config, energy_config, sync_config.clone()) {
