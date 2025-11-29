@@ -314,6 +314,7 @@ impl CoinjectNode {
             genesis_hash: self.chain.genesis_hash(),
             peer_count: Arc::clone(&peer_count),
             faucet_handler,
+            block_submission_handler: None, // Block submission handled via network events
             local_peer_id: Some(local_peer_id_str.clone()),
             listen_addresses: Arc::clone(&listen_addresses),
         });
