@@ -232,7 +232,7 @@ impl HuggingFaceClient {
             buffer_size: 10,
             blocks_since_flush: 0,
             last_block_height: None,
-            flush_interval_blocks: 600, // Default: flush every 600 blocks (~10 min at current rate)
+            flush_interval_blocks: 10, // Flush every 10 blocks for near-real-time data streaming
         })
     }
 
