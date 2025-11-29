@@ -496,8 +496,9 @@ impl MetricsCollector {
         let block_reward = Some(block.coinbase.reward.to_string());
         let total_fees = Some(block.total_fees().to_string());
 
-        // Pool distributions from coinbase
-        let pool_distributions = serde_json::to_value(&block.coinbase.pool_distributions).ok();
+        // Pool distributions (would come from tokenomics if available)
+        // Currently not stored in CoinbaseTransaction - set to None
+        let pool_distributions: Option<serde_json::Value> = None;
 
         // ═══════════════════════════════════════════════════════════════════════════
         // NETWORK METRICS (from context if provided)
