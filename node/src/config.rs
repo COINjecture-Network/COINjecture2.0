@@ -40,8 +40,8 @@ pub struct NodeConfig {
     #[arg(long)]
     pub bootnodes: Vec<String>,
 
-    /// Chain ID
-    #[arg(long, default_value = "coinject-network-b")]
+    /// Chain ID (v2 = fresh network after 2025-11-30 reset)
+    #[arg(long, default_value = "coinject-network-b-v2")]
     pub chain_id: String,
 
     /// Mining difficulty (leading zeros in hash)
