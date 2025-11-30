@@ -429,7 +429,9 @@ impl CoinjectNode {
         let network_tx_for_status = network_cmd_tx.clone();
 
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(10));
+            // Increased from 10s to 30s to reduce gossipsub duplicate errors
+            // When height doesn't change, same message gets rejected as duplicate
+            let mut interval = time::interval(Duration::from_secs(30));
             loop {
                 interval.tick().await;
                 let best_height = chain_for_status.best_block_height().await;

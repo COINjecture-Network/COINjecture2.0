@@ -40,9 +40,10 @@ impl PeerState {
         }
     }
     
-    /// Check if peer is stale (hasn't reported in 60 seconds)
+    /// Check if peer is stale (hasn't reported recently)
+    /// Uses 120 second timeout to handle connection churn
     pub fn is_stale(&self) -> bool {
-        self.last_seen.elapsed() > Duration::from_secs(60)
+        self.last_seen.elapsed() > Duration::from_secs(120)
     }
 }
 
@@ -64,13 +65,14 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            // TESTNET BOOTSTRAP: 2 peers minimum
+            // TESTNET: 3 peers = both droplets + Sarah's GCE must be connected
+            // This ensures all nodes participate before mining
             // PRODUCTION: Increase to 5 for true 80% consensus (4/5)
-            // Once network has 5+ stable nodes, update this to 5
-            min_peers_for_mining: 2,        
+            min_peers_for_mining: 3,        
             sync_threshold_blocks: 10,       // Within 10 blocks
             consensus_threshold: 0.80,       // 80% agreement (XRPL-inspired)
-            peer_stale_timeout: Duration::from_secs(60),
+            // Increased from 60s to 120s to handle connection churn
+            peer_stale_timeout: Duration::from_secs(120),
             max_missed_rounds: 5,
         }
     }
