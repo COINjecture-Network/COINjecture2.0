@@ -64,11 +64,32 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            min_peers_for_mining: 5,        // Need at least 5 peers for true 80% (4/5)
+            // TESTNET BOOTSTRAP: 2 peers minimum
+            // PRODUCTION: Increase to 5 for true 80% consensus (4/5)
+            // Once network has 5+ stable nodes, update this to 5
+            min_peers_for_mining: 2,        
             sync_threshold_blocks: 10,       // Within 10 blocks
             consensus_threshold: 0.80,       // 80% agreement (XRPL-inspired)
             peer_stale_timeout: Duration::from_secs(60),
             max_missed_rounds: 5,
+        }
+    }
+}
+
+impl ConsensusConfig {
+    /// Production config with 5-peer minimum
+    pub fn production() -> Self {
+        Self {
+            min_peers_for_mining: 5,        // True 80% consensus requires 5 peers
+            ..Default::default()
+        }
+    }
+    
+    /// Testnet bootstrap config with 2-peer minimum  
+    pub fn testnet() -> Self {
+        Self {
+            min_peers_for_mining: 2,        // Bootstrap with 2 peers
+            ..Default::default()
         }
     }
 }
