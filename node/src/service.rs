@@ -5,6 +5,7 @@ use crate::chain::ChainState;
 use crate::config::NodeConfig;
 use crate::faucet::{Faucet, FaucetConfig};
 use crate::genesis::{create_genesis_block, GenesisConfig};
+use crate::peer_consensus::{PeerConsensus, ConsensusConfig};
 use crate::validator::BlockValidator;
 use coinject_consensus::{Miner, MiningConfig};
 use coinject_core::Address;
@@ -301,6 +302,9 @@ impl CoinjectNode {
         
         // Track best known peer height for sync-before-mine logic
         let best_known_peer_height = Arc::new(RwLock::new(0u64));
+        
+        // Multi-peer consensus tracker (XRPL-inspired, requires 5+ peers for 80% threshold)
+        let peer_consensus = Arc::new(PeerConsensus::with_defaults());
 
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
@@ -410,11 +414,12 @@ impl CoinjectNode {
         let buffer_for_events = Arc::clone(&block_buffer);
         let peer_count_for_events = Arc::clone(&peer_count);
         let best_peer_height_for_events = Arc::clone(&best_known_peer_height);
+        let peer_consensus_for_events = Arc::clone(&peer_consensus);
         let hf_sync_for_events = self.hf_sync.clone();
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, &peer_count_for_events, &best_peer_height_for_events, &hf_sync_for_events).await;
+                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, &peer_count_for_events, &best_peer_height_for_events, &peer_consensus_for_events, &hf_sync_for_events).await;
             }
         });
 
@@ -590,9 +595,10 @@ impl CoinjectNode {
             let hf_sync_for_mining = self.hf_sync.clone();
             let peer_count_for_mining = Arc::clone(&peer_count);
             let best_peer_height_for_mining = Arc::clone(&best_known_peer_height);
+            let peer_consensus_for_mining = Arc::clone(&peer_consensus);
 
             tokio::spawn(async move {
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining).await;
+                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining, peer_consensus_for_mining).await;
             });
         }
 
@@ -645,6 +651,7 @@ impl CoinjectNode {
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
         peer_count: &Arc<RwLock<usize>>,
         best_known_peer_height: &Arc<RwLock<u64>>,
+        peer_consensus: &Arc<PeerConsensus>,
         hf_sync: &Option<Arc<HuggingFaceSync>>,
     ) {
         match event {
@@ -871,6 +878,12 @@ impl CoinjectNode {
                         *best_peer = best_height;
                     }
                 }
+                
+                // Update multi-peer consensus tracker
+                let peer_id_str = format!("{:?}", peer);
+                let mut hash_bytes = [0u8; 32];
+                hash_bytes.copy_from_slice(best_hash.as_bytes());
+                peer_consensus.update_peer(peer_id_str, best_height, hash_bytes).await;
 
                 println!(
                     "📊 Status update from {:?}: height {} hash={:?} (ours: {} hash={:?})",
@@ -2335,6 +2348,7 @@ impl CoinjectNode {
         hf_sync: Option<Arc<HuggingFaceSync>>,
         peer_count: Arc<RwLock<usize>>,
         best_known_peer_height: Arc<RwLock<u64>>,
+        peer_consensus: Arc<PeerConsensus>,
     ) {
         // Wait for peer connections and initial chain sync before mining
         println!("⏳ Waiting for peer connections and chain sync before mining...");
@@ -2412,17 +2426,28 @@ impl CoinjectNode {
                 continue; // Skip mining this cycle, wait for next interval
             }
 
-            // SYNC-BEFORE-MINE: Check if we're behind peers - if so, DON'T MINE
-            let peer_best = *best_known_peer_height.read().await;
-            const SYNC_THRESHOLD: u64 = 10; // Must be within 10 blocks to mine
-            if peer_best > 0 && best_height + SYNC_THRESHOLD < peer_best {
-                let blocks_behind = peer_best - best_height;
-                println!("⏸️  Mining PAUSED - {} blocks behind peers (our: {}, best peer: {}). Waiting for sync...", 
-                    blocks_behind, best_height, peer_best);
+            // SYNC-BEFORE-MINE: Multi-peer consensus check (XRPL-inspired)
+            // Requires 5+ peers with 80% agreement before mining
+            let (should_mine, reason) = peer_consensus.should_mine(best_height).await;
+            if !should_mine {
+                println!("⏸️  Mining PAUSED: {}", reason);
+                
+                // Fallback: Also check simple best-peer height (for bootstrap with <5 peers)
+                let peer_best = *best_known_peer_height.read().await;
+                const SYNC_THRESHOLD: u64 = 10;
+                if peer_best > 0 && best_height + SYNC_THRESHOLD < peer_best {
+                    let blocks_behind = peer_best - best_height;
+                    println!("   Also {} blocks behind best peer (our: {}, best: {})", 
+                        blocks_behind, best_height, peer_best);
+                }
                 continue; // Skip mining, check again next interval
             }
+            
+            // Log consensus diagnostics
+            let diagnostics = peer_consensus.diagnostics().await;
+            println!("✅ Consensus OK: {}", diagnostics);
 
-            // Only mine if we're synced (within threshold of best known peer)
+            // Ready to mine!
             println!("⛏️  Mining block {}...", best_height + 1);
 
             // Select transactions from pool (top 100 by fee)

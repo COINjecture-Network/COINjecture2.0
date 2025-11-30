@@ -64,7 +64,7 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            min_peers_for_mining: 3,        // Need at least 3 peers
+            min_peers_for_mining: 5,        // Need at least 5 peers for true 80% (4/5)
             sync_threshold_blocks: 10,       // Within 10 blocks
             consensus_threshold: 0.80,       // 80% agreement (XRPL-inspired)
             peer_stale_timeout: Duration::from_secs(60),
