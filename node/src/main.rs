@@ -8,6 +8,7 @@ mod genesis;
 mod keystore;
 mod metrics;
 mod metrics_server;
+mod peer_consensus;
 mod service;
 mod validator;
 
