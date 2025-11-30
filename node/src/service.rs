@@ -298,6 +298,9 @@ impl CoinjectNode {
 
         // Create shared peer count tracker (used by both RPC and network event handler)
         let peer_count = Arc::new(RwLock::new(0usize));
+        
+        // Track best known peer height for sync-before-mine logic
+        let best_known_peer_height = Arc::new(RwLock::new(0u64));
 
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
@@ -406,11 +409,12 @@ impl CoinjectNode {
         let network_tx_for_events = network_cmd_tx.clone();
         let buffer_for_events = Arc::clone(&block_buffer);
         let peer_count_for_events = Arc::clone(&peer_count);
+        let best_peer_height_for_events = Arc::clone(&best_known_peer_height);
         let hf_sync_for_events = self.hf_sync.clone();
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, &peer_count_for_events, &hf_sync_for_events).await;
+                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, &peer_count_for_events, &best_peer_height_for_events, &hf_sync_for_events).await;
             }
         });
 
@@ -585,9 +589,10 @@ impl CoinjectNode {
             let network_tx = network_cmd_tx.clone();
             let hf_sync_for_mining = self.hf_sync.clone();
             let peer_count_for_mining = Arc::clone(&peer_count);
+            let best_peer_height_for_mining = Arc::clone(&best_known_peer_height);
 
             tokio::spawn(async move {
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining).await;
+                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining).await;
             });
         }
 
@@ -639,6 +644,7 @@ impl CoinjectNode {
         network_tx: &mpsc::UnboundedSender<NetworkCommand>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
         peer_count: &Arc<RwLock<usize>>,
+        best_known_peer_height: &Arc<RwLock<u64>>,
         hf_sync: &Option<Arc<HuggingFaceSync>>,
     ) {
         match event {
@@ -857,6 +863,14 @@ impl CoinjectNode {
             NetworkEvent::StatusUpdate { peer, best_height, best_hash } => {
                 let our_height = chain.best_block_height().await;
                 let our_hash = chain.best_block_hash().await;
+
+                // Update best known peer height for sync-before-mine logic
+                {
+                    let mut best_peer = best_known_peer_height.write().await;
+                    if best_height > *best_peer {
+                        *best_peer = best_height;
+                    }
+                }
 
                 println!(
                     "📊 Status update from {:?}: height {} hash={:?} (ours: {} hash={:?})",
@@ -2320,6 +2334,7 @@ impl CoinjectNode {
         network_tx: mpsc::UnboundedSender<NetworkCommand>,
         hf_sync: Option<Arc<HuggingFaceSync>>,
         peer_count: Arc<RwLock<usize>>,
+        best_known_peer_height: Arc<RwLock<u64>>,
     ) {
         // Wait for peer connections and initial chain sync before mining
         println!("⏳ Waiting for peer connections and chain sync before mining...");
@@ -2397,7 +2412,17 @@ impl CoinjectNode {
                 continue; // Skip mining this cycle, wait for next interval
             }
 
-            // Only mine if we're still at the same height (no new blocks received)
+            // SYNC-BEFORE-MINE: Check if we're behind peers - if so, DON'T MINE
+            let peer_best = *best_known_peer_height.read().await;
+            const SYNC_THRESHOLD: u64 = 10; // Must be within 10 blocks to mine
+            if peer_best > 0 && best_height + SYNC_THRESHOLD < peer_best {
+                let blocks_behind = peer_best - best_height;
+                println!("⏸️  Mining PAUSED - {} blocks behind peers (our: {}, best peer: {}). Waiting for sync...", 
+                    blocks_behind, best_height, peer_best);
+                continue; // Skip mining, check again next interval
+            }
+
+            // Only mine if we're synced (within threshold of best known peer)
             println!("⛏️  Mining block {}...", best_height + 1);
 
             // Select transactions from pool (top 100 by fee)
