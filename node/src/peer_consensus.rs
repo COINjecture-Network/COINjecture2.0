@@ -139,11 +139,23 @@ impl PeerConsensus {
         }
     }
     
-    /// Remove a peer (disconnected)
+    /// Mark a peer as disconnected (but keep tracking for stale timeout)
+    /// This allows peers to still count if they reconnect within the timeout
+    pub async fn mark_peer_disconnected(&self, peer_id: &str) {
+        // DON'T remove the peer - let them become stale naturally after 120s
+        // This handles connection churn where peers rapidly connect/disconnect
+        let peers = self.peers.read().await;
+        if peers.contains_key(peer_id) {
+            println!("📡 Peer {} disconnected (still tracking for 120s)", peer_id);
+        }
+        // Peer's last_seen stays the same, so they'll count until stale
+    }
+    
+    /// Actually remove a peer (only call for permanent removal)
     pub async fn remove_peer(&self, peer_id: &str) {
         let mut peers = self.peers.write().await;
         peers.remove(peer_id);
-        println!("📡 Peer removed from tracking: {}", peer_id);
+        println!("📡 Peer permanently removed: {}", peer_id);
     }
     
     /// Get all active (non-filtered, non-stale) peers

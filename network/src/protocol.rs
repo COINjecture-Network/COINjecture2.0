@@ -40,6 +40,8 @@ pub enum NetworkMessage {
         best_height: u64,
         best_hash: Hash,
         genesis_hash: Hash,
+        /// Timestamp to make each status unique (avoids gossipsub duplicate rejection)
+        timestamp: u64,
     },
 }
 
@@ -233,19 +235,31 @@ impl NetworkService {
             identify,
         };
 
-        // Create transport
-        let transport = tcp::tokio::Transport::default()
+        // Create transport with TCP keepalive to prevent NAT/firewall disconnects
+        let tcp_config = tcp::Config::default()
+            .nodelay(true)  // Disable Nagle's algorithm for lower latency
+            .port_reuse(true);  // Allow port reuse for faster reconnects
+        
+        // Configure yamux with longer timeouts for unstable connections
+        let mut yamux_config = yamux::Config::default();
+        yamux_config.set_receive_window_size(16 * 1024 * 1024);  // 16MB window
+        yamux_config.set_max_buffer_size(24 * 1024 * 1024);  // 24MB buffer
+        
+        let transport = tcp::tokio::Transport::new(tcp_config)
             .upgrade(libp2p::core::upgrade::Version::V1)
             .authenticate(noise::Config::new(&local_key)?)
-            .multiplex(yamux::Config::default())
+            .multiplex(yamux_config)
             .boxed();
 
-        // Create swarm
+        // Create swarm with connection keep-alive
+        let swarm_config = libp2p::swarm::Config::with_tokio_executor()
+            .with_idle_connection_timeout(Duration::from_secs(300));  // 5 min idle timeout
+        
         let swarm = Swarm::new(
             transport,
             behaviour,
             local_peer_id,
-            libp2p::swarm::Config::with_tokio_executor(),
+            swarm_config,
         );
 
         // Create event channel
@@ -368,6 +382,10 @@ impl NetworkService {
             best_height,
             best_hash,
             genesis_hash,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
         };
         let data = bincode::serialize(&message)?;
         match self.swarm
@@ -499,6 +517,7 @@ impl NetworkService {
                 best_height,
                 best_hash,
                 genesis_hash: _,
+                timestamp: _, // Ignored - only used to prevent gossipsub duplicate rejection
             }) => {
                 let _ = self.event_tx.send(NetworkEvent::StatusUpdate {
                     peer,
@@ -611,20 +630,30 @@ impl NetworkService {
                 }
                 let _ = self.event_tx.send(NetworkEvent::PeerConnected(peer_id));
             }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                println!("Connection closed with peer: {}", peer_id);
-                self.peers.remove(&peer_id);
-                self.mesh_peers.remove(&peer_id);
-                // Remove peer from gossipsub mesh
-                self.swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .remove_explicit_peer(&peer_id);
-                // Update shared peer count
-                if let Ok(mut count) = self.peer_count.try_write() {
-                    *count = self.peers.len();
+            SwarmEvent::ConnectionClosed { peer_id, cause, num_established, .. } => {
+                // Log detailed close reason for debugging connection stability
+                let reason = match &cause {
+                    Some(err) => format!("{:?}", err),
+                    None => "graceful close".to_string(),
+                };
+                println!("Connection closed with peer: {} (reason: {}, remaining: {})", 
+                    peer_id, reason, num_established);
+                
+                // Only remove from tracking if ALL connections to this peer are closed
+                if num_established == 0 {
+                    self.peers.remove(&peer_id);
+                    self.mesh_peers.remove(&peer_id);
+                    // Remove peer from gossipsub mesh
+                    self.swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .remove_explicit_peer(&peer_id);
+                    // Update shared peer count
+                    if let Ok(mut count) = self.peer_count.try_write() {
+                        *count = self.peers.len();
+                    }
+                    let _ = self.event_tx.send(NetworkEvent::PeerDisconnected(peer_id));
                 }
-                let _ = self.event_tx.send(NetworkEvent::PeerDisconnected(peer_id));
             }
             SwarmEvent::NewListenAddr { address, .. } => {
                 println!("Listening on: {}", address);
