@@ -70,7 +70,9 @@ impl Default for ConsensusConfig {
             // PRODUCTION: Increase to 4+ when we have 5+ nodes for true 80% consensus
             min_peers_for_mining: 2,        
             sync_threshold_blocks: 10,       // Within 10 blocks
-            consensus_threshold: 0.80,       // 80% agreement (XRPL-inspired)
+            // TESTNET: 51% for 2-peer scenarios (1/2 = 50% passes)
+            // PRODUCTION: Increase to 80% when we have 5+ nodes
+            consensus_threshold: 0.51,
             // Increased from 60s to 120s to handle connection churn
             peer_stale_timeout: Duration::from_secs(120),
             max_missed_rounds: 5,
