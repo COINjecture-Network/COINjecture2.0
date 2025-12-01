@@ -65,10 +65,10 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            // TESTNET: 3 peers = both droplets + Sarah's GCE must be connected
-            // This ensures all nodes participate before mining
-            // PRODUCTION: Increase to 5 for true 80% consensus (4/5)
-            min_peers_for_mining: 3,        
+            // TESTNET: 2 peers minimum for 3-node network
+            // Each node sees N-1 peers (can't see itself), so with 3 nodes each sees max 2
+            // PRODUCTION: Increase to 4+ when we have 5+ nodes for true 80% consensus
+            min_peers_for_mining: 2,        
             sync_threshold_blocks: 10,       // Within 10 blocks
             consensus_threshold: 0.80,       // 80% agreement (XRPL-inspired)
             // Increased from 60s to 120s to handle connection churn
