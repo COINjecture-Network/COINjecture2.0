@@ -303,8 +303,8 @@ impl CoinjectNode {
             }) as coinject_rpc::FaucetHandler
         });
 
-        // Create shared peer count tracker (used by both RPC and network event handler)
-        let peer_count = Arc::new(RwLock::new(0usize));
+        // NOTE: peer_count was already created at line 255 and passed to NetworkService
+        // DO NOT create a new one here - use the same Arc so network updates are visible!
         
         // Track best known peer height for sync-before-mine logic
         let best_known_peer_height = Arc::new(RwLock::new(0u64));
