@@ -65,12 +65,13 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            // TESTNET: 2 peers minimum for 3-node network
-            // Each node sees N-1 peers (can't see itself), so with 3 nodes each sees max 2
+            // TESTNET BOOTSTRAP: 1 peer minimum for 2-node bootstrap
+            // With 2 nodes, each can only see 1 peer (can't see itself)
+            // Increase to 2+ when Sarah's GCE joins (3-node network)
             // PRODUCTION: Increase to 4+ when we have 5+ nodes for true 80% consensus
-            min_peers_for_mining: 2,        
+            min_peers_for_mining: 1,        
             sync_threshold_blocks: 10,       // Within 10 blocks
-            // TESTNET: 51% for 2-peer scenarios (1/2 = 50% passes)
+            // TESTNET: 51% for 1-2 peer scenarios
             // PRODUCTION: Increase to 80% when we have 5+ nodes
             consensus_threshold: 0.51,
             // Increased from 60s to 120s to handle connection churn
