@@ -7,12 +7,15 @@ set -e
 # Configuration
 DROPLET1="143.110.139.166"
 DROPLET2="68.183.205.12"
+# Peer IDs (discovered from network_getInfo RPC)
+DROPLET1_PEER_ID="12D3KooWPvk2aAfXSdYQvkX5j6bzqqzeNQ4hqgDJR2CiR27bNi7t"
+DROPLET2_PEER_ID="12D3KooWE5DBbcTYLCH3inwaxQo5yoeGbPTvWHK4rGJi3sRHjF13"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/COINjecture-Key}"
-IMAGE_NAME="coinject-node:latest"
+IMAGE_NAME="gcr.io/coinjecture/coinject-node:v4.7.30"
 CONTAINER_NAME="coinject-node"
 DATA_VOLUME="coinject-data"
 HF_TOKEN="${HF_TOKEN:-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}"
-HF_DATASET="${HF_DATASET:-COINjecture/NP_Solutions}"
+HF_DATASET="${HF_DATASET:-COINjecture/NP_Solutions_v3}"
 
 echo "🚀 Deploying Docker image to nodes..."
 echo "📦 Image: $IMAGE_NAME"
@@ -170,12 +173,13 @@ ENDSSH
     echo ""
 }
 
-# Deploy to both nodes
-# Node 1: No bootnodes (first node)
-deploy_to_node "$DROPLET1" "Node 1" ""
+# Deploy to both nodes with mutual bootnodes (including Peer IDs for reliability)
+# Node 1: Connect to Node 2 as bootnode
+BOOTNODE2="/ip4/$DROPLET2/tcp/30333/p2p/$DROPLET2_PEER_ID"
+deploy_to_node "$DROPLET1" "Node 1" "$BOOTNODE2"
 
 # Node 2: Use Node 1 as bootnode
-BOOTNODE1="/ip4/$DROPLET1/tcp/30333"
+BOOTNODE1="/ip4/$DROPLET1/tcp/30333/p2p/$DROPLET1_PEER_ID"
 deploy_to_node "$DROPLET2" "Node 2" "$BOOTNODE1"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

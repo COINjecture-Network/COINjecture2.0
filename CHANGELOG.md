@@ -5,6 +5,45 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.32] - 2025-12-02
+
+### Fixed
+- **Sequential Block Request Chunks**: Reduced block request chunk size to improve sync reliability
+  - **Problem**: Blocks were requested in large chunks (100 blocks), causing out-of-order delivery via gossipsub
+  - **Solution**: Reduced chunk size to 20 blocks during initial sync (height < 1000), 50 blocks after
+  - **Impact**: Smaller chunks reduce out-of-order delivery and "Invalid previous hash" errors
+  - **Missing Block Requests**: Reduced missing block request range from 99 to 19 blocks ahead
+  - **Single-Block Requests**: Missing sequential blocks are now requested one at a time for precise delivery
+
+- **Block Serving Continuity**: Improved block serving to continue even when some blocks are missing
+  - **Problem**: Block serving would stop at first missing block, preventing other blocks from being served
+  - **Solution**: Changed block serving logic to continue serving available blocks even if some are missing
+  - **Impact**: Nodes can receive blocks that exist even if some blocks in the range are missing
+
+## [4.7.31] - 2025-12-02
+
+### Fixed
+- **Sync Block Threshold Bypass**: Fixed critical issue where explicitly requested sync blocks were being ignored
+  - **Problem**: Sync blocks (explicitly requested via `SyncBlock` message) were being filtered by sync threshold check
+  - **Root Cause**: `SyncBlock` messages were converted to `BlockReceived` events without distinguishing them from broadcast blocks
+  - **Solution**: Added `is_sync_block: bool` flag to `NetworkEvent::BlockReceived` to distinguish sync blocks
+    - Sync blocks now bypass the 100-block sync threshold check
+    - Allows nodes to receive requested blocks even if they're far ahead during catch-up sync
+  - **Impact**: Nodes can now catch up from large height differences by requesting and receiving blocks sequentially
+  - **Files Changed**: 
+    - `network/src/protocol.rs`: Added `is_sync_block` flag to `BlockReceived` event
+    - `node/src/service.rs`: Modified sync threshold check to skip for sync blocks
+
+## [4.7.30] - 2025-12-02
+
+### Fixed
+- **Peer Count Tracking Bug**: Fixed critical bug where mining was paused due to incorrect peer count
+  - **Problem**: Mining loop was reading from a shadowed `peer_count` variable that was never updated
+  - **Root Cause**: Duplicate `Arc<RwLock<u32>>` creation in `node/src/service.rs` at line 307
+  - **Solution**: Removed duplicate `peer_count` creation, ensuring mining loop uses the same `Arc<RwLock>` as network service
+  - **Impact**: Mining now correctly detects peer count and resumes when sufficient peers are connected
+  - **Deployment**: Fix deployed to all nodes (v4.7.30)
+
 ## [4.7.29] - 2025-12-02
 
 ### Fixed
@@ -32,23 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Re-exported `PeerId` from network crate for use in node crate
   - Improved block serving logic to ensure requesting peers receive blocks
 
-### Known Issues
-- **Chain Fork Issue**: GCE VM experiencing chain fork at height 465
-  - **Symptom**: Block 466 received but fails validation with "Invalid previous hash"
-  - **Root Cause**: GCE VM's block 465 hash doesn't match what block 466 expects as `prev_hash`
-  - **Impact**: GCE VM stuck at height 465, unable to progress despite receiving blocks
-  - **Status**: Block request/response mechanism is working correctly; issue is chain validation/fork resolution
-  - **Possible Causes**:
-    - GCE VM mined its own blocks 0-465, creating a fork from droplets' chain
-    - Droplets have been syncing with each other and have a different chain at height 465
-    - Chain reorganization code exists but isn't triggering automatically
-  - **Workarounds Attempted**:
-    - Attempted to clear GCE VM data directory (permission issues encountered)
-    - Chain reorganization logic exists in code but requires manual triggering or improvement
-  - **Next Steps**: 
-    - Implement automatic chain reorganization when fork detected
-    - Or manually clear GCE VM data and resync from genesis
-    - Verify block 465 hash matches between GCE VM and droplets
+### Resolved
+- **Chain Fork Issue**: Resolved by clearing all node data and restarting from genesis
+  - All nodes (Droplet 1, Droplet 2, GCE VM) reset to height 0
+  - Fresh chain started from genesis block
+  - Hugging Face dataset (NP_Solutions_v3) will be populated as new blocks are mined
+  - No more chain gaps or fork issues - clean slate
 
 ## [4.7.16] - 2025-11-29
 

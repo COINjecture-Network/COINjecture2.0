@@ -162,7 +162,7 @@ pub enum NetworkEvent {
     /// Peer disconnected
     PeerDisconnected(PeerId),
     /// New block received
-    BlockReceived { block: Block, peer: PeerId },
+    BlockReceived { block: Block, peer: PeerId, is_sync_block: bool },
     /// New transaction received
     TransactionReceived { tx: Transaction, peer: PeerId },
     /// Status update from peer
@@ -579,15 +579,17 @@ impl NetworkService {
                 let _ = self.event_tx.send(NetworkEvent::BlockReceived {
                     block,
                     peer,
+                    is_sync_block: false,
                 });
             }
             Ok(NetworkMessage::SyncBlock { block, request_id: _ }) => {
                 // SyncBlock is used for historical block sync
                 // The request_id ensures unique message ID (we don't need it after deserialization)
-                // Treated same as NewBlock for processing
+                // These are explicitly requested blocks, so they should bypass sync threshold checks
                 let _ = self.event_tx.send(NetworkEvent::BlockReceived {
                     block,
                     peer,
+                    is_sync_block: true,
                 });
             }
             Ok(NetworkMessage::NewTransaction(tx)) => {

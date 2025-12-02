@@ -680,16 +680,17 @@ impl CoinjectNode {
         hf_sync: &Option<Arc<HuggingFaceSync>>,
     ) {
         match event {
-            NetworkEvent::BlockReceived { block, peer } => {
-                println!("📥 Received block {} from {:?}", block.header.height, peer);
+            NetworkEvent::BlockReceived { block, peer, is_sync_block } => {
+                println!("📥 Received block {} from {:?} (sync_block: {})", block.header.height, peer, is_sync_block);
 
                 let best_height = chain.best_block_height().await;
                 let expected_height = best_height + 1;
 
                 // During initial sync, ignore blocks that are too far ahead to prevent buffer buildup
                 // Only accept blocks within a reasonable range (e.g., within 100 blocks of expected)
+                // BUT: Skip this check for explicitly requested sync blocks - they're needed for catch-up
                 let sync_threshold = 100u64;
-                if best_height < 1000 && block.header.height > expected_height + sync_threshold {
+                if !is_sync_block && best_height < 1000 && block.header.height > expected_height + sync_threshold {
                     println!("⏭️  Ignoring block {} (too far ahead during sync: expected {}, received {})", 
                         block.header.height, expected_height, block.header.height);
                     return;
@@ -925,8 +926,10 @@ impl CoinjectNode {
                         sync_from, sync_to
                     );
 
-                    // Request missing blocks (in chunks of 100 to avoid overwhelming)
-                    let chunk_size = 100u64;
+                    // Request missing blocks in smaller sequential chunks to ensure ordered delivery
+                    // During initial sync, use smaller chunks (20 blocks) to maintain order
+                    // For large gaps, still chunk but request sequentially
+                    let chunk_size = if our_height < 1000 { 20u64 } else { 50u64 };
                     let mut current = sync_from;
 
                     while current <= sync_to {
@@ -1053,13 +1056,17 @@ impl CoinjectNode {
                             sent_count += 1;
                         }
                         Ok(None) => {
-                            if height <= 20 {
+                            // Block doesn't exist - log and continue to next block
+                            // Don't break immediately - try to serve other blocks in the range
+                            if height <= 20 || height % 100 == 0 {
                                 println!(
-                                    "   ↳ Missing requested block {} (first missing in range {}-{})",
+                                    "   ↳ Missing requested block {} (first missing in range {}-{}) - continuing to serve other blocks",
                                     height, from_height, to_height
                                 );
                             }
-                            break;
+                            // Continue to next block instead of breaking
+                            // This allows serving blocks that do exist even if some are missing
+                            continue;
                         }
                         Err(e) => {
                             eprintln!("Error fetching block {}: {}", height, e);
@@ -1218,25 +1225,29 @@ impl CoinjectNode {
                     if let Some(&max_buffered_height) = buffer.keys().max() {
                         if max_buffered_height > next_height {
                             // We have blocks ahead but missing the next one - request missing blocks
+                            // CRITICAL FIX: Request blocks ONE AT A TIME for missing sequential blocks
+                            // This ensures we get the exact block we need, even if it doesn't exist on some peers
                             let request_from = next_height;
-                            let request_to = std::cmp::min(next_height + 99, max_buffered_height - 1);
+                            // Request only the next missing block first, then expand if needed
+                            let request_to = next_height;
                             
-                            println!("⚠️  Missing block {} (have blocks up to {} in buffer), requesting {}-{}", 
-                                next_height, max_buffered_height, request_from, request_to);
+                            println!("⚠️  Missing block {} (have blocks up to {} in buffer), requesting single block {}", 
+                                next_height, max_buffered_height, request_from);
                             
                             drop(buffer);
                             
-                            // Request missing blocks if network_tx is available
+                            // Request missing block ONE AT A TIME if network_tx is available
                             if let Some(network_tx) = network_tx {
                                 if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
                                     from_height: request_from,
                                     to_height: request_to,
                                 }) {
-                                    eprintln!("Failed to request missing blocks: {}", e);
+                                    eprintln!("Failed to request missing block: {}", e);
                                 }
                             }
                             
-                            // Break and wait for blocks to arrive
+                            // Break and wait for block to arrive
+                            // Will retry on next call to process_buffered_blocks
                             break;
                         } else {
                             // No blocks ahead in buffer - we're caught up or waiting
