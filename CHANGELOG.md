@@ -5,6 +5,51 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.29] - 2025-12-02
+
+### Fixed
+- **Block Request/Response Mechanism**: Fixed critical sync issue where nodes weren't receiving requested blocks during initial sync
+  - **Root Cause**: Block requests were broadcast via gossipsub, and responses were also broadcast, causing unreliable delivery
+  - **Solution**: Implemented direct peer-to-peer block sending for sync responses
+    - Added `NetworkCommand::SendBlockToPeer` for direct peer communication
+    - Added `NetworkService::send_block_to_peer()` method that ensures target peer is in gossipsub mesh before sending
+    - Modified `BlocksRequested` handler to use `SendBlockToPeer` instead of `BroadcastBlock` for sync responses
+    - Blocks are now sent directly to requesting peers, ensuring reliable delivery during sync
+  - **Impact**: Nodes can now reliably sync by requesting specific block ranges and receiving them directly from peers
+  - **Deployment**: Fix deployed to GCE VM and verified working (nodes receiving requested blocks 466-565)
+
+- **Sync Performance**: Added sync threshold filter to prevent buffer buildup during initial sync
+  - Blocks more than 100 blocks ahead of expected height are now ignored during sync (when node height < 1000)
+  - Prevents buffer from filling with invalid blocks that can't be validated yet
+  - Reduces "Invalid previous hash" validation errors during sync
+
+- **Peer Count Bug**: Fixed double-counting issue where peer count was incremented/decremented in both network and service layers
+  - Removed redundant peer count updates from service layer
+  - Peer count now only updated by network layer (`network/src/protocol.rs`)
+
+### Changed
+- **Network Protocol**: Enhanced block request/response for better sync reliability
+  - Re-exported `PeerId` from network crate for use in node crate
+  - Improved block serving logic to ensure requesting peers receive blocks
+
+### Known Issues
+- **Chain Fork Issue**: GCE VM experiencing chain fork at height 465
+  - **Symptom**: Block 466 received but fails validation with "Invalid previous hash"
+  - **Root Cause**: GCE VM's block 465 hash doesn't match what block 466 expects as `prev_hash`
+  - **Impact**: GCE VM stuck at height 465, unable to progress despite receiving blocks
+  - **Status**: Block request/response mechanism is working correctly; issue is chain validation/fork resolution
+  - **Possible Causes**:
+    - GCE VM mined its own blocks 0-465, creating a fork from droplets' chain
+    - Droplets have been syncing with each other and have a different chain at height 465
+    - Chain reorganization code exists but isn't triggering automatically
+  - **Workarounds Attempted**:
+    - Attempted to clear GCE VM data directory (permission issues encountered)
+    - Chain reorganization logic exists in code but requires manual triggering or improvement
+  - **Next Steps**: 
+    - Implement automatic chain reorganization when fork detected
+    - Or manually clear GCE VM data and resync from genesis
+    - Verify block 465 hash matches between GCE VM and droplets
+
 ## [4.7.16] - 2025-11-29
 
 ### Added

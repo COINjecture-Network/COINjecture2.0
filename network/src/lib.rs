@@ -4,3 +4,4 @@
 pub mod protocol;
 
 pub use protocol::*;
+pub use libp2p::PeerId;

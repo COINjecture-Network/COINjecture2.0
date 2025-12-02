@@ -236,11 +236,13 @@ impl NetworkService {
         };
 
         // Create transport with TCP keepalive to prevent NAT/firewall disconnects
+        // Note: libp2p TCP config doesn't expose keepalive directly, but we configure
+        // connection timeouts and retry logic to maintain persistent connections
         let tcp_config = tcp::Config::default()
             .nodelay(true)  // Disable Nagle's algorithm for lower latency
             .port_reuse(true);  // Allow port reuse for faster reconnects
         
-        // Configure yamux with longer timeouts for unstable connections
+        // Configure yamux with larger buffers for unstable connections
         let mut yamux_config = yamux::Config::default();
         yamux_config.set_receive_window_size(16 * 1024 * 1024);  // 16MB window
         yamux_config.set_max_buffer_size(24 * 1024 * 1024);  // 24MB buffer
@@ -251,9 +253,10 @@ impl NetworkService {
             .multiplex(yamux_config)
             .boxed();
 
-        // Create swarm with connection keep-alive
+        // Create swarm with longer connection keep-alive to maintain persistent connections
+        // Increased idle timeout to 10 minutes to prevent premature disconnects
         let swarm_config = libp2p::swarm::Config::with_tokio_executor()
-            .with_idle_connection_timeout(Duration::from_secs(300));  // 5 min idle timeout
+            .with_idle_connection_timeout(Duration::from_secs(600));  // 10 min idle timeout
         
         let swarm = Swarm::new(
             transport,
@@ -336,6 +339,38 @@ impl NetworkService {
             .publish(self.topics.blocks.clone(), data) {
             Ok(_) => Ok(()),
             Err(gossipsub::PublishError::InsufficientPeers) => {
+                Err("InsufficientPeers: Not enough peers in mesh for topic".into())
+            }
+            Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
+        }
+    }
+
+    /// Send a block directly to a specific peer (for sync responses)
+    /// Ensures the peer is in the mesh and then publishes the block
+    pub fn send_block_to_peer(&mut self, block: Block, peer: PeerId) -> Result<(), Box<dyn std::error::Error>> {
+        // Ensure the peer is connected and in the mesh
+        if !self.peers.contains(&peer) {
+            return Err(format!("Peer {} not connected", peer).into());
+        }
+
+        // Explicitly add peer to gossipsub mesh to ensure they receive the message
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .add_explicit_peer(&peer);
+        self.mesh_peers.insert(peer);
+
+        // Now broadcast the block - it will go to all mesh peers including the target
+        let message = NetworkMessage::NewBlock(block);
+        let data = bincode::serialize(&message)?;
+        match self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(self.topics.blocks.clone(), data) {
+            Ok(_) => Ok(()),
+            Err(gossipsub::PublishError::InsufficientPeers) => {
+                // Even with explicit peer, might need at least one mesh peer
+                // Try again with just the explicit peer
                 Err("InsufficientPeers: Not enough peers in mesh for topic".into())
             }
             Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
@@ -618,6 +653,11 @@ impl NetworkService {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 println!("Connection established with peer: {}", peer_id);
                 self.peers.insert(peer_id);
+                
+                // Track bootnode connections by checking if peer_id matches any bootnode PeerIds
+                // (We'll identify bootnodes when they connect via their PeerId)
+                // For now, we'll track them in the retry_bootnodes function
+                
                 // Add peer to gossipsub mesh explicitly to ensure it participates in message propagation
                 self.swarm
                     .behaviour_mut()

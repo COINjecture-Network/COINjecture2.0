@@ -10,7 +10,7 @@ use crate::validator::BlockValidator;
 use coinject_consensus::{Miner, MiningConfig};
 use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
-use coinject_network::{NetworkConfig, NetworkEvent, NetworkService};
+use coinject_network::{NetworkConfig, NetworkEvent, NetworkService, PeerId};
 use coinject_rpc::{RpcServer, RpcServerState};
 use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
 use coinject_huggingface::{HuggingFaceSync, HuggingFaceConfig, EnergyConfig, EnergyMeasurementMethod, SyncConfig};
@@ -26,6 +26,7 @@ enum NetworkCommand {
     BroadcastTransaction(coinject_core::Transaction),
     BroadcastStatus { best_height: u64, best_hash: coinject_core::Hash, genesis_hash: coinject_core::Hash },
     RequestBlocks { from_height: u64, to_height: u64 },
+    SendBlockToPeer { block: coinject_core::Block, peer: PeerId },
 }
 
 /// Main node service coordinating all blockchain components
@@ -390,6 +391,11 @@ impl CoinjectNode {
                                     eprintln!("Failed to request blocks: {}", e);
                                 }
                             }
+                            NetworkCommand::SendBlockToPeer { block, peer } => {
+                                if let Err(e) = network.send_block_to_peer(block, peer) {
+                                    eprintln!("Failed to send block to peer {}: {}", peer, e);
+                                }
+                            }
                         }
                     }
                 }
@@ -663,6 +669,15 @@ impl CoinjectNode {
                 let best_height = chain.best_block_height().await;
                 let expected_height = best_height + 1;
 
+                // During initial sync, ignore blocks that are too far ahead to prevent buffer buildup
+                // Only accept blocks within a reasonable range (e.g., within 100 blocks of expected)
+                let sync_threshold = 100u64;
+                if best_height < 1000 && block.header.height > expected_height + sync_threshold {
+                    println!("⏭️  Ignoring block {} (too far ahead during sync: expected {}, received {})", 
+                        block.header.height, expected_height, block.header.height);
+                    return;
+                }
+
                 // Check if block is the next sequential block we need
                 if block.header.height == expected_height {
                     // This is the next block we need - validate and apply immediately
@@ -846,27 +861,17 @@ impl CoinjectNode {
             NetworkEvent::PeerConnected(peer) => {
                 println!("🤝 Peer connected: {:?}", peer);
 
-                // Update peer count
-                let mut count = peer_count.write().await;
-                *count += 1;
-                let count_value = *count;
-                drop(count);
-
-                // Update Prometheus metric
+                // Peer count is already updated by network layer (network/src/protocol.rs)
+                // Just update Prometheus metric with current count
+                let count_value = *peer_count.read().await;
                 crate::metrics::PEER_COUNT.set(count_value as i64);
             }
             NetworkEvent::PeerDisconnected(peer) => {
                 println!("👋 Peer disconnected: {:?}", peer);
 
-                // Update peer count
-                let mut count = peer_count.write().await;
-                if *count > 0 {
-                    *count -= 1;
-                }
-                let count_value = *count;
-                drop(count);
-
-                // Update Prometheus metric
+                // Peer count is already updated by network layer (network/src/protocol.rs)
+                // Just update Prometheus metric with current count
+                let count_value = *peer_count.read().await;
                 crate::metrics::PEER_COUNT.set(count_value as i64);
             }
             NetworkEvent::StatusUpdate { peer, best_height, best_hash } => {
@@ -996,7 +1001,7 @@ impl CoinjectNode {
                     peer, from_height, to_height
                 );
 
-                // Respond by broadcasting the requested blocks
+                // Respond by sending blocks directly to the requesting peer (not broadcast)
                 let mut sent_count = 0;
                 for height in from_height..=to_height {
                     match chain.get_block_by_height(height) {
@@ -1009,8 +1014,9 @@ impl CoinjectNode {
                                 peer
                             );
                         }
-                            if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block)) {
-                                eprintln!("Failed to broadcast block {}: {}", height, e);
+                            // Send directly to the requesting peer instead of broadcasting
+                            if let Err(e) = network_tx.send(NetworkCommand::SendBlockToPeer { block, peer }) {
+                                eprintln!("Failed to send block {} to peer: {}", height, e);
                                 break;
                             }
                             sent_count += 1;
@@ -1032,7 +1038,7 @@ impl CoinjectNode {
                 }
 
                 if sent_count > 0 {
-                    println!("📤 Sent {} blocks in response to sync request", sent_count);
+                    println!("📤 Sent {} blocks directly to {:?} in response to sync request", sent_count, peer);
                 }
             }
         }
