@@ -22,10 +22,15 @@ use tokio::time;
 
 /// Commands that can be sent to the network task
 enum NetworkCommand {
+    /// Broadcast newly mined block to all peers
     BroadcastBlock(coinject_core::Block),
+    /// Send historical block for sync with unique request_id (bypasses gossipsub dedup)
+    /// This is the INSTITUTIONAL-GRADE solution for reliable sync
+    SendSyncBlock { block: coinject_core::Block, request_id: u64 },
     BroadcastTransaction(coinject_core::Transaction),
     BroadcastStatus { best_height: u64, best_hash: coinject_core::Hash, genesis_hash: coinject_core::Hash },
     RequestBlocks { from_height: u64, to_height: u64 },
+    /// Legacy: Send block to specific peer (Sarah's approach - kept for compatibility)
     SendBlockToPeer { block: coinject_core::Block, peer: PeerId },
 }
 
@@ -365,6 +370,18 @@ impl CoinjectNode {
                                     }
                                     Err(e) => {
                                         eprintln!("Failed to broadcast block: {}", e);
+                                    }
+                                    Ok(_) => {}
+                                }
+                            }
+                            NetworkCommand::SendSyncBlock { block, request_id } => {
+                                // INSTITUTIONAL-GRADE: Use unique request_id to bypass gossipsub dedup
+                                match network.send_sync_block(block, request_id) {
+                                    Err(e) if e.to_string().contains("InsufficientPeers") => {
+                                        // Silently ignore - expected when no peers connected
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send sync block: {}", e);
                                     }
                                     Ok(_) => {}
                                 }
@@ -1001,33 +1018,47 @@ impl CoinjectNode {
                     peer, from_height, to_height
                 );
 
-                // Respond by sending blocks directly to the requesting peer (not broadcast)
+                // INSTITUTIONAL-GRADE: Use SyncBlock with unique request_id
+                // This is CRITICAL - using SendBlockToPeer or BroadcastBlock would be rejected
+                // as duplicate by gossipsub. The unique request_id ensures delivery.
+                let base_request_id = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64;
+                
                 let mut sent_count = 0;
                 for height in from_height..=to_height {
                     match chain.get_block_by_height(height) {
                         Ok(Some(block)) => {
-                        if height <= 20 {
-                            println!(
-                                "   ↳ Serving requested block {} (hash {:?}) to {:?}",
-                                height,
-                                block.header.hash(),
-                                peer
-                            );
-                        }
-                            // Send directly to the requesting peer instead of broadcasting
-                            if let Err(e) = network_tx.send(NetworkCommand::SendBlockToPeer { block, peer }) {
-                                eprintln!("Failed to send block {} to peer: {}", height, e);
+                            // Generate unique request_id: base timestamp + height offset
+                            // This guarantees EVERY sync message has a unique gossipsub message ID
+                            let request_id = base_request_id.wrapping_add(height);
+                            
+                            if height <= 20 || height % 100 == 0 {
+                                println!(
+                                    "   ↳ Serving sync block {} (hash {:?}) to {:?}",
+                                    height,
+                                    block.header.hash(),
+                                    peer
+                                );
+                            }
+                            // Use SendSyncBlock with unique request_id - NOT SendBlockToPeer!
+                            if let Err(e) = network_tx.send(NetworkCommand::SendSyncBlock { 
+                                block, 
+                                request_id 
+                            }) {
+                                eprintln!("Failed to send sync block {}: {}", height, e);
                                 break;
                             }
                             sent_count += 1;
                         }
                         Ok(None) => {
-                        if height <= 20 {
-                            println!(
-                                "   ↳ Missing requested block {} (first missing in range {}-{})",
-                                height, from_height, to_height
-                            );
-                        }
+                            if height <= 20 {
+                                println!(
+                                    "   ↳ Missing requested block {} (first missing in range {}-{})",
+                                    height, from_height, to_height
+                                );
+                            }
                             break;
                         }
                         Err(e) => {
@@ -1038,7 +1069,7 @@ impl CoinjectNode {
                 }
 
                 if sent_count > 0 {
-                    println!("📤 Sent {} blocks directly to {:?} in response to sync request", sent_count, peer);
+                    println!("📤 Sent {} sync blocks (unique request_ids) to {:?}", sent_count, peer);
                 }
             }
         }

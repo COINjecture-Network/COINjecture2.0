@@ -20,8 +20,16 @@ use tokio::sync::{mpsc, RwLock};
 /// Network message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkMessage {
-    /// New block announcement
+    /// New block announcement (for newly mined blocks)
     NewBlock(Block),
+    /// Sync block response (for historical block sync)
+    /// The unique request_id ensures gossipsub won't reject as duplicate
+    /// This is CRITICAL for reliable sync - without it, historical blocks get rejected
+    SyncBlock {
+        block: Block,
+        /// Unique identifier (timestamp_nanos + height) to bypass gossipsub deduplication
+        request_id: u64,
+    },
     /// New transaction announcement
     NewTransaction(Transaction),
     /// Block header for light clients
@@ -345,6 +353,37 @@ impl NetworkService {
         }
     }
 
+    /// INSTITUTIONAL-GRADE: Send sync block with unique request_id
+    /// 
+    /// This is the CRITICAL fix for historical block sync. The unique request_id
+    /// ensures gossipsub treats each sync response as a NEW message, bypassing
+    /// the deduplication that was causing sync failures and chain forks.
+    /// 
+    /// WHY THIS MATTERS:
+    /// - Gossipsub caches message IDs for ~2 minutes
+    /// - If a block was broadcast before, resending it gets rejected as "Duplicate"
+    /// - This prevents nodes from syncing historical blocks
+    /// - The request_id (timestamp_nanos + height) makes EVERY message unique
+    pub fn send_sync_block(&mut self, block: Block, request_id: u64) -> Result<(), Box<dyn std::error::Error>> {
+        if self.mesh_peers.is_empty() {
+            return Err("InsufficientPeers: No peers in gossipsub mesh".into());
+        }
+
+        // Use SyncBlock with unique request_id - this GUARANTEES no duplicate rejection
+        let message = NetworkMessage::SyncBlock { block, request_id };
+        let data = bincode::serialize(&message)?;
+        match self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(self.topics.blocks.clone(), data) {
+            Ok(_) => Ok(()),
+            Err(gossipsub::PublishError::InsufficientPeers) => {
+                Err("InsufficientPeers: Not enough peers in mesh for topic".into())
+            }
+            Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
+        }
+    }
+
     /// Send a block directly to a specific peer (for sync responses)
     /// Ensures the peer is in the mesh and then publishes the block
     pub fn send_block_to_peer(&mut self, block: Block, peer: PeerId) -> Result<(), Box<dyn std::error::Error>> {
@@ -537,6 +576,15 @@ impl NetworkService {
     fn handle_gossipsub_message(&mut self, peer: PeerId, message: Vec<u8>) {
         match bincode::deserialize::<NetworkMessage>(&message) {
             Ok(NetworkMessage::NewBlock(block)) => {
+                let _ = self.event_tx.send(NetworkEvent::BlockReceived {
+                    block,
+                    peer,
+                });
+            }
+            Ok(NetworkMessage::SyncBlock { block, request_id: _ }) => {
+                // SyncBlock is used for historical block sync
+                // The request_id ensures unique message ID (we don't need it after deserialization)
+                // Treated same as NewBlock for processing
                 let _ = self.event_tx.send(NetworkEvent::BlockReceived {
                     block,
                     peer,
