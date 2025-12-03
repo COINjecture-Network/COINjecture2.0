@@ -2,6 +2,21 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.35] - 2025-12-03
+
+### Fixed
+- **Improved Fork Detection When Peer is Ahead**: Enhanced fork detection logic to properly identify forks when a peer is ahead
+  - **Problem**: Previous logic only checked if we had a different block at our height, but didn't verify if the peer's chain diverges from ours
+  - **Solution**: Now walks back from peer's best block to check if it connects to our current chain
+  - **Impact**: Fork detection now correctly triggers when peer is ahead on a different fork, ensuring full chain is requested for reorganization
+  - **Missing Blocks**: When fork is detected, requests full chain from genesis, ensuring no blocks are missing for reorganization
+
+### Technical Details
+- Modified `NetworkEvent::StatusUpdate` handler to walk back from peer's best block
+- Checks if peer's chain connects to our current chain by traversing backwards
+- If peer's chain diverges, requests full chain from genesis to peer's best height
+- This ensures all blocks are available for reorganization, preventing missing block issues
+
 ## [4.7.34] - 2025-12-03
 
 ### Fixed
