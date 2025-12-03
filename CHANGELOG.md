@@ -2,6 +2,24 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.36] - 2025-12-03
+
+### Fixed
+- **Enhanced Fork Detection with Multiple Indicators**: Improved fork detection to trigger even when peer's best block isn't stored yet
+  - **Problem**: Previous logic only checked if we had peer's best block stored, returning false if not available
+  - **Solution**: Added multiple fork indicators:
+    1. If we have peer's best block, verify if it connects to our chain (existing logic)
+    2. If we're missing sequential blocks AND have blocks buffered ahead (>10 blocks), likely a fork
+    3. If peer is significantly ahead (>50 blocks), more likely a fork
+  - **Impact**: Fork detection now triggers when missing blocks prevent processing, even without peer's best block
+  - **Missing Blocks**: When fork indicators are detected, requests full chain from genesis, ensuring no missing blocks
+
+### Technical Details
+- Modified `NetworkEvent::StatusUpdate` handler to check multiple fork indicators
+- Checks buffer for missing sequential blocks and blocks buffered ahead
+- Triggers fork detection when: missing_next && has_blocks_ahead && peer_significantly_ahead
+- Requests full chain (0 to peer's best height) when fork is detected
+
 ## [4.7.35] - 2025-12-03
 
 ### Fixed

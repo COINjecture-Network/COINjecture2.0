@@ -1042,13 +1042,14 @@ impl CoinjectNode {
                 // Check if peer has a longer or different chain
                 if best_height > our_height {
                     // Peer is ahead - check if we're on a fork first
-                    // Check if peer's chain diverges from ours by comparing blocks at our height
-                    // If peer's best hash doesn't match our chain at our height, we're on a fork
-                    let on_fork = if let Ok(Some(our_block_at_height)) = chain.get_block_by_height(our_height) {
-                        // Check if peer's chain at our height would match ours
-                        // We can't directly check peer's block, but if we have blocks buffered that don't connect,
-                        // or if we've been stuck requesting the same block, we're likely on a fork
-                        // More reliable: check if we have the peer's best block stored and if it connects to our chain
+                    // Check multiple indicators of a fork:
+                    // 1. If we have peer's best block, check if it connects to our chain
+                    // 2. If we're missing sequential blocks AND have blocks buffered ahead, likely a fork
+                    // 3. If peer is significantly ahead (more than 50 blocks), more likely a fork
+                    let on_fork = {
+                        let mut detected_fork = false;
+                        
+                        // Indicator 1: Check if we have peer's best block and if it connects to our chain
                         if let Ok(Some(peer_best_block)) = chain.get_block_by_hash(&best_hash) {
                             // We have the peer's best block - check if it's on our chain
                             // Walk back from peer's best to see if we can reach our current best
@@ -1071,15 +1072,38 @@ impl CoinjectNode {
                                 found_our_chain = (current_hash == our_hash);
                             }
                             
-                            !found_our_chain
-                        } else {
-                            // Don't have peer's best block yet - check if we're stuck requesting blocks
-                            // If we've been requesting the same block repeatedly, likely a fork
-                            false // Can't determine fork status yet, will check after receiving blocks
+                            detected_fork = !found_our_chain;
                         }
-                    } else {
-                        // Don't have a block at our height - this shouldn't happen, but treat as no fork
-                        false
+                        
+                        // Indicator 2: Check if we're missing sequential blocks AND have blocks buffered ahead
+                        // This is a strong indicator of a fork - we have blocks from the peer's chain
+                        // but can't process them because we're missing blocks in between
+                        if !detected_fork {
+                            let buffer = block_buffer.read().await;
+                            let next_height = our_height + 1;
+                            
+                            // Check if we're missing the next sequential block
+                            let missing_next = !buffer.contains_key(&next_height) && 
+                                             chain.get_block_by_height(next_height).ok().flatten().is_none();
+                            
+                            // Check if we have blocks buffered significantly ahead
+                            let max_buffered = buffer.keys().max().copied().unwrap_or(0);
+                            let has_blocks_ahead = max_buffered > our_height + 10; // At least 10 blocks ahead
+                            
+                            // Check if peer is significantly ahead
+                            let peer_significantly_ahead = (best_height - our_height) > 50;
+                            
+                            // If we're missing sequential blocks, have blocks buffered ahead, and peer is significantly ahead,
+                            // we're likely on a fork - the buffered blocks are from a different chain
+                            if missing_next && has_blocks_ahead && peer_significantly_ahead {
+                                detected_fork = true;
+                                println!("🔍 Fork indicator: Missing block {}, have blocks up to {} buffered, peer at {}", 
+                                    next_height, max_buffered, best_height);
+                            }
+                            drop(buffer);
+                        }
+                        
+                        detected_fork
                     };
 
                     if on_fork {
