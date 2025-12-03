@@ -312,6 +312,132 @@ impl CoinjectNode {
         // Multi-peer consensus tracker (XRPL-inspired, requires 5+ peers for 80% threshold)
         let peer_consensus = Arc::new(PeerConsensus::with_defaults());
 
+        // Create block submission handler
+        // This handler validates, stores, and broadcasts blocks submitted via RPC
+        let chain_for_submission = Arc::clone(&self.chain);
+        let state_for_submission = Arc::clone(&self.state);
+        let timelock_state_for_submission = Arc::clone(&self.timelock_state);
+        let escrow_state_for_submission = Arc::clone(&self.escrow_state);
+        let channel_state_for_submission = Arc::clone(&self.channel_state);
+        let trustline_state_for_submission = Arc::clone(&self.trustline_state);
+        let dimensional_pool_state_for_submission = Arc::clone(&self.dimensional_pool_state);
+        let marketplace_state_for_submission = Arc::clone(&self.marketplace_state);
+        let validator_for_submission = Arc::clone(&self.validator);
+        let tx_pool_for_submission = Arc::clone(&self.tx_pool);
+        let network_tx_for_submission = network_cmd_tx.clone();
+        let hf_sync_for_submission = self.hf_sync.clone();
+        
+        let block_submission_handler: Option<coinject_rpc::BlockSubmissionHandler> = Some(Arc::new(move |block: coinject_core::Block| -> Result<String, String> {
+            // Get runtime handle for async operations
+            let rt_handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| "No async runtime available".to_string())?;
+            
+            // Use a oneshot channel to get the result from the async task
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            
+            let chain = Arc::clone(&chain_for_submission);
+            let state = Arc::clone(&state_for_submission);
+            let timelock_state = Arc::clone(&timelock_state_for_submission);
+            let escrow_state = Arc::clone(&escrow_state_for_submission);
+            let channel_state = Arc::clone(&channel_state_for_submission);
+            let trustline_state = Arc::clone(&trustline_state_for_submission);
+            let dimensional_pool_state = Arc::clone(&dimensional_pool_state_for_submission);
+            let marketplace_state = Arc::clone(&marketplace_state_for_submission);
+            let validator = Arc::clone(&validator_for_submission);
+            let tx_pool = Arc::clone(&tx_pool_for_submission);
+            let network_tx = network_tx_for_submission.clone();
+            let hf_sync = hf_sync_for_submission.clone();
+            
+            // Spawn async task to handle block submission
+            rt_handle.spawn(async move {
+                let result = async {
+                    // Get current chain state
+                    let best_height = chain.best_block_height().await;
+                    let best_hash = chain.best_block_hash().await;
+                    let expected_height = best_height + 1;
+                    
+                    // Validate block height
+                    if block.header.height != expected_height {
+                        return Err(format!("Invalid block height: expected {}, got {}", expected_height, block.header.height));
+                    }
+                    
+                    // Validate previous hash
+                    if block.header.prev_hash != best_hash {
+                        return Err(format!("Invalid previous hash: expected {}, got {}", best_hash, block.header.prev_hash));
+                    }
+                    
+                    // Validate block (skip timestamp age check for RPC submissions)
+                    match validator.validate_block_with_options(&block, &best_hash, expected_height, false) {
+                        Ok(()) => {},
+                        Err(e) => return Err(format!("Block validation failed: {:?}", e)),
+                    }
+                    
+                    // Store block
+                    match chain.store_block(&block).await {
+                        Ok(is_new_best) => {
+                            if !is_new_best {
+                                return Err("Block did not extend the chain".to_string());
+                            }
+                        },
+                        Err(e) => return Err(format!("Failed to store block: {}", e)),
+                    }
+                    
+                    // Apply block transactions
+                    match Self::apply_block_transactions(
+                        &block,
+                        &state,
+                        &timelock_state,
+                        &escrow_state,
+                        &channel_state,
+                        &trustline_state,
+                        &dimensional_pool_state,
+                        &marketplace_state,
+                    ) {
+                        Ok(applied_txs) => {
+                            // Remove applied transactions from pool
+                            let mut pool = tx_pool.write().await;
+                            for tx_hash in &applied_txs {
+                                pool.remove(tx_hash);
+                            }
+                            drop(pool);
+                            
+                            // Broadcast block to network
+                            if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block.clone())) {
+                                return Err(format!("Failed to broadcast block: {}", e));
+                            }
+                            
+                            // Push to Hugging Face if enabled
+                            if let Some(ref hf_sync) = hf_sync {
+                                let hf_sync_clone = Arc::clone(hf_sync);
+                                let block_clone = block.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
+                                        eprintln!("⚠️  Failed to push RPC-submitted block to Hugging Face: {}", e);
+                                    }
+                                });
+                            }
+                            
+                            Ok(block.hash().to_string())
+                        },
+                        Err(e) => Err(format!("Failed to apply block transactions: {}", e)),
+                    }
+                }.await;
+                
+                // Send result back to synchronous handler
+                let _ = tx.send(result);
+            });
+            
+            // Wait for result (with timeout)
+            rt_handle.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    rx
+                ).await
+            })
+            .map_err(|_| "Block submission timeout".to_string())?
+            .map_err(|_| "Failed to receive result".to_string())?
+        }));
+
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
             timelock_state: Arc::clone(&self.timelock_state),
@@ -327,7 +453,7 @@ impl CoinjectNode {
             genesis_hash: self.chain.genesis_hash(),
             peer_count: Arc::clone(&peer_count),
             faucet_handler,
-            block_submission_handler: None, // Block submission handled via network events
+            block_submission_handler,
             local_peer_id: Some(local_peer_id_str.clone()),
             listen_addresses: Arc::clone(&listen_addresses),
         });

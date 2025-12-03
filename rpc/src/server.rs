@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower::ServiceBuilder;
+use tower_http::cors::{CorsLayer, Any};
 
 /// Trait for reading blockchain data (allows node to provide chain state without circular dependency)
 pub trait BlockchainReader: Send + Sync {
@@ -839,18 +841,31 @@ pub struct RpcServer {
 }
 
 impl RpcServer {
-    /// Create and start new RPC server
+    /// Create and start new RPC server with CORS support
     pub async fn new(
         listen_addr: SocketAddr,
         state: Arc<RpcServerState>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let server = Server::builder().build(listen_addr).await?;
+        // Create CORS layer that allows all origins, methods, and headers
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .expose_headers(Any)
+            .max_age(std::time::Duration::from_secs(86400));
+
+        // Build server with CORS middleware wrapped in ServiceBuilder
+        let middleware = ServiceBuilder::new().layer(cors);
+        let server = Server::builder()
+            .set_http_middleware(middleware)
+            .build(listen_addr)
+            .await?;
         let addr = server.local_addr()?;
 
         let rpc_impl = RpcServerImpl::new(state);
         let handle = server.start(rpc_impl.into_rpc());
 
-        println!("JSON-RPC server listening on {}", addr);
+        println!("JSON-RPC server listening on {} (CORS enabled)", addr);
 
         Ok(RpcServer { handle, addr })
     }

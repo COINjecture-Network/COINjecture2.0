@@ -5,6 +5,29 @@ All notable changes to COINjecture will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.7.33] - 2025-12-03
+
+### Added
+- **CORS Support for RPC Server**: Added CORS headers to enable direct browser access to RPC endpoints
+  - **Implementation**: Added `tower-http` CORS middleware to JSON-RPC server
+  - **Configuration**: Allows all origins, methods, and headers (permissive for development/testnet)
+  - **Impact**: Enables direct RPC access from HTTPS frontends without Lambda@Edge proxy
+  - **Files Changed**:
+    - `rpc/Cargo.toml`: Added `tower` and `tower-http` dependencies
+    - `rpc/src/server.rs`: Added CORS middleware to server builder
+  - **Next Steps**: Set up HTTPS/TLS for RPC endpoints to enable full direct access from HTTPS frontends
+
+- **Block Submission Handler**: Enabled RPC block submission for web client mining
+  - **Implementation**: Created `block_submission_handler` that validates, stores, and broadcasts blocks
+  - **Flow**: RPC request → validation → storage → transaction application → network broadcast
+  - **Impact**: Web CLI can now submit mined blocks directly via `chain_submitBlock` RPC method
+  - **Files Changed**: `node/src/service.rs`: Added block submission handler with async task execution
+
+### Fixed
+- **Lambda@Edge Timeout**: Reduced timeout from 10s to 4.5s to comply with Lambda@Edge viewer-request 5s limit
+- **Lambda@Edge Body Truncation**: Added detection and proper error handling for requests >1MB
+- **Lambda@Edge POST Validation**: Added explicit POST method validation with proper error messages
+
 ## [4.7.32] - 2025-12-02
 
 ### Fixed

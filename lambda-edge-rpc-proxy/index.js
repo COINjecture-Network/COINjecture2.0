@@ -8,10 +8,32 @@ exports.handler = async (event) => {
         const request = event.Records[0].cf.request;
         const uri = request.uri;
         
-        // Only handle /api/rpc requests
-        if (!uri.startsWith('/api/rpc')) {
-            return request;
-        }
+    // Only handle /api/rpc requests
+    if (!uri.startsWith('/api/rpc')) {
+        return request;
+    }
+    
+    // Ensure POST method for RPC requests (JSON-RPC requires POST)
+    if (request.method !== 'POST' && request.method !== 'OPTIONS') {
+        return {
+            status: '405',
+            statusDescription: 'Method Not Allowed',
+            headers: {
+                'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+                'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }],
+                'allow': [{ key: 'Allow', value: 'POST, OPTIONS' }]
+            },
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                    code: -32600,
+                    message: 'Used HTTP Method is not allowed. POST is required',
+                    data: { method: request.method || 'UNKNOWN' }
+                },
+                id: null
+            })
+        };
+    }
     
     // Handle OPTIONS preflight requests
     if (request.method === 'OPTIONS') {
@@ -46,6 +68,28 @@ exports.handler = async (event) => {
     // Get request body (handles both base64 and text encoding)
     let body = '';
     if (request.body) {
+        // Check if body was truncated (Lambda@Edge viewer-request max is 1MB)
+        if (request.body.inputTruncated === true) {
+            console.error(`[${requestId}] Request body truncated (too large for Lambda@Edge)`);
+            return {
+                status: '413',
+                statusDescription: 'Payload Too Large',
+                headers: {
+                    'content-type': [{ key: 'Content-Type', value: 'application/json' }],
+                    'access-control-allow-origin': [{ key: 'Access-Control-Allow-Origin', value: '*' }]
+                },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    error: {
+                        code: -32600,
+                        message: 'Request body too large for Lambda@Edge (max 1MB)',
+                        data: { requestId }
+                    },
+                    id: null
+                })
+            };
+        }
+        
         if (request.body.data) {
             body = Buffer.from(
                 request.body.data,
@@ -73,7 +117,7 @@ exports.handler = async (event) => {
                 'Content-Length': Buffer.byteLength(body, 'utf8'),
                 'User-Agent': 'COINjecture-CloudFront-Proxy/1.0'
             },
-            timeout: 10000 // Increased timeout to 10 seconds
+            timeout: 5000 // Lambda@Edge viewer-request timeout is 5 seconds max
         };
         
         const startTime = Date.now();
@@ -172,8 +216,9 @@ exports.handler = async (event) => {
             });
         });
         
-        req.setTimeout(10000, () => {
-            console.error(`[${requestId}] Request timeout after 10s to ${targetHost}:${targetPort}`);
+        // Lambda@Edge viewer-request timeout is 5 seconds max
+        req.setTimeout(4500, () => {
+            console.error(`[${requestId}] Request timeout after 4.5s to ${targetHost}:${targetPort}`);
             req.destroy();
             resolve({
                 status: '504',
@@ -186,7 +231,7 @@ exports.handler = async (event) => {
                     jsonrpc: '2.0',
                     error: {
                         code: -32000,
-                        message: 'Request timeout after 10 seconds',
+                        message: 'Request timeout (Lambda@Edge viewer-request limit: 5s)',
                         data: {
                             target: `${targetHost}:${targetPort}`,
                             requestId
