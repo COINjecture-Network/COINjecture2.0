@@ -2,6 +2,60 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.39] - 2025-01-XX
+
+### Added
+- **Work Score-Based Chain Reorganization**
+  - Chain reorganization now compares chains by cumulative work score, not just length
+  - Prevents reorganization to longer chains with less total work
+  - Uses `WorkScoreCalculator::compare_chains()` with 0.5% tolerance
+  - Logs work score comparison for debugging: old chain work vs new chain work
+
+- **Common Ancestor Anchoring Logic**
+  - Reorganization requires common ancestor to be at least 6 blocks deep
+  - Validates common ancestor block exists and is on current chain
+  - Prevents shallow reorganizations that could destabilize the network
+  - Verifies common ancestor block is stored and valid before proceeding
+
+### Changed
+- `attempt_reorganization_if_longer_chain()` now compares work scores before reorganizing
+- Reorganization check no longer ignores errors (proper error handling)
+- Work score calculation converts `f64` to `u64` for comparison
+
+### Fixed
+- Compilation errors: Fixed work score type mismatch (`f64` vs `u64`)
+- Reorganization check return type handling
+
+### Technical Details
+- Modified `node/src/service.rs::attempt_reorganization_if_longer_chain()` to:
+  - Calculate cumulative work scores for both old and new chains
+  - Use `WorkScoreCalculator::compare_chains()` to determine which chain has more work
+  - Only reorganize if new chain has significantly more work (>0.5% tolerance)
+  - Validate common ancestor is anchored (min 6 blocks deep) and exists in storage
+
+## [4.7.37] - 2025-12-03
+
+### Fixed
+- **Reorganization Debug Logging**: Added detailed logging to diagnose why reorganization isn't triggering
+  - Added logging when chain is broken during reorganization check
+  - Added logging when previous blocks are missing
+  - Added logging when no blocks are found at expected heights
+  - This will help identify why `check_and_reorganize_chain` isn't finding longer chains
+
+### Changed
+- **Frontend RPC Client**: Updated to use HTTPS domains directly instead of CloudFront proxy
+  - Maps HTTP IP addresses to HTTPS domains:
+    - `143.110.139.166` → `https://rpc1.coinjecture.com`
+    - `68.183.205.12` → `https://rpc2.coinjecture.com`
+    - `35.184.253.150` → `https://rpc3.coinjecture.com`
+  - Removed CloudFront proxy fallback (Lambda@Edge was removed)
+  - Direct HTTPS access with CORS (already enabled on RPC servers)
+  - Fixes 405 Method Not Allowed errors from CloudFront
+
+### Technical Details
+- Modified `node/src/service.rs` to add debug logging in `check_and_reorganize_chain`
+- Modified `web/coinjecture-evolved-main/src/lib/rpc-client.ts` to use HTTPS domains
+
 ## [4.7.36] - 2025-12-03
 
 ### Fixed
