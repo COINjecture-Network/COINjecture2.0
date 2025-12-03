@@ -1042,10 +1042,43 @@ impl CoinjectNode {
                 // Check if peer has a longer or different chain
                 if best_height > our_height {
                     // Peer is ahead - check if we're on a fork first
-                    // If peer's best block at our height exists and differs, we're on a fork
-                    let on_fork = if let Ok(Some(block_at_our_height)) = chain.get_block_by_height(our_height) {
-                        block_at_our_height.header.hash() != our_hash
+                    // Check if peer's chain diverges from ours by comparing blocks at our height
+                    // If peer's best hash doesn't match our chain at our height, we're on a fork
+                    let on_fork = if let Ok(Some(our_block_at_height)) = chain.get_block_by_height(our_height) {
+                        // Check if peer's chain at our height would match ours
+                        // We can't directly check peer's block, but if we have blocks buffered that don't connect,
+                        // or if we've been stuck requesting the same block, we're likely on a fork
+                        // More reliable: check if we have the peer's best block stored and if it connects to our chain
+                        if let Ok(Some(peer_best_block)) = chain.get_block_by_hash(&best_hash) {
+                            // We have the peer's best block - check if it's on our chain
+                            // Walk back from peer's best to see if we can reach our current best
+                            let mut current_hash = best_hash;
+                            let mut current_height = best_height;
+                            let mut found_our_chain = false;
+                            
+                            // Walk back up to our height
+                            while current_height > our_height {
+                                if let Ok(Some(block)) = chain.get_block_by_hash(&current_hash) {
+                                    current_hash = block.header.prev_hash;
+                                    current_height -= 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            
+                            // If we reached our height, check if it matches our chain
+                            if current_height == our_height {
+                                found_our_chain = (current_hash == our_hash);
+                            }
+                            
+                            !found_our_chain
+                        } else {
+                            // Don't have peer's best block yet - check if we're stuck requesting blocks
+                            // If we've been requesting the same block repeatedly, likely a fork
+                            false // Can't determine fork status yet, will check after receiving blocks
+                        }
                     } else {
+                        // Don't have a block at our height - this shouldn't happen, but treat as no fork
                         false
                     };
 
