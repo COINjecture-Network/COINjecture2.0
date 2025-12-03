@@ -596,6 +596,40 @@ impl CoinjectNode {
             }
         });
 
+        // Spawn periodic reorganization check task (every 60 seconds)
+        let chain_periodic = Arc::clone(&self.chain);
+        let state_periodic = Arc::clone(&self.state);
+        let timelock_periodic = Arc::clone(&self.timelock_state);
+        let escrow_periodic = Arc::clone(&self.escrow_state);
+        let channel_periodic = Arc::clone(&self.channel_state);
+        let trustline_periodic = Arc::clone(&self.trustline_state);
+        let dimensional_periodic = Arc::clone(&self.dimensional_pool_state);
+        let marketplace_periodic = Arc::clone(&self.marketplace_state);
+        let validator_periodic = Arc::clone(&self.validator);
+        let buffer_periodic = Arc::clone(&block_buffer);
+        let network_tx_periodic = network_cmd_tx.clone();
+
+        tokio::spawn(async move {
+            let mut interval = time::interval(Duration::from_secs(60)); // Check every minute
+            loop {
+                interval.tick().await;
+                println!("⏰ Periodic reorganization check triggered");
+                Self::check_and_reorganize_chain(
+                    &chain_periodic,
+                    &state_periodic,
+                    &timelock_periodic,
+                    &escrow_periodic,
+                    &channel_periodic,
+                    &trustline_periodic,
+                    &dimensional_periodic,
+                    &marketplace_periodic,
+                    &validator_periodic,
+                    &buffer_periodic,
+                    Some(&network_tx_periodic),
+                ).await;
+            }
+        });
+
         // Spawn periodic metrics update task
         let chain_for_metrics = Arc::clone(&self.chain);
         let state_for_metrics = Arc::clone(&self.state);
@@ -917,6 +951,7 @@ impl CoinjectNode {
                                                     marketplace_state,
                                                     validator,
                                                     block_buffer,
+                                                    Some(network_tx),
                                                 ).await;
                                             }
                                             Err(e) => {
@@ -987,6 +1022,7 @@ impl CoinjectNode {
                         let marketplace_clone = Arc::clone(marketplace_state);
                         let validator_clone = Arc::clone(validator);
                         let block_buffer_clone = Arc::clone(block_buffer);
+                        let network_tx_clone = network_tx.clone();
                         
                         tokio::spawn(async move {
                             println!("🔍 Triggering reorganization check after storing fork block at height {}", block.header.height);
@@ -1001,6 +1037,7 @@ impl CoinjectNode {
                                 &marketplace_clone,
                                 &validator_clone,
                                 &block_buffer_clone,
+                                Some(&network_tx_clone),
                             ).await;
                         });
                         
@@ -1505,6 +1542,7 @@ impl CoinjectNode {
         marketplace_state: &Arc<MarketplaceState>,
         validator: &Arc<BlockValidator>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
+        network_cmd_tx: Option<&mpsc::UnboundedSender<NetworkCommand>>,
     ) {
         let current_best_height = chain.best_block_height().await;
         let current_best_hash = chain.best_block_hash().await;
@@ -1580,9 +1618,9 @@ impl CoinjectNode {
         let mut max_stored_height = current_best_height;
         let mut max_stored_hash = current_best_hash;
         
-        // Check stored blocks up to a reasonable limit (current + 500 to handle large forks)
-        // Increased from 200 to 500 to handle larger forks
-        let scan_limit = current_best_height + 500;
+        // Check stored blocks up to a reasonable limit (current + 1000 to handle large forks)
+        // Increased from 500 to 1000 to handle very large forks (500+ block gaps)
+        let scan_limit = current_best_height + 1000;
         println!("🔍 Reorganization check: Scanning stored blocks from height {} to {}", current_best_height + 1, scan_limit);
         for height in (current_best_height + 1)..=scan_limit {
             if let Ok(Some(block)) = chain.get_block_by_height(height) {
@@ -1612,6 +1650,26 @@ impl CoinjectNode {
                     println!("🔍 Reorganization check: No block at height {}, stopping search (checked up to height {})", height, max_stored_height);
                 }
                 break;
+            }
+        }
+        
+        // If we found blocks ahead but with gaps, request missing blocks aggressively
+        if max_stored_height > current_best_height + 1 {
+            // We have blocks ahead but possibly with gaps
+            // Request the full range to fill gaps for reorganization
+            let from_height = current_best_height + 1;
+            let to_height = max_stored_height;
+            
+            println!("📡 Requesting missing blocks {} to {} to complete chain for reorganization", 
+                from_height, to_height);
+            
+            if let Some(cmd_tx) = network_cmd_tx {
+                if let Err(e) = cmd_tx.send(NetworkCommand::RequestBlocks {
+                    from_height,
+                    to_height,
+                }) {
+                    eprintln!("⚠️  Failed to request missing blocks for reorganization: {}", e);
+                }
             }
         }
         

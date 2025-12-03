@@ -3,6 +3,8 @@
  * Connects to JSON-RPC endpoints for blockchain operations
  * Matches the actual Rust RPC server implementation in rpc/src/server.rs
  * Supports multiple nodes with failover and parallel querying
+ * 
+ * Version: 1.0.1 (2025-12-03) - Cache-bust update
  */
 
 import { hexToBytes } from '@noble/hashes/utils';
@@ -25,28 +27,44 @@ const isHTTPS = typeof window !== 'undefined' && window.location.protocol === 'h
 const createProxyUrls = (): string[] => {
   const urls = parseRpcUrls();
   if (isHTTPS && !isDevelopment) {
-    // In production HTTPS, check if URLs are already HTTPS (direct access)
-    // If HTTP, use CloudFront proxy with target parameter (fallback)
-    return urls.map(url => {
-      // If URL is already HTTPS, use it directly (CORS enabled on RPC server)
+    // In production HTTPS, use HTTPS domains directly (CORS enabled on RPC servers)
+    // Map HTTP IP addresses to HTTPS domains if needed
+    const mappedUrls = urls.map(url => {
+      // Map known IP addresses to HTTPS domains
+      if (url.includes('143.110.139.166')) {
+        return 'https://rpc1.coinjecture.com';
+      }
+      if (url.includes('68.183.205.12')) {
+        return 'https://rpc2.coinjecture.com';
+      }
+      if (url.includes('35.184.253.150')) {
+        return 'https://rpc3.coinjecture.com';
+      }
+      // If already HTTPS, use as-is
       if (url.startsWith('https://')) {
         return url;
       }
-      // Otherwise, use CloudFront proxy with target parameter (legacy fallback)
-      const match = url.match(/https?:\/\/([^\/]+)/);
-      if (match) {
-        const target = match[1];
-        return `/api/rpc?target=${encodeURIComponent(target)}`;
-      }
-      return '/api/rpc';
+      // Warn if non-HTTPS URL detected in production
+      console.warn('⚠️  Non-HTTPS URL detected in production:', url);
+      console.warn('⚠️  Please update VITE_RPC_URL to use HTTPS domains');
+      return url;
     });
+    
+    // Validate all URLs are HTTPS
+    const invalidUrls = mappedUrls.filter(url => !url.startsWith('https://'));
+    if (invalidUrls.length > 0) {
+      console.warn('⚠️  Non-HTTPS URLs detected in production:', invalidUrls);
+      console.warn('⚠️  Please update VITE_RPC_URL to use HTTPS domains');
+    }
+    
+    return mappedUrls;
   }
   return urls;
 };
 
 const DEFAULT_RPC_URLS = isDevelopment 
   ? ['/api/rpc'] // Use Vite proxy in development
-  : createProxyUrls(); // Use CloudFront proxy URLs in production HTTPS
+  : createProxyUrls(); // Use CloudFront /api/rpc proxy in production HTTPS
 
 export interface RpcError {
   code: number;

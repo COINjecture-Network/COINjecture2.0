@@ -2,6 +2,42 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.41] - 2025-01-XX
+
+### Added
+- **Periodic Reorganization Check**: Added 60-second periodic task to proactively check for reorganization opportunities
+  - Runs every minute regardless of block processing
+  - Ensures reorganization is checked even when blocks fail validation
+  - Spawned alongside other periodic tasks (status broadcast, metrics)
+
+- **Aggressive Missing Block Requests**: Reorganization check now requests missing blocks when gaps are detected
+  - When stored blocks are found ahead but with gaps, requests full range immediately
+  - Enables reorganization to proceed once gaps are filled
+  - Uses network command sender passed to reorganization check
+
+### Changed
+- **Increased Reorganization Scan Limit**: Increased from 500 to 1000 blocks to handle very large forks
+- **Reorganization Check Signature**: Now accepts optional `network_cmd_tx` parameter to enable block requests
+- **Frontend RPC Client**: Updated to use HTTPS domains directly instead of CloudFront proxy
+  - Maps IP addresses to HTTPS domains: `143.110.139.166` → `https://rpc1.coinjecture.com`
+  - Removed CloudFront `/api/rpc` proxy dependency
+  - Validates all URLs are HTTPS in production
+
+### Fixed
+- **Reorganization Not Triggering**: Fixed by adding periodic checks and aggressive missing block requests
+- **Frontend 502 Bad Gateway**: Fixed by updating RPC client to use HTTPS domains directly
+
+### Technical Details
+- Modified `node/src/service.rs` to:
+  - Add periodic reorganization check task (60-second interval)
+  - Pass `network_cmd_tx` to `check_and_reorganize_chain()` function
+  - Request missing blocks when gaps detected in stored blocks
+  - Increase scan limit from 500 to 1000 blocks
+- Modified `web/coinjecture-evolved-main/src/lib/rpc-client.ts` to:
+  - Use HTTPS domains directly in production
+  - Map IP addresses to HTTPS domains automatically
+  - Remove CloudFront proxy fallback
+
 ## [4.7.40] - 2025-01-XX
 
 ### Changed
