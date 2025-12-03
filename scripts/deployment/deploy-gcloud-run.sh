@@ -11,7 +11,7 @@ SERVICE_NAME="${1:-coinject-node}"
 REGION="${2:-us-central1}"
 IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}:latest"
 HF_TOKEN="${HF_TOKEN:-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}"
-HF_DATASET="${HF_DATASET:-COINjecture/NP_Solutions}"
+HF_DATASET="${HF_DATASET:-COINjecture/NP_Solutions_v3}"
 
 echo "🚀 Deploying COINjecture Node to Google Cloud Run"
 echo "📦 Project: $PROJECT_ID"

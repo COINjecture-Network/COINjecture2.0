@@ -8,10 +8,10 @@ set -e
 DROPLET1="143.110.139.166"
 DROPLET2="68.183.205.12"
 # Peer IDs (discovered from network_getInfo RPC)
-DROPLET1_PEER_ID="12D3KooWPvk2aAfXSdYQvkX5j6bzqqzeNQ4hqgDJR2CiR27bNi7t"
-DROPLET2_PEER_ID="12D3KooWE5DBbcTYLCH3inwaxQo5yoeGbPTvWHK4rGJi3sRHjF13"
+DROPLET1_PEER_ID="12D3KooWJp1LjiE8sLN4kN9JpqZJWGvrMZR2eH4x2Trs3AdYdPwx"
+DROPLET2_PEER_ID="12D3KooWLnKgJxYo1pxMCXxfJsGt1o9j5iExBepUmaMV4NtvWAWQ"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/COINjecture-Key}"
-IMAGE_NAME="gcr.io/coinjecture/coinject-node:v4.7.30"
+IMAGE_NAME="gcr.io/coinjecture/coinject-node:v4.7.41"
 CONTAINER_NAME="coinject-node"
 DATA_VOLUME="coinject-data"
 HF_TOKEN="${HF_TOKEN:-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}"
@@ -21,14 +21,18 @@ echo "🚀 Deploying Docker image to nodes..."
 echo "📦 Image: $IMAGE_NAME"
 echo ""
 
-# Check if Docker image exists locally
+# Check if image exists locally, pull if needed
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
-    echo "❌ Docker image $IMAGE_NAME not found locally!"
-    echo "💡 Building image first..."
-    docker build -t "$IMAGE_NAME" .
+    echo "📥 Pulling image from GCR (AMD64 platform)..."
+    if ! docker pull --platform linux/amd64 "$IMAGE_NAME"; then
+        echo "❌ Failed to pull image from GCR!"
+        echo "💡 Make sure you're authenticated: gcloud auth configure-docker"
+        exit 1
+    fi
+    echo "✅ Image pulled: $IMAGE_NAME"
+else
+    echo "✅ Image found locally: $IMAGE_NAME"
 fi
-
-echo "✅ Docker image found: $IMAGE_NAME"
 echo ""
 
 # Function to deploy to a node

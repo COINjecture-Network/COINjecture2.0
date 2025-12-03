@@ -1,4 +1,12 @@
 #!/bin/bash
+# DEPRECATED: Use configure-cloudfront-rpc.sh instead
+# This script is kept for backward compatibility but uses the old ForwardedValues approach
+# The new script uses modern Cache Policies and Response Headers Policies
+
+echo "⚠️  WARNING: This script uses deprecated CloudFront configuration."
+echo "   Please use configure-cloudfront-rpc.sh instead for better CORS support."
+echo ""
+
 # Get current config
 aws cloudfront get-distribution-config --id E1F9JMDDFH6L9V --output json > /tmp/current-config.json
 

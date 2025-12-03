@@ -2,6 +2,23 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.42] - 2025-01-XX
+
+### Fixed
+- **Reorganization Check Stopping at Missing Blocks**: Fixed reorganization check to continue scanning past missing blocks
+  - Previously stopped at first missing block (e.g., height 1114) and never checked higher heights
+  - Now checks buffer for blocks that might connect to current chain
+  - Walks back from buffered blocks to find chain connections
+  - Continues sequential scan past gaps to find any stored blocks at higher heights
+  - Allows reorganization to find stored blocks even when there are gaps in the sequence
+
+### Technical Details
+- Modified `check_and_reorganize_chain()` in `node/src/service.rs` to:
+  - First check buffer for blocks that might connect to current chain
+  - Walk back from highest buffered block to see if it connects
+  - Continue sequential scan past missing blocks (don't stop at first gap)
+  - Scan up to 1000 blocks ahead to find any stored blocks
+
 ## [4.7.41] - 2025-01-XX
 
 ### Added

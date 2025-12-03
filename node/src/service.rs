@@ -1614,43 +1614,116 @@ impl CoinjectNode {
         
         // Also check stored blocks for longer chains (not just buffer)
         // This is critical when we've received and stored blocks from a longer fork
-        // Walk backwards from highest stored block to find longest valid chain
+        // Instead of scanning sequentially (which stops at first missing block),
+        // scan the buffer for blocks that might connect to our chain, then check if they're stored
         let mut max_stored_height = current_best_height;
         let mut max_stored_hash = current_best_hash;
         
-        // Check stored blocks up to a reasonable limit (current + 1000 to handle large forks)
-        // Increased from 500 to 1000 to handle very large forks (500+ block gaps)
+        // First, check buffer for blocks that might form a chain
+        // Look for blocks whose previous hash matches blocks in our current chain
+        let buffer = block_buffer.read().await;
+        let buffer_heights: Vec<u64> = buffer.keys().copied().collect();
+        drop(buffer);
+        
+        if !buffer_heights.is_empty() {
+            println!("🔍 Reorganization check: Checking {} buffered blocks for chain connections", buffer_heights.len());
+            
+            // Find the highest block in buffer
+            let max_buffered_height = *buffer_heights.iter().max().unwrap_or(&current_best_height);
+            
+            // Try to find a chain path from current best to buffered blocks
+            // Start from highest buffered block and walk back to see if it connects
+            if max_buffered_height > current_best_height {
+                let buffer = block_buffer.read().await;
+                let mut candidate_height = max_buffered_height;
+                let mut candidate_hash = None;
+                
+                // Try to find a block at max_buffered_height that might connect
+                if let Some(block) = buffer.get(&max_buffered_height) {
+                    // Check if this block's previous hash exists in our chain
+                    if let Ok(Some(prev_block)) = chain.get_block_by_hash(&block.header.prev_hash) {
+                        // Found a connection! Walk back to see how far this chain goes
+                        let mut walk_height = max_buffered_height;
+                        let mut walk_hash = block.header.hash();
+                        let mut valid_chain = true;
+                        
+                        while walk_height > current_best_height && valid_chain {
+                            // Check if this block is stored
+                            if let Ok(Some(stored_block)) = chain.get_block_by_hash(&walk_hash) {
+                                if stored_block.header.height == walk_height {
+                                    candidate_height = walk_height;
+                                    candidate_hash = Some(walk_hash);
+                                    
+                                    // Try to walk back one more
+                                    if walk_height > current_best_height + 1 {
+                                        walk_hash = stored_block.header.prev_hash;
+                                        walk_height -= 1;
+                                        
+                                        // Check if previous block exists (either in chain or buffer)
+                                        if chain.get_block_by_hash(&walk_hash).is_ok_and(|b| b.is_some()) {
+                                            continue;
+                                        } else if buffer.contains_key(&walk_height) {
+                                            // Previous block is in buffer, check if it's stored
+                                            if let Some(buffered_block) = buffer.get(&walk_height) {
+                                                if buffered_block.header.hash() == walk_hash {
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                        valid_chain = false;
+                                    } else {
+                                        break;
+                                    }
+                                } else {
+                                    valid_chain = false;
+                                }
+                            } else {
+                                valid_chain = false;
+                            }
+                        }
+                        
+                        if let Some(hash) = candidate_hash {
+                            max_stored_height = candidate_height;
+                            max_stored_hash = hash;
+                            println!("🔍 Reorganization check: Found potential chain connection at height {} (hash: {:?})", candidate_height, hash);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Also do sequential scan for blocks that are directly connected (no gaps)
+        // This handles the case where blocks are stored sequentially
+        // Scan up to 1000 blocks ahead, but don't stop at first missing block
         let scan_limit = current_best_height + 1000;
-        println!("🔍 Reorganization check: Scanning stored blocks from height {} to {}", current_best_height + 1, scan_limit);
+        println!("🔍 Reorganization check: Also scanning stored blocks sequentially from height {} to {} (continuing past gaps)", current_best_height + 1, scan_limit);
         for height in (current_best_height + 1)..=scan_limit {
             if let Ok(Some(block)) = chain.get_block_by_height(height) {
                 if height <= current_best_height + 10 {
-                    println!("🔍 Reorganization check: Found block at height {}", height);
+                    println!("🔍 Reorganization check: Found block at height {} in sequential scan", height);
                 }
                 // Verify this block is part of a valid chain by checking its previous block
                 if let Ok(Some(prev_block)) = chain.get_block_by_hash(&block.header.prev_hash) {
                     if prev_block.header.height == height - 1 {
                         // Valid chain continuation
-                        max_stored_height = height;
-                        max_stored_hash = block.header.hash();
+                        if height > max_stored_height {
+                            max_stored_height = height;
+                            max_stored_hash = block.header.hash();
+                        }
                     } else {
-                        // Chain broken - stop here
-                        println!("🔍 Reorganization check: Chain broken at height {} (prev block at height {}), stopping search", height, prev_block.header.height);
-                        break;
+                        // Chain broken - but don't stop, continue scanning
+                        if height <= current_best_height + 10 {
+                            println!("🔍 Reorganization check: Chain broken at height {} (prev block at height {}), continuing scan", height, prev_block.header.height);
+                        }
                     }
                 } else {
-                    // Previous block not found - stop here
-                    println!("🔍 Reorganization check: Previous block not found for height {} (prev_hash: {:?}), stopping search", height, block.header.prev_hash);
-                    break;
+                    // Previous block not found - but don't stop, continue scanning
+                    if height <= current_best_height + 10 {
+                        println!("🔍 Reorganization check: Previous block not found for height {} (prev_hash: {:?}), continuing scan", height, block.header.prev_hash);
+                    }
                 }
-            } else {
-                // No more blocks at this height - stop here
-                if height <= current_best_height + 10 {
-                    // Only log if we're close to current height (avoid spam)
-                    println!("🔍 Reorganization check: No block at height {}, stopping search (checked up to height {})", height, max_stored_height);
-                }
-                break;
             }
+            // Don't break on missing blocks - continue scanning to find any stored blocks
         }
         
         // If we found blocks ahead but with gaps, request missing blocks aggressively

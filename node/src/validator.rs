@@ -420,13 +420,13 @@ impl BlockValidator {
                             // No balance changes needed
                             // TODO: Verify channel exists and signatures are valid
                         }
-                        coinject_core::ChannelType::CooperativeClose { final_balance_a, final_balance_b } => {
+                        coinject_core::ChannelType::CooperativeClose { final_balance_a: _, final_balance_b: _ } => {
                             // TODO: Verify channel exists and signatures from both parties
                             // TODO: Credit final balances to participants
                             // Balances are u128 (Balance type), always non-negative
                             // TODO: Verify balances match channel capacity
                         }
-                        coinject_core::ChannelType::UnilateralClose { balance_a, balance_b, .. } => {
+                        coinject_core::ChannelType::UnilateralClose { balance_a: _, balance_b: _, .. } => {
                             // TODO: Verify channel exists and dispute proof
                             // TODO: Credit balances to participants after dispute period
                             // Balances are u128 (Balance type), always non-negative

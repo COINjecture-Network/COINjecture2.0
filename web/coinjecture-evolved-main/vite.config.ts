@@ -61,6 +61,10 @@ export default defineConfig(({ mode }) => {
     } : undefined,
     rollupOptions: {
       output: {
+        // Add timestamp to chunk file names to force cache-busting
+        entryFileNames: `assets/[name]-[hash]-v1.0.1.js`,
+        chunkFileNames: `assets/[name]-[hash]-v1.0.1.js`,
+        assetFileNames: `assets/[name]-[hash]-v1.0.1.[ext]`,
         manualChunks: {
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
           'query-vendor': ['@tanstack/react-query'],
