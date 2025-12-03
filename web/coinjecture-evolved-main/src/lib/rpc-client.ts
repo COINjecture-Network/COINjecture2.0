@@ -25,9 +25,14 @@ const isHTTPS = typeof window !== 'undefined' && window.location.protocol === 'h
 const createProxyUrls = (): string[] => {
   const urls = parseRpcUrls();
   if (isHTTPS && !isDevelopment) {
-    // In production HTTPS, use CloudFront proxy with target parameter
+    // In production HTTPS, check if URLs are already HTTPS (direct access)
+    // If HTTP, use CloudFront proxy with target parameter (fallback)
     return urls.map(url => {
-      // Extract host:port from URL
+      // If URL is already HTTPS, use it directly (CORS enabled on RPC server)
+      if (url.startsWith('https://')) {
+        return url;
+      }
+      // Otherwise, use CloudFront proxy with target parameter (legacy fallback)
       const match = url.match(/https?:\/\/([^\/]+)/);
       if (match) {
         const target = match[1];
