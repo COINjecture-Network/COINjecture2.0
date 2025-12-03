@@ -2,6 +2,37 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.40] - 2025-01-XX
+
+### Changed
+- **Increased Sync Threshold**: Increased from 100 to 500 blocks to allow storing blocks from forks for reorganization
+- **Increased Reorganization Scan Limit**: Increased from 200 to 500 blocks to handle larger forks
+- **Added Reorganization Check Logging**: Added logging when reorganization check is triggered after processing blocks
+
+### Fixed
+- **Reorganization Check Trigger**: Added reorganization check trigger after storing fork blocks to ensure reorganization can find stored blocks even if they're not connected yet
+
+### Known Issues
+- **Chain Reorganization Not Triggering**: Despite implementing work score-based reorganization and common ancestor anchoring, reorganization is not triggering when nodes are on different forks. Current diagnosis:
+  - Blocks are being received and stored from forks
+  - Reorganization check is not being called frequently enough
+  - Blocks failing validation ("Invalid previous hash") prevent sequential processing
+  - Gap between nodes continues to widen (currently 500+ blocks)
+  - Need to investigate: periodic reorganization checks, better fork block storage, or alternative reorganization trigger mechanisms
+
+- **Frontend 502 Bad Gateway Errors**: CloudFront is returning 502 errors when submitting blocks via RPC:
+  - Error: `POST https://d1f2zzpbyxllz7.cloudfront.net/api/rpc 502 (Bad Gateway)`
+  - This suggests CloudFront proxy is still being used despite HTTPS domain setup
+  - Frontend may need cache invalidation or RPC client update to use direct HTTPS domains
+  - Lambda@Edge was removed but CloudFront distribution may still be configured incorrectly
+
+### Technical Details
+- Modified `node/src/service.rs` to:
+  - Increase sync threshold from 100 to 500 blocks
+  - Increase reorganization scan limit from 200 to 500 blocks
+  - Add reorganization check trigger after storing fork blocks
+  - Add logging for reorganization check triggers
+
 ## [4.7.39] - 2025-01-XX
 
 ### Added
