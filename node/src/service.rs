@@ -902,23 +902,21 @@ impl CoinjectNode {
                                                 let new_best_height = chain.best_block_height().await;
                                                 let new_best_hash = chain.best_block_hash().await;
                                                 
-                                                // If we've advanced, check if there are any fork blocks that might form a longer chain
-                                                // This is a simplified check - full implementation would track all fork chains
-                                                if new_best_height > block.header.height {
-                                                    // We've advanced past this block, check for reorganization opportunities
-                                                    let _ = Self::check_and_reorganize_chain(
-                                                        chain,
-                                                        state,
-                                                        timelock_state,
-                                                        escrow_state,
-                                                        channel_state,
-                                                        trustline_state,
-                                                        dimensional_pool_state,
-                                                        marketplace_state,
-                                                        validator,
-                                                        block_buffer,
-                                                    ).await;
-                                                }
+                                                // Check for reorganization opportunities after processing blocks
+                                                // This is critical for handling forks when we receive blocks from a longer chain
+                                                // Use the existing check_and_reorganize_chain which is more efficient
+                                                let _ = Self::check_and_reorganize_chain(
+                                                    chain,
+                                                    state,
+                                                    timelock_state,
+                                                    escrow_state,
+                                                    channel_state,
+                                                    trustline_state,
+                                                    dimensional_pool_state,
+                                                    marketplace_state,
+                                                    validator,
+                                                    block_buffer,
+                                                ).await;
                                             }
                                             Err(e) => {
                                                 println!("❌ Failed to apply block transactions: {}", e);
@@ -1043,7 +1041,25 @@ impl CoinjectNode {
 
                 // Check if peer has a longer or different chain
                 if best_height > our_height {
-                    // Peer is ahead - request blocks to catch up
+                    // Peer is ahead - check if we're on a fork first
+                    // If peer's best block at our height exists and differs, we're on a fork
+                    let on_fork = if let Ok(Some(block_at_our_height)) = chain.get_block_by_height(our_height) {
+                        block_at_our_height.header.hash() != our_hash
+                    } else {
+                        false
+                    };
+
+                    if on_fork {
+                        println!("⚠️  Fork detected! Peer is ahead (height {}) and we're on a fork. Requesting full chain for reorganization...", best_height);
+                        // Request full chain from peer to check if it's longer and valid
+                        if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                            from_height: 0,
+                            to_height: best_height,
+                        }) {
+                            eprintln!("Failed to request full chain for fork analysis: {}", e);
+                        }
+                    } else {
+                        // Normal sync - peer is ahead on same chain
                     let sync_from = our_height + 1;
                     let sync_to = best_height;
 
@@ -1052,10 +1068,10 @@ impl CoinjectNode {
                         sync_from, sync_to
                     );
 
-                    // Request missing blocks in smaller sequential chunks to ensure ordered delivery
-                    // During initial sync, use smaller chunks (20 blocks) to maintain order
-                    // For large gaps, still chunk but request sequentially
-                    let chunk_size = if our_height < 1000 { 20u64 } else { 50u64 };
+                        // Request missing blocks in smaller sequential chunks to ensure ordered delivery
+                        // During initial sync, use smaller chunks (20 blocks) to maintain order
+                        // For large gaps, still chunk but request sequentially
+                        let chunk_size = if our_height < 1000 { 20u64 } else { 50u64 };
                     let mut current = sync_from;
 
                     while current <= sync_to {
@@ -1070,6 +1086,7 @@ impl CoinjectNode {
                         }
 
                         current = end + 1;
+                        }
                     }
                 } else if best_height == our_height && best_hash != our_hash {
                     // Fork detected at same height - check if peer's chain is longer by requesting their chain
@@ -1164,13 +1181,13 @@ impl CoinjectNode {
                             let request_id = base_request_id.wrapping_add(height);
                             
                             if height <= 20 || height % 100 == 0 {
-                                println!(
+                            println!(
                                     "   ↳ Serving sync block {} (hash {:?}) to {:?}",
-                                    height,
-                                    block.header.hash(),
-                                    peer
-                                );
-                            }
+                                height,
+                                block.header.hash(),
+                                peer
+                            );
+                        }
                             // Use SendSyncBlock with unique request_id - NOT SendBlockToPeer!
                             if let Err(e) = network_tx.send(NetworkCommand::SendSyncBlock { 
                                 block, 
@@ -1185,11 +1202,11 @@ impl CoinjectNode {
                             // Block doesn't exist - log and continue to next block
                             // Don't break immediately - try to serve other blocks in the range
                             if height <= 20 || height % 100 == 0 {
-                                println!(
+                            println!(
                                     "   ↳ Missing requested block {} (first missing in range {}-{}) - continuing to serve other blocks",
-                                    height, from_height, to_height
-                                );
-                            }
+                                height, from_height, to_height
+                            );
+                        }
                             // Continue to next block instead of breaking
                             // This allows serving blocks that do exist even if some are missing
                             continue;
@@ -1455,6 +1472,69 @@ impl CoinjectNode {
                 // to see if it's longer. This is handled by status update handler.
                 println!("   Fork block at height {} detected in buffer, waiting for full chain...", current_best_height);
             }
+        }
+        
+        drop(buffer);
+        
+        // Also check stored blocks for longer chains (not just buffer)
+        // This is critical when we've received and stored blocks from a longer fork
+        // Walk backwards from highest stored block to find longest valid chain
+        let mut max_stored_height = current_best_height;
+        let mut max_stored_hash = current_best_hash;
+        
+        // Check stored blocks up to a reasonable limit (current + 200)
+        for height in (current_best_height + 1)..=(current_best_height + 200) {
+            if let Ok(Some(block)) = chain.get_block_by_height(height) {
+                // Verify this block is part of a valid chain by checking its previous block
+                if let Ok(Some(prev_block)) = chain.get_block_by_hash(&block.header.prev_hash) {
+                    if prev_block.header.height == height - 1 {
+                        // Valid chain continuation
+                        max_stored_height = height;
+                        max_stored_hash = block.header.hash();
+                    } else {
+                        // Chain broken - stop here
+                        break;
+                    }
+                } else {
+                    // Previous block not found - stop here
+                    break;
+                }
+            } else {
+                // No more blocks at this height - stop here
+                break;
+            }
+        }
+        
+        // If we found a longer chain in stored blocks, attempt reorganization
+        if max_stored_height > current_best_height {
+            println!("🔍 Found longer chain in stored blocks (height {}), attempting reorganization...", max_stored_height);
+            let chain_clone = Arc::clone(chain);
+            let state_clone = Arc::clone(state);
+            let timelock_clone = Arc::clone(timelock_state);
+            let escrow_clone = Arc::clone(escrow_state);
+            let channel_clone = Arc::clone(channel_state);
+            let trustline_clone = Arc::clone(trustline_state);
+            let dimensional_clone = Arc::clone(dimensional_pool_state);
+            let marketplace_clone = Arc::clone(marketplace_state);
+            let validator_clone = Arc::clone(validator);
+            
+            tokio::spawn(async move {
+                if let Err(e) = Self::attempt_reorganization_if_longer_chain(
+                    max_stored_hash,
+                    max_stored_height,
+                    &chain_clone,
+                    &state_clone,
+                    &timelock_clone,
+                    &escrow_clone,
+                    &channel_clone,
+                    &trustline_clone,
+                    &dimensional_clone,
+                    &marketplace_clone,
+                    &validator_clone,
+                ).await {
+                    eprintln!("⚠️  Failed to attempt reorganization for stored blocks: {}", e);
+                }
+            });
         }
     }
 

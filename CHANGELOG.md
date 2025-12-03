@@ -2,6 +2,25 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.34] - 2025-12-03
+
+### Fixed
+- **Chain Reorganization Triggering**: Fixed critical issues preventing chain reorganization from triggering
+  - **Fork Detection When Peer is Ahead**: Now detects forks when a peer is ahead and requests full chain for reorganization
+  - **Reorganization After Receiving Blocks**: Added comprehensive reorganization check after processing blocks
+  - **Enhanced check_and_reorganize_chain**: Now checks both buffer AND stored blocks for longer chains
+  - **Stored Block Scanning**: Scans stored blocks up to 200 blocks ahead to find longest valid chain
+  - Reorganization now triggers automatically when:
+    - Peer is ahead and we're on a fork (requests full chain)
+    - We receive blocks from a longer chain (checks after processing)
+    - We have stored blocks that form a longer chain (scans stored blocks)
+
+### Technical Details
+- Modified `NetworkEvent::StatusUpdate` handler to detect forks when peer is ahead
+- Enhanced `check_and_reorganize_chain()` to scan stored blocks, not just buffer
+- Added reorganization check after `process_buffered_blocks()` completes
+- Improved fork detection logic to request full chain when fork is detected
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
