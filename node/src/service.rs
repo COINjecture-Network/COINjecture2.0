@@ -1632,62 +1632,100 @@ impl CoinjectNode {
             let max_buffered_height = *buffer_heights.iter().max().unwrap_or(&current_best_height);
             
             // Try to find a chain path from current best to buffered blocks
-            // Start from highest buffered block and walk back to see if it connects
+            // Check ALL blocks in buffer, not just the highest one, to find any that connect
             if max_buffered_height > current_best_height {
                 let buffer = block_buffer.read().await;
-                let mut candidate_height = max_buffered_height;
-                let mut candidate_hash = None;
+                let mut best_candidate_height = current_best_height;
+                let mut best_candidate_hash = current_best_hash;
                 
-                // Try to find a block at max_buffered_height that might connect
-                if let Some(block) = buffer.get(&max_buffered_height) {
-                    // Check if this block's previous hash exists in our chain
-                    if let Ok(Some(prev_block)) = chain.get_block_by_hash(&block.header.prev_hash) {
-                        // Found a connection! Walk back to see how far this chain goes
-                        let mut walk_height = max_buffered_height;
-                        let mut walk_hash = block.header.hash();
-                        let mut valid_chain = true;
-                        
-                        while walk_height > current_best_height && valid_chain {
-                            // Check if this block is stored
-                            if let Ok(Some(stored_block)) = chain.get_block_by_hash(&walk_hash) {
-                                if stored_block.header.height == walk_height {
-                                    candidate_height = walk_height;
-                                    candidate_hash = Some(walk_hash);
-                                    
-                                    // Try to walk back one more
-                                    if walk_height > current_best_height + 1 {
-                                        walk_hash = stored_block.header.prev_hash;
-                                        walk_height -= 1;
-                                        
-                                        // Check if previous block exists (either in chain or buffer)
-                                        if chain.get_block_by_hash(&walk_hash).is_ok_and(|b| b.is_some()) {
-                                            continue;
-                                        } else if buffer.contains_key(&walk_height) {
-                                            // Previous block is in buffer, check if it's stored
-                                            if let Some(buffered_block) = buffer.get(&walk_height) {
-                                                if buffered_block.header.hash() == walk_hash {
-                                                    continue;
-                                                }
-                                            }
-                                        }
-                                        valid_chain = false;
-                                    } else {
-                                        break;
+                // Iterate through buffered blocks to find ANY that connect to our current best chain
+                // Sort by height descending to check highest blocks first
+                let mut sorted_heights: Vec<u64> = buffer_heights.iter().copied().filter(|&h| h > current_best_height).collect();
+                sorted_heights.sort_by(|a, b| b.cmp(a)); // Descending order
+                
+                // Walk back from current best to build a set of hashes that are on our current chain
+                let mut current_chain_hashes = std::collections::HashSet::new();
+                let mut walk_back_hash = current_best_hash;
+                let mut walk_back_height = current_best_height;
+                for _ in 0..1000 { // Walk back up to 1000 blocks
+                    current_chain_hashes.insert(walk_back_hash);
+                    if walk_back_height == 0 {
+                        break;
+                    }
+                    if let Ok(Some(prev_block)) = chain.get_block_by_hash(&walk_back_hash) {
+                        walk_back_hash = prev_block.header.prev_hash;
+                        walk_back_height -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                
+                for &check_height in sorted_heights.iter().take(100) { // Limit to top 100 to avoid excessive checks
+                    if let Some(block) = buffer.get(&check_height) {
+                        // Check if this block's previous hash is on our current best chain
+                        if current_chain_hashes.contains(&block.header.prev_hash) {
+                            // Found a connection! This block connects to our current best chain
+                            // Walk forward from this connection point to see how far the chain extends
+                            let mut walk_height = check_height;
+                            let mut walk_hash = block.header.hash();
+                            let mut valid_chain = true;
+                            let mut chain_end_height = check_height;
+                            let mut chain_end_hash = walk_hash;
+                            
+                            // Walk forward to find the end of this chain
+                            while valid_chain {
+                                // Check if next block exists in buffer or is stored
+                                let next_height = walk_height + 1;
+                                let mut found_next = false;
+                                
+                                // Check buffer first
+                                if let Some(next_block) = buffer.get(&next_height) {
+                                    if next_block.header.prev_hash == walk_hash {
+                                        walk_height = next_height;
+                                        walk_hash = next_block.header.hash();
+                                        chain_end_height = next_height;
+                                        chain_end_hash = walk_hash;
+                                        found_next = true;
                                     }
-                                } else {
+                                }
+                                
+                                // Also check if stored block exists at next height
+                                if !found_next {
+                                    if let Ok(Some(stored_block)) = chain.get_block_by_height(next_height) {
+                                        if stored_block.header.prev_hash == walk_hash {
+                                            walk_height = next_height;
+                                            walk_hash = stored_block.header.hash();
+                                            chain_end_height = next_height;
+                                            chain_end_hash = walk_hash;
+                                            found_next = true;
+                                        }
+                                    }
+                                }
+                                
+                                if !found_next {
                                     valid_chain = false;
                                 }
-                            } else {
-                                valid_chain = false;
+                                
+                                // Limit walk to prevent infinite loops
+                                if walk_height > check_height + 1000 {
+                                    break;
+                                }
+                            }
+                            
+                            // If this chain is longer than our best candidate, use it
+                            if chain_end_height > best_candidate_height {
+                                best_candidate_height = chain_end_height;
+                                best_candidate_hash = chain_end_hash;
+                                println!("🔍 Reorganization check: Found potential chain connection at height {} (connects to current chain at prev_hash {:?}, hash: {:?})", 
+                                    chain_end_height, block.header.prev_hash, chain_end_hash);
                             }
                         }
-                        
-                        if let Some(hash) = candidate_hash {
-                            max_stored_height = candidate_height;
-                            max_stored_hash = hash;
-                            println!("🔍 Reorganization check: Found potential chain connection at height {} (hash: {:?})", candidate_height, hash);
-                        }
                     }
+                }
+                
+                if best_candidate_height > current_best_height {
+                    max_stored_height = best_candidate_height;
+                    max_stored_hash = best_candidate_hash;
                 }
             }
         }

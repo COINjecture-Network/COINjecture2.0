@@ -2,6 +2,25 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.43] - 2025-01-XX
+
+### Fixed
+- **Reorganization Check Only Checking Highest Block**: Fixed reorganization check to examine ALL buffered blocks, not just the highest one
+  - Previously only checked the highest buffered block, which might be from a different fork
+  - Now checks top 100 buffered blocks to find ANY that connect to the current best chain
+  - Builds a set of hashes on the current best chain (walking back up to 1000 blocks)
+  - For each buffered block, verifies its previous hash is on the current chain before considering it
+  - Walks forward from connection points to find the full chain extent
+  - Uses the longest valid chain found for reorganization
+
+### Technical Details
+- Modified `check_and_reorganize_chain()` in `node/src/service.rs` to:
+  - Build a HashSet of hashes on the current best chain (walking back from best block)
+  - Iterate through top 100 buffered blocks (sorted by height descending)
+  - Check if each block's previous hash is in the current chain HashSet
+  - Walk forward from connection points to find chain extent
+  - Select the longest valid chain found
+
 ## [4.7.42] - 2025-01-XX
 
 ### Fixed
