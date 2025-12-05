@@ -1,7 +1,11 @@
 // Node Service
 // Main orchestrator tying all components together
 
+// Conditional ChainState: uses ADZDB when compiled with --features adzdb
+#[cfg(not(feature = "adzdb"))]
 use crate::chain::ChainState;
+#[cfg(feature = "adzdb")]
+use crate::chain_adzdb::AdzdbChainState as ChainState;
 use crate::config::NodeConfig;
 use crate::faucet::{Faucet, FaucetConfig};
 use crate::genesis::{create_genesis_block, GenesisConfig};
@@ -781,34 +785,33 @@ impl CoinjectNode {
             let peer_count_for_mining = Arc::clone(&peer_count);
             let best_peer_height_for_mining = Arc::clone(&best_known_peer_height);
             let peer_consensus_for_mining = Arc::clone(&peer_consensus);
+            let dev_mode = self.config.dev;
 
-            tokio::spawn(async move {
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining, peer_consensus_for_mining).await;
+            // Use spawn_local since we're in a LocalSet context
+            tokio::task::spawn_local(async move {
+                println!("🔧 Mining task started (spawn_local)");
+                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining, peer_consensus_for_mining, dev_mode).await;
+                println!("⚠️ Mining loop exited (unexpected)");
             });
         }
 
-        // Spawn periodic HuggingFace buffer flush task (fallback - block-based flushing is primary)
-        // This ensures data is flushed even if block-based flushing doesn't trigger (e.g., during sync)
+        // Spawn periodic HuggingFace buffer flush task (using blocking HTTP via spawn_blocking)
         if let Some(ref hf_sync) = self.hf_sync {
             let hf_sync_for_flush = Arc::clone(hf_sync);
             let chain_for_flush = Arc::clone(&self.chain);
-            tokio::spawn(async move {
-                let mut interval = time::interval(Duration::from_secs(600)); // Check every 10 minutes as fallback
+            tokio::task::spawn_local(async move {
                 let mut last_flush_height = 0u64;
                 loop {
-                    interval.tick().await;
-                    // Only flush if we haven't seen a new block in a while (fallback safety)
+                    // Use blocking sleep to avoid tokio timer issues
+                    tokio::task::spawn_blocking(|| {
+                        std::thread::sleep(Duration::from_secs(120)); // Check every 2 minutes
+                    }).await.unwrap();
+                    
                     let current_height = chain_for_flush.best_block_height().await;
-                    if current_height > last_flush_height + 600 {
-                        // More than ~10 minutes of blocks since last check - force flush as safety measure
-                        eprintln!(
-                            "🔄 Hugging Face: Fallback flush triggered ({} blocks since last check)",
-                            current_height - last_flush_height
-                        );
+                    if current_height > last_flush_height + 50 {
+                        eprintln!("🔄 Hugging Face: Periodic flush ({} blocks since last)", current_height - last_flush_height);
                         if let Err(e) = hf_sync_for_flush.flush().await {
-                            eprintln!("⚠️  Failed to flush Hugging Face buffer: {}", e);
-                        } else {
-                            eprintln!("✅ Hugging Face: Fallback buffer flush completed");
+                            eprintln!("⚠️  HuggingFace flush error: {}", e);
                         }
                         last_flush_height = current_height;
                     }
@@ -1564,36 +1567,78 @@ impl CoinjectNode {
         // Find the highest block in buffer
         let max_buffered_height = buffer_info.0;
         
+        // v4.7.45 FIX: Use find_common_ancestor() for buffered blocks to handle earlier forks properly
         // If we have blocks that extend beyond our current best, check if they form a valid chain
         if max_buffered_height > current_best_height {
             // Re-acquire buffer lock to check for chain path
             let buffer = block_buffer.read().await;
-            // Try to build a chain from current best to max buffered height
+            
+            // Find the highest buffered block and use find_common_ancestor to check for forks
+            if let Some(highest_block) = buffer.get(&max_buffered_height) {
+                let highest_hash = highest_block.header.hash();
+                drop(buffer); // Release lock before async call
+                
+                // Use find_common_ancestor to properly detect if this is a fork from earlier
+                match chain.find_common_ancestor(&highest_hash, max_buffered_height).await {
+                    Ok(Some((common_hash, common_height))) => {
+                        if common_height < current_best_height {
+                            // This buffered chain forks from before our current best - it's a reorganization candidate
+                            println!("🔍 Reorganization check: Buffered chain (height {}) forks at common ancestor height {}", 
+                                max_buffered_height, common_height);
+                            
+                            // The chain at max_buffered_height branches from common_height
+                            // If it's longer than our current chain, it's a reorg candidate
+                            let fork_length = max_buffered_height - common_height;
+                            let our_length = current_best_height - common_height;
+                            
+                            if fork_length > our_length {
+                                println!("🔍 Buffered fork is longer: fork has {} blocks after common ancestor, we have {}", 
+                                    fork_length, our_length);
+                            }
+                        } else {
+                            println!("🔍 Reorganization check: Buffered blocks connect to current chain at height {}", common_height);
+                        }
+                    },
+                    Ok(None) => {
+                        // No common ancestor found - blocks might be from a completely different chain
+                        println!("🔍 Reorganization check: Buffered blocks at height {} have no common ancestor with current chain", max_buffered_height);
+                    },
+                    Err(e) => {
+                        println!("⚠️  Error finding common ancestor for buffered blocks: {:?}", e);
+                    }
+                }
+            } else {
+                drop(buffer);
+            }
+            
+            // Also try sequential path building for directly connected blocks
+            let buffer = block_buffer.read().await;
             let mut chain_path = Vec::new();
-            let mut current_hash = current_best_hash;
-            let mut current_height = current_best_height;
+            let mut walk_hash = current_best_hash;
+            let mut walk_height = current_best_height;
 
             // Try to find a path through buffered blocks
-            while current_height < max_buffered_height {
-                let next_height = current_height + 1;
+            while walk_height < max_buffered_height {
+                let next_height = walk_height + 1;
                 
-                // Look for a block at next_height that connects to current_hash
+                // Look for a block at next_height that connects to walk_hash
                 let mut found = false;
                 for (height, block) in buffer.iter() {
-                    if *height == next_height && block.header.prev_hash == current_hash {
+                    if *height == next_height && block.header.prev_hash == walk_hash {
                         chain_path.push(block.clone());
-                        current_hash = block.header.hash();
-                        current_height = next_height;
+                        walk_hash = block.header.hash();
+                        walk_height = next_height;
                         found = true;
                         break;
                     }
                 }
 
                 if !found {
-                    // Can't form a complete chain from buffer
+                    // Can't form a complete chain from buffer at this point
                     break;
                 }
             }
+            drop(buffer);
 
             // If we found a complete chain path, it will be processed by process_buffered_blocks
             // This check is mainly for detecting forks
@@ -2939,9 +2984,14 @@ impl CoinjectNode {
         peer_count: Arc<RwLock<usize>>,
         best_known_peer_height: Arc<RwLock<u64>>,
         peer_consensus: Arc<PeerConsensus>,
+        dev_mode: bool,
     ) {
-        // Wait for peer connections and initial chain sync before mining
-        println!("⏳ Waiting for peer connections and chain sync before mining...");
+        // In dev mode, skip waiting for peers and start mining immediately
+        if dev_mode {
+            println!("🔧 Dev mode: Starting mining immediately (no peer sync required)");
+        } else {
+            // Wait for peer connections and initial chain sync before mining
+            println!("⏳ Waiting for peer connections and chain sync before mining...");
         let mut sync_wait_interval = time::interval(Duration::from_secs(2));
         let mut sync_attempts = 0;
         const MAX_SYNC_WAIT_ATTEMPTS: u32 = 150; // Wait up to 5 minutes for sync
@@ -2997,45 +3047,70 @@ impl CoinjectNode {
                 break;
             }
         }
+        } // end of else block (non-dev mode peer sync)
 
         // Start mining loop
-        let mut interval = time::interval(Duration::from_secs(10));
+        println!("⛏️  Starting mining loop...");
         let mut last_mined_height = chain.best_block_height().await;
+        println!("⛏️  Mining loop initialized, last height: {}", last_mined_height);
 
         loop {
-            interval.tick().await;
+            // Use blocking sleep to bypass Tokio timer issues
+            eprintln!("⏰ Mining loop - sleeping 5s (blocking)...");
+            use std::io::Write;
+            let _ = std::io::stderr().flush();
+            
+            // Use spawn_blocking with std::thread::sleep
+            tokio::task::spawn_blocking(|| {
+                std::thread::sleep(Duration::from_secs(5));
+            }).await.unwrap();
+            
+            eprintln!("⏰ Mining loop - WOKE UP after blocking sleep!");
+            let _ = std::io::stderr().flush();
+            
+            eprintln!("⏰ Mining loop - getting chain state...");
 
             let best_height = chain.best_block_height().await;
+            println!("⏰ Got best_height: {}", best_height);
             let best_hash = chain.best_block_hash().await;
+            println!("⏰ Got best_hash: {:?}", best_hash);
 
             // Check if chain advanced since last mining attempt (block received from peer)
+            // v4.7.44 FIX: Don't skip mining entirely - just update last_mined_height and continue
+            // to the consensus check. This fixes the race condition where only one node could mine.
             if best_height > last_mined_height {
-                println!("📥 Chain advanced from {} to {} (block received from peer), skipping this mining cycle", 
+                println!("📥 Chain advanced from {} to {} (block received from peer), updating height", 
                     last_mined_height, best_height);
                 last_mined_height = best_height;
-                continue; // Skip mining this cycle, wait for next interval
+                // Note: We continue to consensus check below - this allows ALL nodes to potentially mine
+                // The consensus check will properly coordinate who should mine
             }
 
             // SYNC-BEFORE-MINE: Multi-peer consensus check (XRPL-inspired)
             // Requires 5+ peers with 80% agreement before mining
-            let (should_mine, reason) = peer_consensus.should_mine(best_height).await;
-            if !should_mine {
-                println!("⏸️  Mining PAUSED: {}", reason);
-                
-                // Fallback: Also check simple best-peer height (for bootstrap with <5 peers)
-                let peer_best = *best_known_peer_height.read().await;
-                const SYNC_THRESHOLD: u64 = 10;
-                if peer_best > 0 && best_height + SYNC_THRESHOLD < peer_best {
-                    let blocks_behind = peer_best - best_height;
-                    println!("   Also {} blocks behind best peer (our: {}, best: {})", 
-                        blocks_behind, best_height, peer_best);
+            // SKIP in dev mode - allow solo mining
+            if !dev_mode {
+                let (should_mine, reason) = peer_consensus.should_mine(best_height).await;
+                if !should_mine {
+                    println!("⏸️  Mining PAUSED: {}", reason);
+                    
+                    // Fallback: Also check simple best-peer height (for bootstrap with <5 peers)
+                    let peer_best = *best_known_peer_height.read().await;
+                    const SYNC_THRESHOLD: u64 = 10;
+                    if peer_best > 0 && best_height + SYNC_THRESHOLD < peer_best {
+                        let blocks_behind = peer_best - best_height;
+                        println!("   Also {} blocks behind best peer (our: {}, best: {})", 
+                            blocks_behind, best_height, peer_best);
+                    }
+                    continue; // Skip mining, check again next interval
                 }
-                continue; // Skip mining, check again next interval
+                
+                // Log consensus diagnostics
+                let diagnostics = peer_consensus.diagnostics().await;
+                println!("✅ Consensus OK: {}", diagnostics);
+            } else {
+                println!("🔧 Dev mode: Skipping peer consensus check");
             }
-            
-            // Log consensus diagnostics
-            let diagnostics = peer_consensus.diagnostics().await;
-            println!("✅ Consensus OK: {}", diagnostics);
 
             // Ready to mine!
             println!("⛏️  Mining block {}...", best_height + 1);
@@ -3184,18 +3259,13 @@ impl CoinjectNode {
                     println!("📡 Broadcasted block to network");
                 }
 
-                // Push consensus block to Hugging Face (fire-and-forget)
+                // Push consensus block to Hugging Face (inline, not spawned - LocalSet issues)
                 if let Some(ref hf_sync) = hf_sync {
-                    eprintln!("📦 Hugging Face: Preparing to upload mined block {}", block.header.height);
-                    let hf_sync_clone = Arc::clone(hf_sync);
-                    let block_clone = block.clone();
-                    tokio::spawn(async move {
-                        eprintln!("📦 Hugging Face: Starting async upload for block {}", block_clone.header.height);
-                        match hf_sync_clone.push_consensus_block(&block_clone, true).await {
-                            Ok(()) => eprintln!("✅ Hugging Face: Successfully queued block {} for upload", block_clone.header.height),
-                            Err(e) => eprintln!("❌ Failed to push consensus block {} to Hugging Face: {}", block_clone.header.height, e),
-                        }
-                    });
+                    eprintln!("📦 Hugging Face: Uploading mined block {}", block.header.height);
+                    match hf_sync.push_consensus_block(&block, true).await {
+                        Ok(()) => eprintln!("✅ Hugging Face: Block {} queued for upload", block.header.height),
+                        Err(e) => eprintln!("❌ HuggingFace upload error for block {}: {}", block.header.height, e),
+                    }
 
                     // Upload marketplace transactions from this mined block
                     Self::upload_marketplace_transactions(&block, &marketplace_state, hf_sync);

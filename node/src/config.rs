@@ -79,6 +79,11 @@ pub struct NodeConfig {
     /// HuggingFace dataset name (format: username/dataset-name)
     #[arg(long)]
     pub hf_dataset_name: Option<String>,
+
+    /// Use ADZDB instead of redb for chain storage (experimental)
+    /// Requires compilation with --features adzdb
+    #[arg(long)]
+    pub use_adzdb: bool,
 }
 
 impl NodeConfig {
@@ -152,6 +157,7 @@ mod tests {
             faucet_cooldown: 3600,
             hf_token: None,
             hf_dataset_name: None,
+            use_adzdb: false,
         };
 
         assert!(config.validate().is_ok());
@@ -178,6 +184,7 @@ mod tests {
             faucet_cooldown: 3600,
             hf_token: None,
             hf_dataset_name: None,
+            use_adzdb: false,
         };
 
         assert!(config.validate().is_err());

@@ -7,69 +7,23 @@
 //! ## Design Principles
 //!
 //! 1. **Append-only**: Data is never overwritten, only appended
-//!    - Perfect for blockchain: blocks are immutable
-//!    - Simplifies concurrency: readers never block writers
-//!    - Enables crash recovery without complex journaling
-//!
 //! 2. **Deterministic**: All operations produce identical results
-//!    - Same input → Same output (consensus-safe)
-//!    - No background threads with unpredictable timing
-//!    - No "compaction jitter" like RocksDB
-//!
-//! 3. **Zero-copy**: Minimize serialization overhead
-//!    - Fixed-size headers mapped directly to structs
-//!    - Memory-mapped I/O where possible
-//!    - No JSON/protobuf parsing in hot path
+//! 3. **Zero-copy**: Fixed-size headers for direct memory mapping
 //!
 //! ## File Structure
 //!
 //! ```text
 //! adzdb/
-//! ├── adzdb.idx     # Index file (hash → offset mapping)
+//! ├── adzdb.idx     # Hash index (hash → offset)
 //! ├── adzdb.dat     # Data file (append-only block storage)
-//! └── adzdb.meta    # Metadata (chain state, latest height)
-//! ```
-//!
-//! ## Architecture
-//!
-//! ```text
-//!                    ┌─────────────────────────────────────┐
-//!                    │            ADZDB Engine             │
-//!                    ├─────────────────────────────────────┤
-//!                    │                                     │
-//!   Write Path:      │  ┌─────────┐    ┌──────────────┐   │
-//!   append_block()───┼─▶│ Compute │───▶│ Append to    │   │
-//!                    │  │ Hash    │    │ Data File    │   │
-//!                    │  └─────────┘    └──────┬───────┘   │
-//!                    │                        │           │
-//!                    │                        ▼           │
-//!                    │               ┌──────────────┐     │
-//!                    │               │ Update Index │     │
-//!                    │               │ (Linear Hash)│     │
-//!                    │               └──────────────┘     │
-//!                    │                                     │
-//!   Read Path:       │  ┌─────────┐    ┌──────────────┐   │
-//!   get_block()──────┼─▶│ Hash    │───▶│ Index Lookup │   │
-//!                    │  │ Key     │    │ O(1)         │   │
-//!                    │  └─────────┘    └──────┬───────┘   │
-//!                    │                        │           │
-//!                    │                        ▼           │
-//!                    │               ┌──────────────┐     │
-//!                    │               │ Data File    │     │
-//!                    │               │ Direct Read  │     │
-//!                    │               └──────────────┘     │
-//!                    │                                     │
-//!                    └─────────────────────────────────────┘
+//! ├── adzdb.hgt     # Height index (height → hash)
+//! └── adzdb.meta    # Metadata (chain state)
 //! ```
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Read, Write, Seek, SeekFrom, BufReader};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-
-pub mod index;
-pub mod data_file;
-pub mod recovery;
 
 /// Magic bytes for ADZDB files
 pub const MAGIC: &[u8; 4] = b"ADZB";
@@ -77,23 +31,23 @@ pub const MAGIC: &[u8; 4] = b"ADZB";
 /// Current file format version
 pub const VERSION: u32 = 1;
 
-/// Default bucket count for index (must be power of 2)
-pub const DEFAULT_BUCKETS: u32 = 1 << 16; // 65,536 buckets
-
 /// Maximum value size (1 GB)
 pub const MAX_VALUE_SIZE: u64 = 1 << 30;
+
+/// Maximum reasonable block height (corruption detection)
+pub const MAX_REASONABLE_HEIGHT: u64 = 10_000_000;
+
+/// 256-bit hash
+pub type Hash = [u8; 32];
+
+/// Zero hash constant
+pub const ZERO_HASH: Hash = [0u8; 32];
 
 /// Configuration for ADZDB
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Base path for database files
     pub path: PathBuf,
-    /// Number of index buckets (power of 2)
-    pub bucket_count: u32,
-    /// Target load factor before bucket split (0.0-1.0)
-    pub load_factor: f64,
-    /// Enable memory-mapped I/O for reads
-    pub use_mmap: bool,
     /// Sync data to disk after each write
     pub sync_on_write: bool,
 }
@@ -102,9 +56,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             path: PathBuf::from("./adzdb"),
-            bucket_count: DEFAULT_BUCKETS,
-            load_factor: 0.5,
-            use_mmap: true,
             sync_on_write: true,
         }
     }
@@ -136,6 +87,8 @@ pub enum Error {
     InvalidConfig(String),
     /// Hash mismatch (content-addressable violation)
     HashMismatch { expected: Hash, actual: Hash },
+    /// Height too large (corruption detection)
+    HeightTooLarge(u64),
 }
 
 impl From<io::Error> for Error {
@@ -156,6 +109,7 @@ impl std::fmt::Display for Error {
             Error::HashMismatch { expected, actual } => {
                 write!(f, "Hash mismatch: expected {:?}, got {:?}", expected, actual)
             }
+            Error::HeightTooLarge(h) => write!(f, "Height {} exceeds maximum {}", h, MAX_REASONABLE_HEIGHT),
         }
     }
 }
@@ -164,135 +118,223 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// 256-bit hash (SHA-256 or BLAKE3)
-pub type Hash = [u8; 32];
-
-/// Zero hash constant
-pub const ZERO_HASH: Hash = [0u8; 32];
-
-/// Block header - fixed 128 bytes for zero-copy access
-/// Aligned to cache line for optimal memory access
-#[repr(C, align(64))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlockHeader {
-    /// Block height (0 = genesis)
-    pub height: u64,
-    /// Block hash (content-addressable key)
-    pub hash: Hash,
-    /// Previous block hash
-    pub prev_hash: Hash,
-    /// Merkle root of transactions
-    pub merkle_root: Hash,
-    /// Unix timestamp (seconds since epoch)
-    pub timestamp: u64,
-    /// Difficulty target
-    pub difficulty: u64,
-    /// Nonce used for mining
-    pub nonce: u64,
-    /// Problem type: 0=SAT, 1=SubsetSum, 2=TSP
-    pub problem_type: u8,
-    /// Reserved for future use
-    pub _reserved: [u8; 7],
-}
-
-impl BlockHeader {
-    pub const SIZE: usize = 128;
-    
-    /// Serialize header to bytes (zero-copy - just transmute)
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        // SAFETY: BlockHeader is repr(C) with known layout
-        unsafe { std::mem::transmute_copy(self) }
-    }
-    
-    /// Deserialize header from bytes (zero-copy)
-    pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
-        // SAFETY: BlockHeader is repr(C) with known layout
-        unsafe { std::mem::transmute_copy(bytes) }
-    }
-}
-
-/// Index entry - maps hash to data file offset
+/// Index entry - maps hash to data file offset (56 bytes)
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct IndexEntry {
-    /// Key hash (first 8 bytes for quick comparison)
-    pub key_prefix: u64,
     /// Full key hash
     pub key: Hash,
     /// Offset in data file
     pub offset: u64,
     /// Size of value in data file
     pub size: u32,
-    /// Flags (deleted, etc.)
+    /// Block height (for quick filtering)
+    pub height: u64,
+    /// Flags (reserved)
     pub flags: u32,
 }
 
 impl IndexEntry {
     pub const SIZE: usize = 56;
-    pub const FLAG_DELETED: u32 = 1 << 0;
+    
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..32].copy_from_slice(&self.key);
+        buf[32..40].copy_from_slice(&self.offset.to_le_bytes());
+        buf[40..44].copy_from_slice(&self.size.to_le_bytes());
+        buf[44..52].copy_from_slice(&self.height.to_le_bytes());
+        buf[52..56].copy_from_slice(&self.flags.to_le_bytes());
+        buf
+    }
+    
+    pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
+        Self {
+            key: bytes[0..32].try_into().unwrap(),
+            offset: u64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+            size: u32::from_le_bytes(bytes[40..44].try_into().unwrap()),
+            height: u64::from_le_bytes(bytes[44..52].try_into().unwrap()),
+            flags: u32::from_le_bytes(bytes[52..56].try_into().unwrap()),
+        }
+    }
 }
 
-/// The main ADZDB database handle
-pub struct Database {
-    config: Config,
-    /// Index: hash → offset
-    index: index::LinearHashIndex,
-    /// Data file handle
-    data_file: data_file::AppendOnlyFile,
-    /// Current state
-    state: DatabaseState,
+/// Height index entry - maps height to hash (40 bytes)
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HeightEntry {
+    /// Block height
+    pub height: u64,
+    /// Block hash at this height
+    pub hash: Hash,
 }
 
-/// Runtime state of the database
+impl HeightEntry {
+    pub const SIZE: usize = 40;
+    
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..8].copy_from_slice(&self.height.to_le_bytes());
+        buf[8..40].copy_from_slice(&self.hash);
+        buf
+    }
+    
+    pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
+        Self {
+            height: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+            hash: bytes[8..40].try_into().unwrap(),
+        }
+    }
+}
+
+/// Database metadata (stored in adzdb.meta)
 #[derive(Debug, Clone)]
-pub struct DatabaseState {
+pub struct Metadata {
+    /// Magic bytes
+    pub magic: [u8; 4],
+    /// Version
+    pub version: u32,
     /// Number of entries
     pub entry_count: u64,
-    /// Total data size in bytes
+    /// Total data size
     pub data_size: u64,
     /// Latest block height
     pub latest_height: u64,
     /// Latest block hash
     pub latest_hash: Hash,
-    /// Genesis hash (immutable after creation)
+    /// Genesis hash
     pub genesis_hash: Hash,
+}
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            magic: *MAGIC,
+            version: VERSION,
+            entry_count: 0,
+            data_size: 0,
+            latest_height: 0,
+            latest_hash: ZERO_HASH,
+            genesis_hash: ZERO_HASH,
+        }
+    }
+}
+
+impl Metadata {
+    pub const SIZE: usize = 96;
+    
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut buf = [0u8; Self::SIZE];
+        buf[0..4].copy_from_slice(&self.magic);
+        buf[4..8].copy_from_slice(&self.version.to_le_bytes());
+        buf[8..16].copy_from_slice(&self.entry_count.to_le_bytes());
+        buf[16..24].copy_from_slice(&self.data_size.to_le_bytes());
+        buf[24..32].copy_from_slice(&self.latest_height.to_le_bytes());
+        buf[32..64].copy_from_slice(&self.latest_hash);
+        buf[64..96].copy_from_slice(&self.genesis_hash);
+        buf
+    }
+    
+    pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Result<Self> {
+        let magic: [u8; 4] = bytes[0..4].try_into().unwrap();
+        if &magic != MAGIC {
+            return Err(Error::Corruption("Invalid magic bytes".to_string()));
+        }
+        
+        let meta = Self {
+            magic,
+            version: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+            entry_count: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            data_size: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
+            latest_height: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+            latest_hash: bytes[32..64].try_into().unwrap(),
+            genesis_hash: bytes[64..96].try_into().unwrap(),
+        };
+        
+        // Corruption detection
+        if meta.latest_height > MAX_REASONABLE_HEIGHT {
+            return Err(Error::HeightTooLarge(meta.latest_height));
+        }
+        
+        Ok(meta)
+    }
+}
+
+/// The main ADZDB database handle
+pub struct Database {
+    config: Config,
+    /// Hash index file
+    index_file: File,
+    /// Data file (append-only)
+    data_file: File,
+    /// Height index file
+    height_file: File,
+    /// Metadata file
+    meta_file: File,
+    /// In-memory hash index (loaded on open)
+    hash_index: HashMap<Hash, IndexEntry>,
+    /// In-memory height index
+    height_index: HashMap<u64, Hash>,
+    /// Current metadata
+    metadata: Metadata,
 }
 
 impl Database {
     /// Create a new database
     pub fn create(config: Config) -> Result<Self> {
-        // Ensure directory exists
         std::fs::create_dir_all(&config.path)?;
         
         let index_path = config.path.join("adzdb.idx");
         let data_path = config.path.join("adzdb.dat");
+        let height_path = config.path.join("adzdb.hgt");
+        let meta_path = config.path.join("adzdb.meta");
         
         // Check if already exists
         if index_path.exists() || data_path.exists() {
             return Err(Error::AlreadyExists);
         }
         
-        // Create index
-        let index = index::LinearHashIndex::create(&index_path, config.bucket_count)?;
+        // Create files
+        let index_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&index_path)?;
+            
+        let data_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(&data_path)?;
+            
+        let height_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&height_path)?;
+            
+        let mut meta_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&meta_path)?;
         
-        // Create data file
-        let data_file = data_file::AppendOnlyFile::create(&data_path)?;
-        
-        let state = DatabaseState {
-            entry_count: 0,
-            data_size: 0,
-            latest_height: 0,
-            latest_hash: ZERO_HASH,
-            genesis_hash: ZERO_HASH,
-        };
+        // Write initial metadata
+        let metadata = Metadata::default();
+        meta_file.write_all(&metadata.to_bytes())?;
+        meta_file.sync_all()?;
         
         println!("🗄️  ADZDB created at {:?}", config.path);
         
         Ok(Self {
             config,
-            index,
+            index_file,
             data_file,
-            state,
+            height_file,
+            meta_file,
+            hash_index: HashMap::new(),
+            height_index: HashMap::new(),
+            metadata,
         })
     }
     
@@ -300,279 +342,414 @@ impl Database {
     pub fn open(config: Config) -> Result<Self> {
         let index_path = config.path.join("adzdb.idx");
         let data_path = config.path.join("adzdb.dat");
+        let height_path = config.path.join("adzdb.hgt");
+        let meta_path = config.path.join("adzdb.meta");
         
-        // Open index
-        let index = index::LinearHashIndex::open(&index_path)?;
+        // Open files
+        let index_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&index_path)?;
+            
+        let data_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .append(true)
+            .open(&data_path)?;
+            
+        let height_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&height_path)?;
+            
+        let meta_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&meta_path)?;
         
-        // Open data file
-        let data_file = data_file::AppendOnlyFile::open(&data_path)?;
+        // Load metadata
+        let metadata = Self::load_metadata(&meta_file)?;
         
-        // Recover state
-        let state = Self::recover_state(&index, &data_file)?;
+        // Load hash index into memory
+        let hash_index = Self::load_hash_index(&index_file)?;
+        
+        // Load height index into memory
+        let height_index = Self::load_height_index(&height_file)?;
         
         println!("🗄️  ADZDB opened: {} entries, height {}", 
-            state.entry_count, state.latest_height);
+            metadata.entry_count, metadata.latest_height);
         
         Ok(Self {
             config,
-            index,
+            index_file,
             data_file,
-            state,
+            height_file,
+            meta_file,
+            hash_index,
+            height_index,
+            metadata,
         })
     }
     
-    /// Recover database state from files (Protocol-Aware Recovery)
-    fn recover_state(
-        index: &index::LinearHashIndex,
-        data_file: &data_file::AppendOnlyFile,
-    ) -> Result<DatabaseState> {
-        // For now, just return default state
-        // Full implementation would scan data file
-        Ok(DatabaseState {
-            entry_count: index.entry_count(),
-            data_size: data_file.size(),
-            latest_height: 0,
-            latest_hash: ZERO_HASH,
-            genesis_hash: ZERO_HASH,
-        })
+    /// Create or open database
+    pub fn open_or_create(config: Config) -> Result<Self> {
+        let meta_path = config.path.join("adzdb.meta");
+        if meta_path.exists() {
+            Self::open(config)
+        } else {
+            Self::create(config)
+        }
     }
     
-    /// Store a block (content-addressable)
-    /// Key is derived from content hash - cannot store under arbitrary key
-    pub fn put_block(&mut self, header: &BlockHeader, data: &[u8]) -> Result<Hash> {
-        // Verify content-addressable property
-        let computed_hash = Self::compute_hash(header, data);
-        if computed_hash != header.hash {
-            return Err(Error::HashMismatch {
-                expected: header.hash,
-                actual: computed_hash,
-            });
+    fn load_metadata(file: &File) -> Result<Metadata> {
+        let mut reader = BufReader::new(file);
+        let mut buf = [0u8; Metadata::SIZE];
+        
+        reader.read_exact(&mut buf).map_err(|e| {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                Error::Corruption("Metadata file too small".to_string())
+            } else {
+                Error::Io(e)
+            }
+        })?;
+        
+        Metadata::from_bytes(&buf)
+    }
+    
+    fn load_hash_index(file: &File) -> Result<HashMap<Hash, IndexEntry>> {
+        let mut index = HashMap::new();
+        let mut reader = BufReader::new(file);
+        let mut buf = [0u8; IndexEntry::SIZE];
+        
+        loop {
+            match reader.read_exact(&mut buf) {
+                Ok(()) => {
+                    let entry = IndexEntry::from_bytes(&buf);
+                    if entry.key != ZERO_HASH {
+                        index.insert(entry.key, entry);
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(Error::Io(e)),
+            }
+        }
+        
+        Ok(index)
+    }
+    
+    fn load_height_index(file: &File) -> Result<HashMap<u64, Hash>> {
+        let mut index = HashMap::new();
+        let mut reader = BufReader::new(file);
+        let mut buf = [0u8; HeightEntry::SIZE];
+        
+        loop {
+            match reader.read_exact(&mut buf) {
+                Ok(()) => {
+                    let entry = HeightEntry::from_bytes(&buf);
+                    if entry.hash != ZERO_HASH {
+                        index.insert(entry.height, entry.hash);
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(Error::Io(e)),
+            }
+        }
+        
+        Ok(index)
+    }
+    
+    /// Store a value by hash (content-addressable)
+    pub fn put(&mut self, hash: &Hash, height: u64, data: &[u8]) -> Result<()> {
+        // Corruption detection
+        if height > MAX_REASONABLE_HEIGHT {
+            return Err(Error::HeightTooLarge(height));
         }
         
         // Check if already exists (deduplication)
-        if self.index.contains(&header.hash)? {
-            return Ok(header.hash);
+        if self.hash_index.contains_key(hash) {
+            return Ok(());
         }
         
-        // Append to data file
-        let offset = self.data_file.append(header, data)?;
+        // Get current data file position
+        let offset = self.data_file.seek(SeekFrom::End(0))?;
         
-        // Update index
+        // Write data
+        self.data_file.write_all(data)?;
+        
+        // Create index entry
         let entry = IndexEntry {
-            key_prefix: u64::from_le_bytes(header.hash[..8].try_into().unwrap()),
-            key: header.hash,
+            key: *hash,
             offset,
-            size: (BlockHeader::SIZE + data.len()) as u32,
+            size: data.len() as u32,
+            height,
             flags: 0,
         };
-        self.index.insert(entry)?;
         
-        // Update state
-        self.state.entry_count += 1;
-        self.state.data_size += entry.size as u64;
+        // Write to index file
+        self.index_file.seek(SeekFrom::End(0))?;
+        self.index_file.write_all(&entry.to_bytes())?;
         
-        if header.height > self.state.latest_height {
-            self.state.latest_height = header.height;
-            self.state.latest_hash = header.hash;
+        // Write to height index file
+        let height_entry = HeightEntry {
+            height,
+            hash: *hash,
+        };
+        self.height_file.seek(SeekFrom::End(0))?;
+        self.height_file.write_all(&height_entry.to_bytes())?;
+        
+        // Update in-memory indices
+        self.hash_index.insert(*hash, entry);
+        self.height_index.insert(height, *hash);
+        
+        // Update metadata
+        self.metadata.entry_count += 1;
+        self.metadata.data_size += data.len() as u64;
+        
+        if height > self.metadata.latest_height {
+            self.metadata.latest_height = height;
+            self.metadata.latest_hash = *hash;
         }
         
-        if header.height == 0 {
-            self.state.genesis_hash = header.hash;
+        if height == 0 {
+            self.metadata.genesis_hash = *hash;
         }
         
         // Sync if configured
         if self.config.sync_on_write {
-            self.data_file.sync()?;
+            self.sync()?;
         }
         
-        Ok(header.hash)
+        Ok(())
     }
     
-    /// Get a block by hash (O(1) lookup)
-    pub fn get_block(&self, hash: &Hash) -> Result<(BlockHeader, Vec<u8>)> {
-        // Index lookup (1 I/O)
-        let entry = self.index.get(hash)?
-            .ok_or(Error::NotFound)?;
+    /// Get value by hash (O(1) lookup)
+    pub fn get(&self, hash: &Hash) -> Result<Vec<u8>> {
+        let entry = self.hash_index.get(hash).ok_or(Error::NotFound)?;
         
-        // Data file read (1 I/O) - "Two-Fetch Guarantee"
-        let (header, data) = self.data_file.read(entry.offset, entry.size as usize)?;
+        let file = &self.data_file;
+        let mut reader = BufReader::new(file);
+        reader.seek(SeekFrom::Start(entry.offset))?;
         
-        // Verify hash (content-addressable integrity check)
-        let computed = Self::compute_hash(&header, &data);
-        if computed != *hash {
-            return Err(Error::Corruption(format!(
-                "Hash mismatch at offset {}", entry.offset
-            )));
-        }
+        let mut data = vec![0u8; entry.size as usize];
+        reader.read_exact(&mut data)?;
         
-        Ok((header, data))
+        Ok(data)
     }
     
-    /// Get block by height (requires height index)
-    pub fn get_block_by_height(&self, height: u64) -> Result<(BlockHeader, Vec<u8>)> {
-        // TODO: Implement height-to-hash index
-        // For now, this is O(n) - needs optimization
-        Err(Error::NotFound)
+    /// Get value by height (O(1) with height index)
+    pub fn get_by_height(&self, height: u64) -> Result<Vec<u8>> {
+        let hash = self.height_index.get(&height).ok_or(Error::NotFound)?;
+        self.get(hash)
     }
     
-    /// Check if a hash exists (O(1))
-    pub fn contains(&self, hash: &Hash) -> Result<bool> {
-        self.index.contains(hash)
+    /// Get hash by height
+    pub fn get_hash_by_height(&self, height: u64) -> Result<Hash> {
+        self.height_index.get(&height).copied().ok_or(Error::NotFound)
     }
     
-    /// Compute hash of block (deterministic)
-    fn compute_hash(header: &BlockHeader, data: &[u8]) -> Hash {
-        use sha2::{Sha256, Digest};
+    /// Check if hash exists
+    pub fn contains(&self, hash: &Hash) -> bool {
+        self.hash_index.contains_key(hash)
+    }
+    
+    /// Check if height exists
+    pub fn contains_height(&self, height: u64) -> bool {
+        self.height_index.contains_key(&height)
+    }
+    
+    /// Get latest height
+    pub fn latest_height(&self) -> u64 {
+        self.metadata.latest_height
+    }
+    
+    /// Get latest hash
+    pub fn latest_hash(&self) -> Hash {
+        self.metadata.latest_hash
+    }
+    
+    /// Get genesis hash
+    pub fn genesis_hash(&self) -> Hash {
+        self.metadata.genesis_hash
+    }
+    
+    /// Get entry count
+    pub fn entry_count(&self) -> u64 {
+        self.metadata.entry_count
+    }
+    
+    /// Sync all files to disk
+    pub fn sync(&mut self) -> Result<()> {
+        // Update metadata file
+        self.meta_file.seek(SeekFrom::Start(0))?;
+        self.meta_file.write_all(&self.metadata.to_bytes())?;
         
-        let mut hasher = Sha256::new();
-        hasher.update(&header.to_bytes());
-        hasher.update(data);
+        // Sync all files
+        self.data_file.sync_all()?;
+        self.index_file.sync_all()?;
+        self.height_file.sync_all()?;
+        self.meta_file.sync_all()?;
         
-        let result = hasher.finalize();
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(&result);
-        hash
+        Ok(())
     }
     
     /// Get database statistics
-    pub fn stats(&self) -> DatabaseState {
-        self.state.clone()
-    }
-    
-    /// Flush all pending writes to disk
-    pub fn sync(&mut self) -> Result<()> {
-        self.data_file.sync()?;
-        self.index.sync()?;
-        Ok(())
-    }
-}
-
-// Placeholder modules - would be in separate files
-pub mod index {
-    use super::*;
-    
-    /// Linear hash index (NuDB-inspired)
-    pub struct LinearHashIndex {
-        // Placeholder
-        entries: HashMap<Hash, IndexEntry>,
-    }
-    
-    impl LinearHashIndex {
-        pub fn create(_path: &Path, _buckets: u32) -> Result<Self> {
-            Ok(Self { entries: HashMap::new() })
-        }
-        
-        pub fn open(_path: &Path) -> Result<Self> {
-            Ok(Self { entries: HashMap::new() })
-        }
-        
-        pub fn insert(&mut self, entry: IndexEntry) -> Result<()> {
-            self.entries.insert(entry.key, entry);
-            Ok(())
-        }
-        
-        pub fn get(&self, key: &Hash) -> Result<Option<IndexEntry>> {
-            Ok(self.entries.get(key).copied())
-        }
-        
-        pub fn contains(&self, key: &Hash) -> Result<bool> {
-            Ok(self.entries.contains_key(key))
-        }
-        
-        pub fn entry_count(&self) -> u64 {
-            self.entries.len() as u64
-        }
-        
-        pub fn sync(&self) -> Result<()> {
-            Ok(())
+    pub fn stats(&self) -> DatabaseStats {
+        DatabaseStats {
+            entry_count: self.metadata.entry_count,
+            data_size: self.metadata.data_size,
+            latest_height: self.metadata.latest_height,
+            latest_hash: self.metadata.latest_hash,
+            genesis_hash: self.metadata.genesis_hash,
         }
     }
 }
 
-pub mod data_file {
-    use super::*;
-    
-    /// Append-only data file (NuDB-inspired)
-    pub struct AppendOnlyFile {
-        size: u64,
-        data: Vec<u8>,
-    }
-    
-    impl AppendOnlyFile {
-        pub fn create(_path: &Path) -> Result<Self> {
-            Ok(Self { size: 0, data: Vec::new() })
-        }
-        
-        pub fn open(_path: &Path) -> Result<Self> {
-            Ok(Self { size: 0, data: Vec::new() })
-        }
-        
-        pub fn append(&mut self, header: &BlockHeader, data: &[u8]) -> Result<u64> {
-            let offset = self.size;
-            self.data.extend_from_slice(&header.to_bytes());
-            self.data.extend_from_slice(data);
-            self.size += (BlockHeader::SIZE + data.len()) as u64;
-            Ok(offset)
-        }
-        
-        pub fn read(&self, offset: u64, size: usize) -> Result<(BlockHeader, Vec<u8>)> {
-            let start = offset as usize;
-            let header_bytes: [u8; BlockHeader::SIZE] = 
-                self.data[start..start + BlockHeader::SIZE].try_into()
-                    .map_err(|_| Error::Corruption("Invalid header".to_string()))?;
-            
-            let header = BlockHeader::from_bytes(&header_bytes);
-            let data_start = start + BlockHeader::SIZE;
-            let data_end = start + size;
-            let data = self.data[data_start..data_end].to_vec();
-            
-            Ok((header, data))
-        }
-        
-        pub fn size(&self) -> u64 {
-            self.size
-        }
-        
-        pub fn sync(&self) -> Result<()> {
-            Ok(())
-        }
-    }
-}
-
-pub mod recovery {
-    //! Protocol-Aware Recovery (TigerBeetle-inspired)
-    //! 
-    //! When local storage is corrupted, request correct data from P2P network.
-    //! The consensus protocol "knows" what data should be and can heal storage.
+/// Database statistics
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    pub entry_count: u64,
+    pub data_size: u64,
+    pub latest_height: u64,
+    pub latest_hash: Hash,
+    pub genesis_hash: Hash,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     
     #[test]
-    fn test_block_header_size() {
-        assert_eq!(std::mem::size_of::<BlockHeader>(), BlockHeader::SIZE);
-    }
-    
-    #[test]
-    fn test_block_header_roundtrip() {
-        let header = BlockHeader {
+    fn test_index_entry_roundtrip() {
+        let entry = IndexEntry {
+            key: [1u8; 32],
+            offset: 12345,
+            size: 1000,
             height: 42,
-            hash: [1u8; 32],
-            prev_hash: [2u8; 32],
-            merkle_root: [3u8; 32],
-            timestamp: 1234567890,
-            difficulty: 0x0000ffff,
-            nonce: 999,
-            problem_type: 1,
-            _reserved: [0u8; 7],
+            flags: 0,
         };
         
-        let bytes = header.to_bytes();
-        let recovered = BlockHeader::from_bytes(&bytes);
+        let bytes = entry.to_bytes();
+        let recovered = IndexEntry::from_bytes(&bytes);
         
-        assert_eq!(header, recovered);
+        assert_eq!(entry.key, recovered.key);
+        assert_eq!(entry.offset, recovered.offset);
+        assert_eq!(entry.size, recovered.size);
+        assert_eq!(entry.height, recovered.height);
+    }
+    
+    #[test]
+    fn test_metadata_roundtrip() {
+        let meta = Metadata {
+            magic: *MAGIC,
+            version: VERSION,
+            entry_count: 100,
+            data_size: 50000,
+            latest_height: 42,
+            latest_hash: [1u8; 32],
+            genesis_hash: [2u8; 32],
+        };
+        
+        let bytes = meta.to_bytes();
+        let recovered = Metadata::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(meta.entry_count, recovered.entry_count);
+        assert_eq!(meta.latest_height, recovered.latest_height);
+    }
+    
+    #[test]
+    fn test_database_create_and_put() {
+        let temp_dir = std::env::temp_dir().join("adzdb-test-create");
+        let _ = fs::remove_dir_all(&temp_dir);
+        
+        let config = Config::new(&temp_dir);
+        let mut db = Database::create(config).unwrap();
+        
+        let hash = [42u8; 32];
+        let data = b"test block data";
+        
+        db.put(&hash, 0, data).unwrap();
+        
+        assert!(db.contains(&hash));
+        assert_eq!(db.entry_count(), 1);
+        
+        let retrieved = db.get(&hash).unwrap();
+        assert_eq!(retrieved, data);
+        
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+    
+    #[test]
+    fn test_database_height_index() {
+        let temp_dir = std::env::temp_dir().join("adzdb-test-height");
+        let _ = fs::remove_dir_all(&temp_dir);
+        
+        let config = Config::new(&temp_dir);
+        let mut db = Database::create(config).unwrap();
+        
+        // Add blocks at different heights
+        let hash0 = [0u8; 32];
+        let hash1 = [1u8; 32];
+        let hash2 = [2u8; 32];
+        
+        db.put(&hash0, 0, b"genesis").unwrap();
+        db.put(&hash1, 1, b"block 1").unwrap();
+        db.put(&hash2, 2, b"block 2").unwrap();
+        
+        // Retrieve by height
+        assert_eq!(db.get_by_height(0).unwrap(), b"genesis");
+        assert_eq!(db.get_by_height(1).unwrap(), b"block 1");
+        assert_eq!(db.get_by_height(2).unwrap(), b"block 2");
+        
+        // Get hash by height
+        assert_eq!(db.get_hash_by_height(0).unwrap(), hash0);
+        assert_eq!(db.get_hash_by_height(1).unwrap(), hash1);
+        assert_eq!(db.get_hash_by_height(2).unwrap(), hash2);
+        
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+    
+    #[test]
+    fn test_corruption_detection() {
+        let temp_dir = std::env::temp_dir().join("adzdb-test-corrupt");
+        let _ = fs::remove_dir_all(&temp_dir);
+        
+        let config = Config::new(&temp_dir);
+        let mut db = Database::create(config).unwrap();
+        
+        let hash = [42u8; 32];
+        
+        // Try to insert with impossibly high height
+        let result = db.put(&hash, MAX_REASONABLE_HEIGHT + 1, b"corrupt");
+        assert!(matches!(result, Err(Error::HeightTooLarge(_))));
+        
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+    
+    #[test]
+    fn test_database_reopen() {
+        let temp_dir = std::env::temp_dir().join("adzdb-test-reopen");
+        let _ = fs::remove_dir_all(&temp_dir);
+        
+        let config = Config::new(&temp_dir);
+        
+        // Create and populate
+        {
+            let mut db = Database::create(config.clone()).unwrap();
+            db.put(&[1u8; 32], 0, b"genesis").unwrap();
+            db.put(&[2u8; 32], 1, b"block 1").unwrap();
+            db.sync().unwrap();
+        }
+        
+        // Reopen and verify
+        {
+            let db = Database::open(config).unwrap();
+            assert_eq!(db.entry_count(), 2);
+            assert_eq!(db.latest_height(), 1);
+            assert_eq!(db.get_by_height(0).unwrap(), b"genesis");
+            assert_eq!(db.get_by_height(1).unwrap(), b"block 1");
+        }
+        
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
-

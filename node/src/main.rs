@@ -2,6 +2,8 @@
 // Network B - NP-hard Consensus Blockchain
 
 mod chain;
+#[cfg(feature = "adzdb")]
+mod chain_adzdb;
 mod config;
 mod faucet;
 mod genesis;

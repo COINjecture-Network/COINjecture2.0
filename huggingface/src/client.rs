@@ -278,11 +278,10 @@ impl HuggingFaceClient {
                 problem_type, block_height, total_records);
         }
 
-        // Check if we should flush based on block count
+        // Check if we should flush based on block count (using blocking HTTP via spawn_blocking)
         if self.blocks_since_flush >= self.flush_interval_blocks {
-            eprintln!("📤 Hugging Face: Flush interval reached ({} blocks), flushing all buffered records...", self.blocks_since_flush);
+            eprintln!("📤 Hugging Face: Flush interval reached ({} blocks), uploading via blocking HTTP...", self.blocks_since_flush);
             self.flush().await?;
-            // Note: flush() will reset blocks_since_flush, but we also reset last_block_height here
             self.last_block_height = None;
         }
 
@@ -479,32 +478,43 @@ impl HuggingFaceClient {
                 serde_json::to_string(&file_operation).unwrap()
             );
             
-            // Make HTTP request
-            let response = self.client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.config.token))
-                .header("Content-Type", "application/x-ndjson")
-                .body(ndjson_payload)
-                .send()
-                .await
-                .map_err(|e| {
-                    eprintln!("❌ Hugging Face network error: {}", e);
-                    ClientError::Network(e.to_string())
-                })?;
+            // Use blocking HTTP via spawn_blocking to avoid tokio LocalSet issues
+            let token = self.config.token.clone();
+            let url_clone = url.clone();
+            let payload = ndjson_payload.clone();
+            let record_count = total_count;
+            let dataset = dataset_name.clone();
             
-            if !response.status().is_success() {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_default();
-                eprintln!("❌ Hugging Face API error: HTTP {} - {}", status, error_text);
-                return Err(ClientError::Api(format!(
-                    "HTTP {}: {}",
-                    status,
-                    error_text
-                )));
+            let upload_result = tokio::task::spawn_blocking(move || {
+                eprintln!("📤 Hugging Face: Starting blocking upload to {}", url_clone);
+                
+                // Use ureq for pure blocking HTTP
+                let response = ureq::post(&url_clone)
+                    .set("Authorization", &format!("Bearer {}", token))
+                    .set("Content-Type", "application/x-ndjson")
+                    .send_string(&payload);
+                
+                match response {
+                    Ok(resp) => {
+                        if resp.status() >= 200 && resp.status() < 300 {
+                            eprintln!("✅ Hugging Face: Successfully pushed {} records to {}", record_count, dataset);
+                            Ok(())
+                        } else {
+                            let error_text = resp.into_string().unwrap_or_default();
+                            eprintln!("❌ Hugging Face API error: {}", error_text);
+                            Err(format!("API error: {}", error_text))
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Hugging Face network error: {}", e);
+                        Err(format!("Network error: {}", e))
+                    }
+                }
+            }).await.map_err(|e| ClientError::Network(format!("spawn_blocking error: {}", e)))?;
+            
+            if let Err(e) = upload_result {
+                return Err(ClientError::Api(e));
             }
-            
-            eprintln!("✅ Hugging Face: Successfully pushed {} total records to unified dataset {}",
-                total_count, dataset_name);
             
             // Clear all buffers after successful upload
             self.buffers.clear();

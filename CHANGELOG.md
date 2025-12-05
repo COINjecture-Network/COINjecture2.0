@@ -2,6 +2,37 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.46] - 2025-12-05
+
+### Fixed
+- **Database Corruption Detection (Critical)**: Added validation to detect and auto-fix impossibly high block heights
+  - **Problem**: Corrupted bytes in the database were being interpreted as valid u64 values (e.g., 358,132,200 blocks)
+  - **Root Cause**: No validation existed for block heights read from database
+  - **Solution**: Added `MAX_REASONABLE_HEIGHT` constant (10,000,000 blocks) with auto-fix
+    - On startup, if stored height exceeds MAX_REASONABLE_HEIGHT, reset to genesis
+    - When storing blocks, reject any with impossibly high heights
+    - Auto-updates database with corrected values
+  - **Files Changed**: `node/src/chain.rs`
+
+## [4.7.45] - 2025-12-05
+
+### Fixed
+- **Reorganization with Buffered Blocks**: Improved fork detection for buffered blocks
+  - **Problem**: Reorganization wasn't finding the common ancestor properly for buffered blocks from earlier forks
+  - **Solution**: Use `find_common_ancestor()` for buffered blocks to handle earlier forks
+  - **Impact**: Better detection of fork chains and reorganization candidates
+  - **Files Changed**: `node/src/service.rs` - `check_and_reorganize_chain()`
+
+## [4.7.44] - 2025-12-05
+
+### Fixed
+- **Mining Race Condition**: Fixed issue where only ONE node could mine successfully
+  - **Problem**: There was a `continue` statement that would skip mining entirely when a node received a block from a peer
+  - **Root Cause**: This created a feedback loop where the first node to mine would always win - other nodes would receive the block and skip their mining cycle
+  - **Solution**: Changed from `continue` (skip mining) to just updating `last_mined_height` and letting all nodes continue to the consensus check
+  - **Impact**: All nodes now have fair opportunity to mine, governed by proper peer consensus
+  - **Files Changed**: `node/src/service.rs` - mining loop
+
 ## [4.7.43] - 2025-01-XX
 
 ### Fixed

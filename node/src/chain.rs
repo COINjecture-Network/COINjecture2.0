@@ -13,6 +13,11 @@ const BLOCKS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("bl
 const METADATA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 const HEIGHT_INDEX_TABLE: TableDefinition<u64, &[u8; 32]> = TableDefinition::new("height_index");
 
+// v4.7.46: Maximum reasonable height to detect database corruption
+// If height exceeds this, it's likely corrupted bytes being interpreted as u64
+// 10 million blocks at 30s each = ~9.5 years of blocks
+const MAX_REASONABLE_HEIGHT: u64 = 10_000_000;
+
 #[derive(Error, Debug)]
 pub enum ChainError {
     #[error("Database error: {0}")]
@@ -102,7 +107,7 @@ impl ChainState {
 
         // Load best height and hash
         let read_txn = db.begin_read()?;
-        let (best_height, best_hash) = {
+        let (mut best_height, mut best_hash) = {
             let table = read_txn.open_table(METADATA_TABLE)?;
 
             let height_bytes = table
@@ -128,6 +133,33 @@ impl ChainState {
             (height, hash)
         };
         drop(read_txn);
+
+        // v4.7.46: Database corruption detection and auto-fix
+        // Corrupted bytes can be interpreted as impossibly high block heights
+        if best_height > MAX_REASONABLE_HEIGHT {
+            eprintln!(
+                "⚠️  DATABASE CORRUPTION DETECTED: Best height {} exceeds maximum reasonable height {}",
+                best_height, MAX_REASONABLE_HEIGHT
+            );
+            eprintln!("   This likely indicates corrupted database bytes being interpreted as u64 values.");
+            eprintln!("   Auto-fixing: Resetting to genesis (height 0)...");
+            
+            // Reset to genesis
+            best_height = 0;
+            best_hash = genesis_hash;
+            
+            // Update database with corrected values
+            let write_txn = db.begin_write()?;
+            {
+                let mut table = write_txn.open_table(METADATA_TABLE)?;
+                table.insert("best_height", best_height.to_le_bytes().as_ref())?;
+                table.insert("best_hash", best_hash.as_bytes() as &[u8])?;
+            }
+            write_txn.commit()?;
+            
+            eprintln!("   ✅ Database auto-fixed: Reset to genesis block (height 0)");
+            eprintln!("   The node will re-sync from peers.");
+        }
 
         Ok(ChainState {
             db,
@@ -162,6 +194,15 @@ impl ChainState {
     pub async fn store_block(&self, block: &Block) -> Result<bool, ChainError> {
         let block_hash = block.header.hash();
         let block_height = block.header.height;
+
+        // v4.7.46: Validate block height to prevent database corruption
+        if block_height > MAX_REASONABLE_HEIGHT {
+            eprintln!(
+                "⚠️  Rejecting block with impossibly high height {}: exceeds MAX_REASONABLE_HEIGHT {}",
+                block_height, MAX_REASONABLE_HEIGHT
+            );
+            return Err(ChainError::InvalidHeight);
+        }
 
         // Store the block
         Self::store_block_raw(&self.db, block)?;
