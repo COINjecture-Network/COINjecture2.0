@@ -3,7 +3,9 @@
 
 pub mod protocol;
 pub mod eclipse;
+pub mod reputation;
 
 pub use protocol::*;
 pub use eclipse::*;
+pub use reputation::*;
 pub use libp2p::PeerId;
