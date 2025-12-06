@@ -787,7 +787,8 @@ mod tests {
     #[tokio::test]
     async fn test_network_creation() {
         let config = NetworkConfig::default();
-        let result = NetworkService::new(config);
+        let peer_count = Arc::new(RwLock::new(0));
+        let result = NetworkService::new(config, peer_count);
         assert!(result.is_ok());
     }
 
