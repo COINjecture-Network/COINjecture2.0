@@ -41,8 +41,14 @@ pub enum NetworkMessage {
     },
     /// Request block by hash
     GetBlock(Hash),
-    /// Request blocks by height range
-    GetBlocks { from: u64, to: u64 },
+    /// Request blocks by height range (with unique request_id to bypass dedup)
+    GetBlocks { 
+        from: u64, 
+        to: u64,
+        /// Unique request ID (timestamp_nanos) to bypass gossipsub deduplication
+        /// CRITICAL: Without this, repeated sync requests get rejected as "Duplicate"
+        request_id: u64,
+    },
     /// Peer status announcement
     Status {
         best_height: u64,
@@ -557,13 +563,20 @@ impl NetworkService {
         }
     }
 
-    /// Broadcast GetBlocks request
+    /// Broadcast GetBlocks request with unique ID to bypass gossipsub deduplication
     pub fn request_blocks(
         &mut self,
         from: u64,
         to: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let message = NetworkMessage::GetBlocks { from, to };
+        // Generate unique request_id to bypass gossipsub deduplication
+        // This is the FIX for the "Gossip Trap" - each request is now unique!
+        let request_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        
+        let message = NetworkMessage::GetBlocks { from, to, request_id };
         let data = bincode::serialize(&message)?;
         self.swarm
             .behaviour_mut()
@@ -610,7 +623,8 @@ impl NetworkService {
                     best_hash,
                 });
             }
-            Ok(NetworkMessage::GetBlocks { from, to }) => {
+            Ok(NetworkMessage::GetBlocks { from, to, request_id: _ }) => {
+                // request_id is only used to bypass gossipsub dedup, not needed after deserialize
                 let _ = self.event_tx.send(NetworkEvent::BlocksRequested {
                     peer,
                     from_height: from,

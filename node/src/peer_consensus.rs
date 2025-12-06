@@ -65,18 +65,30 @@ pub struct ConsensusConfig {
 impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
-            // TESTNET BOOTSTRAP: 1 peer minimum for 2-node bootstrap
-            // With 2 nodes, each can only see 1 peer (can't see itself)
-            // Increase to 2+ when Sarah's GCE joins (3-node network)
-            // PRODUCTION: Increase to 4+ when we have 5+ nodes for true 80% consensus
+            // Minimum 1 peer to mine (allows 2-node bootstrap)
             min_peers_for_mining: 1,        
             sync_threshold_blocks: 10,       // Within 10 blocks
-            // TESTNET: 51% for 1-2 peer scenarios
-            // PRODUCTION: Increase to 80% when we have 5+ nodes
-            consensus_threshold: 0.51,
-            // Increased from 60s to 120s to handle connection churn
+            // ADAPTIVE CONSENSUS: Threshold adjusts based on peer count
+            // BOOTSTRAP MODE (peers < 4): 50% - prioritizes liveness
+            // SECURE MODE (peers >= 4): 80% - prioritizes safety (BFT)
+            consensus_threshold: 0.80,       // Target for production
             peer_stale_timeout: Duration::from_secs(120),
             max_missed_rounds: 5,
+        }
+    }
+}
+
+impl ConsensusConfig {
+    /// Get adaptive consensus threshold based on peer count
+    /// Small networks need lower thresholds to maintain liveness
+    /// Large networks can enforce strict BFT thresholds for security
+    pub fn get_adaptive_threshold(&self, peer_count: usize) -> (f64, &'static str) {
+        match peer_count {
+            0 => (1.0, "SOLO"),           // No peers, impossible to reach consensus
+            1 => (0.50, "BOOTSTRAP-1"),   // 1 peer: need 50% (1/1 = 100% works)
+            2 => (0.50, "BOOTSTRAP-2"),   // 2 peers: 50% allows 1/2 to pass
+            3 => (0.60, "BOOTSTRAP-3"),   // 3 peers: 60% allows 2/3 to pass
+            _ => (self.consensus_threshold, "SECURE"), // 4+ peers: full BFT threshold
         }
     }
 }
@@ -206,11 +218,17 @@ impl PeerConsensus {
     
     /// Check if we have consensus among peers about the chain tip
     /// Returns (has_consensus, consensus_height, agreement_percentage)
+    /// Uses ADAPTIVE threshold based on peer count
     pub async fn check_consensus(&self) -> (bool, u64, f64) {
         let active = self.active_peers().await;
-        if active.len() < self.config.min_peers_for_mining {
+        let peer_count = active.len();
+        
+        if peer_count < self.config.min_peers_for_mining {
             return (false, 0, 0.0);
         }
+        
+        // Get adaptive threshold based on network size
+        let (threshold, _mode) = self.config.get_adaptive_threshold(peer_count);
         
         // Count how many peers agree on each height (within 1 block tolerance)
         let mut height_votes: HashMap<u64, usize> = HashMap::new();
@@ -226,8 +244,8 @@ impl PeerConsensus {
             .map(|(h, v)| (*h, *v))
             .unwrap_or((0, 0));
         
-        let agreement = max_votes as f64 / active.len() as f64;
-        let has_consensus = agreement >= self.config.consensus_threshold;
+        let agreement = max_votes as f64 / peer_count as f64;
+        let has_consensus = agreement >= threshold;  // Use adaptive threshold!
         
         (has_consensus, consensus_height, agreement)
     }
@@ -255,21 +273,21 @@ impl PeerConsensus {
             ));
         }
         
-        // Check 3: Do peers have consensus?
+        // Check 3: Do peers have consensus? (ADAPTIVE THRESHOLD)
+        let (threshold, mode) = self.config.get_adaptive_threshold(active_count);
         let (has_consensus, consensus_height, agreement) = self.check_consensus().await;
+        
         if !has_consensus {
             return (false, format!(
-                "No peer consensus: {:.1}% < {:.1}% required at height {}",
-                agreement * 100.0,
-                self.config.consensus_threshold * 100.0,
-                consensus_height
+                "[{}] No peer consensus: {:.1}% < {:.1}% required at height {}",
+                mode, agreement * 100.0, threshold * 100.0, consensus_height
             ));
         }
         
         // All checks passed!
         (true, format!(
-            "Synced and consensus reached: {} peers, {:.1}% agreement at height {}",
-            active_count, agreement * 100.0, consensus_height
+            "[{}] Consensus OK: {} peers, {:.1}% agreement (threshold: {:.0}%)",
+            mode, active_count, agreement * 100.0, threshold * 100.0
         ))
     }
     
