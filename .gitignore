@@ -19,3 +19,21 @@ Thumbs.db
 # Temp files
 *.tmp
 *.bak
+
+# Secrets and keys - NEVER COMMIT
+coinjecture-droplet-key
+*.pem
+*.key
+*_key
+*-key
+*.bin
+validator_key.bin
+
+# Database files
+*.db
+
+# Logs
+*.log
+
+# Archives
+*.tar
