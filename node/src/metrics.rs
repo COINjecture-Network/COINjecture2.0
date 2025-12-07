@@ -349,6 +349,108 @@ lazy_static! {
         "Wavefunction phase theta(tau) = lambda*tau (radians)"
     )
     .unwrap();
+
+    // === NODE TYPE CLASSIFICATION METRICS ===
+    // Dynamic behavioral classification of 6 specialized node types
+
+    /// Current node type (0=Light, 1=Full, 2=Archive, 3=Validator, 4=Bounty, 5=Oracle)
+    pub static ref NODE_TYPE: IntGauge = register_int_gauge!(
+        "coinject_node_type",
+        "Current node type classification (0=Light, 1=Full, 2=Archive, 3=Validator, 4=Bounty, 5=Oracle)"
+    )
+    .unwrap();
+
+    /// Classification confidence (0.0 - 1.0)
+    pub static ref NODE_TYPE_CONFIDENCE: Gauge = register_gauge!(
+        "coinject_node_type_confidence",
+        "Confidence score for node type classification"
+    )
+    .unwrap();
+
+    /// Reward multiplier for current node type
+    pub static ref NODE_REWARD_MULTIPLIER: Gauge = register_gauge!(
+        "coinject_node_reward_multiplier",
+        "Reward multiplier based on node type"
+    )
+    .unwrap();
+
+    /// Storage ratio (blocks stored / chain height)
+    pub static ref NODE_STORAGE_RATIO: Gauge = register_gauge!(
+        "coinject_node_storage_ratio",
+        "Ratio of blocks stored to total chain height"
+    )
+    .unwrap();
+
+    /// Validation speed (blocks/second)
+    pub static ref NODE_VALIDATION_SPEED: Gauge = register_gauge!(
+        "coinject_node_validation_speed",
+        "Block validation speed (blocks/second)"
+    )
+    .unwrap();
+
+    /// Solve rate (solutions/hour) for bounty nodes
+    pub static ref NODE_SOLVE_RATE: Gauge = register_gauge!(
+        "coinject_node_solve_rate",
+        "Problem solving rate (solutions/hour)"
+    )
+    .unwrap();
+
+    /// Uptime ratio (0.0 - 1.0)
+    pub static ref NODE_UPTIME_RATIO: Gauge = register_gauge!(
+        "coinject_node_uptime_ratio",
+        "Node uptime ratio (actual / expected)"
+    )
+    .unwrap();
+
+    /// Data served to peers (bytes)
+    pub static ref NODE_DATA_SERVED: IntCounter = register_int_counter!(
+        "coinject_node_data_served_bytes_total",
+        "Total data served to peers (bytes)"
+    )
+    .unwrap();
+
+    /// Blocks propagated count
+    pub static ref NODE_BLOCKS_PROPAGATED: IntCounter = register_int_counter!(
+        "coinject_node_blocks_propagated_total",
+        "Total blocks propagated to network"
+    )
+    .unwrap();
+
+    /// Oracle feeds provided
+    pub static ref NODE_ORACLE_FEEDS: IntCounter = register_int_counter!(
+        "coinject_node_oracle_feeds_total",
+        "Total oracle feeds provided"
+    )
+    .unwrap();
+
+    /// Oracle accuracy (0.0 - 1.0)
+    pub static ref NODE_ORACLE_ACCURACY: Gauge = register_gauge!(
+        "coinject_node_oracle_accuracy",
+        "Oracle data accuracy score"
+    )
+    .unwrap();
+
+    /// Classification score by type
+    pub static ref NODE_TYPE_SCORES: GaugeVec = register_gauge_vec!(
+        "coinject_node_type_score",
+        "Classification score for each node type",
+        &["node_type"]
+    )
+    .unwrap();
+
+    /// Headers synced (for Light nodes)
+    pub static ref NODE_HEADERS_SYNCED: IntGauge = register_int_gauge!(
+        "coinject_node_headers_synced",
+        "Number of block headers synced (Light node metric)"
+    )
+    .unwrap();
+
+    /// Light client peer count (full nodes serving light clients)
+    pub static ref LIGHT_CLIENT_PEERS: IntGauge = register_int_gauge!(
+        "coinject_light_client_peers",
+        "Number of full nodes serving this light client"
+    )
+    .unwrap();
 }
 
 /// Initialize all metrics
@@ -472,7 +574,51 @@ pub fn init() {
         .register(Box::new(CONSENSUS_PHASE.clone()))
         .expect("Failed to register consensus_phase");
 
-    tracing::info!("✓ Prometheus metrics initialized");
+    // Node Type Classification metrics
+    REGISTRY
+        .register(Box::new(NODE_TYPE.clone()))
+        .expect("Failed to register node_type");
+    REGISTRY
+        .register(Box::new(NODE_TYPE_CONFIDENCE.clone()))
+        .expect("Failed to register node_type_confidence");
+    REGISTRY
+        .register(Box::new(NODE_REWARD_MULTIPLIER.clone()))
+        .expect("Failed to register node_reward_multiplier");
+    REGISTRY
+        .register(Box::new(NODE_STORAGE_RATIO.clone()))
+        .expect("Failed to register node_storage_ratio");
+    REGISTRY
+        .register(Box::new(NODE_VALIDATION_SPEED.clone()))
+        .expect("Failed to register node_validation_speed");
+    REGISTRY
+        .register(Box::new(NODE_SOLVE_RATE.clone()))
+        .expect("Failed to register node_solve_rate");
+    REGISTRY
+        .register(Box::new(NODE_UPTIME_RATIO.clone()))
+        .expect("Failed to register node_uptime_ratio");
+    REGISTRY
+        .register(Box::new(NODE_DATA_SERVED.clone()))
+        .expect("Failed to register node_data_served");
+    REGISTRY
+        .register(Box::new(NODE_BLOCKS_PROPAGATED.clone()))
+        .expect("Failed to register node_blocks_propagated");
+    REGISTRY
+        .register(Box::new(NODE_ORACLE_FEEDS.clone()))
+        .expect("Failed to register node_oracle_feeds");
+    REGISTRY
+        .register(Box::new(NODE_ORACLE_ACCURACY.clone()))
+        .expect("Failed to register node_oracle_accuracy");
+    REGISTRY
+        .register(Box::new(NODE_TYPE_SCORES.clone()))
+        .expect("Failed to register node_type_scores");
+    REGISTRY
+        .register(Box::new(NODE_HEADERS_SYNCED.clone()))
+        .expect("Failed to register node_headers_synced");
+    REGISTRY
+        .register(Box::new(LIGHT_CLIENT_PEERS.clone()))
+        .expect("Failed to register light_client_peers");
+
+    tracing::info!("✓ Prometheus metrics initialized (incl. node type classification)");
 }
 
 /// Export metrics in Prometheus text format
@@ -585,4 +731,78 @@ pub fn update_state_metrics(
     ACTIVE_ACCOUNTS.set(active_accounts as i64);
     MEMPOOL_SIZE.set(mempool_size as i64);
     TX_THROUGHPUT.set(tps);
+}
+
+// =============================================================================
+// Node Type Classification Metrics
+// =============================================================================
+
+use crate::node_types::{NodeType, NodeTypeStatus, ClassificationResult};
+
+/// Convert NodeType to numeric index for metrics
+fn node_type_to_index(node_type: NodeType) -> i64 {
+    match node_type {
+        NodeType::Light => 0,
+        NodeType::Full => 1,
+        NodeType::Archive => 2,
+        NodeType::Validator => 3,
+        NodeType::Bounty => 4,
+        NodeType::Oracle => 5,
+    }
+}
+
+/// Update node classification metrics from status
+pub fn update_node_classification(status: &NodeTypeStatus) {
+    NODE_TYPE.set(node_type_to_index(status.current_type));
+    NODE_TYPE_CONFIDENCE.set(status.confidence);
+    NODE_REWARD_MULTIPLIER.set(status.reward_multiplier);
+    NODE_STORAGE_RATIO.set(status.storage_ratio);
+    NODE_VALIDATION_SPEED.set(status.validation_speed);
+    NODE_SOLVE_RATE.set(status.solve_rate);
+    NODE_UPTIME_RATIO.set(status.uptime_ratio);
+}
+
+/// Update node type scores from classification result
+pub fn update_node_type_scores(result: &ClassificationResult) {
+    for (node_type, score) in &result.type_scores {
+        let type_label = match node_type {
+            NodeType::Light => "light",
+            NodeType::Full => "full",
+            NodeType::Archive => "archive",
+            NodeType::Validator => "validator",
+            NodeType::Bounty => "bounty",
+            NodeType::Oracle => "oracle",
+        };
+        NODE_TYPE_SCORES.with_label_values(&[type_label]).set(*score);
+    }
+}
+
+/// Record data served to peers
+pub fn record_data_served(bytes: u64) {
+    NODE_DATA_SERVED.inc_by(bytes);
+}
+
+/// Record block propagated
+pub fn record_block_propagated() {
+    NODE_BLOCKS_PROPAGATED.inc();
+}
+
+/// Record oracle feed
+pub fn record_oracle_feed() {
+    NODE_ORACLE_FEEDS.inc();
+}
+
+/// Update oracle accuracy
+pub fn update_oracle_accuracy(accuracy: f64) {
+    NODE_ORACLE_ACCURACY.set(accuracy);
+}
+
+/// Update headers synced (Light node)
+pub fn update_headers_synced(count: u64) {
+    NODE_HEADERS_SYNCED.set(count as i64);
+}
+
+/// Update light client peer count
+pub fn update_light_client_peers(count: usize) {
+    LIGHT_CLIENT_PEERS.set(count as i64);
 }

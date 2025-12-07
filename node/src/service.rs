@@ -32,10 +32,28 @@ enum NetworkCommand {
     /// This is the INSTITUTIONAL-GRADE solution for reliable sync
     SendSyncBlock { block: coinject_core::Block, request_id: u64 },
     BroadcastTransaction(coinject_core::Transaction),
-    BroadcastStatus { best_height: u64, best_hash: coinject_core::Hash, genesis_hash: coinject_core::Hash },
+    BroadcastStatus { 
+        best_height: u64, 
+        best_hash: coinject_core::Hash, 
+        genesis_hash: coinject_core::Hash,
+        node_type: coinject_network::NetworkNodeType,
+    },
     RequestBlocks { from_height: u64, to_height: u64 },
     /// Legacy: Send block to specific peer (Sarah's approach - kept for compatibility)
     SendBlockToPeer { block: coinject_core::Block, peer: PeerId },
+    // === LIGHT SYNC COMMANDS ===
+    /// Send headers to a requesting peer
+    SendHeaders { headers: Vec<coinject_core::BlockHeader>, request_id: u64 },
+    /// Send FlyClient proof response
+    SendFlyClientProof { proof_data: Vec<u8>, request_id: u64 },
+    /// Send MMR proof response
+    SendMMRProof { proof_data: Vec<u8>, block_height: u64, request_id: u64 },
+    /// Send chain tip response
+    SendChainTip { height: u64, hash: coinject_core::Hash, mmr_root: coinject_core::Hash, total_work: u128, request_id: u64 },
+    /// Request headers (for Light client sync)
+    RequestHeaders { start_height: u64, max_headers: u32 },
+    /// Request FlyClient proof
+    RequestFlyClientProof { security_param: u32 },
 }
 
 /// Main node service coordinating all blockchain components
@@ -57,6 +75,14 @@ pub struct CoinjectNode {
     network_cmd_tx: Option<mpsc::UnboundedSender<NetworkCommand>>,
     rpc: Option<RpcServer>,
     hf_sync: Option<Arc<HuggingFaceSync>>,
+    /// Node type classification manager (6 specialized types)
+    node_classification: Arc<RwLock<crate::node_types::NodeClassificationManager>>,
+    /// Light client state (for headers-only mode)
+    light_client: Option<Arc<crate::light_client::LightClientState>>,
+    /// Node Type Manager - Central orchestrator for capabilities and protocol
+    node_manager: Arc<crate::node_manager::NodeTypeManager>,
+    /// Capability-based peer router
+    capability_router: Arc<crate::node_manager::CapabilityRouter>,
     shutdown_tx: mpsc::Sender<()>,
     shutdown_rx: mpsc::Receiver<()>,
 }
@@ -227,6 +253,60 @@ impl CoinjectNode {
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
 
+        // Initialize Node Classification Manager
+        println!("📊 Initializing Node Classification Manager...");
+        let mut classification_manager = crate::node_types::NodeClassificationManager::new(best_height);
+        
+        // Set target type from config
+        let target_type = config.target_node_type();
+        classification_manager.set_target_type(target_type);
+        
+        // Set headers-only mode if configured
+        if config.is_light_mode() {
+            classification_manager.set_headers_only(true);
+            println!("   📱 Light mode enabled (headers-only sync)");
+        }
+        
+        let node_classification = Arc::new(RwLock::new(classification_manager));
+        println!("   Target type: {} (actual type determined by behavior)", target_type);
+        println!();
+        
+        // Initialize Light Client if in headers-only mode
+        let light_client = if config.is_light_mode() {
+            println!("📱 Initializing Light Client (headers-only sync)...");
+            let light_state = crate::light_client::LightClientState::new(
+                genesis_hash,
+                genesis.header.clone(),
+            );
+            println!("   Light client ready for header sync");
+            println!();
+            Some(Arc::new(light_state))
+        } else {
+            None
+        };
+
+        // Initialize Node Type Manager (Central Orchestrator)
+        println!("🎯 Initializing Node Type Manager (Orchestration Layer)...");
+        let (node_manager, _manager_rx, _classification_rx) = crate::node_manager::NodeTypeManager::new(
+            best_height,
+            target_type,
+            Some(genesis.header.clone()),
+        );
+        let node_manager = Arc::new(node_manager);
+        
+        // Initialize Capability Router
+        let capability_router = Arc::new(crate::node_manager::CapabilityRouter::new());
+        
+        let capabilities = crate::node_manager::NetworkCapabilities::for_node_type(target_type);
+        println!("   Node capabilities:");
+        println!("   • Can produce blocks: {}", capabilities.can_produce_blocks);
+        println!("   • Can validate blocks: {}", capabilities.can_validate_blocks);
+        println!("   • Can serve FlyClient proofs: {}", capabilities.can_serve_flyclient);
+        println!("   • Can solve problems: {}", capabilities.can_solve_problems);
+        println!("   • Can provide oracle data: {}", capabilities.can_provide_oracle_data);
+        println!("   • Max peers: {} in / {} out", capabilities.max_inbound_peers, capabilities.max_outbound_peers);
+        println!();
+
         Ok(CoinjectNode {
             config,
             chain,
@@ -245,6 +325,10 @@ impl CoinjectNode {
             network_cmd_tx: None,
             rpc: None,
             hf_sync,
+            node_classification,
+            light_client,
+            node_manager,
+            capability_router,
             shutdown_tx,
             shutdown_rx,
         })
@@ -521,8 +605,8 @@ impl CoinjectNode {
                                     eprintln!("Failed to broadcast transaction: {}", e);
                                 }
                             }
-                            NetworkCommand::BroadcastStatus { best_height, best_hash, genesis_hash } => {
-                                match network.broadcast_status(best_height, best_hash, genesis_hash) {
+                            NetworkCommand::BroadcastStatus { best_height, best_hash, genesis_hash, node_type } => {
+                                match network.broadcast_status(best_height, best_hash, genesis_hash, node_type) {
                                     Err(e) if e.to_string().contains("InsufficientPeers") => {
                                         // Silently ignore InsufficientPeers - it's expected when no peers are connected
                                     }
@@ -541,6 +625,37 @@ impl CoinjectNode {
                             NetworkCommand::SendBlockToPeer { block, peer } => {
                                 if let Err(e) = network.send_block_to_peer(block, peer) {
                                     eprintln!("Failed to send block to peer {}: {}", peer, e);
+                                }
+                            }
+                            // === LIGHT SYNC COMMAND HANDLERS ===
+                            NetworkCommand::SendHeaders { headers, request_id } => {
+                                if let Err(e) = network.send_headers(headers, request_id) {
+                                    eprintln!("Failed to send headers: {}", e);
+                                }
+                            }
+                            NetworkCommand::SendFlyClientProof { proof_data, request_id } => {
+                                if let Err(e) = network.send_flyclient_proof(proof_data, request_id) {
+                                    eprintln!("Failed to send FlyClient proof: {}", e);
+                                }
+                            }
+                            NetworkCommand::SendMMRProof { proof_data, block_height, request_id } => {
+                                if let Err(e) = network.send_mmr_proof(proof_data, block_height, request_id) {
+                                    eprintln!("Failed to send MMR proof: {}", e);
+                                }
+                            }
+                            NetworkCommand::SendChainTip { height, hash, mmr_root, total_work, request_id } => {
+                                if let Err(e) = network.send_chain_tip(height, hash, mmr_root, total_work, request_id) {
+                                    eprintln!("Failed to send chain tip: {}", e);
+                                }
+                            }
+                            NetworkCommand::RequestHeaders { start_height, max_headers } => {
+                                if let Err(e) = network.request_headers(start_height, max_headers) {
+                                    eprintln!("Failed to request headers: {}", e);
+                                }
+                            }
+                            NetworkCommand::RequestFlyClientProof { security_param } => {
+                                if let Err(e) = network.request_flyclient_proof(security_param) {
+                                    eprintln!("Failed to request FlyClient proof: {}", e);
                                 }
                             }
                         }
@@ -569,10 +684,32 @@ impl CoinjectNode {
         let best_peer_height_for_events = Arc::clone(&best_known_peer_height);
         let peer_consensus_for_events = Arc::clone(&peer_consensus);
         let hf_sync_for_events = self.hf_sync.clone();
+        let node_manager_for_events = Arc::clone(&self.node_manager);
+        let capability_router_for_events = Arc::clone(&self.capability_router);
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                Self::handle_network_event(event, &chain, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state, &validator, &tx_pool, &network_tx_for_events, &buffer_for_events, &peer_count_for_events, &best_peer_height_for_events, &peer_consensus_for_events, &hf_sync_for_events).await;
+                Self::handle_network_event(
+                    event,
+                    &chain,
+                    &state,
+                    &timelock_state,
+                    &escrow_state,
+                    &channel_state,
+                    &trustline_state,
+                    &dimensional_pool_state,
+                    &marketplace_state,
+                    &validator,
+                    &tx_pool,
+                    &network_tx_for_events,
+                    &buffer_for_events,
+                    &peer_count_for_events,
+                    &best_peer_height_for_events,
+                    &peer_consensus_for_events,
+                    &hf_sync_for_events,
+                    &node_manager_for_events,
+                    &capability_router_for_events,
+                ).await;
             }
         });
 
@@ -590,10 +727,15 @@ impl CoinjectNode {
                 let best_height = chain_for_status.best_block_height().await;
                 let best_hash = chain_for_status.best_block_hash().await;
 
+                // TODO: Get actual node type from config
+                // For now, default to Full. The node_manager tracks the actual type.
+                let node_type = coinject_network::NetworkNodeType::Full;
+                
                 if let Err(e) = network_tx_for_status.send(NetworkCommand::BroadcastStatus {
                     best_height,
                     best_hash,
                     genesis_hash,
+                    node_type,
                 }) {
                     eprintln!("Failed to send status broadcast command: {}", e);
                 }
@@ -639,6 +781,7 @@ impl CoinjectNode {
         let state_for_metrics = Arc::clone(&self.state);
         let dimensional_pool_state_for_metrics = Arc::clone(&self.dimensional_pool_state);
         let tx_pool_for_metrics = Arc::clone(&self.tx_pool);
+        let node_classification_for_metrics = Arc::clone(&self.node_classification);
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(15));
@@ -765,6 +908,52 @@ impl CoinjectNode {
                     let damping = ETA / std::f64::consts::SQRT_2;
                     crate::metrics::DAMPING_COEFFICIENT.set(damping);
                 }
+
+                // ============================================================
+                // NODE TYPE CLASSIFICATION METRICS UPDATE
+                // ============================================================
+                // Update classification manager with current chain height and metrics
+                {
+                    let mut classification = node_classification_for_metrics.write().await;
+                    
+                    // Update chain height for classification calculations
+                    classification.update_chain_height(block_height);
+                    
+                    // Update storage tracking (blocks stored = chain height for Full nodes)
+                    // In a real implementation, this would track actual blocks stored
+                    classification.local_metrics.blocks_stored = block_height;
+                    
+                    // Update uptime (seconds since start)
+                    if let Some(started) = classification.local_metrics.observation_started {
+                        let uptime_secs = started.elapsed().as_secs();
+                        classification.update_uptime(uptime_secs, uptime_secs);
+                    }
+                    
+                    // Attempt reclassification if enough blocks have passed
+                    if let Some(result) = classification.maybe_reclassify(block_height) {
+                        // Log classification change
+                        tracing::info!(
+                            "🏷️ Node classified as {} (confidence: {:.2}%): {}",
+                            result.node_type,
+                            result.confidence * 100.0,
+                            result.reason
+                        );
+                        
+                        // Update classification scores in metrics
+                        crate::metrics::update_node_type_scores(&result);
+                    }
+                    
+                    // Always export current classification status to Prometheus
+                    let status = classification.status();
+                    crate::metrics::update_node_classification(&status);
+                    
+                    // Check if meeting target and log advice
+                    if let Some((meeting_target, advice)) = classification.is_meeting_target() {
+                        if !meeting_target {
+                            tracing::debug!("📈 Node improvement advice: {}", advice);
+                        }
+                    }
+                }
             }
         });
 
@@ -841,6 +1030,8 @@ impl CoinjectNode {
         best_known_peer_height: &Arc<RwLock<u64>>,
         peer_consensus: &Arc<PeerConsensus>,
         hf_sync: &Option<Arc<HuggingFaceSync>>,
+        node_manager: &Arc<crate::node_manager::NodeTypeManager>,
+        capability_router: &Arc<crate::node_manager::CapabilityRouter>,
     ) {
         match event {
             NetworkEvent::BlockReceived { block, peer, is_sync_block } => {
@@ -902,6 +1093,10 @@ impl CoinjectNode {
 
                                                 // Update block metrics
                                                 crate::metrics::BLOCK_HEIGHT.set(block.header.height as i64);
+                                                
+                                                // === NODE TYPE MANAGER: Track block validation ===
+                                                // This feeds the behavioral classification system
+                                                node_manager.on_block_validated(&block, 50).await; // TODO: measure actual validation time
 
                                                 // Push consensus block to Hugging Face (fire-and-forget)
                                                 if let Some(ref hf_sync) = hf_sync {
@@ -1077,6 +1272,13 @@ impl CoinjectNode {
                 // Just update Prometheus metric with current count
                 let count_value = *peer_count.read().await;
                 crate::metrics::PEER_COUNT.set(count_value as i64);
+                
+                // === NODE TYPE MANAGER: Track peer count ===
+                node_manager.on_peer_count_change(count_value).await;
+                
+                // Register peer in capability router (default to Full until we get their status)
+                let peer_id_str = format!("{:?}", peer);
+                capability_router.register_peer(peer_id_str, crate::node_types::NodeType::Full).await;
             }
             NetworkEvent::PeerDisconnected(peer) => {
                 println!("👋 Peer disconnected: {:?}", peer);
@@ -1085,8 +1287,15 @@ impl CoinjectNode {
                 // Just update Prometheus metric with current count
                 let count_value = *peer_count.read().await;
                 crate::metrics::PEER_COUNT.set(count_value as i64);
+                
+                // === NODE TYPE MANAGER: Track peer count ===
+                node_manager.on_peer_count_change(count_value).await;
+                
+                // Remove peer from capability router
+                let peer_id_str = format!("{:?}", peer);
+                capability_router.remove_peer(&peer_id_str).await;
             }
-            NetworkEvent::StatusUpdate { peer, best_height, best_hash } => {
+            NetworkEvent::StatusUpdate { peer, best_height, best_hash, node_type } => {
                 let our_height = chain.best_block_height().await;
                 let our_hash = chain.best_block_hash().await;
 
@@ -1102,11 +1311,32 @@ impl CoinjectNode {
                 let peer_id_str = format!("{:?}", peer);
                 let mut hash_bytes = [0u8; 32];
                 hash_bytes.copy_from_slice(best_hash.as_bytes());
-                peer_consensus.update_peer(peer_id_str, best_height, hash_bytes).await;
+                peer_consensus.update_peer(peer_id_str.clone(), best_height, hash_bytes).await;
+                
+                // === CAPABILITY ROUTER: Update peer's node type ===
+                // Now we know the peer's actual node type from their status
+                let internal_node_type = match node_type {
+                    coinject_network::NetworkNodeType::Light => crate::node_types::NodeType::Light,
+                    coinject_network::NetworkNodeType::Full => crate::node_types::NodeType::Full,
+                    coinject_network::NetworkNodeType::Archive => crate::node_types::NodeType::Archive,
+                    coinject_network::NetworkNodeType::Validator => crate::node_types::NodeType::Validator,
+                    coinject_network::NetworkNodeType::Bounty => crate::node_types::NodeType::Bounty,
+                    coinject_network::NetworkNodeType::Oracle => crate::node_types::NodeType::Oracle,
+                };
+                capability_router.register_peer(peer_id_str.clone(), internal_node_type).await;
+                
+                let type_emoji = match node_type {
+                    coinject_network::NetworkNodeType::Light => "📱",
+                    coinject_network::NetworkNodeType::Full => "💻",
+                    coinject_network::NetworkNodeType::Archive => "🗄️",
+                    coinject_network::NetworkNodeType::Validator => "⚡",
+                    coinject_network::NetworkNodeType::Bounty => "🎯",
+                    coinject_network::NetworkNodeType::Oracle => "🔮",
+                };
 
                 println!(
-                    "📊 Status update from {:?}: height {} hash={:?} (ours: {} hash={:?})",
-                    peer, best_height, best_hash, our_height, our_hash
+                    "📊 Status update from {:?}: height {} hash={:?} type={}{:?} (ours: {} hash={:?})",
+                    peer, best_height, best_hash, type_emoji, node_type, our_height, our_hash
                 );
 
                 // Check if peer has a longer or different chain
@@ -1348,6 +1578,98 @@ impl CoinjectNode {
                 if sent_count > 0 {
                     println!("📤 Sent {} sync blocks (unique request_ids) to {:?}", sent_count, peer);
                 }
+            }
+            // =========================================================================
+            // LIGHT SYNC PROTOCOL EVENT HANDLERS
+            // =========================================================================
+            NetworkEvent::HeadersRequested { peer, start_height, max_headers, request_id } => {
+                println!("📱 Headers requested by {:?}: from {} (max {})", peer, start_height, max_headers);
+                
+                // Collect headers from our chain
+                let mut headers = Vec::new();
+                for height in start_height..(start_height + max_headers as u64) {
+                    match chain.get_block_by_height(height) {
+                        Ok(Some(block)) => headers.push(block.header.clone()),
+                        Ok(None) => break, // No more blocks
+                        Err(_) => break,
+                    }
+                }
+                
+                if !headers.is_empty() {
+                    if let Err(e) = network_tx.send(NetworkCommand::SendHeaders { headers: headers.clone(), request_id }) {
+                        eprintln!("Failed to send headers: {}", e);
+                    } else {
+                        println!("📤 Sent {} headers to {:?}", headers.len(), peer);
+                    }
+                }
+            }
+            NetworkEvent::HeadersReceived { peer, headers, request_id } => {
+                println!("📱 Received {} headers from {:?} (request_id: {})", headers.len(), peer, request_id);
+                // Light client would process these headers here
+                // For now, just log receipt - the Light client state handles verification
+                crate::metrics::NODE_HEADERS_SYNCED.set(headers.len() as i64);
+            }
+            NetworkEvent::FlyClientProofRequested { peer, security_param, request_id } => {
+                println!("🎭 FlyClient proof requested by {:?} (security: {})", peer, security_param);
+                // Generate FlyClient proof using the node_manager's LightSyncServer
+                // This requires the LightSyncServer to be initialized
+                // TODO: Wire to node_manager.light_sync_server
+            }
+            NetworkEvent::FlyClientProofReceived { peer, proof_data, request_id } => {
+                println!("🎭 Received FlyClient proof from {:?} ({} bytes)", peer, proof_data.len());
+                // Light client would verify this proof here
+                // TODO: Wire to node_manager.verify_flyclient_proof()
+            }
+            NetworkEvent::MMRProofRequested { peer, block_height, request_id } => {
+                println!("🌲 MMR proof requested by {:?} for block {}", peer, block_height);
+                // Generate MMR proof using node_manager's LightSyncServer
+                // TODO: Wire to node_manager.light_sync_server
+            }
+            NetworkEvent::MMRProofReceived { peer, proof_data, block_height, request_id } => {
+                println!("🌲 Received MMR proof from {:?} for block {} ({} bytes)", peer, block_height, proof_data.len());
+                // Light client would verify this proof here
+            }
+            NetworkEvent::TxProofRequested { peer, tx_hash, block_height, request_id } => {
+                println!("📄 Tx proof requested by {:?} for {:?} in block {}", peer, tx_hash, block_height);
+                // Generate Merkle proof for transaction inclusion
+                // This requires building the merkle path from the block's transactions
+                if let Ok(Some(block)) = chain.get_block_by_height(block_height) {
+                    // Simple merkle path - find tx in block and build path
+                    // TODO: Implement proper merkle tree and path generation
+                    let merkle_path: Vec<coinject_core::Hash> = vec![]; // Placeholder
+                    if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
+                        height: block_height,
+                        hash: block.header.hash(),
+                        mmr_root: coinject_core::Hash::default(), // TODO: Get actual MMR root
+                        total_work: 0, // TODO: Calculate total work
+                        request_id,
+                    }) {
+                        eprintln!("Failed to send tx proof: {}", e);
+                    }
+                }
+            }
+            NetworkEvent::TxProofReceived { peer, tx_hash, merkle_path, block_height, request_id } => {
+                println!("📄 Received tx proof from {:?} for {:?} (path length: {})", peer, tx_hash, merkle_path.len());
+                // Light client would verify this proof here
+            }
+            NetworkEvent::ChainTipRequested { peer, request_id } => {
+                println!("📍 Chain tip requested by {:?}", peer);
+                let best_height = chain.best_block_height().await;
+                let best_hash = chain.best_block_hash().await;
+                
+                if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
+                    height: best_height,
+                    hash: best_hash,
+                    mmr_root: coinject_core::Hash::default(), // TODO: Get actual MMR root
+                    total_work: 0, // TODO: Calculate total work
+                    request_id,
+                }) {
+                    eprintln!("Failed to send chain tip: {}", e);
+                }
+            }
+            NetworkEvent::ChainTipReceived { peer, height, hash, mmr_root, total_work, request_id } => {
+                println!("📍 Received chain tip from {:?}: height={} hash={:?}", peer, height, hash);
+                // Light client uses this to determine sync target
             }
         }
     }

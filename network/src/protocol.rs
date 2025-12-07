@@ -17,6 +17,24 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 
+/// Node type for network messages (simplified for serialization)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum NetworkNodeType {
+    Light = 0,
+    Full = 1,
+    Archive = 2,
+    Validator = 3,
+    Bounty = 4,
+    Oracle = 5,
+}
+
+impl Default for NetworkNodeType {
+    fn default() -> Self {
+        NetworkNodeType::Full
+    }
+}
+
 /// Network message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkMessage {
@@ -49,13 +67,78 @@ pub enum NetworkMessage {
         /// CRITICAL: Without this, repeated sync requests get rejected as "Duplicate"
         request_id: u64,
     },
-    /// Peer status announcement
+    /// Peer status announcement (with node type for capability routing)
     Status {
         best_height: u64,
         best_hash: Hash,
         genesis_hash: Hash,
+        /// Node type for capability-based routing
+        node_type: NetworkNodeType,
         /// Timestamp to make each status unique (avoids gossipsub duplicate rejection)
         timestamp: u64,
+    },
+}
+
+/// Light sync protocol messages (for Light clients)
+/// These are on a dedicated topic for efficient routing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LightSyncNetworkMessage {
+    /// Request headers from a height range
+    GetHeaders {
+        start_height: u64,
+        max_headers: u32,
+        request_id: u64,
+    },
+    /// Response with block headers
+    Headers {
+        headers: Vec<coinject_core::BlockHeader>,
+        request_id: u64,
+    },
+    /// Request FlyClient proof for super-light verification
+    GetFlyClientProof {
+        security_param: u32,
+        request_id: u64,
+    },
+    /// FlyClient proof response (MMR-based)
+    FlyClientProof {
+        proof_data: Vec<u8>, // Serialized FlyClientProof
+        request_id: u64,
+    },
+    /// Request MMR inclusion proof for a specific block
+    GetMMRProof {
+        block_height: u64,
+        request_id: u64,
+    },
+    /// MMR inclusion proof response
+    MMRProof {
+        proof_data: Vec<u8>, // Serialized MMRInclusionProof
+        block_height: u64,
+        request_id: u64,
+    },
+    /// Request transaction inclusion proof (SPV)
+    GetTxProof {
+        tx_hash: Hash,
+        block_height: u64,
+        request_id: u64,
+    },
+    /// Transaction inclusion proof (Merkle path)
+    TxProof {
+        tx_hash: Hash,
+        merkle_path: Vec<Hash>,
+        block_height: u64,
+        request_id: u64,
+    },
+    /// Request current chain tip (lightweight status)
+    GetChainTip {
+        request_id: u64,
+    },
+    /// Chain tip response
+    ChainTip {
+        height: u64,
+        hash: Hash,
+        mmr_root: Hash,
+        total_work: u128,
+        request_id: u64,
     },
 }
 
@@ -64,6 +147,8 @@ pub struct NetworkTopics {
     pub blocks: IdentTopic,
     pub transactions: IdentTopic,
     pub status: IdentTopic,
+    /// Light sync topic for header-only sync protocol
+    pub light_sync: IdentTopic,
 }
 
 impl NetworkTopics {
@@ -72,6 +157,7 @@ impl NetworkTopics {
             blocks: IdentTopic::new(format!("{}/blocks", chain_id)),
             transactions: IdentTopic::new(format!("{}/transactions", chain_id)),
             status: IdentTopic::new(format!("{}/status", chain_id)),
+            light_sync: IdentTopic::new(format!("{}/light-sync", chain_id)),
         }
     }
 }
@@ -171,17 +257,86 @@ pub enum NetworkEvent {
     BlockReceived { block: Block, peer: PeerId, is_sync_block: bool },
     /// New transaction received
     TransactionReceived { tx: Transaction, peer: PeerId },
-    /// Status update from peer
+    /// Status update from peer (includes node type for capability routing)
     StatusUpdate {
         peer: PeerId,
         best_height: u64,
         best_hash: Hash,
+        node_type: NetworkNodeType,
     },
     /// Blocks requested by peer (for sync)
     BlocksRequested {
         peer: PeerId,
         from_height: u64,
         to_height: u64,
+    },
+    // === LIGHT SYNC EVENTS ===
+    /// Headers requested by light client
+    HeadersRequested {
+        peer: PeerId,
+        start_height: u64,
+        max_headers: u32,
+        request_id: u64,
+    },
+    /// Headers received (for light clients)
+    HeadersReceived {
+        peer: PeerId,
+        headers: Vec<coinject_core::BlockHeader>,
+        request_id: u64,
+    },
+    /// FlyClient proof requested
+    FlyClientProofRequested {
+        peer: PeerId,
+        security_param: u32,
+        request_id: u64,
+    },
+    /// FlyClient proof received
+    FlyClientProofReceived {
+        peer: PeerId,
+        proof_data: Vec<u8>,
+        request_id: u64,
+    },
+    /// MMR proof requested
+    MMRProofRequested {
+        peer: PeerId,
+        block_height: u64,
+        request_id: u64,
+    },
+    /// MMR proof received
+    MMRProofReceived {
+        peer: PeerId,
+        proof_data: Vec<u8>,
+        block_height: u64,
+        request_id: u64,
+    },
+    /// Transaction proof requested (SPV)
+    TxProofRequested {
+        peer: PeerId,
+        tx_hash: Hash,
+        block_height: u64,
+        request_id: u64,
+    },
+    /// Transaction proof received (SPV)
+    TxProofReceived {
+        peer: PeerId,
+        tx_hash: Hash,
+        merkle_path: Vec<Hash>,
+        block_height: u64,
+        request_id: u64,
+    },
+    /// Chain tip requested
+    ChainTipRequested {
+        peer: PeerId,
+        request_id: u64,
+    },
+    /// Chain tip received
+    ChainTipReceived {
+        peer: PeerId,
+        height: u64,
+        hash: Hash,
+        mmr_root: Hash,
+        total_work: u128,
+        request_id: u64,
     },
 }
 
@@ -335,6 +490,10 @@ impl NetworkService {
             .behaviour_mut()
             .gossipsub
             .subscribe(&self.topics.status)?;
+        self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&self.topics.light_sync)?;
         Ok(())
     }
 
@@ -446,12 +605,13 @@ impl NetworkService {
         }
     }
 
-    /// Broadcast status to peers
+    /// Broadcast status to peers (includes node type for capability routing)
     pub fn broadcast_status(
         &mut self,
         best_height: u64,
         best_hash: Hash,
         genesis_hash: Hash,
+        node_type: NetworkNodeType,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Check if we have peers in the mesh before broadcasting
         if self.mesh_peers.is_empty() {
@@ -462,6 +622,7 @@ impl NetworkService {
             best_height,
             best_hash,
             genesis_hash,
+            node_type,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -475,6 +636,179 @@ impl NetworkService {
             Ok(_) => Ok(()),
             Err(gossipsub::PublishError::InsufficientPeers) => {
                 Err("InsufficientPeers: Not enough peers in mesh for topic".into())
+            }
+            Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
+        }
+    }
+    
+    // =========================================================================
+    // LIGHT SYNC PROTOCOL METHODS
+    // =========================================================================
+    
+    /// Request headers from the network (for Light clients)
+    pub fn request_headers(
+        &mut self,
+        start_height: u64,
+        max_headers: u32,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let request_id = Self::generate_request_id();
+        let message = LightSyncNetworkMessage::GetHeaders {
+            start_height,
+            max_headers,
+            request_id,
+        };
+        self.publish_light_sync_message(message)?;
+        Ok(request_id)
+    }
+    
+    /// Send headers response (for Full/Archive nodes serving Light clients)
+    pub fn send_headers(
+        &mut self,
+        headers: Vec<coinject_core::BlockHeader>,
+        request_id: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let message = LightSyncNetworkMessage::Headers { headers, request_id };
+        self.publish_light_sync_message(message)
+    }
+    
+    /// Request FlyClient proof (for super-light verification)
+    pub fn request_flyclient_proof(
+        &mut self,
+        security_param: u32,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let request_id = Self::generate_request_id();
+        let message = LightSyncNetworkMessage::GetFlyClientProof {
+            security_param,
+            request_id,
+        };
+        self.publish_light_sync_message(message)?;
+        Ok(request_id)
+    }
+    
+    /// Send FlyClient proof response
+    pub fn send_flyclient_proof(
+        &mut self,
+        proof_data: Vec<u8>,
+        request_id: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let message = LightSyncNetworkMessage::FlyClientProof { proof_data, request_id };
+        self.publish_light_sync_message(message)
+    }
+    
+    /// Request MMR inclusion proof for a block
+    pub fn request_mmr_proof(
+        &mut self,
+        block_height: u64,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let request_id = Self::generate_request_id();
+        let message = LightSyncNetworkMessage::GetMMRProof {
+            block_height,
+            request_id,
+        };
+        self.publish_light_sync_message(message)?;
+        Ok(request_id)
+    }
+    
+    /// Send MMR proof response
+    pub fn send_mmr_proof(
+        &mut self,
+        proof_data: Vec<u8>,
+        block_height: u64,
+        request_id: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let message = LightSyncNetworkMessage::MMRProof {
+            proof_data,
+            block_height,
+            request_id,
+        };
+        self.publish_light_sync_message(message)
+    }
+    
+    /// Request transaction proof (SPV)
+    pub fn request_tx_proof(
+        &mut self,
+        tx_hash: Hash,
+        block_height: u64,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let request_id = Self::generate_request_id();
+        let message = LightSyncNetworkMessage::GetTxProof {
+            tx_hash,
+            block_height,
+            request_id,
+        };
+        self.publish_light_sync_message(message)?;
+        Ok(request_id)
+    }
+    
+    /// Send transaction proof response
+    pub fn send_tx_proof(
+        &mut self,
+        tx_hash: Hash,
+        merkle_path: Vec<Hash>,
+        block_height: u64,
+        request_id: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let message = LightSyncNetworkMessage::TxProof {
+            tx_hash,
+            merkle_path,
+            block_height,
+            request_id,
+        };
+        self.publish_light_sync_message(message)
+    }
+    
+    /// Request chain tip (lightweight)
+    pub fn request_chain_tip(&mut self) -> Result<u64, Box<dyn std::error::Error>> {
+        let request_id = Self::generate_request_id();
+        let message = LightSyncNetworkMessage::GetChainTip { request_id };
+        self.publish_light_sync_message(message)?;
+        Ok(request_id)
+    }
+    
+    /// Send chain tip response
+    pub fn send_chain_tip(
+        &mut self,
+        height: u64,
+        hash: Hash,
+        mmr_root: Hash,
+        total_work: u128,
+        request_id: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let message = LightSyncNetworkMessage::ChainTip {
+            height,
+            hash,
+            mmr_root,
+            total_work,
+            request_id,
+        };
+        self.publish_light_sync_message(message)
+    }
+    
+    /// Generate unique request ID for deduplication bypass
+    fn generate_request_id() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64
+    }
+    
+    /// Publish a light sync message to the dedicated topic
+    fn publish_light_sync_message(
+        &mut self,
+        message: LightSyncNetworkMessage,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if self.mesh_peers.is_empty() {
+            return Err("InsufficientPeers: No peers in gossipsub mesh".into());
+        }
+        
+        let data = bincode::serialize(&message)?;
+        match self.swarm
+            .behaviour_mut()
+            .gossipsub
+            .publish(self.topics.light_sync.clone(), data) {
+            Ok(_) => Ok(()),
+            Err(gossipsub::PublishError::InsufficientPeers) => {
+                Err("InsufficientPeers: Not enough peers in mesh for light-sync topic".into())
             }
             Err(e) => Err(format!("Gossipsub publish error: {:?}", e).into()),
         }
@@ -586,7 +920,15 @@ impl NetworkService {
     }
 
     /// Handle incoming gossipsub message
-    fn handle_gossipsub_message(&mut self, peer: PeerId, message: Vec<u8>) {
+    fn handle_gossipsub_message(&mut self, peer: PeerId, message: Vec<u8>, topic_hash: &gossipsub::TopicHash) {
+        // Check if this is a light sync message
+        let light_sync_topic_hash = self.topics.light_sync.hash();
+        if *topic_hash == light_sync_topic_hash {
+            self.handle_light_sync_message(peer, message);
+            return;
+        }
+        
+        // Handle regular network messages
         match bincode::deserialize::<NetworkMessage>(&message) {
             Ok(NetworkMessage::NewBlock(block)) => {
                 let _ = self.event_tx.send(NetworkEvent::BlockReceived {
@@ -615,12 +957,14 @@ impl NetworkService {
                 best_height,
                 best_hash,
                 genesis_hash: _,
+                node_type,
                 timestamp: _, // Ignored - only used to prevent gossipsub duplicate rejection
             }) => {
                 let _ = self.event_tx.send(NetworkEvent::StatusUpdate {
                     peer,
                     best_height,
                     best_hash,
+                    node_type,
                 });
             }
             Ok(NetworkMessage::GetBlocks { from, to, request_id: _ }) => {
@@ -639,6 +983,92 @@ impl NetworkService {
             }
         }
     }
+    
+    /// Handle incoming light sync protocol messages
+    fn handle_light_sync_message(&mut self, peer: PeerId, message: Vec<u8>) {
+        match bincode::deserialize::<LightSyncNetworkMessage>(&message) {
+            Ok(LightSyncNetworkMessage::GetHeaders { start_height, max_headers, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::HeadersRequested {
+                    peer,
+                    start_height,
+                    max_headers,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::Headers { headers, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::HeadersReceived {
+                    peer,
+                    headers,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::GetFlyClientProof { security_param, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::FlyClientProofRequested {
+                    peer,
+                    security_param,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::FlyClientProof { proof_data, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::FlyClientProofReceived {
+                    peer,
+                    proof_data,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::GetMMRProof { block_height, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::MMRProofRequested {
+                    peer,
+                    block_height,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::MMRProof { proof_data, block_height, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::MMRProofReceived {
+                    peer,
+                    proof_data,
+                    block_height,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::GetTxProof { tx_hash, block_height, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::TxProofRequested {
+                    peer,
+                    tx_hash,
+                    block_height,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::TxProof { tx_hash, merkle_path, block_height, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::TxProofReceived {
+                    peer,
+                    tx_hash,
+                    merkle_path,
+                    block_height,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::GetChainTip { request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::ChainTipRequested {
+                    peer,
+                    request_id,
+                });
+            }
+            Ok(LightSyncNetworkMessage::ChainTip { height, hash, mmr_root, total_work, request_id }) => {
+                let _ = self.event_tx.send(NetworkEvent::ChainTipReceived {
+                    peer,
+                    height,
+                    hash,
+                    mmr_root,
+                    total_work,
+                    request_id,
+                });
+            }
+            Err(e) => {
+                eprintln!("Failed to deserialize light sync message: {}", e);
+            }
+        }
+    }
 
     /// Process swarm events (call this in a loop)
     pub async fn process_events(&mut self) {
@@ -649,7 +1079,7 @@ impl NetworkService {
                     message,
                     ..
                 }) => {
-                    self.handle_gossipsub_message(propagation_source, message.data);
+                    self.handle_gossipsub_message(propagation_source, message.data, &message.topic);
                 }
                 CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { peer_id, topic }) => {
                     println!("📡 Peer {} subscribed to topic: {:?}", peer_id, topic);

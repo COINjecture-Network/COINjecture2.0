@@ -1,9 +1,53 @@
 // Node Configuration
 // CLI args and runtime configuration
+//
+// Supports 6 specialized node types with dynamic behavioral classification:
+// - Light: Header-only sync, minimal storage (mobile-friendly)
+// - Full: Complete validation, standard storage (default)
+// - Archive: Complete history, 2TB+ storage
+// - Validator: Block production, high validation speed
+// - Bounty: NP-problem solving focused
+// - Oracle: External data feeds
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+/// Node type preference (actual classification is based on behavior)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum NodeTypePreference {
+    /// Header-only sync for mobile/embedded devices (minimal storage)
+    Light,
+    /// Full validation with standard storage (default)
+    Full,
+    /// Complete historical data preservation (2TB+ storage)
+    Archive,
+    /// Block production and high-speed validation
+    Validator,
+    /// NP-problem solving and bounty hunting
+    Bounty,
+    /// External data feeds and cross-chain bridges
+    Oracle,
+}
+
+impl Default for NodeTypePreference {
+    fn default() -> Self {
+        NodeTypePreference::Full
+    }
+}
+
+impl std::fmt::Display for NodeTypePreference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeTypePreference::Light => write!(f, "light"),
+            NodeTypePreference::Full => write!(f, "full"),
+            NodeTypePreference::Archive => write!(f, "archive"),
+            NodeTypePreference::Validator => write!(f, "validator"),
+            NodeTypePreference::Bounty => write!(f, "bounty"),
+            NodeTypePreference::Oracle => write!(f, "oracle"),
+        }
+    }
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(author, version, about = "COINjecture Network B - NP-hard Consensus Blockchain", long_about = None)]
@@ -11,6 +55,36 @@ pub struct NodeConfig {
     /// Data directory for blockchain storage
     #[arg(long, default_value = "./data")]
     pub data_dir: PathBuf,
+
+    // ==========================================================================
+    // NODE TYPE CONFIGURATION
+    // ==========================================================================
+    
+    /// Target node type (preference, actual type is determined by behavior)
+    /// Options: light, full, archive, validator, bounty, oracle
+    #[arg(long, value_enum, default_value = "full")]
+    pub node_type: NodeTypePreference,
+    
+    /// Run in headers-only mode (Light node sync)
+    /// Only downloads and validates block headers, not full blocks
+    #[arg(long)]
+    pub headers_only: bool,
+    
+    /// Enable bounty hunting mode (actively solve NP-problems)
+    #[arg(long)]
+    pub bounty_hunter: bool,
+    
+    /// Enable oracle mode (provide external data feeds)
+    #[arg(long)]
+    pub oracle_mode: bool,
+    
+    /// Oracle data sources (URLs for external feeds)
+    #[arg(long)]
+    pub oracle_sources: Vec<String>,
+
+    // ==========================================================================
+    // STANDARD CONFIGURATION
+    // ==========================================================================
 
     /// Run in development mode (auto-mining, no peers)
     #[arg(long)]
@@ -106,6 +180,57 @@ impl NodeConfig {
     pub fn chain_db_path(&self) -> PathBuf {
         self.data_dir.join("chain.db")
     }
+    
+    /// Check if this node is configured for header-only mode (Light node)
+    pub fn is_light_mode(&self) -> bool {
+        self.headers_only || matches!(self.node_type, NodeTypePreference::Light)
+    }
+    
+    /// Check if this node is configured for archive mode
+    pub fn is_archive_mode(&self) -> bool {
+        matches!(self.node_type, NodeTypePreference::Archive)
+    }
+    
+    /// Check if bounty hunting is enabled
+    pub fn is_bounty_hunter(&self) -> bool {
+        self.bounty_hunter || matches!(self.node_type, NodeTypePreference::Bounty)
+    }
+    
+    /// Check if oracle mode is enabled
+    pub fn is_oracle_mode(&self) -> bool {
+        self.oracle_mode || matches!(self.node_type, NodeTypePreference::Oracle)
+    }
+    
+    /// Get the target node type for classification
+    pub fn target_node_type(&self) -> crate::node_types::NodeType {
+        use crate::node_types::NodeType;
+        
+        // Override based on specific flags
+        if self.headers_only {
+            return NodeType::Light;
+        }
+        if self.bounty_hunter {
+            return NodeType::Bounty;
+        }
+        if self.oracle_mode {
+            return NodeType::Oracle;
+        }
+        
+        // Map preference to node type
+        match self.node_type {
+            NodeTypePreference::Light => NodeType::Light,
+            NodeTypePreference::Full => NodeType::Full,
+            NodeTypePreference::Archive => NodeType::Archive,
+            NodeTypePreference::Validator => NodeType::Validator,
+            NodeTypePreference::Bounty => NodeType::Bounty,
+            NodeTypePreference::Oracle => NodeType::Oracle,
+        }
+    }
+    
+    /// Get storage requirements for the target node type (in GB)
+    pub fn storage_requirement_gb(&self) -> u32 {
+        self.target_node_type().hardware_requirements().min_storage_gb
+    }
 
     pub fn validate(&self) -> Result<(), String> {
         // Validate miner address format if provided
@@ -127,6 +252,16 @@ impl NodeConfig {
         if self.block_time < 10 {
             return Err("Block time must be at least 10 seconds".to_string());
         }
+        
+        // Validate oracle sources if oracle mode enabled
+        if self.is_oracle_mode() && self.oracle_sources.is_empty() {
+            tracing::warn!("Oracle mode enabled but no oracle_sources specified");
+        }
+        
+        // Warn about conflicting settings
+        if self.headers_only && self.mine {
+            return Err("Cannot mine in headers-only mode (Light nodes don't store full blocks)".to_string());
+        }
 
         Ok(())
     }
@@ -136,10 +271,14 @@ impl NodeConfig {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_config_validation() {
-        let config = NodeConfig {
+    fn test_config() -> NodeConfig {
+        NodeConfig {
             data_dir: PathBuf::from("./data"),
+            node_type: NodeTypePreference::Full,
+            headers_only: false,
+            bounty_hunter: false,
+            oracle_mode: false,
+            oracle_sources: vec![],
             dev: false,
             mine: false,
             miner_address: Some("0000000000000000000000000000000000000000000000000000000000000001".to_string()),
@@ -158,35 +297,56 @@ mod tests {
             hf_token: None,
             hf_dataset_name: None,
             use_adzdb: false,
-        };
+        }
+    }
 
+    #[test]
+    fn test_config_validation() {
+        let config = test_config();
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_invalid_miner_address() {
-        let config = NodeConfig {
-            data_dir: PathBuf::from("./data"),
-            dev: false,
-            mine: false,
-            miner_address: Some("invalid".to_string()),
-            p2p_addr: "/ip4/0.0.0.0/tcp/30333".to_string(),
-            rpc_addr: "127.0.0.1:9933".to_string(),
-            metrics_addr: "127.0.0.1:9090".to_string(),
-            bootnodes: vec![],
-            chain_id: "test".to_string(),
-            difficulty: 4,
-            block_time: 60,
-            max_peers: 50,
-            verbose: false,
-            enable_faucet: false,
-            faucet_amount: 10000,
-            faucet_cooldown: 3600,
-            hf_token: None,
-            hf_dataset_name: None,
-            use_adzdb: false,
-        };
-
+        let mut config = test_config();
+        config.miner_address = Some("invalid".to_string());
         assert!(config.validate().is_err());
+    }
+    
+    #[test]
+    fn test_node_type_light() {
+        let mut config = test_config();
+        config.node_type = NodeTypePreference::Light;
+        assert!(config.is_light_mode());
+    }
+    
+    #[test]
+    fn test_headers_only_implies_light() {
+        let mut config = test_config();
+        config.headers_only = true;
+        assert!(config.is_light_mode());
+    }
+    
+    #[test]
+    fn test_headers_only_cannot_mine() {
+        let mut config = test_config();
+        config.headers_only = true;
+        config.mine = true;
+        assert!(config.validate().is_err());
+    }
+    
+    #[test]
+    fn test_bounty_hunter_mode() {
+        let mut config = test_config();
+        config.bounty_hunter = true;
+        assert!(config.is_bounty_hunter());
+    }
+    
+    #[test]
+    fn test_oracle_mode() {
+        let mut config = test_config();
+        config.oracle_mode = true;
+        config.oracle_sources = vec!["https://api.example.com".to_string()];
+        assert!(config.is_oracle_mode());
     }
 }

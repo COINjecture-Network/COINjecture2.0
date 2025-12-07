@@ -1,18 +1,27 @@
 // =============================================================================
-// COINjecture Tokenomics
-// η = λ = 1/√2 Exponential Dimensional Distribution
+// COINjecture Tokenomics - EMPIRICAL VERSION
+// η = λ = 1/√2 Exponential Dimensional Distribution  
 // =============================================================================
 //
+// DESIGN PRINCIPLES (Sarah's Compliance Requirements):
+// 
+// 1. EMPIRICAL: All values derived from actual network data, not hardcoded
+// 2. SELF-REFERENTIAL: System references its own state, not external constants
+// 3. DIMENSIONLESS: Pure ratios without absolute units
+//
 // All tokenomics parameters are either:
-// - A direct function of η = λ = 1/√2
+// - A direct function of η = λ = 1/√2 (mathematical constant)
 // - Derived from the dimensional scales D_n = e^(-τn/√2)
 // - Measured against network consensus state |ψ(t)|
-// - Bounded by the Viviani oracle Δ ≤ 0.3
+// - Computed from network_metrics oracle (medians, percentiles)
 //
-// This creates a SELF-STABILIZING economic system where market forces
-// naturally converge to the same critical equilibrium that governs consensus.
+// This creates a SELF-STABILIZING economic system where:
+// - The network decides its own limits through adaptive resilience
+// - No arbitrary constants - all values are network-derived
+// - Market forces naturally converge to critical equilibrium
 
 pub mod dimensions;
+pub mod network_metrics;  // NEW: Central oracle for network-derived values
 pub mod rewards;
 pub mod distributor;
 
@@ -27,6 +36,7 @@ pub mod governance;
 
 // Re-exports
 pub use dimensions::*;
+pub use network_metrics::*;  // Export NetworkMetrics oracle
 pub use rewards::*;
 pub use distributor::*;
 pub use pools::*;
