@@ -49,3 +49,6 @@ sha2 = "0.10"
 [features]
 default = []
 adzdb = ["dep:adzdb"]
+
+[dev-dependencies]
+tokio = { version = "1.35", features = ["macros", "rt-multi-thread", "test-util"] }

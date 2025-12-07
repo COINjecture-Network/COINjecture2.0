@@ -37,3 +37,6 @@ validator_key.bin
 
 # Archives
 *.tar
+
+ADZDB-repo/
+nul

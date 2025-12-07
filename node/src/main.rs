@@ -21,6 +21,7 @@ mod keystore;
 mod light_client;
 mod light_sync;
 mod metrics;
+mod metrics_integration;
 mod metrics_server;
 pub mod mobile_sdk;
 pub mod node_manager;

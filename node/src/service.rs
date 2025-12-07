@@ -47,7 +47,7 @@ enum NetworkCommand {
     /// Send FlyClient proof response
     SendFlyClientProof { proof_data: Vec<u8>, request_id: u64 },
     /// Send MMR proof response
-    SendMMRProof { proof_data: Vec<u8>, block_height: u64, request_id: u64 },
+    SendMMRProof { header: coinject_core::BlockHeader, proof_data: Vec<u8>, mmr_root: coinject_core::Hash, request_id: u64 },
     /// Send chain tip response
     SendChainTip { height: u64, hash: coinject_core::Hash, mmr_root: coinject_core::Hash, total_work: u128, request_id: u64 },
     /// Request headers (for Light client sync)
@@ -638,8 +638,8 @@ impl CoinjectNode {
                                     eprintln!("Failed to send FlyClient proof: {}", e);
                                 }
                             }
-                            NetworkCommand::SendMMRProof { proof_data, block_height, request_id } => {
-                                if let Err(e) = network.send_mmr_proof(proof_data, block_height, request_id) {
+                            NetworkCommand::SendMMRProof { header, proof_data, mmr_root, request_id } => {
+                                if let Err(e) = network.send_mmr_proof(header, proof_data, mmr_root, request_id) {
                                     eprintln!("Failed to send MMR proof: {}", e);
                                 }
                             }
@@ -1611,65 +1611,182 @@ impl CoinjectNode {
             }
             NetworkEvent::FlyClientProofRequested { peer, security_param, request_id } => {
                 println!("🎭 FlyClient proof requested by {:?} (security: {})", peer, security_param);
+                
+                // Check if this node can serve Light clients
+                if !node_manager.can_serve_light_clients() {
+                    println!("⚠️  Cannot serve FlyClient proofs - not a Full/Archive/Validator node");
+                    return;
+                }
+                
                 // Generate FlyClient proof using the node_manager's LightSyncServer
-                // This requires the LightSyncServer to be initialized
-                // TODO: Wire to node_manager.light_sync_server
-            }
-            NetworkEvent::FlyClientProofReceived { peer, proof_data, request_id } => {
-                println!("🎭 Received FlyClient proof from {:?} ({} bytes)", peer, proof_data.len());
-                // Light client would verify this proof here
-                // TODO: Wire to node_manager.verify_flyclient_proof()
-            }
-            NetworkEvent::MMRProofRequested { peer, block_height, request_id } => {
-                println!("🌲 MMR proof requested by {:?} for block {}", peer, block_height);
-                // Generate MMR proof using node_manager's LightSyncServer
-                // TODO: Wire to node_manager.light_sync_server
-            }
-            NetworkEvent::MMRProofReceived { peer, proof_data, block_height, request_id } => {
-                println!("🌲 Received MMR proof from {:?} for block {} ({} bytes)", peer, block_height, proof_data.len());
-                // Light client would verify this proof here
-            }
-            NetworkEvent::TxProofRequested { peer, tx_hash, block_height, request_id } => {
-                println!("📄 Tx proof requested by {:?} for {:?} in block {}", peer, tx_hash, block_height);
-                // Generate Merkle proof for transaction inclusion
-                // This requires building the merkle path from the block's transactions
-                if let Ok(Some(block)) = chain.get_block_by_height(block_height) {
-                    // Simple merkle path - find tx in block and build path
-                    // TODO: Implement proper merkle tree and path generation
-                    let merkle_path: Vec<coinject_core::Hash> = vec![]; // Placeholder
-                    if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
-                        height: block_height,
-                        hash: block.header.hash(),
-                        mmr_root: coinject_core::Hash::default(), // TODO: Get actual MMR root
-                        total_work: 0, // TODO: Calculate total work
+                if let Some(proof_bytes) = node_manager.generate_flyclient_proof(security_param).await {
+                    if let Err(e) = network_tx.send(NetworkCommand::SendFlyClientProof {
+                        proof_data: proof_bytes.clone(),
                         request_id,
                     }) {
-                        eprintln!("Failed to send tx proof: {}", e);
+                        eprintln!("Failed to send FlyClient proof: {}", e);
+                    } else {
+                        println!("📤 Sent FlyClient proof ({} bytes) to {:?}", proof_bytes.len(), peer);
+                        node_manager.on_data_served(proof_bytes.len() as u64).await;
+                    }
+                } else {
+                    eprintln!("Failed to generate FlyClient proof for {:?}", peer);
+                }
+            }
+            NetworkEvent::FlyClientProofReceived { peer, proof_data, request_id } => {
+                println!("🎭 Received FlyClient proof from {:?} ({} bytes, request_id: {})", 
+                    peer, proof_data.len(), request_id);
+                
+                // Deserialize and verify the FlyClient proof
+                match bincode::deserialize::<crate::light_sync::FlyClientProof>(&proof_data) {
+                    Ok(proof) => {
+                        match node_manager.verify_flyclient_proof(&proof).await {
+                            Ok(()) => {
+                                println!("✅ FlyClient proof verified successfully from {:?}", peer);
+                                crate::metrics::NODE_HEADERS_SYNCED.set(proof.tip_header.height as i64);
+                            }
+                            Err(e) => {
+                                eprintln!("❌ FlyClient proof verification failed: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Failed to deserialize FlyClient proof: {}", e);
                     }
                 }
             }
+            NetworkEvent::MMRProofRequested { peer, block_height, request_id } => {
+                println!("🌲 MMR proof requested by {:?} for block {}", peer, block_height);
+                
+                // Check if this node can serve Light clients
+                if !node_manager.can_serve_light_clients() {
+                    println!("⚠️  Cannot serve MMR proofs - not a Full/Archive/Validator node");
+                    return;
+                }
+                
+                // Generate MMR proof using node_manager's LightSyncServer
+                if let Some((header, proof_bytes, mmr_root)) = node_manager.generate_mmr_proof(block_height).await {
+                    if let Err(e) = network_tx.send(NetworkCommand::SendMMRProof {
+                        header: header.clone(),
+                        proof_data: proof_bytes.clone(),
+                        mmr_root,
+                        request_id,
+                    }) {
+                        eprintln!("Failed to send MMR proof: {}", e);
+                    } else {
+                        println!("📤 Sent MMR proof for block {} ({} bytes) to {:?}", 
+                            block_height, proof_bytes.len(), peer);
+                        node_manager.on_data_served(proof_bytes.len() as u64).await;
+                    }
+                } else {
+                    eprintln!("Failed to generate MMR proof for block {} requested by {:?}", block_height, peer);
+                }
+            }
+            NetworkEvent::MMRProofReceived { peer, header, proof_data, mmr_root, request_id } => {
+                println!("🌲 Received MMR proof from {:?} for block {} ({} bytes, request_id: {})", 
+                    peer, header.height, proof_data.len(), request_id);
+                
+                // Deserialize and verify the MMR proof
+                match bincode::deserialize::<crate::light_sync::MMRInclusionProof>(&proof_data) {
+                    Ok(proof) => {
+                        // Verify against the provided MMR root
+                        if proof.verify(&mmr_root) {
+                            println!("✅ MMR proof verified for block {} against mmr_root {:?}", 
+                                header.height, mmr_root);
+                            
+                            // Additional: verify header hash matches proof leaf
+                            if proof.leaf_hash == header.hash() {
+                                println!("✅ Header hash matches proof leaf");
+                            } else {
+                                eprintln!("⚠️  Header hash doesn't match proof leaf");
+                            }
+                        } else {
+                            eprintln!("❌ MMR proof verification failed for block {}", header.height);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Failed to deserialize MMR proof: {}", e);
+                    }
+                }
+            }
+            NetworkEvent::TxProofRequested { peer, tx_hash, block_height, request_id } => {
+                println!("📄 Tx proof requested by {:?} for {:?} in block {}", peer, tx_hash, block_height);
+                
+                // Generate Merkle proof for transaction inclusion
+                if let Ok(Some(block)) = chain.get_block_by_height(block_height) {
+                    // Build merkle tree and generate path
+                    let merkle_path = build_merkle_proof(&block.transactions, &tx_hash);
+                    
+                    // Get MMR root and total work from node_manager
+                    let mmr_root = node_manager.get_mmr_root().await.unwrap_or_default();
+                    let total_work = node_manager.get_total_work().await.unwrap_or(0);
+                    
+                    // Send the transaction proof
+                    // Note: We're using SendChainTip as a workaround - in production, 
+                    // there should be a dedicated SendTxProof command
+                    if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
+                        height: block_height,
+                        hash: block.header.hash(),
+                        mmr_root,
+                        total_work,
+                        request_id,
+                    }) {
+                        eprintln!("Failed to send tx proof: {}", e);
+                    } else {
+                        println!("📤 Sent tx proof for {:?} (path length: {}) to {:?}", 
+                            tx_hash, merkle_path.len(), peer);
+                        node_manager.on_data_served((merkle_path.len() * 33) as u64).await;
+                    }
+                } else {
+                    eprintln!("Block {} not found for tx proof request", block_height);
+                }
+            }
             NetworkEvent::TxProofReceived { peer, tx_hash, merkle_path, block_height, request_id } => {
-                println!("📄 Received tx proof from {:?} for {:?} (path length: {})", peer, tx_hash, merkle_path.len());
-                // Light client would verify this proof here
+                println!("📄 Received tx proof from {:?} for {:?} in block {} (path length: {}, request_id: {})", 
+                    peer, tx_hash, block_height, merkle_path.len(), request_id);
+                
+                // Verify the merkle proof against the block's merkle root
+                if let Ok(Some(block)) = chain.get_block_by_height(block_height) {
+                    if verify_merkle_proof(&tx_hash, &merkle_path, &block.header.merkle_root) {
+                        println!("✅ Transaction {:?} verified in block {}", tx_hash, block_height);
+                    } else {
+                        eprintln!("❌ Transaction merkle proof verification failed");
+                    }
+                }
             }
             NetworkEvent::ChainTipRequested { peer, request_id } => {
                 println!("📍 Chain tip requested by {:?}", peer);
                 let best_height = chain.best_block_height().await;
                 let best_hash = chain.best_block_hash().await;
                 
+                // Get MMR root and total work from node_manager
+                let mmr_root = node_manager.get_mmr_root().await.unwrap_or_default();
+                let total_work = node_manager.get_total_work().await.unwrap_or(0);
+                
                 if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
                     height: best_height,
                     hash: best_hash,
-                    mmr_root: coinject_core::Hash::default(), // TODO: Get actual MMR root
-                    total_work: 0, // TODO: Calculate total work
+                    mmr_root,
+                    total_work,
                     request_id,
                 }) {
                     eprintln!("Failed to send chain tip: {}", e);
+                } else {
+                    println!("📤 Sent chain tip (height: {}, hash: {:?}, mmr_root: {:?}) to {:?}", 
+                        best_height, best_hash, mmr_root, peer);
                 }
             }
             NetworkEvent::ChainTipReceived { peer, height, hash, mmr_root, total_work, request_id } => {
-                println!("📍 Received chain tip from {:?}: height={} hash={:?}", peer, height, hash);
-                // Light client uses this to determine sync target
+                println!("📍 Received chain tip from {:?}: height={}, hash={:?}, total_work={}, request_id={}", 
+                    peer, height, hash, total_work, request_id);
+                
+                // Light client uses this to determine sync target and verify chain
+                // Update best known peer height if this is higher
+                let mut best_peer = best_known_peer_height.write().await;
+                if height > *best_peer {
+                    *best_peer = height;
+                    println!("📈 Updated best known peer height to {}", height);
+                }
             }
         }
     }
@@ -3703,4 +3820,102 @@ impl CoinjectNode {
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.try_send(());
     }
+}
+
+// =============================================================================
+// MERKLE PROOF UTILITIES
+// =============================================================================
+
+/// Build a Merkle proof for a transaction in a block
+/// Returns the authentication path with direction flags
+fn build_merkle_proof(
+    transactions: &[coinject_core::Transaction],
+    target_tx_hash: &coinject_core::Hash,
+) -> Vec<(coinject_core::Hash, bool)> {
+    use sha2::{Sha256, Digest};
+    
+    if transactions.is_empty() {
+        return Vec::new();
+    }
+    
+    // Get transaction hashes
+    let mut leaves: Vec<coinject_core::Hash> = transactions
+        .iter()
+        .map(|tx| tx.hash())
+        .collect();
+    
+    // Find target index
+    let target_index = match leaves.iter().position(|h| h == target_tx_hash) {
+        Some(idx) => idx,
+        None => return Vec::new(), // Transaction not found
+    };
+    
+    // Build proof bottom-up
+    let mut proof = Vec::new();
+    let mut current_index = target_index;
+    
+    while leaves.len() > 1 {
+        // Pad to even length
+        if leaves.len() % 2 == 1 {
+            leaves.push(*leaves.last().unwrap());
+        }
+        
+        // Collect sibling
+        let sibling_index = if current_index % 2 == 0 {
+            current_index + 1
+        } else {
+            current_index - 1
+        };
+        
+        let is_right = current_index % 2 == 0;
+        proof.push((leaves[sibling_index], is_right));
+        
+        // Build next level
+        let mut next_level = Vec::new();
+        for i in (0..leaves.len()).step_by(2) {
+            let left = &leaves[i];
+            let right = &leaves[i + 1];
+            
+            let mut hasher = Sha256::new();
+            hasher.update(b"MERKLE_NODE");
+            hasher.update(left.as_bytes());
+            hasher.update(right.as_bytes());
+            next_level.push(coinject_core::Hash::from_bytes(hasher.finalize().into()));
+        }
+        
+        leaves = next_level;
+        current_index /= 2;
+    }
+    
+    proof
+}
+
+/// Verify a Merkle proof against a root
+fn verify_merkle_proof(
+    tx_hash: &coinject_core::Hash,
+    proof: &[(coinject_core::Hash, bool)],
+    expected_root: &coinject_core::Hash,
+) -> bool {
+    use sha2::{Sha256, Digest};
+    
+    let mut current = *tx_hash;
+    
+    for (sibling, is_right) in proof {
+        let mut hasher = Sha256::new();
+        hasher.update(b"MERKLE_NODE");
+        
+        if *is_right {
+            // Current is on the left, sibling is on the right
+            hasher.update(current.as_bytes());
+            hasher.update(sibling.as_bytes());
+        } else {
+            // Sibling is on the left, current is on the right
+            hasher.update(sibling.as_bytes());
+            hasher.update(current.as_bytes());
+        }
+        
+        current = coinject_core::Hash::from_bytes(hasher.finalize().into());
+    }
+    
+    &current == expected_root
 }

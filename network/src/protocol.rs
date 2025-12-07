@@ -111,8 +111,9 @@ pub enum LightSyncNetworkMessage {
     },
     /// MMR inclusion proof response
     MMRProof {
-        proof_data: Vec<u8>, // Serialized MMRInclusionProof
-        block_height: u64,
+        header: coinject_core::BlockHeader,  // The block header being proven
+        proof_data: Vec<u8>,                 // Serialized MMRInclusionProof
+        mmr_root: Hash,                      // Current MMR root for verification
         request_id: u64,
     },
     /// Request transaction inclusion proof (SPV)
@@ -305,8 +306,9 @@ pub enum NetworkEvent {
     /// MMR proof received
     MMRProofReceived {
         peer: PeerId,
+        header: coinject_core::BlockHeader,
         proof_data: Vec<u8>,
-        block_height: u64,
+        mmr_root: Hash,
         request_id: u64,
     },
     /// Transaction proof requested (SPV)
@@ -712,13 +714,15 @@ impl NetworkService {
     /// Send MMR proof response
     pub fn send_mmr_proof(
         &mut self,
+        header: coinject_core::BlockHeader,
         proof_data: Vec<u8>,
-        block_height: u64,
+        mmr_root: Hash,
         request_id: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let message = LightSyncNetworkMessage::MMRProof {
+            header,
             proof_data,
-            block_height,
+            mmr_root,
             request_id,
         };
         self.publish_light_sync_message(message)
@@ -1023,11 +1027,12 @@ impl NetworkService {
                     request_id,
                 });
             }
-            Ok(LightSyncNetworkMessage::MMRProof { proof_data, block_height, request_id }) => {
+            Ok(LightSyncNetworkMessage::MMRProof { header, proof_data, mmr_root, request_id }) => {
                 let _ = self.event_tx.send(NetworkEvent::MMRProofReceived {
                     peer,
+                    header,
                     proof_data,
-                    block_height,
+                    mmr_root,
                     request_id,
                 });
             }
