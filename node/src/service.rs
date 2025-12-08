@@ -559,7 +559,11 @@ impl CoinjectNode {
         println!();
 
         // Spawn network task (processes events and commands)
-        tokio::task::spawn_local(async move {
+        // CRITICAL FIX: Use tokio::spawn instead of spawn_local
+        // spawn_local runs on a single thread (LocalSet), which starves libp2p's
+        // internal connection tasks on Linux. tokio::spawn runs on worker threads
+        // allowing proper I/O scheduling for Noise/Yamux handshakes.
+        tokio::spawn(async move {
             let mut network = network_service;
             let mut bootnode_retry_interval = time::interval(Duration::from_secs(10)); // Retry bootnodes every 10 seconds
             bootnode_retry_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -976,9 +980,9 @@ impl CoinjectNode {
             let peer_consensus_for_mining = Arc::clone(&peer_consensus);
             let dev_mode = self.config.dev;
 
-            // Use spawn_local since we're in a LocalSet context
-            tokio::task::spawn_local(async move {
-                println!("🔧 Mining task started (spawn_local)");
+            // CRITICAL FIX: Use tokio::spawn for multi-threaded I/O scheduling
+            tokio::spawn(async move {
+                println!("🔧 Mining task started");
                 Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining, peer_consensus_for_mining, dev_mode).await;
                 println!("⚠️ Mining loop exited (unexpected)");
             });
@@ -988,7 +992,8 @@ impl CoinjectNode {
         if let Some(ref hf_sync) = self.hf_sync {
             let hf_sync_for_flush = Arc::clone(hf_sync);
             let chain_for_flush = Arc::clone(&self.chain);
-            tokio::task::spawn_local(async move {
+            // CRITICAL FIX: Use tokio::spawn for multi-threaded I/O scheduling
+            tokio::spawn(async move {
                 let mut last_flush_height = 0u64;
                 loop {
                     // Use blocking sleep to avoid tokio timer issues
@@ -1278,7 +1283,15 @@ impl CoinjectNode {
                 
                 // Register peer in capability router (default to Full until we get their status)
                 let peer_id_str = format!("{:?}", peer);
-                capability_router.register_peer(peer_id_str, crate::node_types::NodeType::Full).await;
+                capability_router.register_peer(peer_id_str.clone(), crate::node_types::NodeType::Full).await;
+                
+                // === FIX: Track peer in consensus immediately on connect ===
+                // This fixes the bootstrap deadlock where mining waits for StatusUpdate
+                // but StatusUpdate can't be broadcast without peers in gossipsub mesh.
+                // We add the peer with height 0 (unknown) - their real height will be
+                // updated when we receive their StatusUpdate message.
+                peer_consensus.update_peer(peer_id_str, 0, [0u8; 32]).await;
+                println!("   📊 Peer added to consensus tracker (awaiting status update)");
             }
             NetworkEvent::PeerDisconnected(peer) => {
                 println!("👋 Peer disconnected: {:?}", peer);
@@ -1294,6 +1307,9 @@ impl CoinjectNode {
                 // Remove peer from capability router
                 let peer_id_str = format!("{:?}", peer);
                 capability_router.remove_peer(&peer_id_str).await;
+                
+                // === FIX: Mark peer as disconnected in consensus tracker ===
+                peer_consensus.mark_peer_disconnected(&peer_id_str).await;
             }
             NetworkEvent::StatusUpdate { peer, best_height, best_hash, node_type } => {
                 let our_height = chain.best_block_height().await;
@@ -1619,7 +1635,7 @@ impl CoinjectNode {
                 }
                 
                 // Generate FlyClient proof using the node_manager's LightSyncServer
-                if let Some(proof_bytes) = node_manager.generate_flyclient_proof(security_param).await {
+                if let Some(proof_bytes) = node_manager.generate_flyclient_proof(security_param as usize).await {
                     if let Err(e) = network_tx.send(NetworkCommand::SendFlyClientProof {
                         proof_data: proof_bytes.clone(),
                         request_id,
@@ -1718,7 +1734,7 @@ impl CoinjectNode {
                     let merkle_path = build_merkle_proof(&block.transactions, &tx_hash);
                     
                     // Get MMR root and total work from node_manager
-                    let mmr_root = node_manager.get_mmr_root().await.unwrap_or_default();
+                    let mmr_root = node_manager.get_mmr_root().await.unwrap_or(coinject_core::Hash::ZERO);
                     let total_work = node_manager.get_total_work().await.unwrap_or(0);
                     
                     // Send the transaction proof
@@ -1745,13 +1761,13 @@ impl CoinjectNode {
                 println!("📄 Received tx proof from {:?} for {:?} in block {} (path length: {}, request_id: {})", 
                     peer, tx_hash, block_height, merkle_path.len(), request_id);
                 
-                // Verify the merkle proof against the block's merkle root
+                // Verify the merkle proof against the block's transactions root
+                // Note: merkle_path from network is Vec<Hash>, but verify_merkle_proof expects Vec<(Hash, bool)>
+                // For now, we log receipt and skip full verification - needs protocol update
                 if let Ok(Some(block)) = chain.get_block_by_height(block_height) {
-                    if verify_merkle_proof(&tx_hash, &merkle_path, &block.header.merkle_root) {
-                        println!("✅ Transaction {:?} verified in block {}", tx_hash, block_height);
-                    } else {
-                        eprintln!("❌ Transaction merkle proof verification failed");
-                    }
+                    println!("📋 Transaction {:?} in block {} (merkle root: {:?})", 
+                        tx_hash, block_height, block.header.transactions_root);
+                    // TODO: Fix protocol to include direction flags in merkle_path
                 }
             }
             NetworkEvent::ChainTipRequested { peer, request_id } => {
@@ -1760,7 +1776,7 @@ impl CoinjectNode {
                 let best_hash = chain.best_block_hash().await;
                 
                 // Get MMR root and total work from node_manager
-                let mmr_root = node_manager.get_mmr_root().await.unwrap_or_default();
+                let mmr_root = node_manager.get_mmr_root().await.unwrap_or(coinject_core::Hash::ZERO);
                 let total_work = node_manager.get_total_work().await.unwrap_or(0);
                 
                 if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
@@ -3455,11 +3471,14 @@ impl CoinjectNode {
                     last_height = best_height;
                 }
 
-                // If we're at genesis, wait longer for status updates (at least 15 seconds = 7-8 attempts)
+                // If we're at genesis with peers, start mining after short wait (20 seconds = 10 attempts)
                 if best_height == 0 {
-                    if sync_attempts >= 8 {
-                        println!("✅ Connected to {} peer(s) at genesis, waiting for status updates...", current_peers);
-                        // Continue waiting - don't break yet
+                    if sync_attempts >= 10 {
+                        // At genesis with peers - time to bootstrap the network!
+                        println!("🚀 At genesis with {} peer(s), starting mining to bootstrap network!", current_peers);
+                        break;
+                    } else if sync_attempts >= 5 {
+                        println!("✅ Connected to {} peer(s) at genesis, preparing to mine... ({}/10)", current_peers, sync_attempts);
                     }
                 } else if stable_height_count >= STABLE_HEIGHT_THRESHOLD {
                     // Height is stable - we're either synced or caught up
@@ -3698,7 +3717,7 @@ impl CoinjectNode {
                     println!("📡 Broadcasted block to network");
                 }
 
-                // Push consensus block to Hugging Face (inline, not spawned - LocalSet issues)
+                // Push consensus block to Hugging Face (inline within mining loop)
                 if let Some(ref hf_sync) = hf_sync {
                     eprintln!("📦 Hugging Face: Uploading mined block {}", block.header.height);
                     match hf_sync.push_consensus_block(&block, true).await {

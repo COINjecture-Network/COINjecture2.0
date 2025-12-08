@@ -33,10 +33,15 @@ mod validator;
 use config::NodeConfig;
 use service::CoinjectNode;
 use tokio::signal;
-use tokio::task::LocalSet;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
+// CRITICAL FIX: Use multi-threaded runtime explicitly
+// This ensures libp2p's internal connection tasks (Noise/Yamux handshake)
+// run on worker threads and get properly polled. 
+// The previous LocalSet + spawn_local architecture caused connection
+// tasks to starve on Linux, resulting in 28-byte Noise handshake data
+// stuck in kernel buffer (Recv-Q) without being read.
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     let filter = EnvFilter::try_from_default_env()
@@ -64,35 +69,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Create LocalSet for spawn_local tasks
-    let local = LocalSet::new();
+    // Create and start node
+    // NOTE: Removed LocalSet - using standard tokio::spawn for proper
+    // multi-threaded I/O scheduling. This is ESSENTIAL for libp2p on Linux.
+    let mut node = CoinjectNode::new(config).await?;
+    node.start().await?;
 
-    // Run node within LocalSet context
-    local.run_until(async move {
-        // Create and start node
-        let mut node = CoinjectNode::new(config).await?;
-        node.start().await?;
-
-        // Wait for shutdown signal (Ctrl+C)
-        match signal::ctrl_c().await {
-            Ok(()) => {
-                println!();
-                println!("📡 Received shutdown signal (Ctrl+C)");
-                node.shutdown();
-            }
-            Err(err) => {
-                eprintln!("Unable to listen for shutdown signal: {}", err);
-            }
+    // Wait for shutdown signal (Ctrl+C)
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            println!();
+            println!("📡 Received shutdown signal (Ctrl+C)");
+            node.shutdown();
         }
+        Err(err) => {
+            eprintln!("Unable to listen for shutdown signal: {}", err);
+        }
+    }
 
-        // Wait for graceful shutdown
-        node.wait_for_shutdown().await;
+    // Wait for graceful shutdown
+    node.wait_for_shutdown().await;
 
-        println!("👋 COINjecture Node stopped");
-        println!();
+    println!("👋 COINjecture Node stopped");
+    println!();
 
-        Ok::<(), Box<dyn std::error::Error>>(())
-    }).await
+    Ok(())
 }
 
 fn print_banner(config: &NodeConfig) {

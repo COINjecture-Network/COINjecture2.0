@@ -671,7 +671,8 @@ impl NodeTypeManager {
                 server.read().await.handle_get_headers(start_height, max_headers, request_id)
             }
             LightSyncMessage::GetChainTip { request_id } => {
-                server.read().await.handle_get_chain_tip(request_id)
+                // handle_get_chain_tip returns Option<LightSyncMessage>, unwrap or return None
+                server.read().await.handle_get_chain_tip(request_id)?
             }
             _ => return None,
         };
