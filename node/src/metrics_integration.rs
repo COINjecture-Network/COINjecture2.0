@@ -109,7 +109,7 @@ impl MetricsCollector {
         // Update hash rate estimator
         {
             let mut estimator = self.hash_rate_estimator.write().await;
-            estimator.record_block(block.header.difficulty, block_time);
+            estimator.record_block(block.header.work_score, block_time);
         }
         
         // Get solve time if tracked
@@ -204,13 +204,13 @@ impl MetricsCollector {
     fn get_problem_category(&self, block: &Block) -> u8 {
         // Extract from coinbase or first transaction
         // In production, this would read the actual problem category
-        // For now, use difficulty as a proxy
-        (block.header.difficulty % 10) as u8
+        // For now, use work_score as a proxy (convert to integer)
+        ((block.header.work_score * 10.0) as u64 % 10) as u8
     }
 
     fn calculate_total_fees(&self, block: &Block) -> u128 {
         block.transactions.iter()
-            .map(|tx| tx.fee)
+            .map(|tx| tx.fee())
             .sum()
     }
 
@@ -219,10 +219,9 @@ impl MetricsCollector {
             return 250; // Default estimate
         }
         
-        // Estimate transaction size (header + signature + data)
-        let total_size: u64 = block.transactions.iter()
-            .map(|tx| 100 + tx.data.len() as u64)
-            .sum();
+        // Estimate transaction size (header + signature)
+        // Transaction type determines base size - estimate ~200-300 bytes average
+        let total_size: u64 = block.transactions.len() as u64 * 250;
         
         total_size / block.transactions.len() as u64
     }
@@ -287,10 +286,10 @@ impl Default for MetricsCollector {
 // HASH RATE ESTIMATOR
 // =============================================================================
 
-/// Estimates network hash rate from block difficulty and timing
+/// Estimates network hash rate from block work_score and timing
 struct HashRateEstimator {
-    /// Recent block data (difficulty, time)
-    recent_blocks: Vec<(u32, f64)>,
+    /// Recent block data (work_score, time)
+    recent_blocks: Vec<(f64, f64)>,
     /// Current estimate
     estimate: f64,
     /// Window size
@@ -306,8 +305,8 @@ impl HashRateEstimator {
         }
     }
 
-    fn record_block(&mut self, difficulty: u32, block_time: f64) {
-        self.recent_blocks.push((difficulty, block_time));
+    fn record_block(&mut self, work_score: f64, block_time: f64) {
+        self.recent_blocks.push((work_score, block_time));
         
         // Maintain window
         if self.recent_blocks.len() > self.window {
@@ -315,10 +314,10 @@ impl HashRateEstimator {
         }
         
         // Recalculate estimate
-        // hash_rate ≈ 2^difficulty / avg_block_time
+        // hash_rate ≈ work_score / avg_block_time
         if !self.recent_blocks.is_empty() {
-            let avg_difficulty: f64 = self.recent_blocks.iter()
-                .map(|(d, _)| *d as f64)
+            let avg_work_score: f64 = self.recent_blocks.iter()
+                .map(|(w, _)| *w)
                 .sum::<f64>() / self.recent_blocks.len() as f64;
             
             let avg_time: f64 = self.recent_blocks.iter()
@@ -326,8 +325,8 @@ impl HashRateEstimator {
                 .sum::<f64>() / self.recent_blocks.len() as f64;
             
             if avg_time > 0.0 {
-                // Simplified: difficulty represents log2 of work required
-                self.estimate = 2.0_f64.powf(avg_difficulty) / avg_time;
+                // Work score represents useful computation done
+                self.estimate = avg_work_score * 1000.0 / avg_time;
             }
         }
     }
@@ -406,23 +405,46 @@ impl StakingTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coinject_core::{BlockHeader, Address};
+    use coinject_core::{BlockHeader, Address, Commitment, CoinbaseTransaction, SolutionReveal};
 
     fn create_test_block(height: u64) -> Block {
+        let commitment = Commitment {
+            hash: Hash::ZERO,
+            problem_hash: Hash::ZERO,
+        };
+        
         Block {
             header: BlockHeader {
                 version: 1,
                 height,
-                timestamp: 1700000000 + height * 600,
-                parent_hash: Hash::default(),
-                merkle_root: Hash::default(),
-                state_root: Hash::default(),
+                prev_hash: Hash::ZERO,
+                timestamp: (1700000000 + height * 600) as i64,
+                transactions_root: Hash::ZERO,
+                solutions_root: Hash::ZERO,
+                commitment,
+                work_score: 1.0,
+                miner: Address::from_bytes([0u8; 32]),
                 nonce: 0,
-                difficulty: 4,
-                miner: Address::default(),
-                work_score: 100,
+                solve_time_us: 0,
+                verify_time_us: 0,
+                time_asymmetry_ratio: 0.0,
+                solution_quality: 0.0,
+                complexity_weight: 0.0,
+                energy_estimate_joules: 0.0,
             },
+            coinbase: CoinbaseTransaction::new(Address::from_bytes([0u8; 32]), 0, height),
             transactions: Vec::new(),
+            solution_reveal: SolutionReveal {
+                problem: coinject_core::problem::ProblemType::Custom {
+                    problem_id: Hash::ZERO,
+                    data: vec![],
+                },
+                solution: coinject_core::problem::Solution::Custom(vec![]),
+                commitment: Commitment {
+                    hash: Hash::ZERO,
+                    problem_hash: Hash::ZERO,
+                },
+            },
         }
     }
 

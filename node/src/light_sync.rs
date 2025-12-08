@@ -112,7 +112,7 @@ impl MerkleMountainRange {
     /// Get the MMR root (bag of peaks)
     pub fn root(&self) -> Hash {
         if self.peaks.is_empty() {
-            return Hash::default();
+            return Hash::ZERO;
         }
         if self.peaks.len() == 1 {
             return self.peaks[0];
@@ -501,8 +501,8 @@ impl LightSyncServer {
         self.full_headers.insert(height, header.clone());
         self.chain_height = height;
         
-        // Accumulate work (simplified - real impl uses actual difficulty)
-        self.total_work += 1u128 << header.difficulty;
+        // Accumulate work (simplified - real impl uses actual difficulty from work_score)
+        self.total_work += (header.work_score * 1000.0) as u128 + 1;
 
         self.mmr.append(hash)
     }
@@ -570,22 +570,21 @@ impl LightSyncServer {
     }
 
     /// Generate a FlyClient proof
-    pub fn generate_flyclient_proof(&self, security_param: usize) -> FlyClientProof {
-        let tip_header = self.full_headers.get(&self.chain_height)
-            .cloned()
-            .unwrap_or_default();
+    pub fn generate_flyclient_proof(&self, security_param: usize) -> Option<FlyClientProof> {
+        let tip_header = self.full_headers.get(&self.chain_height)?.clone();
+        let genesis_hash = self.headers.get(&0).cloned()?;
         
         // Sample blocks according to FlyClient distribution
         let sampled_headers = self.sample_blocks(security_param);
 
-        FlyClientProof {
-            genesis_hash: self.headers.get(&0).cloned().unwrap_or_default(),
+        Some(FlyClientProof {
+            genesis_hash,
             tip_header,
             mmr_root: self.mmr_root(),
             sampled_headers,
             total_work: self.total_work,
             security_param,
-        }
+        })
     }
 
     /// Sample blocks according to FlyClient distribution
@@ -667,45 +666,34 @@ impl LightSyncServer {
     }
 
     /// Handle GetFlyClientProof request
-    pub fn handle_get_flyclient_proof(&self, security_param: usize, request_id: u64) -> LightSyncMessage {
-        let proof = self.generate_flyclient_proof(security_param);
-        LightSyncMessage::FlyClientProof { proof, request_id }
+    pub fn handle_get_flyclient_proof(&self, security_param: usize, request_id: u64) -> Option<LightSyncMessage> {
+        let proof = self.generate_flyclient_proof(security_param)?;
+        Some(LightSyncMessage::FlyClientProof { proof, request_id })
     }
 
     /// Handle GetMMRProof request
-    pub fn handle_get_mmr_proof(&self, block_height: u64, request_id: u64) -> LightSyncMessage {
-        let header = self.full_headers.get(&block_height).cloned().unwrap_or_default();
-        let proof = self.generate_mmr_proof(block_height).unwrap_or_else(|| {
-            MMRInclusionProof {
-                leaf_hash: header.hash(),
-                leaf_index: block_height,
-                mmr_size: self.mmr.mmr_size,
-                auth_path: Vec::new(),
-                peak_index: 0,
-                peaks: self.mmr.peaks.clone(),
-            }
-        });
+    pub fn handle_get_mmr_proof(&self, block_height: u64, request_id: u64) -> Option<LightSyncMessage> {
+        let header = self.full_headers.get(&block_height)?.clone();
+        let proof = self.generate_mmr_proof(block_height)?;
 
-        LightSyncMessage::MMRProof {
+        Some(LightSyncMessage::MMRProof {
             header,
             proof,
             mmr_root: self.mmr_root(),
             request_id,
-        }
+        })
     }
 
     /// Handle GetChainTip request
-    pub fn handle_get_chain_tip(&self, request_id: u64) -> LightSyncMessage {
-        let tip_header = self.full_headers.get(&self.chain_height)
-            .cloned()
-            .unwrap_or_default();
+    pub fn handle_get_chain_tip(&self, request_id: u64) -> Option<LightSyncMessage> {
+        let tip_header = self.full_headers.get(&self.chain_height)?.clone();
 
-        LightSyncMessage::ChainTip {
+        Some(LightSyncMessage::ChainTip {
             tip_header,
             mmr_root: self.mmr_root(),
             total_work: self.total_work,
             request_id,
-        }
+        })
     }
 
     // =========================================================================
@@ -875,26 +863,35 @@ pub enum FlyClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coinject_core::Address;
+    use coinject_core::{Address, Commitment};
 
     fn test_header(height: u64, parent: Hash) -> BlockHeader {
         BlockHeader {
             version: 1,
             height,
-            timestamp: 1000000 + height,
-            parent_hash: parent,
-            merkle_root: Hash::default(),
-            state_root: Hash::default(),
+            prev_hash: parent,
+            timestamp: (1000000 + height) as i64,
+            transactions_root: Hash::ZERO,
+            solutions_root: Hash::ZERO,
+            commitment: Commitment {
+                hash: Hash::ZERO,
+                problem_hash: Hash::ZERO,
+            },
+            work_score: 1.0,
+            miner: Address::from_bytes([0u8; 32]),
             nonce: 0,
-            difficulty: 4,
-            miner: Address::default(),
-            work_score: 0,
+            solve_time_us: 0,
+            verify_time_us: 0,
+            time_asymmetry_ratio: 0.0,
+            solution_quality: 0.0,
+            complexity_weight: 0.0,
+            energy_estimate_joules: 0.0,
         }
     }
 
     #[test]
     fn test_mmr_append() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let mut mmr = MerkleMountainRange::with_genesis(genesis.hash());
 
         assert_eq!(mmr.leaf_count, 1);
@@ -902,7 +899,7 @@ mod tests {
 
         // Add more headers
         for i in 1..10 {
-            let header = test_header(i, Hash::default());
+            let header = test_header(i, Hash::ZERO);
             mmr.append(header.hash());
         }
 
@@ -913,12 +910,12 @@ mod tests {
 
     #[test]
     fn test_mmr_root_deterministic() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let mut mmr1 = MerkleMountainRange::with_genesis(genesis.hash());
         let mut mmr2 = MerkleMountainRange::with_genesis(genesis.hash());
 
         for i in 1..100 {
-            let header = test_header(i, Hash::default());
+            let header = test_header(i, Hash::ZERO);
             mmr1.append(header.hash());
             mmr2.append(header.hash());
         }
@@ -928,7 +925,7 @@ mod tests {
 
     #[test]
     fn test_light_sync_server() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let mut server = LightSyncServer::new(genesis.clone());
 
         // Add some blocks
@@ -942,14 +939,14 @@ mod tests {
         assert_eq!(server.chain_height, 99);
 
         // Generate FlyClient proof
-        let proof = server.generate_flyclient_proof(10);
+        let proof = server.generate_flyclient_proof(10).unwrap();
         assert_eq!(proof.tip_header.height, 99);
         assert!(!proof.sampled_headers.is_empty());
     }
 
     #[test]
     fn test_flyclient_verification() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let genesis_hash = genesis.hash();
         let mut server = LightSyncServer::new(genesis);
 
@@ -962,7 +959,7 @@ mod tests {
         }
 
         // Generate and verify proof
-        let proof = server.generate_flyclient_proof(10);
+        let proof = server.generate_flyclient_proof(10).unwrap();
         let mut verifier = LightClientVerifier::new(genesis_hash);
         
         let result = verifier.verify_and_update(&proof).unwrap();
@@ -972,7 +969,7 @@ mod tests {
 
     #[test]
     fn test_mmr_proof_generation() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let mut server = LightSyncServer::new(genesis.clone());
 
         // Add blocks

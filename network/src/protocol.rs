@@ -8,7 +8,7 @@ use libp2p::{
     mdns,
     noise,
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId, Swarm, Transport,
+    tcp, yamux, Multiaddr, PeerId, Swarm,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -406,35 +406,33 @@ impl NetworkService {
             identify,
         };
 
-        // Create transport with TCP keepalive to prevent NAT/firewall disconnects
-        // Note: libp2p TCP config doesn't expose keepalive directly, but we configure
-        // connection timeouts and retry logic to maintain persistent connections
+        // Configure TCP with nodelay to prevent Nagle's algorithm buffering small handshake packets
+        // This is CRITICAL for Linux where Nagle can cause silent Noise handshake failures
         let tcp_config = tcp::Config::default()
-            .nodelay(true)  // Disable Nagle's algorithm for lower latency
-            .port_reuse(true);  // Allow port reuse for faster reconnects
+            .nodelay(true)  // CRITICAL: Disable Nagle's algorithm for Noise handshake
+            .port_reuse(true)  // Allow port reuse for faster reconnects
+            .listen_backlog(2048);  // Larger backlog for connection queue
         
-        // Configure yamux with larger buffers for unstable connections
+        // Configure yamux with reasonable buffers
         let mut yamux_config = yamux::Config::default();
-        yamux_config.set_receive_window_size(16 * 1024 * 1024);  // 16MB window
-        yamux_config.set_max_buffer_size(24 * 1024 * 1024);  // 24MB buffer
+        yamux_config.set_receive_window_size(1024 * 1024);  // 1MB window (research recommended)
+        yamux_config.set_max_buffer_size(2 * 1024 * 1024);  // 2MB buffer
         
-        let transport = tcp::tokio::Transport::new(tcp_config)
-            .upgrade(libp2p::core::upgrade::Version::V1)
-            .authenticate(noise::Config::new(&local_key)?)
-            .multiplex(yamux_config)
-            .boxed();
-
-        // Create swarm with longer connection keep-alive to maintain persistent connections
-        // Increased idle timeout to 10 minutes to prevent premature disconnects
-        let swarm_config = libp2p::swarm::Config::with_tokio_executor()
-            .with_idle_connection_timeout(Duration::from_secs(600));  // 10 min idle timeout
-        
-        let swarm = Swarm::new(
-            transport,
-            behaviour,
-            local_peer_id,
-            swarm_config,
-        );
+        // Use SwarmBuilder for proper Tokio executor integration
+        // This is ESSENTIAL for Linux - manual transport construction can cause
+        // connection tasks to not be properly driven by the executor
+        let swarm = libp2p::SwarmBuilder::with_existing_identity(local_key)
+            .with_tokio()
+            .with_tcp(
+                tcp_config,
+                noise::Config::new,
+                || yamux_config.clone(),
+            )?
+            .with_behaviour(|_keypair| Ok(behaviour))?
+            .with_swarm_config(|cfg| {
+                cfg.with_idle_connection_timeout(Duration::from_secs(600))  // 10 min idle timeout
+            })
+            .build();
 
         // Create event channel
         let (event_tx, event_rx) = mpsc::unbounded_channel();

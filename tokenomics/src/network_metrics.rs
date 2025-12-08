@@ -280,7 +280,7 @@ impl NetworkMetrics {
     pub fn stake_threshold_percentile(&self, percentile: f64) -> u128 {
         let stakes: Vec<u128> = self.history.iter()
             .filter(|s| s.total_staked > 0 && s.staker_count > 0)
-            .map(|s| s.total_staked / s.staker_count.max(1))
+            .map(|s| s.total_staked / (s.staker_count.max(1) as u128))
             .collect();
         
         if stakes.is_empty() {
@@ -483,7 +483,7 @@ impl NetworkMetrics {
         // Stakes
         let stakes: Vec<u128> = self.history.iter()
             .filter(|s| s.staker_count > 0)
-            .map(|s| s.total_staked / s.staker_count.max(1))
+            .map(|s| s.total_staked / (s.staker_count.max(1) as u128))
             .collect();
         if !stakes.is_empty() {
             self.cached_median_stake = self.median_u128(&stakes);
@@ -670,5 +670,6 @@ mod tests {
         assert!((p90 - 9.0).abs() < 1.0);
     }
 }
+
 
 

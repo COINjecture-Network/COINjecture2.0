@@ -830,3 +830,4 @@ mod tests {
         assert_eq!(format!("{}", err), "Invalid MMR proof for block 100");
     }
 }
+

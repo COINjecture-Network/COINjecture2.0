@@ -51,3 +51,4 @@ opt-level = "s"
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"  # Even more size optimization for WASM
+

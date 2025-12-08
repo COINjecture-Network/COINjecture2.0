@@ -219,10 +219,10 @@ impl LightClientState {
             let parent_exists = self.headers_by_hash
                 .read()
                 .await
-                .contains_key(&header.parent_hash);
+                .contains_key(&header.prev_hash);
             
             if !parent_exists {
-                return Err(LightClientError::MissingParent(header.parent_hash));
+                return Err(LightClientError::MissingParent(header.prev_hash));
             }
         }
         
@@ -284,7 +284,7 @@ impl LightClientState {
                 let expected_parent = by_height.get(&(height - 1))
                     .ok_or(LightClientError::MissingHeader(height - 1))?;
                 
-                if &header.parent_hash != expected_parent {
+                if &header.prev_hash != expected_parent {
                     return Ok(false); // Chain broken
                 }
             }
@@ -647,7 +647,6 @@ impl LightClientSync {
 // =============================================================================
 
 /// Server component for Full/Archive nodes to serve Light clients
-#[derive(Debug)]
 pub struct HeaderServer {
     /// Function to get header by height (provided by chain)
     get_header_fn: Box<dyn Fn(u64) -> Option<BlockHeader> + Send + Sync>,
@@ -655,6 +654,14 @@ pub struct HeaderServer {
     get_block_fn: Box<dyn Fn(&Hash) -> Option<Block> + Send + Sync>,
     /// Current best height
     best_height: Arc<RwLock<u64>>,
+}
+
+impl std::fmt::Debug for HeaderServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeaderServer")
+            .field("best_height", &self.best_height)
+            .finish_non_exhaustive()
+    }
 }
 
 impl HeaderServer {
@@ -718,7 +725,7 @@ impl HeaderServer {
         let height = *self.best_height.read().await;
         let hash = (self.get_header_fn)(height)
             .map(|h| h.hash())
-            .unwrap_or_default();
+            .unwrap_or(Hash::ZERO);
         
         LightClientMessage::Tip {
             height,
@@ -811,26 +818,35 @@ fn build_merkle_path(leaves: &[Hash], index: usize) -> Vec<(Hash, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coinject_core::Address;
+    use coinject_core::{Address, Commitment};
     
     fn test_header(height: u64, parent: Hash) -> BlockHeader {
         BlockHeader {
             version: 1,
             height,
-            timestamp: 1000000 + height,
-            parent_hash: parent,
-            merkle_root: Hash::default(),
-            state_root: Hash::default(),
+            prev_hash: parent,
+            timestamp: (1000000 + height) as i64,
+            transactions_root: Hash::ZERO,
+            solutions_root: Hash::ZERO,
+            commitment: Commitment {
+                hash: Hash::ZERO,
+                problem_hash: Hash::ZERO,
+            },
+            work_score: 0.0,
+            miner: Address::from_bytes([0u8; 32]),
             nonce: 0,
-            difficulty: 4,
-            miner: Address::default(),
-            work_score: 0,
+            solve_time_us: 0,
+            verify_time_us: 0,
+            time_asymmetry_ratio: 0.0,
+            solution_quality: 0.0,
+            complexity_weight: 0.0,
+            energy_estimate_joules: 0.0,
         }
     }
     
     #[tokio::test]
     async fn test_light_client_store_headers() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let genesis_hash = genesis.hash();
         
         let state = LightClientState::new(genesis_hash, genesis.clone());
@@ -850,7 +866,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_light_client_validate_chain() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let genesis_hash = genesis.hash();
         
         let state = LightClientState::new(genesis_hash, genesis);
@@ -870,7 +886,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_light_client_missing_parent() {
-        let genesis = test_header(0, Hash::default());
+        let genesis = test_header(0, Hash::ZERO);
         let genesis_hash = genesis.hash();
         
         let state = LightClientState::new(genesis_hash, genesis);
@@ -890,7 +906,7 @@ mod tests {
         let proof = MerkleProof {
             tx_hash,
             path: vec![(sibling, false)], // Sibling on right
-            block_header: test_header(1, Hash::default()),
+            block_header: test_header(1, Hash::ZERO),
             tx_index: 0,
         };
         

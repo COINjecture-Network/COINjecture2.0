@@ -958,3 +958,4 @@ mod e2e_tests {
         assert!(status.is_light_sync_ready);
     }
 }
+

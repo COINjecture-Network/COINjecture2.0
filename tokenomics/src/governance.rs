@@ -6,13 +6,13 @@
 
 use crate::dimensions::ETA;
 use crate::pools::PoolType;
-use crate::staking::DELTA_CRITICAL;
+use crate::staking::delta_critical;
 use coinject_core::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Proposal threshold: total_supply × Δ_critical = 23.1%
-pub const PROPOSAL_THRESHOLD_PCT: f64 = DELTA_CRITICAL;
+pub fn proposal_threshold_pct() -> f64 { delta_critical() }
 
 /// Quorum required for proposal to pass: 50%
 pub const QUORUM_THRESHOLD: f64 = 0.50;
@@ -351,7 +351,7 @@ impl GovernanceManager {
 
     /// Calculate required voting power to submit proposal
     pub fn proposal_threshold(&self) -> u128 {
-        ((self.total_voting_power as f64) * PROPOSAL_THRESHOLD_PCT) as u128
+        ((self.total_voting_power as f64) * proposal_threshold_pct()) as u128
     }
 
     /// Create new proposal

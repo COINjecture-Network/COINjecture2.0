@@ -271,7 +271,7 @@ impl EmissionCalculator {
         let remaining = target_supply.saturating_sub(self.metrics.circulating_supply);
         
         if current_emission > 0 {
-            Some(remaining / current_emission)
+            Some((remaining / current_emission as u128) as u64)
         } else {
             None
         }

@@ -28,6 +28,7 @@ COPY wallet/Cargo.toml ./wallet/
 COPY marketplace-export/Cargo.toml ./marketplace-export/
 COPY huggingface/Cargo.toml ./huggingface/
 COPY adzdb/Cargo.toml ./adzdb/
+COPY mobile-sdk/Cargo.toml ./mobile-sdk/
 
 # Copy source code
 COPY core ./core
@@ -42,6 +43,7 @@ COPY wallet ./wallet
 COPY marketplace-export ./marketplace-export
 COPY huggingface ./huggingface
 COPY adzdb ./adzdb
+COPY mobile-sdk ./mobile-sdk
 
 # Build release binary WITH ADZDB feature
 RUN cargo build --release --bin coinject --features adzdb
