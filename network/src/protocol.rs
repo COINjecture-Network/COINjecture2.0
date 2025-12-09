@@ -342,6 +342,20 @@ pub enum NetworkEvent {
     },
 }
 
+/// Check if a multiaddr contains a private/internal IP address
+/// Used to filter out Docker bridge IPs that cause connection timeouts
+fn is_private_address(addr: &Multiaddr) -> bool {
+    let s = addr.to_string();
+    s.contains("/ip4/10.") ||      // Docker internal networks
+    s.contains("/ip4/172.1") ||    // Docker bridge (172.16-172.31)
+    s.contains("/ip4/172.2") ||    // Docker bridge
+    s.contains("/ip4/172.3") ||    // Docker bridge  
+    s.contains("/ip4/192.168.") || // Private networks
+    s.contains("/ip4/127.") ||     // Loopback
+    s.contains("/ip6/::1") ||      // IPv6 loopback
+    s.contains("/ip6/fe80")        // IPv6 link-local
+}
+
 impl NetworkService {
     /// Create new network service
     pub fn new(
@@ -393,6 +407,8 @@ impl NetworkService {
         let kademlia = kad::Behaviour::new(local_peer_id, store);
 
         // Create identify protocol for peer info exchange
+        // NOTE: We filter Docker internal IPs (172.x, 10.x) in the event loop instead of
+        // using with_hide_listen_addrs (not available in libp2p 0.54)
         let identify = identify::Behaviour::new(identify::Config::new(
             "/coinject/1.0.0".to_string(),
             local_key.public(),
@@ -430,7 +446,10 @@ impl NetworkService {
             )?
             .with_behaviour(|_keypair| Ok(behaviour))?
             .with_swarm_config(|cfg| {
-                cfg.with_idle_connection_timeout(Duration::from_secs(600))  // 10 min idle timeout
+                // CRITICAL: For blockchain/mining, connections must persist indefinitely
+                // The default 10-second timeout causes connection cycling
+                // Use 24 hours - effectively infinite for our purposes
+                cfg.with_idle_connection_timeout(Duration::from_secs(86400))  // 24 hour idle timeout
             })
             .build();
 
@@ -1132,7 +1151,13 @@ impl NetworkService {
                         "Identified peer: {} - protocol: {}",
                         peer_id, info.protocol_version
                     );
+                    // CRITICAL: Filter out private/Docker addresses from peer's advertised addresses
+                    // This prevents wasting time trying to dial internal Docker IPs
                     for addr in info.listen_addrs {
+                        if is_private_address(&addr) {
+                            // Skip private addresses - they're likely Docker bridge IPs
+                            continue;
+                        }
                         self.swarm
                             .behaviour_mut()
                             .kademlia
@@ -1193,7 +1218,35 @@ impl NetworkService {
                 }
             }
             SwarmEvent::NewListenAddr { address, .. } => {
-                println!("Listening on: {}", address);
+                // Filter out private addresses from being advertised
+                if is_private_address(&address) {
+                    println!("🚫 Ignoring private listen address: {}", address);
+                } else {
+                    println!("Listening on: {}", address);
+                }
+            }
+            SwarmEvent::NewExternalAddrCandidate { address } => {
+                // CRITICAL: Filter private Docker IPs to prevent connection timeouts
+                // When running with --network=host, Docker bridge IPs get advertised
+                // and peers waste time trying to dial them
+                if is_private_address(&address) {
+                    println!("🚫 Filtering private external address candidate: {}", address);
+                } else {
+                    println!("✅ Adding external address: {}", address);
+                    self.swarm.add_external_address(address);
+                }
+            }
+            SwarmEvent::ExternalAddrConfirmed { address } => {
+                // Remove confirmed addresses if they're private (shouldn't happen but safety check)
+                if is_private_address(&address) {
+                    println!("🚫 Removing private confirmed address: {}", address);
+                    self.swarm.remove_external_address(&address);
+                } else {
+                    println!("✅ External address confirmed: {}", address);
+                }
+            }
+            SwarmEvent::ExternalAddrExpired { address } => {
+                println!("📤 External address expired: {}", address);
             }
             SwarmEvent::OutgoingConnectionError { error, .. } => {
                 eprintln!("❌ Outgoing connection error: {:?}", error);
