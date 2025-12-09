@@ -1253,7 +1253,9 @@ impl NetworkService {
                 // DIAGNOSTIC: Log full connection establishment details for debugging
                 let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
                 let addr = endpoint.get_remote_address();
-                let handshake_time = established_in.map(|d| format!("{:?}", d)).unwrap_or_else(|| "unknown".to_string());
+                // Use map_or_else to avoid ambiguity with futures::StreamExt::map
+                let handshake_time = established_in
+                    .map_or_else(|| "unknown".to_string(), |d| format!("{:?}", d));
                 
                 println!("🔗 CONNECTION ESTABLISHED [{}]", direction.to_uppercase());
                 println!("   Peer: {}", peer_id);
