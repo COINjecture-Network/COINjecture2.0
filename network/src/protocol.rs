@@ -425,7 +425,6 @@ impl NetworkService {
         // This is CRITICAL for Linux where Nagle can cause silent Noise handshake failures
         let tcp_config = tcp::Config::default()
             .nodelay(true)  // CRITICAL: Disable Nagle's algorithm for Noise handshake
-            .port_reuse(true)  // Allow port reuse for faster reconnects
             .listen_backlog(2048);  // Larger backlog for connection queue
         
         // FIXED: Use default Yamux config to avoid flow control issues with mixed-version peers
@@ -1253,9 +1252,7 @@ impl NetworkService {
                 // DIAGNOSTIC: Log full connection establishment details for debugging
                 let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
                 let addr = endpoint.get_remote_address();
-                // Use map_or_else to avoid ambiguity with futures::StreamExt::map
-                let handshake_time = established_in
-                    .map_or_else(|| "unknown".to_string(), |d| format!("{:?}", d));
+                let handshake_time = format!("{:?}", established_in);
                 
                 println!("🔗 CONNECTION ESTABLISHED [{}]", direction.to_uppercase());
                 println!("   Peer: {}", peer_id);
