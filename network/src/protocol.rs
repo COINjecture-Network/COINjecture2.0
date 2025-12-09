@@ -370,18 +370,17 @@ impl NetworkService {
         println!("   (Use this PeerId in bootnode addresses: /ip4/<IP>/tcp/30333/p2p/{})", local_peer_id);
 
         // Create gossipsub behaviour
-        // Configure for small networks: allow broadcasting with just 1 peer
-        // Constraint: mesh_outbound_min <= mesh_n / 2
-        // For 2-node networks, mesh_n must be 1 (each node needs only 1 peer)
-        // With mesh_n=1, mesh_outbound_min must be <= 0.5, so set to 0
+        // FIXED: mesh_n=1 violates gossipsub constraints (mesh_outbound_min <= mesh_n/2)
+        // Gossipsub spec requires: mesh_n_out < mesh_n_low <= mesh_n
+        // For small networks, mesh_n=2 is the minimum safe value
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(1))
-            .validation_mode(ValidationMode::Permissive) // Use Permissive to allow message propagation in small networks
-            .mesh_outbound_min(0) // Minimum outbound connections: 0 (required when mesh_n=1)
-            .mesh_n_low(1) // Low threshold: 1 peer
-            .mesh_n(1) // Target mesh size: 1 peer (for 2-node networks)
-            .mesh_n_high(2) // High threshold: 2 peers
-            .gossip_lazy(1) // Lazy gossip threshold: 1 peer
+            .validation_mode(ValidationMode::Permissive) // Allow propagation in small networks
+            .mesh_n(2)              // Target 2 peers in mesh (minimum safe value)
+            .mesh_n_low(1)          // Seek more peers when below 1
+            .mesh_n_high(3)         // Prune when above 3 peers  
+            .mesh_outbound_min(1)   // Require at least 1 outbound (must be <= mesh_n/2 = 1)
+            .gossip_lazy(2)         // Lazy push to 2 peers not in mesh
             .message_id_fn(|message| {
                 // Use message content hash as ID
                 let hash = blake3::hash(&message.data);
@@ -429,11 +428,12 @@ impl NetworkService {
             .port_reuse(true)  // Allow port reuse for faster reconnects
             .listen_backlog(2048);  // Larger backlog for connection queue
         
-        // Configure yamux with reasonable buffers
-        let mut yamux_config = yamux::Config::default();
-        yamux_config.set_receive_window_size(1024 * 1024);  // 1MB window (research recommended)
-        yamux_config.set_max_buffer_size(2 * 1024 * 1024);  // 2MB buffer
-        
+        // FIXED: Use default Yamux config to avoid flow control issues with mixed-version peers
+        // Custom window/buffer sizes (like 1MB/2MB) can cause silent disconnects due to
+        // window mismatches between yamux v2.1.0+ (InitialStreamWindowSize=16KB) and
+        // older nodes (MaxStreamWindowSize=16MB). Issue #1257 documents RST frames
+        // being sent instead of backpressure when buffers fill.
+        // 
         // Use SwarmBuilder for proper Tokio executor integration
         // This is ESSENTIAL for Linux - manual transport construction can cause
         // connection tasks to not be properly driven by the executor
@@ -442,14 +442,14 @@ impl NetworkService {
             .with_tcp(
                 tcp_config,
                 noise::Config::new,
-                || yamux_config.clone(),
+                yamux::Config::default,  // FIXED: Use defaults for peer compatibility
             )?
             .with_behaviour(|_keypair| Ok(behaviour))?
             .with_swarm_config(|cfg| {
-                // CRITICAL: For blockchain/mining, connections must persist indefinitely
-                // The default 10-second timeout causes connection cycling
-                // Use 24 hours - effectively infinite for our purposes
-                cfg.with_idle_connection_timeout(Duration::from_secs(86400))  // 24 hour idle timeout
+                // FIXED: 60 seconds is sufficient (24h was excessive and wastes resources)
+                // Gossipsub heartbeats (1s) keep active connections alive
+                // 60s allows cleanup of truly dead connections
+                cfg.with_idle_connection_timeout(Duration::from_secs(60))
             })
             .build();
 
