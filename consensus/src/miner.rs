@@ -5,7 +5,7 @@ use coinject_core::{
     Address, Block, BlockHeader, Clause, CoinbaseTransaction, Commitment, Hash, ProblemType,
     Solution, SolutionReveal, Transaction,
 };
-use coinject_tokenomics::RewardCalculator;
+use coinject_tokenomics::{RewardCalculator, NetworkMetrics};
 use crate::{WorkScoreCalculator, DifficultyAdjuster};
 use rand::Rng;
 use rand::seq::SliceRandom;
@@ -72,6 +72,19 @@ impl Miner {
             difficulty_adjuster: Arc::new(RwLock::new(DifficultyAdjuster::new())),
         }
     }
+    
+    /// Set network metrics for empirical difficulty adjustment and work score calculation
+    /// This enables full compliance with empirical/self-referential/dimensionless principles
+    pub async fn set_network_metrics(&mut self, network_metrics: Arc<RwLock<NetworkMetrics>>) {
+        // Update difficulty adjuster with network metrics
+        {
+            let mut adjuster = self.difficulty_adjuster.write().await;
+            adjuster.set_metrics(Arc::clone(&network_metrics));
+        }
+        
+        // Update work calculator with network metrics
+        self.work_calculator.set_metrics(network_metrics);
+    }
 
     /// Generate a deterministic NP-hard problem for mining
     /// RUNTIME INTEGRATION: Uses dimensional complexity |ψ(τ)| to modulate difficulty
@@ -100,14 +113,24 @@ impl Miner {
         let consensus_state = ConsensusState::at_tau(tau);
 
         // Get adaptive problem size from difficulty adjuster
-        // This adjusts based on actual solve times to target 1-10 second solves
-        let adjuster = self.difficulty_adjuster.read().await;
+        // This adjusts based on actual solve times to target network-derived optimal times
+        let has_metrics = {
+            let adjuster = self.difficulty_adjuster.read().await;
+            adjuster.has_metrics()
+        };
 
         // Randomly choose problem type
         match rng.gen_range(0..3) {
             0 => {
                 // Subset Sum - Generate SOLVABLE problem by selecting a random subset first
-                let problem_size = adjuster.size_for_problem_type("SubsetSum");
+                // Use async version if network metrics available, otherwise sync version
+                let problem_size = if has_metrics {
+                    let mut adjuster = self.difficulty_adjuster.write().await;
+                    adjuster.size_for_problem_type_async("SubsetSum").await
+                } else {
+                    let adjuster = self.difficulty_adjuster.read().await;
+                    adjuster.size_for_problem_type("SubsetSum")
+                };
                 let numbers: Vec<i64> = (0..problem_size)
                     .map(|_| rng.gen_range(1..1000))
                     .collect();
@@ -126,7 +149,13 @@ impl Miner {
             }
             1 => {
                 // SAT (Boolean Satisfiability) - Generate SATISFIABLE problem
-                let variables = adjuster.size_for_problem_type("SAT");
+                let variables = if has_metrics {
+                    let mut adjuster = self.difficulty_adjuster.write().await;
+                    adjuster.size_for_problem_type_async("SAT").await
+                } else {
+                    let adjuster = self.difficulty_adjuster.read().await;
+                    adjuster.size_for_problem_type("SAT")
+                };
                 let num_clauses = variables * 3; // 3-SAT ratio
 
                 // Generate a random satisfying assignment first (our "hidden solution")
@@ -165,7 +194,13 @@ impl Miner {
             }
             _ => {
                 // TSP (Traveling Salesman Problem)
-                let cities = adjuster.size_for_problem_type("TSP");
+                let cities = if has_metrics {
+                    let mut adjuster = self.difficulty_adjuster.write().await;
+                    adjuster.size_for_problem_type_async("TSP").await
+                } else {
+                    let adjuster = self.difficulty_adjuster.read().await;
+                    adjuster.size_for_problem_type("TSP")
+                };
                 let mut distances = vec![vec![0u64; cities]; cities];
                 for i in 0..cities {
                     for j in i+1..cities {
