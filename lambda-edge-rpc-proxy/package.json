@@ -1,0 +1,7 @@
+{
+  "name": "coinjecture-rpc-proxy",
+  "version": "1.0.0",
+  "description": "Lambda@Edge function to proxy RPC requests to any COINjecture node",
+  "main": "index.js"
+}
+

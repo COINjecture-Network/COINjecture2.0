@@ -1,0 +1,76 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# Test/temp directories
+/testnet/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.bak
+
+# Secrets and keys - NEVER COMMIT
+coinjecture-droplet-key
+*.pem
+*.key
+*_key
+*-key
+*.bin
+validator_key.bin
+
+# Database files
+*.db
+
+# Logs
+*.log
+
+# Archives
+*.tar
+*.tar.gz
+
+ADZDB-repo/
+nul
+
+# Deployment scripts with potential secrets (use templates instead)
+deploy-*.ps1
+deploy-*.sh
+run-*.bat
+start-*.bat
+test-*.ps1
+test-*.bat
+connect-*.ps1
+
+# Node data directories
+coinject-data*/
+node*-data/
+
+# Build artifacts
+network-fix.tar
+code-update.tar
+ssh_output.txt
+*.txt.bak
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Test files with potential tokens
+test_*.py
+check_*.py
+clear_*.py
+upload_*.py
+setup_*.py
+
+# Web wallet dependencies (large)
+web-wallet/node_modules/

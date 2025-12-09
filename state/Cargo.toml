@@ -1,0 +1,18 @@
+[package]
+name = "coinject-state"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+coinject-core = { path = "../core" }
+redb.workspace = true
+serde.workspace = true
+bincode.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"

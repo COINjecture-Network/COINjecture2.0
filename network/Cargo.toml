@@ -1,0 +1,19 @@
+[package]
+name = "coinject-network"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+coinject-core = { path = "../core" }
+libp2p.workspace = true
+libp2p-request-response = { version = "0.11.0", default-features = false }
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+bincode.workspace = true
+blake3.workspace = true
+futures.workspace = true
+rand.workspace = true

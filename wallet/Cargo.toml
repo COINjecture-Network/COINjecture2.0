@@ -1,0 +1,43 @@
+[package]
+name = "coinject-wallet"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "coinject-wallet"
+path = "src/main.rs"
+
+[dependencies]
+coinject-core = { path = "../core" }
+coinject-mempool = { path = "../mempool" }
+coinject-rpc = { path = "../rpc" }
+
+# CLI framework
+clap = { version = "4.5", features = ["derive", "cargo"] }
+colored = "2.1"
+
+# Crypto
+ed25519-dalek = "2.1"
+rand = "0.8"
+sha2 = "0.10"
+blake3 = "1.5"
+
+# Serialization
+serde.workspace = true
+serde_json = "1.0"
+bincode.workspace = true
+hex = "0.4"
+
+# Async runtime
+tokio.workspace = true
+reqwest = { version = "0.12", features = ["json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror.workspace = true
+
+# File I/O
+dirs = "5.0"
+
+# Time
+chrono = "0.4"
