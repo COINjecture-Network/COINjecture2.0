@@ -839,6 +839,54 @@ impl NetworkService {
     pub fn peer_count(&self) -> usize {
         self.peers.len()
     }
+    
+    /// Get mesh peer count (peers that can receive gossipsub broadcasts)
+    pub fn mesh_peer_count(&self) -> usize {
+        self.mesh_peers.len()
+    }
+    
+    /// Log comprehensive network health status (call periodically for monitoring)
+    pub fn log_network_health(&self) {
+        let total_peers = self.peers.len();
+        let mesh_peers = self.mesh_peers.len();
+        let bootnode_count = self.bootnode_addrs.len();
+        
+        println!("═══════════════════════════════════════════════════════════");
+        println!("📊 NETWORK HEALTH STATUS");
+        println!("───────────────────────────────────────────────────────────");
+        println!("   Total connected peers: {}", total_peers);
+        println!("   Gossipsub mesh peers:  {} (can receive broadcasts)", mesh_peers);
+        println!("   Configured bootnodes:  {}", bootnode_count);
+        println!("   Local PeerId:          {}", self.local_peer_id);
+        
+        // Health assessment
+        let health = if mesh_peers == 0 {
+            "🔴 CRITICAL - No mesh peers, cannot propagate blocks/txs"
+        } else if mesh_peers == 1 {
+            "🟡 WARNING - Only 1 mesh peer, single point of failure"
+        } else if total_peers < 3 {
+            "🟡 WARNING - Low peer count, network may be unstable"
+        } else {
+            "🟢 HEALTHY - Sufficient peers for reliable propagation"
+        };
+        println!("   Health status:         {}", health);
+        
+        // List connected peers
+        if !self.peers.is_empty() {
+            println!("───────────────────────────────────────────────────────────");
+            println!("   Connected peers:");
+            for peer in &self.peers {
+                let in_mesh = if self.mesh_peers.contains(peer) { "✅ mesh" } else { "⏳ pending" };
+                println!("     {} [{}]", peer, in_mesh);
+            }
+        }
+        println!("═══════════════════════════════════════════════════════════");
+    }
+    
+    /// Check if network is healthy enough for block propagation
+    pub fn is_healthy_for_broadcast(&self) -> bool {
+        self.mesh_peers.len() >= 1
+    }
 
     /// Connect to bootstrap nodes
     pub fn connect_to_bootnodes(&mut self, bootnodes: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -1104,21 +1152,26 @@ impl NetworkService {
                     self.handle_gossipsub_message(propagation_source, message.data, &message.topic);
                 }
                 CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { peer_id, topic }) => {
-                    println!("📡 Peer {} subscribed to topic: {:?}", peer_id, topic);
+                    println!("📡 GOSSIPSUB: Peer {} subscribed to topic: {:?}", peer_id, topic);
                     // When a peer subscribes to blocks topic, they're in the mesh
-                    // Compare topic hashes to check if it's the blocks topic
                     let blocks_topic_hash = self.topics.blocks.hash();
                     if topic == blocks_topic_hash {
                         self.mesh_peers.insert(peer_id);
+                        println!("   ✅ Peer added to blocks mesh (mesh size: {})", self.mesh_peers.len());
                     }
                 }
                 CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Unsubscribed { peer_id, topic }) => {
-                    println!("📡 Peer {} unsubscribed from topic: {:?}", peer_id, topic);
-                    // When a peer unsubscribes from blocks topic, remove from mesh
+                    println!("📡 GOSSIPSUB: Peer {} unsubscribed from topic: {:?}", peer_id, topic);
                     let blocks_topic_hash = self.topics.blocks.hash();
                     if topic == blocks_topic_hash {
                         self.mesh_peers.remove(&peer_id);
+                        println!("   ⚠️  Peer removed from blocks mesh (mesh size: {})", self.mesh_peers.len());
                     }
+                }
+                CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::GossipsubNotSupported { peer_id }) => {
+                    // DIAGNOSTIC: Peer doesn't support gossipsub protocol
+                    println!("🚨 PROTOCOL NEGOTIATION FAILED: Peer {} does not support gossipsub!", peer_id);
+                    println!("   This peer cannot participate in block/tx propagation.");
                 }
                 CoinjectBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                     for (peer, addr) in peers {
@@ -1147,22 +1200,39 @@ impl NetworkService {
                     info,
                     ..
                 }) => {
-                    println!(
-                        "Identified peer: {} - protocol: {}",
-                        peer_id, info.protocol_version
-                    );
+                    // DIAGNOSTIC: Full identify protocol exchange details
+                    println!("🆔 IDENTIFY RECEIVED from peer: {}", peer_id);
+                    println!("   Protocol version: {}", info.protocol_version);
+                    println!("   Agent version: {}", info.agent_version);
+                    println!("   Supported protocols: {:?}", info.protocols);
+                    println!("   Observed addr (how they see us): {:?}", info.observed_addr);
+                    
+                    // Count public vs private addresses
+                    let mut public_addrs = 0;
+                    let mut private_addrs = 0;
+                    
                     // CRITICAL: Filter out private/Docker addresses from peer's advertised addresses
-                    // This prevents wasting time trying to dial internal Docker IPs
                     for addr in info.listen_addrs {
                         if is_private_address(&addr) {
-                            // Skip private addresses - they're likely Docker bridge IPs
+                            private_addrs += 1;
                             continue;
                         }
+                        public_addrs += 1;
                         self.swarm
                             .behaviour_mut()
                             .kademlia
                             .add_address(&peer_id, addr);
                     }
+                    println!("   Listen addrs: {} public, {} private (filtered)", public_addrs, private_addrs);
+                }
+                CoinjectBehaviourEvent::Identify(identify::Event::Sent { peer_id, .. }) => {
+                    println!("🆔 IDENTIFY SENT to peer: {}", peer_id);
+                }
+                CoinjectBehaviourEvent::Identify(identify::Event::Error { peer_id, error, .. }) => {
+                    eprintln!("🚨 IDENTIFY ERROR with peer {}: {:?}", peer_id, error);
+                }
+                CoinjectBehaviourEvent::Identify(identify::Event::Pushed { peer_id, info, .. }) => {
+                    println!("🆔 IDENTIFY PUSHED to peer: {} (protocol: {})", peer_id, info.protocol_version);
                 }
                 CoinjectBehaviourEvent::Kademlia(kad::Event::RoutingUpdated {
                     peer,
@@ -1172,34 +1242,86 @@ impl NetworkService {
                 }
                 _ => {}
             },
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                println!("Connection established with peer: {}", peer_id);
-                self.peers.insert(peer_id);
+            SwarmEvent::ConnectionEstablished { 
+                peer_id, 
+                endpoint, 
+                num_established,
+                concurrent_dial_errors,
+                established_in,
+                ..
+            } => {
+                // DIAGNOSTIC: Log full connection establishment details for debugging
+                let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
+                let addr = endpoint.get_remote_address();
+                let handshake_time = established_in.map(|d| format!("{:?}", d)).unwrap_or_else(|| "unknown".to_string());
                 
-                // Track bootnode connections by checking if peer_id matches any bootnode PeerIds
-                // (We'll identify bootnodes when they connect via their PeerId)
-                // For now, we'll track them in the retry_bootnodes function
+                println!("🔗 CONNECTION ESTABLISHED [{}]", direction.to_uppercase());
+                println!("   Peer: {}", peer_id);
+                println!("   Address: {}", addr);
+                println!("   Handshake time: {} (Noise+Yamux negotiation)", handshake_time);
+                println!("   Concurrent connections to peer: {}", num_established);
+                
+                // Log any dial errors that occurred during connection attempts
+                if let Some(errors) = concurrent_dial_errors {
+                    if !errors.is_empty() {
+                        println!("   ⚠️  Dial errors during connection:");
+                        for (addr, err) in errors {
+                            println!("      {} → {:?}", addr, err);
+                        }
+                    }
+                }
+                
+                self.peers.insert(peer_id);
                 
                 // Add peer to gossipsub mesh explicitly to ensure it participates in message propagation
                 self.swarm
                     .behaviour_mut()
                     .gossipsub
                     .add_explicit_peer(&peer_id);
-                // Note: Peer will be added to mesh_peers when gossipsub mesh is established
+                
+                // Log mesh state after adding peer
+                let mesh_size = self.mesh_peers.len();
+                let total_peers = self.peers.len();
+                println!("   📊 Network state: {} total peers, {} in gossipsub mesh", total_peers, mesh_size);
+                
                 // Update shared peer count
                 if let Ok(mut count) = self.peer_count.try_write() {
                     *count = self.peers.len();
                 }
                 let _ = self.event_tx.send(NetworkEvent::PeerConnected(peer_id));
             }
-            SwarmEvent::ConnectionClosed { peer_id, cause, num_established, .. } => {
-                // Log detailed close reason for debugging connection stability
+            SwarmEvent::ConnectionClosed { peer_id, cause, num_established, connection_id, endpoint } => {
+                // DIAGNOSTIC: Detailed connection close analysis for stability debugging
+                let direction = if endpoint.is_dialer() { "outbound" } else { "inbound" };
                 let reason = match &cause {
-                    Some(err) => format!("{:?}", err),
-                    None => "graceful close".to_string(),
+                    Some(err) => {
+                        // Categorize the error type for easier diagnosis
+                        let err_str = format!("{:?}", err);
+                        if err_str.contains("Timeout") || err_str.contains("timeout") {
+                            format!("TIMEOUT - {}", err_str)
+                        } else if err_str.contains("Reset") || err_str.contains("reset") {
+                            format!("CONNECTION_RESET - {}", err_str)
+                        } else if err_str.contains("Refused") || err_str.contains("refused") {
+                            format!("CONNECTION_REFUSED - {}", err_str)
+                        } else if err_str.contains("Io") || err_str.contains("IO") {
+                            format!("IO_ERROR - {}", err_str)
+                        } else if err_str.contains("KeepAlive") || err_str.contains("keep-alive") {
+                            format!("KEEPALIVE_TIMEOUT - {}", err_str)
+                        } else {
+                            err_str
+                        }
+                    },
+                    None => "GRACEFUL_CLOSE".to_string(),
                 };
-                println!("Connection closed with peer: {} (reason: {}, remaining: {})", 
-                    peer_id, reason, num_established);
+                
+                let was_in_mesh = self.mesh_peers.contains(&peer_id);
+                
+                println!("❌ CONNECTION CLOSED [{}]", direction.to_uppercase());
+                println!("   Peer: {}", peer_id);
+                println!("   Connection ID: {:?}", connection_id);
+                println!("   Reason: {}", reason);
+                println!("   Was in gossipsub mesh: {}", was_in_mesh);
+                println!("   Remaining connections to peer: {}", num_established);
                 
                 // Only remove from tracking if ALL connections to this peer are closed
                 if num_established == 0 {
@@ -1210,6 +1332,17 @@ impl NetworkService {
                         .behaviour_mut()
                         .gossipsub
                         .remove_explicit_peer(&peer_id);
+                    
+                    // Log network state after removal
+                    let mesh_size = self.mesh_peers.len();
+                    let total_peers = self.peers.len();
+                    println!("   📊 Network state after disconnect: {} total peers, {} in mesh", total_peers, mesh_size);
+                    
+                    // Alert if mesh is now empty
+                    if mesh_size == 0 && total_peers == 0 {
+                        println!("   🚨 WARNING: No peers remaining! Network isolated.");
+                    }
+                    
                     // Update shared peer count
                     if let Ok(mut count) = self.peer_count.try_write() {
                         *count = self.peers.len();
@@ -1248,18 +1381,67 @@ impl NetworkService {
             SwarmEvent::ExternalAddrExpired { address } => {
                 println!("📤 External address expired: {}", address);
             }
-            SwarmEvent::OutgoingConnectionError { error, .. } => {
-                eprintln!("❌ Outgoing connection error: {:?}", error);
-            }
-            SwarmEvent::IncomingConnectionError { error, .. } => {
-                eprintln!("❌ Incoming connection error: {:?}", error);
-            }
-            SwarmEvent::Dialing { peer_id, .. } => {
-                if let Some(peer) = peer_id {
-                    println!("🔄 Dialing peer: {}", peer);
+            SwarmEvent::OutgoingConnectionError { peer_id, error, connection_id } => {
+                // DIAGNOSTIC: Detailed outgoing connection failure analysis
+                let peer_str = peer_id.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string());
+                let err_str = format!("{:?}", error);
+                
+                // Categorize for easier diagnosis
+                let category = if err_str.contains("Timeout") || err_str.contains("timeout") {
+                    "TIMEOUT"
+                } else if err_str.contains("Noise") || err_str.contains("noise") {
+                    "NOISE_HANDSHAKE_FAILED"
+                } else if err_str.contains("Yamux") || err_str.contains("yamux") {
+                    "YAMUX_NEGOTIATION_FAILED"
+                } else if err_str.contains("Transport") {
+                    "TRANSPORT_ERROR"
+                } else if err_str.contains("Denied") || err_str.contains("denied") {
+                    "CONNECTION_DENIED"
+                } else if err_str.contains("Refused") {
+                    "CONNECTION_REFUSED"
                 } else {
-                    println!("🔄 Dialing unknown peer...");
+                    "OTHER"
+                };
+                
+                eprintln!("❌ OUTGOING CONNECTION FAILED [{}]", category);
+                eprintln!("   Peer: {}", peer_str);
+                eprintln!("   Connection ID: {:?}", connection_id);
+                eprintln!("   Error: {}", err_str);
+            }
+            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, connection_id } => {
+                // DIAGNOSTIC: Detailed incoming connection failure analysis
+                let err_str = format!("{:?}", error);
+                
+                let category = if err_str.contains("Timeout") || err_str.contains("timeout") {
+                    "TIMEOUT"
+                } else if err_str.contains("Noise") || err_str.contains("noise") {
+                    "NOISE_HANDSHAKE_FAILED"
+                } else if err_str.contains("Yamux") || err_str.contains("yamux") {
+                    "YAMUX_NEGOTIATION_FAILED"
+                } else {
+                    "OTHER"
+                };
+                
+                eprintln!("❌ INCOMING CONNECTION FAILED [{}]", category);
+                eprintln!("   From: {}", send_back_addr);
+                eprintln!("   To local: {}", local_addr);
+                eprintln!("   Connection ID: {:?}", connection_id);
+                eprintln!("   Error: {}", err_str);
+            }
+            SwarmEvent::Dialing { peer_id, connection_id } => {
+                if let Some(peer) = peer_id {
+                    println!("🔄 DIALING: Peer {} (connection {:?})", peer, connection_id);
+                } else {
+                    println!("🔄 DIALING: Unknown peer (connection {:?})", connection_id);
                 }
+            }
+            SwarmEvent::IncomingConnection { local_addr, send_back_addr, connection_id } => {
+                // DIAGNOSTIC: Log incoming connection attempts BEFORE protocol negotiation
+                println!("📥 INCOMING CONNECTION ATTEMPT");
+                println!("   From: {}", send_back_addr);
+                println!("   To local: {}", local_addr);
+                println!("   Connection ID: {:?}", connection_id);
+                println!("   (Noise+Yamux handshake starting...)");
             }
             _ => {}
         }

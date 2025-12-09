@@ -1,0 +1,259 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for release (e.g., v4.7.46)'
+        required: false
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: write
+
+jobs:
+  # ==========================================================================
+  # Cross-compile for Linux (solves 1GB RAM droplet build issue)
+  # ==========================================================================
+  build-linux:
+    name: Build Linux Binary
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-action@stable
+      with:
+        targets: x86_64-unknown-linux-gnu
+    
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libssl-dev
+    
+    - name: Cache cargo registry
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: "release-linux"
+    
+    - name: Build release binary
+      run: |
+        cargo build --release --target x86_64-unknown-linux-gnu
+        # Strip debug symbols to reduce binary size
+        strip target/x86_64-unknown-linux-gnu/release/coinject
+    
+    - name: Create tarball
+      run: |
+        cd target/x86_64-unknown-linux-gnu/release
+        tar -czvf coinject-linux-x86_64.tar.gz coinject
+        sha256sum coinject-linux-x86_64.tar.gz > coinject-linux-x86_64.tar.gz.sha256
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coinject-linux-x86_64
+        path: |
+          target/x86_64-unknown-linux-gnu/release/coinject-linux-x86_64.tar.gz
+          target/x86_64-unknown-linux-gnu/release/coinject-linux-x86_64.tar.gz.sha256
+        retention-days: 7
+
+  # ==========================================================================
+  # Build Docker Image (for easy deployment)
+  # ==========================================================================
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: build-linux
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Linux binary
+      uses: actions/download-artifact@v4
+      with:
+        name: coinject-linux-x86_64
+        path: ./docker-build/
+    
+    - name: Extract binary for Docker
+      run: |
+        cd docker-build
+        tar -xzf coinject-linux-x86_64.tar.gz
+        chmod +x coinject
+    
+    - name: Create minimal Dockerfile
+      run: |
+        cat > docker-build/Dockerfile.minimal << 'EOF'
+        FROM debian:bookworm-slim
+        
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            libssl3 \
+            && rm -rf /var/lib/apt/lists/*
+        
+        WORKDIR /app
+        
+        COPY coinject /app/coinject
+        
+        EXPOSE 30333 9944
+        
+        ENTRYPOINT ["/app/coinject"]
+        EOF
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./docker-build
+        file: ./docker-build/Dockerfile.minimal
+        push: false
+        tags: coinjecture-netb:latest
+        outputs: type=docker,dest=./coinjecture-netb-docker.tar
+    
+    - name: Compress Docker image
+      run: gzip coinjecture-netb-docker.tar
+    
+    - name: Upload Docker artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: coinjecture-docker-image
+        path: coinjecture-netb-docker.tar.gz
+        retention-days: 7
+
+  # ==========================================================================
+  # Create GitHub Release
+  # ==========================================================================
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-docker]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag_name != ''
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Linux artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: coinject-linux-x86_64
+        path: ./release-assets/
+    
+    - name: Download Docker artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: coinjecture-docker-image
+        path: ./release-assets/
+    
+    - name: Determine tag
+      id: tag
+      run: |
+        if [ -n "${{ github.event.inputs.tag_name }}" ]; then
+          echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.tag.outputs.tag }}
+        name: COINjecture Network B ${{ steps.tag.outputs.tag }}
+        draft: false
+        prerelease: ${{ contains(steps.tag.outputs.tag, 'alpha') || contains(steps.tag.outputs.tag, 'beta') || contains(steps.tag.outputs.tag, 'rc') }}
+        files: |
+          ./release-assets/coinject-linux-x86_64.tar.gz
+          ./release-assets/coinject-linux-x86_64.tar.gz.sha256
+          ./release-assets/coinjecture-netb-docker.tar.gz
+        body: |
+          ## COINjecture Network B ${{ steps.tag.outputs.tag }}
+          
+          ### Downloads
+          
+          | Platform | File | Description |
+          |----------|------|-------------|
+          | Linux x86_64 | `coinject-linux-x86_64.tar.gz` | Pre-built binary for Linux |
+          | Docker | `coinjecture-netb-docker.tar.gz` | Docker image (load with `docker load`) |
+          
+          ### Quick Start
+          
+          **Linux Binary:**
+          ```bash
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/coinject-linux-x86_64.tar.gz
+          tar -xzf coinject-linux-x86_64.tar.gz
+          chmod +x coinject
+          ./coinject --help
+          ```
+          
+          **Docker Image:**
+          ```bash
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/coinjecture-netb-docker.tar.gz
+          gunzip coinjecture-netb-docker.tar.gz
+          docker load < coinjecture-netb-docker.tar
+          docker run -p 30333:30333 -p 9944:9944 coinjecture-netb:latest
+          ```
+          
+          ### Changes
+          
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================================================
+  # Optional: Deploy to DigitalOcean (manual trigger only)
+  # ==========================================================================
+  deploy-droplet:
+    name: Deploy to Droplet
+    runs-on: ubuntu-latest
+    needs: build-linux
+    if: github.event_name == 'workflow_dispatch'
+    environment: production
+    
+    steps:
+    - name: Download Linux binary
+      uses: actions/download-artifact@v4
+      with:
+        name: coinject-linux-x86_64
+        path: ./deploy/
+    
+    - name: Deploy via SSH
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ secrets.DROPLET_IP }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_SSH_KEY }}
+        script: |
+          set -e
+          
+          echo "=== COINjecture Deployment Started ==="
+          cd /opt/coinjecture || mkdir -p /opt/coinjecture && cd /opt/coinjecture
+          
+          # Backup existing binary
+          if [ -f coinject ]; then
+            cp coinject coinject.backup.$(date +%Y%m%d_%H%M%S)
+          fi
+          
+          # Download new binary from artifact (passed via scp)
+          # Note: For actual deployment, you'd scp the file first
+          
+          echo "=== Deployment Complete ==="
+          echo "Restart the node with: systemctl restart coinjecture"
+    
+    - name: Upload binary to droplet
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.DROPLET_IP }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_SSH_KEY }}
+        source: "deploy/coinject-linux-x86_64.tar.gz"
+        target: "/opt/coinjecture/"
+        strip_components: 1
+
