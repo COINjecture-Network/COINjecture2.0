@@ -3218,7 +3218,10 @@ impl CoinjectNode {
 
         // Step 1: Unwind all old chain blocks (except genesis) in reverse order
         // Start from the last block (highest height) and work backwards
-        for block in old_chain_blocks.iter().rev().skip(1) { // Skip genesis (last after reverse)
+                // FIX: Skip genesis (first element) before reversing, not after
+        // old_chain_blocks is [genesis, block1, ..., tip]
+        // [1..] skips genesis, then .rev() gives us [tip, ..., block1] (no genesis)
+        for block in old_chain_blocks[1..].iter().rev() {
             println!("   Unwinding block {}...", block.header.height);
             if let Err(e) = Self::unwind_block_transactions(
                 block, state, timelock_state, escrow_state, channel_state,
