@@ -1,5 +1,6 @@
 # Multi-stage build for COINjecture blockchain node
-FROM rust:1.82-slim AS builder
+# Using Rust 1.88 to support all dependencies
+FROM rust:1.88-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -13,6 +14,7 @@ WORKDIR /build
 
 # Copy Cargo files first for better caching
 COPY Cargo.toml Cargo.lock ./
+COPY adzdb/Cargo.toml ./adzdb/
 COPY core/Cargo.toml ./core/
 COPY consensus/Cargo.toml ./consensus/
 COPY network/Cargo.toml ./network/
@@ -24,8 +26,10 @@ COPY node/Cargo.toml ./node/
 COPY wallet/Cargo.toml ./wallet/
 COPY marketplace-export/Cargo.toml ./marketplace-export/
 COPY huggingface/Cargo.toml ./huggingface/
+COPY mobile-sdk/Cargo.toml ./mobile-sdk/
 
 # Copy source code
+COPY adzdb ./adzdb
 COPY core ./core
 COPY consensus ./consensus
 COPY network ./network
@@ -37,6 +41,7 @@ COPY node ./node
 COPY wallet ./wallet
 COPY marketplace-export ./marketplace-export
 COPY huggingface ./huggingface
+COPY mobile-sdk ./mobile-sdk
 
 # Build release binary
 RUN cargo build --release --bin coinject

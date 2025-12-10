@@ -2055,8 +2055,24 @@ impl CoinjectNode {
                         }
                     },
                     Ok(None) => {
-                        // No common ancestor found - blocks might be from a completely different chain
-                        println!("🔍 Reorganization check: Buffered blocks at height {} have no common ancestor with current chain", max_buffered_height);
+                        // COMPLETE FORK DETECTED: No common ancestor means we're on a completely different chain
+                        // This requires a full chain review from genesis
+                        println!("🚨 COMPLETE FORK DETECTED: Buffered blocks at height {} have no common ancestor with current chain", max_buffered_height);
+                        println!("   Requesting full chain from genesis for validation...");
+                        
+                        // Request full chain from genesis to validate and compare
+                        if let Some(network_tx) = network_cmd_tx {
+                            if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                                from_height: 0,
+                                to_height: max_buffered_height,
+                            }) {
+                                eprintln!("⚠️  Failed to request full chain from genesis: {}", e);
+                            } else {
+                                println!("   ✅ Requested full chain from genesis (0 to {})", max_buffered_height);
+                            }
+                        } else {
+                            println!("   ⚠️  No network command channel available to request full chain");
+                        }
                     },
                     Err(e) => {
                         println!("⚠️  Error finding common ancestor for buffered blocks: {:?}", e);
@@ -2287,6 +2303,22 @@ impl CoinjectNode {
         // If we found a longer chain in stored blocks, attempt reorganization
         if max_stored_height > current_best_height {
             println!("🔍 Found longer chain in stored blocks (height {}), attempting reorganization...", max_stored_height);
+            
+            // Check if this chain has no common ancestor (complete fork)
+            // If so, we need to validate from genesis
+            match chain.find_common_ancestor(&max_stored_hash, max_stored_height).await {
+                Ok(Some((common_hash, common_height))) => {
+                    println!("   Found common ancestor at height {}", common_height);
+                    // Normal reorganization with common ancestor
+                }
+                Ok(None) => {
+                    println!("   ⚠️  No common ancestor - this is a complete fork, will validate from genesis");
+                }
+                Err(e) => {
+                    println!("   ⚠️  Error finding common ancestor: {:?}", e);
+                }
+            }
+            
             let chain_clone = Arc::clone(chain);
             let state_clone = Arc::clone(state);
             let timelock_clone = Arc::clone(timelock_state);
@@ -2381,8 +2413,82 @@ impl CoinjectNode {
                 }
             }
             Ok(None) => {
-                println!("⚠️  No common ancestor found, cannot reorganize");
-                return Ok(false);
+                // COMPLETE FORK DETECTED: No common ancestor means we're on a completely different chain
+                // This requires a full chain review from genesis
+                println!("🚨 COMPLETE FORK DETECTED: No common ancestor found with chain ending at height {}", new_chain_end_height);
+                println!("   This requires full chain validation from genesis");
+                
+                // Request full chain from genesis to validate the new chain
+                // The caller should have already requested blocks, but we need to ensure we have the full chain
+                // For now, we'll attempt to validate what we have and request if needed
+                // This will be handled by the reorganization check that triggers this
+                
+                // Validate the new chain from genesis
+                match Self::validate_chain_from_genesis(
+                    &new_chain_end_hash,
+                    new_chain_end_height,
+                    chain,
+                    validator,
+                ).await {
+                    Ok((new_chain_blocks, new_chain_work)) => {
+                        println!("✅ New chain validated from genesis: {} blocks, total work: {}", 
+                            new_chain_blocks.len(), new_chain_work);
+                        
+                        // Get our current chain from genesis
+                        let (our_chain_blocks, our_chain_work) = match Self::get_chain_from_genesis(
+                            current_best_hash,
+                            current_best_height,
+                            chain,
+                        ).await {
+                            Ok(chain_data) => chain_data,
+                            Err(e) => {
+                                println!("⚠️  Failed to get our chain from genesis: {}", e);
+                                return Ok(false);
+                            }
+                        };
+                        
+                        println!("📊 Complete chain comparison:");
+                        println!("   Our chain: {} blocks, total work: {}", our_chain_blocks.len(), our_chain_work);
+                        println!("   New chain: {} blocks, total work: {}", new_chain_blocks.len(), new_chain_work);
+                        
+                        // Compare by work score first, then height
+                        use crate::peer_consensus::WorkScoreCalculator;
+                        let comparison = WorkScoreCalculator::compare_chains(our_chain_work, new_chain_work);
+                        
+                        if comparison <= 0 && new_chain_end_height <= current_best_height {
+                            // Our chain has equal or more work and equal or greater height
+                            println!("   ⏸️  Skipping reorganization: our chain has equal or better work/height");
+                            return Ok(false);
+                        }
+                        
+                        // New chain is better - reorganize from genesis
+                        println!("🔄 Reorganizing from genesis: unwinding {} blocks (work: {}), applying {} blocks (work: {})",
+                            our_chain_blocks.len(), our_chain_work, new_chain_blocks.len(), new_chain_work);
+                        
+                        // Perform complete reorganization (unwind all blocks to genesis, apply new chain)
+                        Self::reorganize_chain_from_genesis(
+                            our_chain_blocks,
+                            new_chain_blocks,
+                            chain,
+                            state,
+                            timelock_state,
+                            escrow_state,
+                            channel_state,
+                            trustline_state,
+                            dimensional_pool_state,
+                            marketplace_state,
+                            validator,
+                        ).await?;
+                        
+                        return Ok(true);
+                    }
+                    Err(e) => {
+                        println!("⚠️  Failed to validate new chain from genesis: {}", e);
+                        println!("   Requesting full chain from genesis for validation...");
+                        // Return false but the caller should request full chain
+                        return Ok(false);
+                    }
+                }
             }
             Err(e) => return Err(e),
         };
@@ -2924,6 +3030,239 @@ impl CoinjectNode {
         }
 
         println!("✅ Chain reorganization complete!");
+        Ok(())
+    }
+
+    /// Validate a chain from genesis block
+    /// Returns (chain_blocks, total_work_score) if valid
+    async fn validate_chain_from_genesis(
+        end_hash: &coinject_core::Hash,
+        end_height: u64,
+        chain: &Arc<ChainState>,
+        validator: &Arc<BlockValidator>,
+    ) -> Result<(Vec<coinject_core::Block>, u64), String> {
+        let genesis_hash = chain.genesis_hash();
+        let mut chain_blocks = Vec::new();
+        let mut current_hash = *end_hash;
+        let mut current_height = end_height;
+        let mut total_work: u64 = 0;
+
+        // Walk back from end to genesis, collecting blocks
+        while current_height > 0 {
+            match chain.get_block_by_hash(&current_hash) {
+                Ok(Some(block)) => {
+                    // Validate block connects properly
+                    if block.header.height != current_height {
+                        return Err(format!("Block height mismatch: expected {}, got {}", 
+                            current_height, block.header.height));
+                    }
+                    
+                    // Add work score
+                    total_work += block.header.work_score as u64;
+                    
+                    chain_blocks.push(block.clone());
+                    current_hash = block.header.prev_hash;
+                    current_height -= 1;
+                }
+                Ok(None) => {
+                    return Err(format!("Missing block at height {} (hash: {:?})", 
+                        current_height, current_hash));
+                }
+                Err(e) => {
+                    return Err(format!("Error getting block at height {}: {}", current_height, e));
+                }
+            }
+        }
+
+        // Verify we reached genesis
+        if current_hash != genesis_hash {
+            return Err(format!("Chain doesn't connect to genesis. Expected {:?}, got {:?}", 
+                genesis_hash, current_hash));
+        }
+
+        // Get genesis block
+        match chain.get_block_by_hash(&genesis_hash) {
+            Ok(Some(genesis_block)) => {
+                if genesis_block.header.height != 0 {
+                    return Err("Genesis block has wrong height".to_string());
+                }
+                total_work += genesis_block.header.work_score as u64;
+                chain_blocks.push(genesis_block);
+            }
+            Ok(None) => {
+                return Err("Genesis block not found".to_string());
+            }
+            Err(e) => {
+                return Err(format!("Error getting genesis block: {}", e));
+            }
+        }
+
+        // Reverse so blocks are in forward order (genesis to end)
+        chain_blocks.reverse();
+
+        // Validate chain integrity: each block must connect to previous
+        for i in 1..chain_blocks.len() {
+            let prev_block = &chain_blocks[i - 1];
+            let curr_block = &chain_blocks[i];
+            
+            if curr_block.header.prev_hash != prev_block.header.hash() {
+                return Err(format!("Chain integrity violation at height {}: prev_hash doesn't match previous block hash", 
+                    curr_block.header.height));
+            }
+            
+            if curr_block.header.height != prev_block.header.height + 1 {
+                return Err(format!("Chain height gap at height {}: expected {}, got {}", 
+                    curr_block.header.height, prev_block.header.height + 1, curr_block.header.height));
+            }
+        }
+
+        // Validate all blocks (except genesis, which is assumed valid)
+        for i in 1..chain_blocks.len() {
+            let block = &chain_blocks[i];
+            let prev_hash = chain_blocks[i - 1].header.hash();
+            
+            // Validate block (skip timestamp age check during chain validation)
+            if let Err(e) = validator.validate_block_with_options(block, &prev_hash, block.header.height, true) {
+                return Err(format!("Block {} validation failed: {}", block.header.height, e));
+            }
+        }
+
+        Ok((chain_blocks, total_work))
+    }
+
+    /// Get our current chain from genesis
+    /// Returns (chain_blocks, total_work_score)
+    async fn get_chain_from_genesis(
+        best_hash: coinject_core::Hash,
+        best_height: u64,
+        chain: &Arc<ChainState>,
+    ) -> Result<(Vec<coinject_core::Block>, u64), String> {
+        let genesis_hash = chain.genesis_hash();
+        let mut chain_blocks = Vec::new();
+        let mut current_hash = best_hash;
+        let mut current_height = best_height;
+        let mut total_work: u64 = 0;
+
+        // Walk back from best to genesis, collecting blocks
+        while current_height > 0 {
+            match chain.get_block_by_height(current_height) {
+                Ok(Some(block)) => {
+                    if block.header.hash() != current_hash {
+                        return Err(format!("Block hash mismatch at height {}", current_height));
+                    }
+                    total_work += block.header.work_score as u64;
+                    chain_blocks.push(block.clone());
+                    current_hash = block.header.prev_hash;
+                    current_height -= 1;
+                }
+                Ok(None) => {
+                    return Err(format!("Missing block at height {}", current_height));
+                }
+                Err(e) => {
+                    return Err(format!("Error getting block at height {}: {}", current_height, e));
+                }
+            }
+        }
+
+        // Get genesis block
+        match chain.get_block_by_height(0) {
+            Ok(Some(genesis_block)) => {
+                if genesis_block.header.hash() != genesis_hash {
+                    return Err("Genesis block hash mismatch".to_string());
+                }
+                total_work += genesis_block.header.work_score as u64;
+                chain_blocks.push(genesis_block);
+            }
+            Ok(None) => {
+                return Err("Genesis block not found".to_string());
+            }
+            Err(e) => {
+                return Err(format!("Error getting genesis block: {}", e));
+            }
+        }
+
+        // Reverse so blocks are in forward order (genesis to best)
+        chain_blocks.reverse();
+
+        Ok((chain_blocks, total_work))
+    }
+
+    /// Perform complete chain reorganization from genesis
+    /// Unwinds all blocks to genesis and applies new chain from genesis
+    async fn reorganize_chain_from_genesis(
+        old_chain_blocks: Vec<coinject_core::Block>,
+        new_chain_blocks: Vec<coinject_core::Block>,
+        chain: &Arc<ChainState>,
+        state: &Arc<AccountState>,
+        timelock_state: &Arc<TimeLockState>,
+        escrow_state: &Arc<EscrowState>,
+        channel_state: &Arc<ChannelState>,
+        trustline_state: &Arc<TrustLineState>,
+        dimensional_pool_state: &Arc<DimensionalPoolState>,
+        marketplace_state: &Arc<MarketplaceState>,
+        validator: &Arc<BlockValidator>,
+    ) -> Result<(), String> {
+        println!("🔄 Starting complete reorganization from genesis: unwinding {} blocks, applying {} blocks",
+            old_chain_blocks.len(), new_chain_blocks.len());
+
+        // Verify both chains start from genesis
+        if old_chain_blocks.is_empty() || new_chain_blocks.is_empty() {
+            return Err("Chain is empty".to_string());
+        }
+        
+        let genesis_hash = chain.genesis_hash();
+        if old_chain_blocks[0].header.hash() != genesis_hash || 
+           new_chain_blocks[0].header.hash() != genesis_hash {
+            return Err("Chains don't start from genesis".to_string());
+        }
+
+        // Step 1: Unwind all old chain blocks (except genesis) in reverse order
+        // Start from the last block (highest height) and work backwards
+        for block in old_chain_blocks.iter().rev().skip(1) { // Skip genesis (last after reverse)
+            println!("   Unwinding block {}...", block.header.height);
+            if let Err(e) = Self::unwind_block_transactions(
+                block, state, timelock_state, escrow_state, channel_state,
+                trustline_state, dimensional_pool_state, marketplace_state,
+            ) {
+                return Err(format!("Failed to unwind block {}: {}", block.header.height, e));
+            }
+        }
+
+        // Step 2: Validate new chain integrity (already validated in validate_chain_from_genesis)
+        // But verify genesis matches
+        if new_chain_blocks[0].header.hash() != genesis_hash {
+            return Err("New chain doesn't start from correct genesis".to_string());
+        }
+
+        // Step 3: Apply new chain blocks (skip genesis, it's already applied)
+        for block in new_chain_blocks.iter().skip(1) { // Skip genesis
+            println!("   Applying new chain block {}...", block.header.height);
+            
+            // Store block
+            chain.store_block(block).await
+                .map_err(|e| format!("Failed to store block {}: {}", block.header.height, e))?;
+
+            // Apply transactions
+            Self::apply_block_transactions(
+                block, state, timelock_state, escrow_state, channel_state,
+                trustline_state, dimensional_pool_state, marketplace_state,
+            )?;
+
+            // Update consensus state
+            use coinject_core::{TAU_C, ConsensusState};
+            let tau = (block.header.height as f64) / TAU_C;
+            let consensus_state = ConsensusState::at_tau(tau);
+            dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state)
+                .map_err(|e| format!("Failed to save consensus state: {}", e))?;
+        }
+
+        // Step 4: Update best chain
+        if let Some(last_block) = new_chain_blocks.last() {
+            chain.update_best_chain(last_block.header.hash(), last_block.header.height).await
+                .map_err(|e| format!("Failed to update best chain: {}", e))?;
+        }
+
+        println!("✅ Complete reorganization from genesis complete!");
         Ok(())
     }
 

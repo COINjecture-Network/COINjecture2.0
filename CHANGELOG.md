@@ -2,6 +2,24 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.47] - 2025-12-09
+
+### Added
+- **Complete Fork Recovery from Genesis**: Automatic recovery from complete chain forks
+  - **Problem**: When nodes detected a complete fork (no common ancestor), they would fail to reorganize
+  - **Solution**: Implemented automatic recovery that:
+    1. Detects complete forks (no common ancestor found)
+    2. Requests full chain from genesis (height 0)
+    3. Validates the new chain from genesis with full integrity checks
+    4. Compares chains by work score and height
+    5. Performs complete reorganization from genesis if new chain is better
+  - **Features**:
+    - `validate_chain_from_genesis()`: Validates entire chain from genesis with work score calculation
+    - `get_chain_from_genesis()`: Retrieves current chain from genesis for comparison
+    - `reorganize_chain_from_genesis()`: Performs complete reorganization unwinding to genesis
+  - **Impact**: Nodes can now automatically recover from complete forks by connecting to the chain with highest work score/height
+  - **Files Changed**: `node/src/service.rs` - `attempt_reorganization_if_longer_chain()`, `check_and_reorganize_chain()`
+
 ## [4.7.46] - 2025-12-05
 
 ### Fixed
