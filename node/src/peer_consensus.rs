@@ -41,9 +41,10 @@ impl PeerState {
     }
     
     /// Check if peer is stale (hasn't reported recently)
-    /// Uses 120 second timeout to handle connection churn
+    /// Uses 300 second (5 minute) timeout to handle slow sync and connection churn
+    /// Increased from 120s to prevent false positives during sync
     pub fn is_stale(&self) -> bool {
-        self.last_seen.elapsed() > Duration::from_secs(120)
+        self.last_seen.elapsed() > Duration::from_secs(300)
     }
 }
 
