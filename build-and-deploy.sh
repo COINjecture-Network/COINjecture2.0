@@ -16,7 +16,7 @@ HF_DATASET="${HF_DATASET:-COINjecture/v5}"
 # Get version info
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date +%Y%m%d)
-VERSION="${VERSION:-v4.7.47}"
+VERSION="${VERSION:-v4.7.48}"
 
 # Image tags
 LOCAL_IMAGE="coinjecture-netb:latest"
