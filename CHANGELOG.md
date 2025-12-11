@@ -2,6 +2,32 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.49] - 2025-12-11
+
+### Fixed
+- **False Positive Fork Detection During Normal Sync (CRITICAL)**
+  - **Problem**: Node 2 was detecting "complete forks" when it was just receiving blocks out of order during normal sync
+    - Node 2 correctly synced to height 972 (matching Node 1's chain)
+    - Node 2 requested block 973, but also received blocks 5204, 5205, etc. out of order
+    - Reorganization logic saw disconnected blocks and incorrectly triggered full chain reorganization
+    - This created a loop: request full chain → receive out-of-order blocks → detect "fork" → repeat
+  - **Root Cause**: 
+    1. Gossipsub delivers blocks out of order (blocks 5200+ arrive before block 973)
+    2. Reorganization logic saw blocks >100 blocks ahead with no common ancestor
+    3. Logic incorrectly interpreted this as a "complete fork" instead of out-of-order delivery
+  - **Solution**:
+    1. **Out-of-Order Detection**: Check if buffered blocks are >100 blocks ahead AND missing next sequential block AND no recent sequential blocks
+    2. **Ignore Out-of-Order Blocks**: If blocks are far ahead (>100) but we don't have recent sequential blocks, ignore them as out-of-order delivery
+    3. **Stricter Fork Detection**: Only trigger full chain reorganization when:
+       - Missing next sequential block
+       - Have blocks far ahead (>100 blocks)
+       - DON'T have recent sequential blocks (within next 10)
+       - Peer is significantly ahead
+    4. **Prevent False Positives**: In `check_and_reorganize_chain()`, ignore buffered blocks that are far ahead during normal sync
+  - **Files Changed**: 
+    - `node/src/service.rs` - Updated `check_and_reorganize_chain()` and fork detection logic in status update handler
+  - **Impact**: Prevents false positive fork detection during normal sync. Node 2 can now sync sequentially without triggering unnecessary full chain reorganizations.
+
 ## [4.7.48] - 2025-12-10
 
 ### Fixed
