@@ -6,20 +6,21 @@ Node 1 exceeded memory on a 1GB droplet, causing OOM (Out of Memory) kills and u
 ## Solution
 
 ### Memory Limits Applied
-- **Container Memory Limit**: 800MB
-- **Memory Swap**: 800MB (no swap, prevents thrashing)
-- **System Reserve**: 200MB (for OS, Docker daemon, etc.)
+- **Container Memory Limit**: 1.6GB (for 2GB droplets)
+- **Memory Swap**: 1.6GB (no swap, prevents thrashing)
+- **System Reserve**: 400MB (for OS, Docker daemon, etc.)
 
 ### Rationale
-1GB droplet specs:
-- Total RAM: 1GB
+2GB droplet specs (upgraded from 1GB):
+- Total RAM: 2GB
 - Disk: 25GB
 - Location: SFO2 (San Francisco)
 
-With 800MB limit:
+With 1.6GB limit:
 - Prevents OOM kills
-- Leaves 200MB for system processes
+- Leaves 400MB for system processes
 - No swap to avoid disk I/O thrashing
+- Sufficient headroom for mining operations
 
 ### Deployment Script Updates
 Updated `build-and-deploy.sh` to include:
