@@ -913,12 +913,16 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("coinject-rpc-test-addr");
         let _ = std::fs::remove_dir_all(&temp_dir);
 
+        // Create test database for state objects
+        let db_path = temp_dir.join("test.db");
+        let db = Arc::new(redb::Database::create(&db_path).unwrap());
+
         let state = Arc::new(RpcServerState {
             account_state: Arc::new(AccountState::new(&temp_dir).unwrap()),
-            timelock_state: Arc::new(TimeLockState::new()),
-            escrow_state: Arc::new(EscrowState::new()),
-            channel_state: Arc::new(ChannelState::new()),
-            marketplace_state: Arc::new(MarketplaceState::new()),
+            timelock_state: Arc::new(TimeLockState::new(db.clone()).unwrap()),
+            escrow_state: Arc::new(EscrowState::new(db.clone()).unwrap()),
+            channel_state: Arc::new(ChannelState::new(db.clone()).unwrap()),
+            marketplace_state: Arc::new(MarketplaceState::from_db(db.clone()).unwrap()),
             blockchain: Arc::new(MockBlockchainReader) as Arc<dyn BlockchainReader>,
             marketplace: Arc::new(RwLock::new(ProblemMarketplace::new())),
             tx_pool: Arc::new(RwLock::new(TransactionPool::new())),
@@ -928,6 +932,7 @@ mod tests {
             genesis_hash: Hash::ZERO,
             peer_count: Arc::new(RwLock::new(0)),
             faucet_handler: None,
+            block_submission_handler: None,
             local_peer_id: Some("test-peer-id".to_string()),
             listen_addresses: Arc::new(RwLock::new(vec![])),
         });
@@ -954,8 +959,8 @@ mod tests {
 
         let state = Arc::new(RpcServerState {
             account_state: Arc::new(AccountState::new(&temp_dir).unwrap()),
-            timelock_state: Arc::new(TimeLockState::new()),
-            escrow_state: Arc::new(EscrowState::new()),
+            timelock_state: Arc::new(TimeLockState::new(db.clone()).unwrap()),
+            escrow_state: Arc::new(EscrowState::new(db.clone()).unwrap()),
             channel_state: Arc::new(ChannelState::new(db.clone()).unwrap()),
             marketplace_state: Arc::new(MarketplaceState::from_db(db.clone()).unwrap()),
             blockchain: Arc::new(MockBlockchainReader) as Arc<dyn BlockchainReader>,
@@ -967,6 +972,7 @@ mod tests {
             genesis_hash: Hash::ZERO,
             peer_count: Arc::new(RwLock::new(0)),
             faucet_handler: None,
+            block_submission_handler: None,
             local_peer_id: Some("test-peer-id".to_string()),
             listen_addresses: Arc::new(RwLock::new(vec![])),
         });
