@@ -73,7 +73,7 @@ impl Default for ConsensusConfig {
             // BOOTSTRAP MODE (peers < 4): 50% - prioritizes liveness
             // SECURE MODE (peers >= 4): 80% - prioritizes safety (BFT)
             consensus_threshold: 0.80,       // Target for production
-            peer_stale_timeout: Duration::from_secs(120),
+            peer_stale_timeout: Duration::from_secs(300), // Increased to 5 minutes for sync tolerance
             max_missed_rounds: 5,
         }
     }
