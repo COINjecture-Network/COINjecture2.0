@@ -9,37 +9,38 @@ use std::time::Duration;
 const LAMBDA: f64 = ETA; // λ = η = 1/√2 for critical equilibrium
 const TAU_C: f64 = 20.0; // Dimensionless time scale (~√2 * block_time)
 const MAX_BATCH_SIZE: usize = 1024; // Maximum safe batch size
+const MIN_BATCH_SIZE: usize = 10; // Minimum batch size for efficiency
 const BASE_RETRY_DELAY_MS: f64 = 500.0; // Base retry delay in milliseconds
 
 /// Compute exponential batch size using critical damping
-/// Uses D_n = e^(-η τ_n) where τ_n is dimensionless sync time
+/// Uses inverted exp: D_n = 1 - e^(-η τ_n) → starts small, grows to 1
 /// 
 /// Early sync: Small batches (high damping) for quick verification
 /// Late sync: Larger batches as τ grows, exploiting critical damping for max throughput
 pub fn compute_batch_size(current_progress: f64, sync_cycle: u32) -> usize {
     let tau = sync_cycle as f64 / 10.0; // Scale by ~10 cycles per time unit
-    let damping_factor = (-ETA * tau).exp();
+    let growth_factor = 1.0 - (-ETA * tau).exp(); // Starts ~0, approaches 1
     
     // Batch size grows exponentially as sync progresses
-    // Starts small (high damping) for safety, grows to max as we converge
-    let batch_size = (MAX_BATCH_SIZE as f64 * damping_factor) as usize;
+    let batch_size = MIN_BATCH_SIZE as f64 + (MAX_BATCH_SIZE as f64 - MIN_BATCH_SIZE as f64) * growth_factor;
     
-    // Ensure minimum batch size of 1 and maximum of MAX_BATCH_SIZE
-    batch_size.max(1).min(MAX_BATCH_SIZE)
+    // Round to int
+    batch_size.round() as usize
 }
 
 /// Compute retry delay with critical damping
-/// Uses exponential backoff tuned to η=λ to avoid oscillation between peers
-/// 
-/// The sin() term adds controlled "coupling" oscillation, but damped by η
-/// to converge quickly without network thrash
+/// Uses increasing backoff: base / (1 - e^(-η fail)) → grows but asymptotes
+/// Avoids explosion via clamp; steady increase without oscillation
 pub fn compute_retry_delay(fail_count: u32) -> Duration {
     let fail_count_f = fail_count as f64;
     
-    // Critical damping: exponential decay with controlled oscillation
-    // delay = base * exp(-η * fail_count + λ * sin(fail_count))
-    let delay_ms = BASE_RETRY_DELAY_MS * 
-        ((-ETA * fail_count_f) + (LAMBDA * fail_count_f.sin())).exp().abs();
+    // Increasing damped: base / (1 - exp(-η fail)) → grows but asymptotes
+    let denom = 1.0 - (-ETA * fail_count_f).exp();
+    let delay_ms = if denom > 0.001 { 
+        BASE_RETRY_DELAY_MS / denom 
+    } else { 
+        BASE_RETRY_DELAY_MS 
+    };
     
     // Clamp to reasonable bounds (50ms to 30s)
     let clamped_ms = delay_ms.max(50.0).min(30000.0);
@@ -101,7 +102,7 @@ pub fn compute_peer_lambda(shared_blocks: u64, total_blocks: u64) -> f64 {
 /// Compute optimal chunk size for block requests based on sync progress
 /// Uses critical damping to balance speed and stability
 pub fn compute_chunk_size(our_height: u64, target_height: u64, sync_cycle: u32) -> u64 {
-    let progress = if target_height > our_height {
+    let progress = if target_height > our_height && target_height > 0 {
         (our_height as f64) / (target_height as f64)
     } else {
         1.0
@@ -121,9 +122,9 @@ mod tests {
     #[test]
     fn test_batch_size_starts_small() {
         let batch = compute_batch_size(0.0, 0);
-        assert!(batch >= 1 && batch <= MAX_BATCH_SIZE);
+        assert!(batch >= MIN_BATCH_SIZE && batch <= MAX_BATCH_SIZE);
         // Early sync should start with smaller batches
-        assert!(batch < MAX_BATCH_SIZE);
+        assert!(batch < MAX_BATCH_SIZE / 2); // <512 for start
     }
 
     #[test]
@@ -131,15 +132,15 @@ mod tests {
         let batch_early = compute_batch_size(0.1, 1);
         let batch_late = compute_batch_size(0.9, 100);
         // Later sync should use larger batches
-        assert!(batch_late >= batch_early);
+        assert!(batch_late > batch_early);
     }
 
     #[test]
     fn test_retry_delay_increases() {
-        let delay_1 = compute_retry_delay(1);
-        let delay_5 = compute_retry_delay(5);
+        let delay_1 = compute_retry_delay(1).as_millis() as f64;
+        let delay_5 = compute_retry_delay(5).as_millis() as f64;
         // More failures should increase delay
-        assert!(delay_5 >= delay_1);
+        assert!(delay_5 > delay_1);
     }
 
     #[test]
