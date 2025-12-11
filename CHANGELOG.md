@@ -2,6 +2,30 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.48] - 2025-12-10
+
+### Fixed
+- **Genesis Fork Bug: "One Node = One Chain" Problem (CRITICAL)**
+  - **Problem**: Every node was generating block 1 with different hashes, causing immediate forks
+    - All nodes booted from same genesis → generated block 1 independently
+    - Each node used `SystemTime::now()` for timestamp → different timestamps per node
+    - Result: Every node thought its chain was canonical → immediate fork on block 1
+  - **Root Cause**: 
+    1. All nodes mining at genesis (no single canonical producer)
+    2. Non-deterministic timestamp for block 1 (used `SystemTime::now()`)
+  - **Solution**:
+    1. **Deterministic Block 1 Timestamp**: Block 1 (height 1) now uses fixed timestamp `1735689601` (genesis + 1 second)
+       - Ensures block 1 hash is deterministic even if multiple nodes mine it
+       - Subsequent blocks still use `SystemTime::now()` for real-time progression
+    2. **Genesis Block Unwinding Fix**: Fixed bug where genesis block was being unwound during complete fork recovery
+       - Changed from `old_chain_blocks.iter().rev().skip(1)` (skipped tip, kept genesis)
+       - To `old_chain_blocks[1..].iter().rev()` (skips genesis correctly)
+  - **Files Changed**: 
+    - `consensus/src/miner.rs` - Deterministic timestamp for height 1
+    - `node/src/service.rs` - Fixed genesis unwinding in `reorganize_chain_from_genesis()`
+  - **Impact**: Prevents the classic "one node = one chain" fork problem. Block 1 is now deterministic.
+  - **Note**: Deployment scripts should be updated so only Node 1 (primary bootnode) mines at genesis. Other nodes should start as full nodes without `--mine` flag.
+
 ## [4.7.47] - 2025-12-09
 
 ### Added

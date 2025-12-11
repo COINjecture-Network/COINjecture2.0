@@ -683,10 +683,23 @@ impl Miner {
         println!("  Energy estimate: {:.2} J", energy_estimate_joules);
 
         // 7. Build block header with commitment and PoUW metrics
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        // FIX: For block 1 (height 1), use deterministic timestamp to prevent forks
+        // Genesis timestamp is 1735689600 (Jan 1, 2025 00:00:00 UTC)
+        // For height 1, use genesis + 1 second to ensure deterministic hash
+        // For subsequent blocks, use max(parent_timestamp + 1, current_time) for monotonicity
+        let timestamp = if height == 1 {
+            // Block 1: Use deterministic timestamp (genesis + 1 second)
+            // This ensures all nodes generate the same block 1 hash if they mine it
+            1735689601i64  // Jan 1, 2025 00:00:01 UTC
+        } else {
+            // Subsequent blocks: Use current time, but ensure it's >= parent + 1
+            // Note: We don't have parent block here, so we use current time
+            // The validator will enforce timestamp ordering
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64
+        };
 
         let transactions_root = Self::merkle_root(&transactions);
         let solutions_root = Hash::new(&bincode::serialize(&solution).unwrap_or_default());

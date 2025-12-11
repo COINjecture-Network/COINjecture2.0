@@ -300,4 +300,3 @@ if [ "$SKIP_GCR" = false ] && [ "$NO_PUSH" = false ]; then
     echo "  gcloud compute ssh <vm-name> --zone=<zone> --command='docker pull $GCR_TAG_LATEST'"
 fi
 echo ""
-
