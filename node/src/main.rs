@@ -12,6 +12,7 @@
 // CRITICAL: Nodes are classified EMPIRICALLY based on behavior, NOT self-declaration
 
 mod chain;
+mod sync_optimizer;
 #[cfg(feature = "adzdb")]
 mod chain_adzdb;
 mod config;
