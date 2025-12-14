@@ -1028,8 +1028,31 @@ impl NetworkService {
         false
     }
 
+    /// Sync connected peers from swarm to internal tracking
+    /// This fixes the issue where connections exist in swarm but aren't tracked
+    fn sync_connected_peers(&mut self) {
+        // Get all connected peers from swarm
+        let connected_peers: Vec<PeerId> = self.swarm.connected_peers().cloned().collect();
+        
+        for peer_id in connected_peers {
+            // If swarm says connected but we haven't tracked it, track it NOW
+            if !self.peers.contains(&peer_id) {
+                self.peers.insert(peer_id);
+                self.mesh_peers.insert(peer_id);
+                self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                if let Ok(mut count) = self.peer_count.try_write() {
+                    *count = self.peers.len();
+                }
+                let _ = self.event_tx.send(NetworkEvent::PeerConnected(peer_id));
+            }
+        }
+    }
+
     /// Retry connecting to bootnodes that may have disconnected
     pub fn retry_bootnodes(&mut self) {
+        // CRITICAL: Sync connected peers FIRST before checking bootnode status
+        // This ensures we catch any connections that were established but not tracked
+        self.sync_connected_peers();
         if self.bootnode_addrs.is_empty() {
             return;
         }
@@ -1088,6 +1111,23 @@ impl NetworkService {
                     if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
                         target_peer_id = Some(peer_id);
                         break;
+                    }
+                }
+                
+                // CRITICAL: Check if already connected before dialing
+                if let Some(bootnode_peer_id) = target_peer_id {
+                    if self.swarm.is_connected(&bootnode_peer_id) {
+                        // Already connected - sync tracking and skip dial
+                        if !self.peers.contains(&bootnode_peer_id) {
+                            self.peers.insert(bootnode_peer_id);
+                            self.mesh_peers.insert(bootnode_peer_id);
+                            self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&bootnode_peer_id);
+                            if let Ok(mut count) = self.peer_count.try_write() {
+                                *count = self.peers.len();
+                            }
+                            let _ = self.event_tx.send(NetworkEvent::PeerConnected(bootnode_peer_id));
+                        }
+                        continue; // Skip dial, already connected
                     }
                 }
                 
@@ -1318,6 +1358,10 @@ impl NetworkService {
 
     /// Process swarm events (call this in a loop)
     pub async fn process_events(&mut self) {
+        // CRITICAL: Sync connected peers before processing events
+        // This catches connections that exist in swarm but weren't tracked
+        self.sync_connected_peers();
+        
         match self.swarm.select_next_some().await {
             SwarmEvent::Behaviour(event) => match event {
                 CoinjectBehaviourEvent::Gossipsub(gossipsub::Event::Message {

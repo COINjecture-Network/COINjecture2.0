@@ -2,6 +2,64 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.61] - 2025-12-14
+
+### Fixed
+- **Connection State Synchronization - Critical Fix**
+  - Added `sync_connected_peers()` that runs before every swarm event to sync connected peers from swarm to internal tracking
+  - This ensures connections that exist in libp2p's swarm are always tracked, even if ConnectionEstablished event was missed
+  - `retry_bootnodes()` now checks if already connected before dialing to prevent unnecessary dial attempts
+  - **Root Cause**: Connections were being established but not tracked, causing nodes to think they had no peers
+  - **Solution**: Continuously sync swarm.connected_peers() to internal tracking before processing events
+  - **Files Changed**: `network/src/protocol.rs` - Added sync_connected_peers() and integrated into event loop
+
+### Known Issues
+- **Persistent Unidirectional Connectivity Issue**
+  - **Symptom**: Node 1 can connect to Node 2 (outbound), but Node 2 cannot establish outbound connection to Node 1
+  - **Observed Behavior**:
+    - Node 1 successfully dials Node 2 and receives blocks
+    - Node 2's outbound dials to Node 1 timeout at libp2p transport layer
+    - Node 2 does not see incoming connection attempts from Node 1's IP (143.110.139.166)
+    - TCP connectivity verified working (netcat succeeds on port 30333)
+  - **Root Cause Analysis**:
+    - Network-level issue: Node 1's connection attempts are not reaching Node 2's TCP layer
+    - libp2p dials timeout before TCP connection establishes
+    - Possible causes: NAT/firewall asymmetry, connection reset, or network routing issue
+    - Not a code issue - TCP works, but libp2p handshake fails
+  - **Workarounds Attempted**:
+    - Listen port advertisement fix (v4.7.59) - Node 1 now advertises port 30333 correctly
+    - Connection state synchronization (v4.7.61) - Fixes tracking once connection exists
+    - Peer blacklisting - GCE VM peer correctly ignored
+    - Link-local address filtering - Ghost IPs filtered
+  - **Next Steps Required**:
+    - Network-level investigation: Check firewall rules, NAT configuration, routing tables
+    - Consider using libp2p relay protocol for NAT traversal
+    - Verify Docker network configuration and port forwarding
+    - Check for connection resets or firewall rules blocking libp2p handshake packets
+
+## [4.7.60] - 2025-12-14
+
+### Fixed
+- **Bootnode Connection Recognition - Critical Fix**
+  - Fixed issue where inbound bootnode connections were not being recognized
+  - `retry_bootnodes()` now checks `swarm.is_connected()` as authoritative source
+  - If swarm reports connection but internal tracking is missing, connection is now added to tracking immediately
+  - Prevents infinite retry loops when connection exists but isn't tracked
+  - **Root Cause**: Node 2's connection tracking wasn't recognizing Node 1's inbound connection
+  - **Solution**: Check swarm.is_connected() first, then sync internal tracking if mismatch detected
+  - **Files Changed**: `network/src/protocol.rs` - Enhanced `retry_bootnodes()` and `ConnectionEstablished` handlers
+
+## [4.7.59] - 2025-12-14
+
+### Fixed
+- **Listen Port Advertisement - Critical Connectivity Fix**
+  - Fixed issue where nodes only advertised ephemeral ports instead of the configured listen port (30333)
+  - When a public IP is detected from observed addresses, nodes now also advertise the same IP with the listen port
+  - This allows peers to successfully dial the node on the correct port instead of timing out
+  - **Root Cause**: Node 1 was advertising `/ip4/143.110.139.166/tcp/41482` (ephemeral) but not `/ip4/143.110.139.166/tcp/30333` (listen port)
+  - **Solution**: Enhanced `NewExternalAddrCandidate` and `Identify::Received` handlers to construct and advertise listen port addresses
+  - **Files Changed**: `network/src/protocol.rs` - Added `listen_port` field and address construction logic
+
 ## [4.7.58] - 2025-12-13
 
 ### Fixed
