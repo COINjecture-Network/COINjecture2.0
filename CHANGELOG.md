@@ -2,6 +2,208 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.58] - 2025-12-13
+
+### Fixed
+- **Link-Local Address Filtering - Ghost IP Fix (CRITICAL)**
+  - Added filtering for 169.254.0.0/16 (link-local auto-configuration addresses)
+  - Prevents connection attempts to ghost IPs that don't correspond to actual network interfaces
+  - **Problem**: Connection attempts showed 169.254.x.x addresses causing timeouts
+  - **Root Cause**: RFC 3927 link-local addresses were not being filtered
+  - **Solution**: Added `/ip4/169.254.` check to `is_private_address()` function
+  - **Files Changed**: `network/src/protocol.rs` - Updated `is_private_address()` to filter link-local addresses
+
+## [4.7.57] - 2025-12-13
+
+### Fixed
+- **Peer Blacklisting - Ignore Interfering GCE VM Peer**
+  - Added peer blacklist functionality to explicitly ignore/reject connections from specific peers
+  - GCE VM peer (12D3KooWFL8uuMmeoWyU46SdX8g2aJEk4Fv5qAr4dZXmZfsGiefa) is now blacklisted
+  - Blacklisted peers are disconnected immediately after handshake completes
+  - Prevents interfering peers from consuming connection slots and causing conflicts
+  - **Problem**: GCE VM peer was interfering with Node 1 ↔ Node 2 connectivity
+  - **Solution**: Added blacklist that disconnects blacklisted peers immediately after connection establishment
+  - **Files Changed**: 
+    - `network/src/protocol.rs` - Added `blacklisted_peers` HashSet to NetworkService
+    - `network/src/protocol.rs` - Added blacklist check in `ConnectionEstablished` handler
+    - `network/src/protocol.rs` - Enhanced `IncomingConnectionError` to ignore blacklisted peer errors
+
+## [4.7.56] - 2025-12-13
+
+### Fixed
+- **Handshake Timeout Fix - Prevent Simultaneous Dial Conflicts (CRITICAL)**
+  - Added tracking of incoming connection attempts to prevent simultaneous outbound dials
+  - When an incoming connection from a bootnode is detected, outbound dial attempts are skipped
+  - This prevents race conditions where both nodes try to connect simultaneously, causing handshake timeouts
+  - **Problem**: Node 1 connects outbound to Node 2, but Node 2 also tries to dial outbound simultaneously, causing handshake conflicts and timeouts
+  - **Solution**: Track incoming connection attempts and skip outbound dials when incoming connection is in progress
+  - Enhanced incoming connection error logging with detailed diagnostics
+  - **Files Changed**: 
+    - `network/src/protocol.rs` - Added `incoming_connection_attempts` tracking
+    - `network/src/protocol.rs` - Enhanced `IncomingConnection` handler to detect bootnode connections
+    - `network/src/protocol.rs` - Enhanced `IncomingConnectionError` handler with detailed diagnostics
+    - `network/src/protocol.rs` - Modified `retry_bootnodes()` to skip dials when incoming connection detected
+
+## [4.7.55] - 2025-12-13
+
+### Fixed
+- **Bootnode Connection Recognition**
+  - Fixed `is_bootnode_connected()` to check both internal peer tracking AND swarm's connected peers
+  - This ensures inbound connections from bootnode are recognized immediately
+  - Prevents unnecessary outbound dial attempts when bootnode has already connected inbound
+  - **Files Changed**: `network/src/protocol.rs` - Enhanced `is_bootnode_connected()` and `retry_bootnodes()`
+
+### Fixed
+- **Handshake Timeout Fix - Prevent Simultaneous Dial Conflicts (CRITICAL)**
+  - Added tracking of incoming connection attempts to prevent simultaneous outbound dials
+  - When an incoming connection from a bootnode is detected, outbound dial attempts are skipped
+  - This prevents race conditions where both nodes try to connect simultaneously, causing handshake timeouts
+  - **Problem**: Node 1 connects outbound to Node 2, but Node 2 also tries to dial outbound simultaneously, causing handshake conflicts and timeouts
+  - **Solution**: Track incoming connection attempts and skip outbound dials when incoming connection is in progress
+  - Enhanced incoming connection error logging with detailed diagnostics
+  - **Files Changed**: 
+    - `network/src/protocol.rs` - Added `incoming_connection_attempts` tracking
+    - `network/src/protocol.rs` - Enhanced `IncomingConnection` handler to detect bootnode connections
+    - `network/src/protocol.rs` - Enhanced `IncomingConnectionError` handler with detailed diagnostics
+    - `network/src/protocol.rs` - Modified `retry_bootnodes()` to skip dials when incoming connection detected
+
+- **Bootnode Connection Recognition**
+  - Fixed `is_bootnode_connected()` to check both internal peer tracking AND swarm's connected peers
+  - This ensures inbound connections from bootnode are recognized immediately
+  - Prevents unnecessary outbound dial attempts when bootnode has already connected inbound
+  - **Files Changed**: `network/src/protocol.rs` - Enhanced `is_bootnode_connected()` and `retry_bootnodes()`
+
+## [4.7.54] - 2025-12-13
+
+### Added
+
+### Fixed
+- **Bootnode Connection Recognition (CRITICAL)**
+  - Fixed `is_bootnode_connected()` to check both internal peer tracking AND swarm's connected peers
+  - This ensures inbound connections from bootnode are recognized immediately
+  - Prevents unnecessary outbound dial attempts when bootnode has already connected inbound
+  - **Problem**: Node 2 kept trying to dial Node 1 even when Node 1 had connected inbound
+  - **Solution**: Check `swarm.is_connected()` in addition to internal peer tracking
+  - **Files Changed**: `network/src/protocol.rs` - Enhanced `is_bootnode_connected()` and `retry_bootnodes()`
+
+### Added
+- **Relay Address Discovery and Fallback Connection (CRITICAL)**
+  - Added relay address tracking to enable fallback connections when direct connection fails
+  - Nodes now extract and store relay addresses (`/p2p-circuit/`) from identify protocol
+  - When direct connection to a peer fails, nodes automatically attempt relay connection
+  - Relay addresses are stored per-peer and used as fallback in `retry_bootnodes()`
+  - **Problem**: Node 2 could not establish OUTBOUND connection to Node 1 (unidirectional connectivity)
+  - **Solution**: Extract relay addresses from identify protocol, store them, and use as fallback when direct dial fails
+  - **Files Changed**: 
+    - `network/src/protocol.rs` - Added `peer_relay_addresses` HashMap to NetworkService
+    - `network/src/protocol.rs` - Enhanced `identify::Event::Received` to extract relay addresses
+    - `network/src/protocol.rs` - Enhanced `retry_bootnodes()` to try relay connection when direct fails
+    - `network/src/protocol.rs` - Improved external address handling to allow relay addresses
+
+- **Enhanced Relay Event Logging**
+  - Added detailed logging for relay reservation acceptance and circuit establishment
+  - Logs when relay addresses are discovered and stored
+  - Helps diagnose relay connectivity issues
+  - **Files Changed**: `network/src/protocol.rs` - Enhanced relay event handlers
+
+## [4.7.53] - 2025-12-13
+
+### Fixed
+- **Connection Tracking and Peer Management (CRITICAL)**
+  - Fixed peer tracking to only register peers on first connection, preventing duplicate tracking when multiple connections exist to the same peer
+  - Fixed connection closed handling to only remove peer from tracking when ALL connections to that peer are closed
+  - This prevents premature disconnection and ensures peers remain tracked even if one connection closes
+  - **Problem**: Multiple connections to same peer caused duplicate tracking and premature removal
+  - **Solution**: Track peer only on first connection, remove only when all connections closed
+  - **Files Changed**: `network/src/protocol.rs` - Updated `ConnectionEstablished` and `ConnectionClosed` handlers
+
+- **Bootnode Retry Logic Enhancement**
+  - Fixed `retry_bootnodes()` to only retry when bootnode is not connected AND no peers exist
+  - Prevents infinite retry loops when connection is established but not yet tracked
+  - **Problem**: Node would retry bootnode even when connection was established but not yet in peer set
+  - **Solution**: Check both bootnode connection status AND peer count before retrying
+  - **Files Changed**: `network/src/protocol.rs` - Updated `retry_bootnodes()` logic
+
+- **Enhanced Deserialization Error Logging**
+  - Added detailed logging for deserialization failures including peer ID, message length, and hex dump
+  - Helps diagnose protocol mismatches and message corruption issues
+  - Detects topic mismatches (NetworkMessage vs LightSyncNetworkMessage)
+  - **Files Changed**: `network/src/protocol.rs` - Enhanced error logging in `handle_gossipsub_message()` and `handle_light_sync_message()`
+
+- **Genesis Hash Validation During Handshake**
+  - Added genesis hash validation when receiving Status messages
+  - Peers on different chains are immediately disconnected
+  - Prevents cross-chain communication and ensures all peers are on the same network
+  - **Problem**: Nodes could connect to peers on different chains without validation
+  - **Solution**: Validate genesis hash in Status message handler, disconnect on mismatch
+  - **Files Changed**: 
+    - `network/src/protocol.rs` - Added genesis_hash to StatusUpdate event
+    - `node/src/service.rs` - Added genesis hash validation in StatusUpdate handler
+    - `node/src/service.rs` - Added `DisconnectPeer` command to NetworkCommand enum
+
+## [4.7.52] - 2025-12-13
+
+### Fixed
+- **Bootnode Retry Logic Fix**
+  - Fixed issue where Node 2 would endlessly retry connecting to Node 1 even when already connected
+  - `retry_bootnodes()` now stops retrying if ANY peers are connected
+  - This prevents unnecessary dial attempts when Node 1 connects inbound to Node 2
+  - **Problem**: Node 1 connects outbound to Node 2, but Node 2 doesn't recognize it and keeps retrying
+  - **Solution**: If we have peers, assume bootnode might be one of them and stop retrying
+  - **Files Changed**: `network/src/protocol.rs` - Updated `retry_bootnodes()` to check for any connected peers
+
+## [4.7.51] - 2025-12-13
+
+### Fixed
+- **NAT Traversal and Bidirectional Connectivity (CRITICAL)**
+  - Fixed unidirectional connectivity preventing GossipSub mesh establishment
+  - Added `autonat` protocol for NAT detection and hole punching
+  - Added `relay` protocol for nodes behind restrictive NATs
+  - Autonat configured with 10s timeout and 30s retry interval for NAT detection
+  - Relay enables connections through relay nodes when direct connection fails
+  - This fixes the issue where Node 2 could not establish bidirectional connection to Node 1
+  - GossipSub mesh now properly establishes, enabling status updates and block propagation
+  - **Problem**: Node 1 could connect to Node 2 (inbound), but Node 2 could not connect to Node 1 (outbound dials timed out)
+  - **Solution**: Autonat detects NAT type and attempts hole punching; relay provides fallback for restrictive NATs
+  - **Files Changed**: 
+    - `Cargo.toml` - Added `autonat` and `relay` features to libp2p
+    - `network/src/protocol.rs` - Added autonat and relay behaviours, configured NAT traversal
+
+## [4.7.50] - 2025-12-11
+
+### Fixed
+- **Simplified Bootnode Connection Logic**
+  - Removed complex bootnode tracking that was causing unnecessary complexity
+  - Simplified retry logic: only retries if no peers are connected
+  - Bootnode connection detection now works correctly - if Node 1 sees Node 2, the connection exists
+  - Fixed issue where Node 2 kept dialing Node 1 even when already connected (inbound connection from Node 1's perspective)
+  - **Files Changed**: `network/src/protocol.rs` - Simplified `retry_bootnodes()` and removed unnecessary bootnode tracking
+
+- **Sync-Before-Mining Logic for Multi-Node Networks**
+  - Fixed sync logic to work with any number of nodes, not just Node 1 and Node 2
+  - Nodes now sync to the longest chain with highest work score (using peer consensus)
+  - Sync logic scales to many nodes by using `peer_consensus.check_consensus()` to find longest chain
+  - Full/Archive/Validator/Bounty/Oracle nodes must fully sync before mining
+  - Light nodes skip full chain sync (they only sync headers) but can still mine
+  - **Files Changed**: `node/src/service.rs` - Updated `mining_loop()` to use peer consensus for longest chain detection
+
+- **Fork Block Acceptance During Reorganization**
+  - Fixed issue where nodes rejected fork blocks (blocks 0-N from peer's chain) as "old blocks" during reorganization
+  - When requesting full chain (0-N) for reorganization, nodes now accept and store fork blocks at heights <= current best height
+  - Fork blocks are stored for reorganization even if they're at the same or lower height than current chain
+  - This allows nodes to properly reorganize when they're on a fork and need to switch to the canonical chain
+  - **Problem**: Node 2 was stuck at height 171 because it rejected blocks 0-171 from Node 1's chain as "old blocks"
+  - **Solution**: Check if blocks at height <= best_height have different hash (fork blocks) and store them for reorganization
+  - **Files Changed**: `node/src/service.rs` - Updated block handling logic to accept fork blocks during reorganization
+
+### Changed
+- **Mining and Validation**: All nodes are validators (validate blocks), but not all nodes are miners (produce blocks)
+  - The NP-hard problem system allows any node to participate in block production IF they choose to mine
+  - Node type classification determines capabilities (storage, sync mode, etc.), not validation status
+  - All nodes validate blocks regardless of type
+  - Light nodes can mine without full chain sync (headers-only mode) if mining is enabled
+  - Full/Archive/Validator/Bounty/Oracle nodes must sync full chain before mining (if mining is enabled)
+
 ## [4.7.49] - 2025-12-11
 
 ### Added

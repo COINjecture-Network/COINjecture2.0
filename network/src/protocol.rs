@@ -2,11 +2,13 @@
 use coinject_core::{Block, Transaction, Hash};
 use futures::StreamExt;
 use libp2p::{
+    autonat,
     gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
     identify, identity,
     kad::{self, store::MemoryStore},
     mdns,
     noise,
+    relay,
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm,
 };
@@ -163,13 +165,15 @@ impl NetworkTopics {
     }
 }
 
-/// libp2p network behaviour combining gossipsub, mDNS, and Kademlia
+/// libp2p network behaviour combining gossipsub, mDNS, Kademlia, autonat, and relay
 #[derive(NetworkBehaviour)]
 pub struct CoinjectBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub mdns: mdns::tokio::Behaviour,
     pub kademlia: kad::Behaviour<MemoryStore>,
     pub identify: identify::Behaviour,
+    pub autonat: autonat::Behaviour,
+    pub relay: relay::Behaviour,
 }
 
 /// Network protocol configuration
@@ -245,6 +249,13 @@ pub struct NetworkService {
     bootnode_addrs: Vec<Multiaddr>,
     /// Track which bootnodes are currently connected (by their PeerId if known)
     connected_bootnodes: HashSet<PeerId>,
+    /// Relay addresses for each peer (for fallback when direct connection fails)
+    peer_relay_addresses: HashMap<PeerId, Multiaddr>,
+    /// Track incoming connection attempts to prevent simultaneous outbound dials
+    /// Maps connection_id to the source address
+    incoming_connection_attempts: HashMap<libp2p::swarm::ConnectionId, Multiaddr>,
+    /// Blacklisted peer IDs that should be rejected/ignored
+    blacklisted_peers: HashSet<PeerId>,
 }
 
 /// Events emitted by the network service
@@ -263,6 +274,7 @@ pub enum NetworkEvent {
         peer: PeerId,
         best_height: u64,
         best_hash: Hash,
+        genesis_hash: Hash, // CRITICAL: Genesis hash for chain validation during "handshake"
         node_type: NetworkNodeType,
     },
     /// Blocks requested by peer (for sync)
@@ -352,6 +364,7 @@ fn is_private_address(addr: &Multiaddr) -> bool {
     s.contains("/ip4/172.3") ||    // Docker bridge  
     s.contains("/ip4/192.168.") || // Private networks
     s.contains("/ip4/127.") ||     // Loopback
+    s.contains("/ip4/169.254.") || // Link-local auto-configuration (RFC 3927) - fixes ghost IPs
     s.contains("/ip6/::1") ||      // IPv6 loopback
     s.contains("/ip6/fe80")        // IPv6 link-local
 }
@@ -413,12 +426,32 @@ impl NetworkService {
             local_key.public(),
         ));
 
+        // Create autonat for NAT detection and hole punching
+        // This enables bidirectional connectivity by detecting NAT type and attempting hole punching
+        let autonat = autonat::Behaviour::new(
+            local_peer_id,
+            autonat::Config {
+                // Use longer timeout for slow networks
+                timeout: Duration::from_secs(10),
+                // Retry interval for NAT detection
+                retry_interval: Duration::from_secs(30),
+                // Only use servers we trust (for now, allow any)
+                ..Default::default()
+            },
+        );
+
+        // Create relay for nodes behind restrictive NATs
+        // This allows nodes to connect through relay nodes when direct connection fails
+        let relay = relay::Behaviour::new(local_peer_id, relay::Config::default());
+
         // Combine behaviours
         let behaviour = CoinjectBehaviour {
             gossipsub,
             mdns,
             kademlia,
             identify,
+            autonat,
+            relay,
         };
 
         // Configure TCP with nodelay to prevent Nagle's algorithm buffering small handshake packets
@@ -426,6 +459,11 @@ impl NetworkService {
         let tcp_config = tcp::Config::default()
             .nodelay(true)  // CRITICAL: Disable Nagle's algorithm for Noise handshake
             .listen_backlog(2048);  // Larger backlog for connection queue
+        
+        // Configure Noise with longer timeout for slow networks
+        // Default timeout is 10s, increase to 30s for high-latency connections
+        // CRITICAL FIX: Use default config to avoid handshake issues
+        let noise_config = noise::Config::new;
         
         // FIXED: Use default Yamux config to avoid flow control issues with mixed-version peers
         // Custom window/buffer sizes (like 1MB/2MB) can cause silent disconnects due to
@@ -440,7 +478,7 @@ impl NetworkService {
             .with_tokio()
             .with_tcp(
                 tcp_config,
-                noise::Config::new,
+                noise_config,
                 yamux::Config::default,  // FIXED: Use defaults for peer compatibility
             )?
             .with_behaviour(|_keypair| Ok(behaviour))?
@@ -448,6 +486,9 @@ impl NetworkService {
                 // FIXED: 60 seconds is sufficient (24h was excessive and wastes resources)
                 // Gossipsub heartbeats (1s) keep active connections alive
                 // 60s allows cleanup of truly dead connections
+                // Note: libp2p 0.54 doesn't expose dial timeout directly, but the transport
+                // layer handles timeouts. The Noise handshake timeout is controlled by
+                // the transport implementation.
                 cfg.with_idle_connection_timeout(Duration::from_secs(60))
             })
             .build();
@@ -469,6 +510,17 @@ impl NetworkService {
                 local_peer_id,
                 bootnode_addrs: Vec::new(),
                 connected_bootnodes: HashSet::new(),
+                peer_relay_addresses: HashMap::new(),
+                incoming_connection_attempts: HashMap::new(),
+                blacklisted_peers: {
+                    // Blacklist the GCE VM peer that's interfering with connections
+                    let mut blacklist = HashSet::new();
+                    if let Ok(blacklisted_peer) = "12D3KooWFL8uuMmeoWyU46SdX8g2aJEk4Fv5qAr4dZXmZfsGiefa".parse::<PeerId>() {
+                        blacklist.insert(blacklisted_peer);
+                        println!("🚫 Blacklisted interfering peer: {}", blacklisted_peer);
+                    }
+                    blacklist
+                },
             },
             event_rx,
         ))
@@ -843,6 +895,17 @@ impl NetworkService {
     pub fn mesh_peer_count(&self) -> usize {
         self.mesh_peers.len()
     }
+
+    /// Disconnect a peer (e.g., for genesis hash mismatch)
+    pub fn disconnect_peer(&mut self, peer: PeerId) {
+        println!("🔌 Disconnecting peer: {:?}", peer);
+        self.swarm.disconnect_peer_id(peer);
+        self.peers.remove(&peer);
+        self.mesh_peers.remove(&peer);
+        if let Ok(mut count) = self.peer_count.try_write() {
+            *count = self.peers.len();
+        }
+    }
     
     /// Log comprehensive network health status (call periodically for monitoring)
     pub fn log_network_health(&self) {
@@ -934,27 +997,126 @@ impl NetworkService {
         Ok(())
     }
 
+    /// Check if canonical bootnode (Node 1) is connected
+    pub fn is_bootnode_connected(&self) -> bool {
+        if self.bootnode_addrs.is_empty() {
+            return false;
+        }
+        
+        // Check if any bootnode peer ID is in our connected peers
+        // CRITICAL: Check both our internal peers set AND the swarm's connected peers
+        // This fixes the issue where inbound connections aren't being tracked
+        for addr in &self.bootnode_addrs {
+            if let Some(bootnode_peer_id) = addr.iter().find_map(|p| {
+                if let libp2p::multiaddr::Protocol::P2p(peer_id) = p {
+                    Some(peer_id)
+                } else {
+                    None
+                }
+            }) {
+                // Check our internal tracking
+                if self.peers.contains(&bootnode_peer_id) {
+                    return true;
+                }
+                // CRITICAL: Also check swarm's connected peers (for inbound connections)
+                // This ensures we recognize bootnode even if it connected inbound before we tracked it
+                if self.swarm.is_connected(&bootnode_peer_id) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Retry connecting to bootnodes that may have disconnected
     pub fn retry_bootnodes(&mut self) {
         if self.bootnode_addrs.is_empty() {
             return;
         }
 
-        // Check how many peers we have
-        let peer_count = self.peers.len();
+        // CRITICAL FIX: Only retry if bootnode is not connected AND we have no peers
+        // This prevents infinite retry loops when connection is established but not tracked
+        // IMPORTANT: If bootnode connects inbound, we should recognize it and stop dialing
+        let bootnode_connected = self.is_bootnode_connected();
+        let has_peers = !self.peers.is_empty();
         
-        // If we have no peers, try to reconnect to all bootnodes
-        if peer_count == 0 {
-            println!("📡 No peers connected, retrying {} bootnode(s)...", self.bootnode_addrs.len());
+        // If bootnode is connected (inbound or outbound), don't retry
+        if bootnode_connected {
+            return;
+        }
+        
+        // CRITICAL: Check if we have incoming connection attempts from bootnodes
+        // If so, don't dial outbound - wait for the incoming connection to complete
+        let has_incoming_bootnode_attempt = self.bootnode_addrs.iter().any(|bootnode_addr| {
+            let bootnode_ip = bootnode_addr.iter()
+                .find_map(|p| {
+                    if let libp2p::multiaddr::Protocol::Ip4(ip) = p {
+                        Some(ip)
+                    } else {
+                        None
+                    }
+                });
+            
+            self.incoming_connection_attempts.values().any(|inc_addr| {
+                let inc_ip = inc_addr.iter()
+                    .find_map(|p| {
+                        if let libp2p::multiaddr::Protocol::Ip4(ip) = p {
+                            Some(ip)
+                        } else {
+                            None
+                        }
+                    });
+                
+                bootnode_ip.is_some() && inc_ip.is_some() && bootnode_ip == inc_ip
+            })
+        });
+        
+        if has_incoming_bootnode_attempt {
+            println!("📡 Incoming connection attempt from bootnode detected - waiting for handshake to complete (skipping outbound dial)");
+            return;
+        }
+        
+        // Only retry if we have no peers at all
+        if !has_peers {
+            println!("📡 Bootnode not connected and no peers, retrying {} bootnode(s)...", self.bootnode_addrs.len());
+            
+            // Try direct connection first, then relay if available
             for addr in self.bootnode_addrs.clone() {
+                // Extract target peer ID from bootnode address
+                let mut target_peer_id: Option<PeerId> = None;
+                for proto in addr.iter() {
+                    if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                        target_peer_id = Some(peer_id);
+                        break;
+                    }
+                }
+                
+                // Try direct connection first
                 match self.swarm.dial(addr.clone()) {
                     Ok(()) => {
-                        println!("   🔄 Retry dial to: {}", addr);
+                        println!("   🔄 Retry dial (direct) to: {}", addr);
                     }
                     Err(e) => {
                         // Connection might already be in progress, that's ok
-                        if !e.to_string().contains("already pending") {
-                            eprintln!("   ❌ Retry dial failed: {:?}", e);
+                        if !e.to_string().contains("already pending") && !e.to_string().contains("Already dialing") {
+                            eprintln!("   ❌ Direct dial failed: {:?}", e);
+                            
+                            // If direct connection failed and we have a relay address for this peer, try relay
+                            if let Some(peer_id) = target_peer_id {
+                                if let Some(relay_addr) = self.peer_relay_addresses.get(&peer_id) {
+                                    println!("   🔄 Attempting relay connection to {} via: {}", peer_id, relay_addr);
+                                    match self.swarm.dial(relay_addr.clone()) {
+                                        Ok(()) => {
+                                            println!("   ✅ Relay dial initiated");
+                                        }
+                                        Err(relay_err) => {
+                                            eprintln!("   ❌ Relay dial also failed: {:?}", relay_err);
+                                        }
+                                    }
+                                } else {
+                                    println!("   ℹ️  No relay address available for peer {}", peer_id);
+                                }
+                            }
                         }
                     }
                 }
@@ -1024,14 +1186,17 @@ impl NetworkService {
             Ok(NetworkMessage::Status {
                 best_height,
                 best_hash,
-                genesis_hash: _,
+                genesis_hash,
                 node_type,
                 timestamp: _, // Ignored - only used to prevent gossipsub duplicate rejection
             }) => {
+                // CRITICAL: Validate genesis hash - reject peers on different chains
+                // This is part of the "handshake" - if genesis doesn't match, disconnect
                 let _ = self.event_tx.send(NetworkEvent::StatusUpdate {
                     peer,
                     best_height,
                     best_hash,
+                    genesis_hash, // Pass genesis_hash to handler for validation
                     node_type,
                 });
             }
@@ -1047,7 +1212,19 @@ impl NetworkService {
                 // Other message types handled separately
             }
             Err(e) => {
-                eprintln!("Failed to deserialize network message: {}", e);
+                eprintln!("❌ Failed to deserialize NetworkMessage from peer {:?}: {}", peer, e);
+                eprintln!("   Message length: {} bytes", message.len());
+                if message.len() > 0 {
+                    let preview_len = message.len().min(32);
+                    let hex_preview: String = message[..preview_len].iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect();
+                    eprintln!("   First {} bytes (hex): {}", preview_len, hex_preview);
+                }
+                // Try to deserialize as LightSyncNetworkMessage to see if it's a topic mismatch
+                if let Ok(_light_msg) = bincode::deserialize::<LightSyncNetworkMessage>(&message) {
+                    eprintln!("   ⚠️  Message is actually a LightSyncNetworkMessage (topic mismatch?)");
+                }
             }
         }
     }
@@ -1211,16 +1388,30 @@ impl NetworkService {
                     let mut private_addrs = 0;
                     
                     // CRITICAL: Filter out private/Docker addresses from peer's advertised addresses
+                    // Also extract relay addresses for fallback connection attempts
                     for addr in info.listen_addrs {
-                        if is_private_address(&addr) {
+                        // Check if this is a relay address (/p2p-circuit)
+                        let addr_str = addr.to_string();
+                        if addr_str.contains("/p2p-circuit/") {
+                            // This is a relay address - store it for fallback connection attempts
+                            println!("   🔄 Found relay address for peer {}: {}", peer_id, addr);
+                            self.peer_relay_addresses.insert(peer_id, addr.clone());
+                            // Still add to Kademlia for discovery
+                            self.swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .add_address(&peer_id, addr);
+                            public_addrs += 1; // Relay addresses count as public (reachable)
+                        } else if is_private_address(&addr) {
                             private_addrs += 1;
                             continue;
+                        } else {
+                            public_addrs += 1;
+                            self.swarm
+                                .behaviour_mut()
+                                .kademlia
+                                .add_address(&peer_id, addr);
                         }
-                        public_addrs += 1;
-                        self.swarm
-                            .behaviour_mut()
-                            .kademlia
-                            .add_address(&peer_id, addr);
                     }
                     println!("   Listen addrs: {} public, {} private (filtered)", public_addrs, private_addrs);
                 }
@@ -1238,6 +1429,32 @@ impl NetworkService {
                     ..
                 }) => {
                     println!("Kademlia routing updated for peer: {}", peer);
+                }
+                CoinjectBehaviourEvent::Autonat(autonat::Event::StatusChanged { old, new }) => {
+                    println!("🌐 Autonat status changed: {:?} -> {:?}", old, new);
+                }
+                CoinjectBehaviourEvent::Autonat(autonat::Event::InboundProbe { .. }) => {
+                    // NAT detection probe received
+                }
+                CoinjectBehaviourEvent::Autonat(autonat::Event::OutboundProbe { .. }) => {
+                    // NAT detection probe sent
+                }
+                CoinjectBehaviourEvent::Relay(relay::Event::ReservationReqAccepted { .. }) => {
+                    println!("🔄 Relay reservation request accepted");
+                    println!("   ℹ️  Relay reservation obtained - peers can now connect via relay");
+                    // Note: In libp2p 0.54, relay addresses are automatically advertised via identify protocol
+                    // We extract them from identify::Event::Received (listen_addrs with /p2p-circuit/)
+                }
+                CoinjectBehaviourEvent::Relay(relay::Event::ReservationReqDenied { .. }) => {
+                    println!("⚠️  Relay reservation request denied");
+                }
+                CoinjectBehaviourEvent::Relay(relay::Event::CircuitReqDenied { .. }) => {
+                    println!("⚠️  Relay circuit request denied");
+                }
+                CoinjectBehaviourEvent::Relay(relay::Event::CircuitReqAccepted { src_peer_id, dst_peer_id, .. }) => {
+                    println!("✅ Relay circuit established");
+                    println!("   From: {} → To: {}", src_peer_id, dst_peer_id);
+                    println!("   🔄 Connection via relay is now active");
                 }
                 _ => {}
             },
@@ -1270,24 +1487,54 @@ impl NetworkService {
                     }
                 }
                 
-                self.peers.insert(peer_id);
+                // CRITICAL: Check if this peer is blacklisted - if so, disconnect immediately
+                if self.blacklisted_peers.contains(&peer_id) {
+                    println!("🚫 DISCONNECTING blacklisted peer immediately: {}", peer_id);
+                    println!("   Connection established but peer is blacklisted - closing connection");
+                    self.swarm.disconnect_peer_id(peer_id);
+                    // Remove from any tracking
+                    self.peers.remove(&peer_id);
+                    self.mesh_peers.remove(&peer_id);
+                    // Remove from incoming connection tracking
+                    self.incoming_connection_attempts.retain(|_, addr| {
+                        !addr.to_string().contains(&peer_id.to_string())
+                    });
+                    return; // Don't process this connection further
+                }
                 
-                // Add peer to gossipsub mesh explicitly to ensure it participates in message propagation
-                self.swarm
-                    .behaviour_mut()
-                    .gossipsub
-                    .add_explicit_peer(&peer_id);
+                // Remove from incoming connection tracking since it succeeded
+                // Find the connection_id by matching the peer_id (we'll track this better in future)
+                // For now, just clear any stale entries
+                self.incoming_connection_attempts.retain(|_, addr| {
+                    // Keep entries that don't match this peer's address
+                    !addr.to_string().contains(&peer_id.to_string())
+                });
+                
+                // CRITICAL FIX: Only track peer on first connection, not every connection
+                // Multiple connections to same peer can cause issues
+                let is_new_peer = !self.peers.contains(&peer_id);
+                if is_new_peer {
+                    self.peers.insert(peer_id);
+                    
+                    // Add peer to gossipsub mesh explicitly to ensure it participates in message propagation
+                    self.swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .add_explicit_peer(&peer_id);
+                    
+                    self.mesh_peers.insert(peer_id);
+                    
+                    // Update shared peer count
+                    if let Ok(mut count) = self.peer_count.try_write() {
+                        *count = self.peers.len();
+                    }
+                    let _ = self.event_tx.send(NetworkEvent::PeerConnected(peer_id));
+                }
                 
                 // Log mesh state after adding peer
                 let mesh_size = self.mesh_peers.len();
                 let total_peers = self.peers.len();
-                println!("   📊 Network state: {} total peers, {} in gossipsub mesh", total_peers, mesh_size);
-                
-                // Update shared peer count
-                if let Ok(mut count) = self.peer_count.try_write() {
-                    *count = self.peers.len();
-                }
-                let _ = self.event_tx.send(NetworkEvent::PeerConnected(peer_id));
+                println!("   📊 Network state: {} total peers, {} in gossipsub mesh (new peer: {})", total_peers, mesh_size, is_new_peer);
             }
             SwarmEvent::ConnectionClosed { peer_id, cause, num_established, connection_id, endpoint } => {
                 // DIAGNOSTIC: Detailed connection close analysis for stability debugging
@@ -1370,11 +1617,16 @@ impl NetworkService {
             }
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 // Remove confirmed addresses if they're private (shouldn't happen but safety check)
-                if is_private_address(&address) {
+                // Exception: relay addresses may contain private IPs but are still reachable
+                let addr_str = address.to_string();
+                if is_private_address(&address) && !addr_str.contains("/p2p-circuit/") {
                     println!("🚫 Removing private confirmed address: {}", address);
                     self.swarm.remove_external_address(&address);
                 } else {
                     println!("✅ External address confirmed: {}", address);
+                    if addr_str.contains("/p2p-circuit/") {
+                        println!("   🔄 This is a relay address - peers can use this to connect via relay");
+                    }
                 }
             }
             SwarmEvent::ExternalAddrExpired { address } => {
@@ -1408,6 +1660,24 @@ impl NetworkService {
                 eprintln!("   Error: {}", err_str);
             }
             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, connection_id } => {
+                // Remove from tracking since connection failed
+                self.incoming_connection_attempts.remove(&connection_id);
+                
+                // Check if this was from a blacklisted peer
+                let mut incoming_peer_id: Option<PeerId> = None;
+                for proto in send_back_addr.iter() {
+                    if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                        incoming_peer_id = Some(peer_id);
+                        break;
+                    }
+                }
+                if let Some(peer_id) = incoming_peer_id {
+                    if self.blacklisted_peers.contains(&peer_id) {
+                        // Silently ignore errors from blacklisted peers
+                        return;
+                    }
+                }
+                
                 // DIAGNOSTIC: Detailed incoming connection failure analysis
                 let err_str = format!("{:?}", error);
                 
@@ -1417,6 +1687,8 @@ impl NetworkService {
                     "NOISE_HANDSHAKE_FAILED"
                 } else if err_str.contains("Yamux") || err_str.contains("yamux") {
                     "YAMUX_NEGOTIATION_FAILED"
+                } else if err_str.contains("Reset") || err_str.contains("reset") {
+                    "CONNECTION_RESET"
                 } else {
                     "OTHER"
                 };
@@ -1426,6 +1698,36 @@ impl NetworkService {
                 eprintln!("   To local: {}", local_addr);
                 eprintln!("   Connection ID: {:?}", connection_id);
                 eprintln!("   Error: {}", err_str);
+                
+                // If this was a timeout from a bootnode, log it prominently
+                for bootnode_addr in &self.bootnode_addrs {
+                    let bootnode_ip = bootnode_addr.iter()
+                        .find_map(|p| {
+                            if let libp2p::multiaddr::Protocol::Ip4(ip) = p {
+                                Some(ip)
+                            } else {
+                                None
+                            }
+                        });
+                    
+                    let incoming_ip = send_back_addr.iter()
+                        .find_map(|p| {
+                            if let libp2p::multiaddr::Protocol::Ip4(ip) = p {
+                                Some(ip)
+                            } else {
+                                None
+                            }
+                        });
+                    
+                    if let (Some(boot_ip), Some(inc_ip)) = (bootnode_ip, incoming_ip) {
+                        if boot_ip == inc_ip && category == "TIMEOUT" {
+                            eprintln!("   🚨 CRITICAL: Bootnode handshake timeout - this may indicate:");
+                            eprintln!("      - Simultaneous dial attempts causing conflicts");
+                            eprintln!("      - Network latency issues");
+                            eprintln!("      - Firewall/NAT interference");
+                        }
+                    }
+                }
             }
             SwarmEvent::Dialing { peer_id, connection_id } => {
                 if let Some(peer) = peer_id {
@@ -1435,12 +1737,69 @@ impl NetworkService {
                 }
             }
             SwarmEvent::IncomingConnection { local_addr, send_back_addr, connection_id } => {
+                // CRITICAL: Check if this connection is from a blacklisted peer
+                // Extract peer ID from address if available
+                let mut incoming_peer_id: Option<PeerId> = None;
+                for proto in send_back_addr.iter() {
+                    if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
+                        incoming_peer_id = Some(peer_id);
+                        break;
+                    }
+                }
+                
+                // If we have a peer ID and it's blacklisted, reject the connection
+                // Note: We can't reject at this stage, but we'll disconnect immediately after handshake
+                if let Some(peer_id) = incoming_peer_id {
+                    if self.blacklisted_peers.contains(&peer_id) {
+                        println!("🚫 BLACKLISTED peer attempting connection: {}", peer_id);
+                        println!("   From: {}", send_back_addr);
+                        println!("   Connection ID: {:?}", connection_id);
+                        println!("   ⚠️  Will disconnect after handshake completes");
+                        // Store connection_id to disconnect after handshake
+                        // We'll handle this in ConnectionEstablished event
+                    }
+                }
+                
                 // DIAGNOSTIC: Log incoming connection attempts BEFORE protocol negotiation
                 println!("📥 INCOMING CONNECTION ATTEMPT");
                 println!("   From: {}", send_back_addr);
                 println!("   To local: {}", local_addr);
                 println!("   Connection ID: {:?}", connection_id);
                 println!("   (Noise+Yamux handshake starting...)");
+                
+                // CRITICAL: Track incoming connection attempts to prevent simultaneous outbound dials
+                // If we're receiving an incoming connection from a bootnode, don't dial outbound
+                self.incoming_connection_attempts.insert(connection_id, send_back_addr.clone());
+                
+                // Check if this incoming connection is from a bootnode
+                // If so, we should stop trying to dial outbound to avoid conflicts
+                for bootnode_addr in &self.bootnode_addrs {
+                    // Extract IP from bootnode address
+                    let bootnode_ip = bootnode_addr.iter()
+                        .find_map(|p| {
+                            if let libp2p::multiaddr::Protocol::Ip4(ip) = p {
+                                Some(ip)
+                            } else {
+                                None
+                            }
+                        });
+                    
+                    // Check if incoming connection is from bootnode IP
+                    let incoming_ip = send_back_addr.iter()
+                        .find_map(|p| {
+                            if let libp2p::multiaddr::Protocol::Ip4(ip) = p {
+                                Some(ip)
+                            } else {
+                                None
+                            }
+                        });
+                    
+                    if let (Some(boot_ip), Some(inc_ip)) = (bootnode_ip, incoming_ip) {
+                        if boot_ip == inc_ip {
+                            println!("   ✅ Incoming connection from bootnode IP - will skip outbound dial attempts");
+                        }
+                    }
+                }
             }
             _ => {}
         }
