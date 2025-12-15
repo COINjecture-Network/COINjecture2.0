@@ -1320,7 +1320,7 @@ impl CoinjectNode {
                 // === FIX: Mark peer as disconnected in consensus tracker ===
                 peer_consensus.mark_peer_disconnected(&peer_id_str).await;
             }
-            NetworkEvent::StatusUpdate { peer, best_height, best_hash, node_type } => {
+            NetworkEvent::StatusUpdate { peer, best_height, best_hash, genesis_hash: _, node_type } => {
                 let our_height = chain.best_block_height().await;
                 let our_hash = chain.best_block_hash().await;
 
