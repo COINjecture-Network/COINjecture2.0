@@ -1,4 +1,5 @@
 // P2P Network Protocol with libp2p gossipsub
+use crate::addr_filter::{AddressFilterConfig, validate_multiaddr, filter_multiaddrs_with_logging};
 use coinject_core::{Block, Transaction, Hash};
 use futures::StreamExt;
 use libp2p::{
@@ -9,7 +10,7 @@ use libp2p::{
     mdns,
     noise,
     relay,
-    swarm::{NetworkBehaviour, SwarmEvent},
+    swarm::{NetworkBehaviour, SwarmEvent, dial_opts::{DialOpts, PeerCondition}},
     tcp, yamux, Multiaddr, PeerId, Swarm,
 };
 use serde::{Deserialize, Serialize};
@@ -184,6 +185,11 @@ pub struct NetworkConfig {
     pub enable_mdns: bool,
     /// Optional path to persist the keypair (for stable PeerId across restarts)
     pub keypair_path: Option<PathBuf>,
+    /// Optional external address to advertise (e.g., /ip4/<PUBLIC_IP>/tcp/30333)
+    /// Use this when running behind NAT/Docker to ensure peers dial the correct address
+    pub external_addr: Option<String>,
+    /// Address filter configuration for cloud vs local deployment
+    pub addr_filter_config: Option<AddressFilterConfig>,
 }
 
 impl Default for NetworkConfig {
@@ -194,6 +200,8 @@ impl Default for NetworkConfig {
             max_peers: 50,
             enable_mdns: true,
             keypair_path: None,
+            external_addr: None,
+            addr_filter_config: Some(AddressFilterConfig::default()),
         }
     }
 }
@@ -256,6 +264,12 @@ pub struct NetworkService {
     incoming_connection_attempts: HashMap<libp2p::swarm::ConnectionId, Multiaddr>,
     /// Blacklisted peer IDs that should be rejected/ignored
     blacklisted_peers: HashSet<PeerId>,
+    /// Address filter configuration
+    addr_filter_config: AddressFilterConfig,
+    /// External address we advertise (if set)
+    external_addr: Option<Multiaddr>,
+    /// Track pending outbound dials to prevent simultaneous dial collisions
+    pending_dials: HashSet<PeerId>,
 }
 
 /// Events emitted by the network service
@@ -498,6 +512,26 @@ impl NetworkService {
 
         let topics = NetworkTopics::new(&config.chain_id);
 
+        // Parse and set external address if provided (CRITICAL for NAT/Docker)
+        let mut swarm = swarm;
+        let external_addr = if let Some(ref ext_addr) = config.external_addr {
+            match ext_addr.parse::<Multiaddr>() {
+                Ok(addr) => {
+                    println!("[ADDR] Setting external address: {}", addr);
+                    swarm.add_external_address(addr.clone());
+                    Some(addr)
+                }
+                Err(e) => {
+                    eprintln!("[ADDR] Failed to parse external address '{}': {}", ext_addr, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let addr_filter_config = config.addr_filter_config.clone().unwrap_or_default();
+
         Ok((
             NetworkService {
                 swarm,
@@ -521,6 +555,9 @@ impl NetworkService {
                     }
                     blacklist
                 },
+                addr_filter_config,
+                external_addr,
+                pending_dials: HashSet::new(),
             },
             event_rx,
         ))
@@ -951,11 +988,20 @@ impl NetworkService {
     }
 
     /// Connect to bootstrap nodes
+    /// Connect to bootstrap nodes with address validation and dial collision prevention
     pub fn connect_to_bootnodes(&mut self, bootnodes: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         for bootnode in bootnodes {
-            println!("   Connecting to bootnode: {}", bootnode);
+            println!("[BOOT] Connecting to bootnode: {}", bootnode);
             let addr: Multiaddr = bootnode.parse()
                 .map_err(|e| format!("Failed to parse bootnode address '{}': {:?}", bootnode, e))?;
+
+            // Validate the bootnode address
+            let validation = validate_multiaddr(&addr, &self.addr_filter_config);
+            if !validation.is_accepted() {
+                println!("[BOOT] Bootnode address rejected: {} (reason: {})", addr, validation.reason());
+                println!("[BOOT]   Hint: Bootnodes should use public IPs with port 30333");
+                continue;
+            }
 
             // Store for reconnection attempts
             if !self.bootnode_addrs.contains(&addr) {
@@ -967,31 +1013,55 @@ impl NetworkService {
             for proto in addr.iter() {
                 if let libp2p::multiaddr::Protocol::P2p(peer_id) = proto {
                     peer_id_opt = Some(peer_id);
+                    
+                    // Check if we're already connected or have pending dial
+                    if self.peers.contains(&peer_id) {
+                        println!("[BOOT] Already connected to bootnode: {}", peer_id);
+                        continue;
+                    }
+                    if self.pending_dials.contains(&peer_id) {
+                        println!("[BOOT] Already dialing bootnode: {}", peer_id);
+                        continue;
+                    }
+                    
                     // Add to Kademlia routing table
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, addr.clone());
                     break;
                 }
             }
 
-            // Dial the bootnode
-            match self.swarm.dial(addr.clone()) {
+            // Use DialOpts with PeerCondition to prevent simultaneous dial collisions
+            let dial_result = if let Some(peer_id) = peer_id_opt {
+                // Dial with peer condition: only dial if not already connected/dialing
+                let opts = DialOpts::peer_id(peer_id)
+                    .addresses(vec![addr.clone()])
+                    .condition(PeerCondition::Disconnected)
+                    .build();
+                self.swarm.dial(opts)
+            } else {
+                println!("[BOOT] Warning: Bootnode address missing /p2p/<PeerId> suffix");
+                println!("[BOOT]   For reliable connectivity, use: {}/p2p/<PEER_ID>", bootnode);
+                self.swarm.dial(addr.clone())
+            };
+
+            match dial_result {
                 Ok(()) => {
-                    println!("   ✅ Dial initiated to bootnode: {}", bootnode);
-                    if peer_id_opt.is_none() {
-                        println!("   ⚠️  Warning: Bootnode address missing /p2p/<PeerId> suffix");
-                        println!("      For reliable connectivity, use: {}/p2p/<PEER_ID>", bootnode);
-                    }
+                    println!("[BOOT] Dial initiated to bootnode: {}", bootnode);
                 }
                 Err(e) => {
-                    eprintln!("   ❌ Failed to dial bootnode '{}': {:?}", bootnode, e);
-                    // Continue trying other bootnodes even if one fails
+                    let error_str = format!("{:?}", e);
+                    if error_str.contains("AlreadyDialing") || error_str.contains("AlreadyConnected") || error_str.contains("already pending") {
+                        println!("[BOOT] Already dialing/connected to bootnode: {}", bootnode);
+                    } else {
+                        eprintln!("[BOOT] Failed to dial bootnode '{}': {:?}", bootnode, e);
+                    }
                 }
             }
         }
         
         // Bootstrap Kademlia DHT to discover peers
         if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
-            eprintln!("   ⚠️  Kademlia bootstrap warning: {:?}", e);
+            eprintln!("[BOOT] Kademlia bootstrap warning: {:?}", e);
         }
         
         Ok(())
@@ -1114,9 +1184,9 @@ impl NetworkService {
                     }
                 }
                 
-                // CRITICAL: Check if already connected before dialing
+                // CRITICAL: Check if already connected or pending before dialing
                 if let Some(bootnode_peer_id) = target_peer_id {
-                    if self.swarm.is_connected(&bootnode_peer_id) {
+                    if self.swarm.is_connected(&bootnode_peer_id) || self.peers.contains(&bootnode_peer_id) {
                         // Already connected - sync tracking and skip dial
                         if !self.peers.contains(&bootnode_peer_id) {
                             self.peers.insert(bootnode_peer_id);
@@ -1129,17 +1199,34 @@ impl NetworkService {
                         }
                         continue; // Skip dial, already connected
                     }
+                    if self.pending_dials.contains(&bootnode_peer_id) {
+                        println!("[RETRY] Already have pending dial to: {}", bootnode_peer_id);
+                        continue;
+                    }
                 }
                 
-                // Try direct connection first
-                match self.swarm.dial(addr.clone()) {
+                // Use DialOpts with PeerCondition for collision prevention
+                let dial_result = if let Some(peer_id) = target_peer_id {
+                    let opts = DialOpts::peer_id(peer_id)
+                        .addresses(vec![addr.clone()])
+                        .condition(PeerCondition::Disconnected)
+                        .build();
+                    self.swarm.dial(opts)
+                } else {
+                    self.swarm.dial(addr.clone())
+                };
+                
+                match dial_result {
                     Ok(()) => {
-                        println!("   🔄 Retry dial (direct) to: {}", addr);
+                        println!("[RETRY] Dial initiated to: {}", addr);
                     }
                     Err(e) => {
+                        let err_str = e.to_string();
                         // Connection might already be in progress, that's ok
-                        if !e.to_string().contains("already pending") && !e.to_string().contains("Already dialing") {
-                            eprintln!("   ❌ Direct dial failed: {:?}", e);
+                        if !err_str.contains("already pending") && 
+                           !err_str.contains("AlreadyDialing") &&
+                           !err_str.contains("AlreadyConnected") {
+                            eprintln!("[RETRY] Dial failed: {:?}", e);
                             
                             // If direct connection failed and we have a relay address for this peer, try relay
                             if let Some(peer_id) = target_peer_id {
@@ -1420,44 +1507,59 @@ impl NetworkService {
                     info,
                     ..
                 }) => {
-                    // DIAGNOSTIC: Full identify protocol exchange details
-                    println!("🆔 IDENTIFY RECEIVED from peer: {}", peer_id);
-                    println!("   Protocol version: {}", info.protocol_version);
-                    println!("   Agent version: {}", info.agent_version);
-                    println!("   Supported protocols: {:?}", info.protocols);
-                    println!("   Observed addr (how they see us): {:?}", info.observed_addr);
+                    println!(
+                        "[IDENTIFY] Received from peer: {} - protocol: {} - agent: {}",
+                        peer_id, info.protocol_version, info.agent_version
+                    );
                     
-                    // Count public vs private addresses
-                    let mut public_addrs = 0;
-                    let mut private_addrs = 0;
+                    // Log all listen addresses before filtering
+                    println!("[IDENTIFY] Peer {} reported {} listen address(es):", peer_id, info.listen_addrs.len());
+                    for addr in &info.listen_addrs {
+                        println!("[IDENTIFY]   Raw: {}", addr);
+                    }
                     
-                    // CRITICAL: Filter out private/Docker addresses from peer's advertised addresses
-                    // Also extract relay addresses for fallback connection attempts
+                    // Extract relay addresses first (they bypass normal filtering)
+                    let mut relay_addrs = Vec::new();
+                    let mut non_relay_addrs = Vec::new();
+                    
                     for addr in info.listen_addrs {
-                        // Check if this is a relay address (/p2p-circuit)
                         let addr_str = addr.to_string();
                         if addr_str.contains("/p2p-circuit/") {
                             // This is a relay address - store it for fallback connection attempts
-                            println!("   🔄 Found relay address for peer {}: {}", peer_id, addr);
+                            println!("[IDENTIFY]   🔄 Found relay address for peer {}: {}", peer_id, addr);
                             self.peer_relay_addresses.insert(peer_id, addr.clone());
-                            // Still add to Kademlia for discovery
-                            self.swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .add_address(&peer_id, addr);
-                            public_addrs += 1; // Relay addresses count as public (reachable)
-                        } else if is_private_address(&addr) {
-                            private_addrs += 1;
-                            continue;
+                            relay_addrs.push(addr);
                         } else {
-                            public_addrs += 1;
-                            self.swarm
-                                .behaviour_mut()
-                                .kademlia
-                                .add_address(&peer_id, addr);
+                            non_relay_addrs.push(addr);
                         }
                     }
-                    println!("   Listen addrs: {} public, {} private (filtered)", public_addrs, private_addrs);
+                    
+                    // Filter non-relay addresses using addr_filter
+                    let filtered_addrs = filter_multiaddrs_with_logging(
+                        non_relay_addrs,
+                        &self.addr_filter_config,
+                        &format!("identify:{}", peer_id),
+                    );
+                    
+                    println!("[IDENTIFY] Accepted {} address(es) for peer {} ({} relay, {} filtered)", 
+                        filtered_addrs.len() + relay_addrs.len(), peer_id, relay_addrs.len(), filtered_addrs.len());
+                    
+                    // Add relay addresses to kademlia
+                    for addr in relay_addrs {
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr);
+                    }
+                    
+                    // Add filtered addresses to kademlia
+                    for addr in filtered_addrs {
+                        println!("[IDENTIFY]   Adding to kademlia: {}", addr);
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr);
+                    }
                 }
                 CoinjectBehaviourEvent::Identify(identify::Event::Sent { peer_id, .. }) => {
                     println!("🆔 IDENTIFY SENT to peer: {}", peer_id);
@@ -1529,6 +1631,11 @@ impl NetworkService {
                             println!("      {} → {:?}", addr, err);
                         }
                     }
+                }
+                
+                // Remove from pending dials now that connection is established
+                if endpoint.is_dialer() {
+                    self.pending_dials.remove(&peer_id);
                 }
                 
                 // CRITICAL: Check if this peer is blacklisted - if so, disconnect immediately
@@ -1640,36 +1747,41 @@ impl NetworkService {
                     let _ = self.event_tx.send(NetworkEvent::PeerDisconnected(peer_id));
                 }
             }
-            SwarmEvent::NewListenAddr { address, .. } => {
-                // Filter out private addresses from being advertised
-                if is_private_address(&address) {
-                    println!("🚫 Ignoring private listen address: {}", address);
-                } else {
-                    println!("Listening on: {}", address);
+            SwarmEvent::NewListenAddr { address, listener_id } => {
+                println!("[LISTEN] Listening on: {} (listener_id={:?})", address, listener_id);
+                println!("[LISTEN]   Local PeerId: {}", self.local_peer_id);
+                println!("[LISTEN]   Full bootnode addr: {}/p2p/{}", address, self.local_peer_id);
+                
+                // If we have an external address configured, remind the user
+                if let Some(ref ext) = self.external_addr {
+                    println!("[LISTEN]   External addr (advertised): {}/p2p/{}", ext, self.local_peer_id);
                 }
             }
             SwarmEvent::NewExternalAddrCandidate { address } => {
-                // CRITICAL: Filter private Docker IPs to prevent connection timeouts
-                // When running with --network=host, Docker bridge IPs get advertised
-                // and peers waste time trying to dial them
-                if is_private_address(&address) {
-                    println!("🚫 Filtering private external address candidate: {}", address);
+                // CRITICAL: Filter invalid addresses (private IPs + wrong ports)
+                // Docker NAT assigns ephemeral source ports that peers can't dial back
+                let validation = validate_multiaddr(&address, &self.addr_filter_config);
+                if !validation.is_accepted() {
+                    println!("[ADDR_FILTER] Rejecting external address candidate: {} ({})", address, validation.reason());
                 } else {
                     println!("✅ Adding external address: {}", address);
                     self.swarm.add_external_address(address);
                 }
             }
             SwarmEvent::ExternalAddrConfirmed { address } => {
-                // Remove confirmed addresses if they're private (shouldn't happen but safety check)
-                // Exception: relay addresses may contain private IPs but are still reachable
+                // Remove confirmed addresses if they're invalid (private IP or wrong port)
+                // Exception: relay addresses use different port logic
                 let addr_str = address.to_string();
-                if is_private_address(&address) && !addr_str.contains("/p2p-circuit/") {
-                    println!("🚫 Removing private confirmed address: {}", address);
-                    self.swarm.remove_external_address(&address);
+                if addr_str.contains("/p2p-circuit/") {
+                    println!("✅ External relay address confirmed: {}", address);
+                    println!("   🔄 This is a relay address - peers can use this to connect via relay");
                 } else {
-                    println!("✅ External address confirmed: {}", address);
-                    if addr_str.contains("/p2p-circuit/") {
-                        println!("   🔄 This is a relay address - peers can use this to connect via relay");
+                    let validation = validate_multiaddr(&address, &self.addr_filter_config);
+                    if !validation.is_accepted() {
+                        println!("[ADDR_FILTER] Removing invalid confirmed address: {} ({})", address, validation.reason());
+                        self.swarm.remove_external_address(&address);
+                    } else {
+                        println!("✅ External address confirmed: {}", address);
                     }
                 }
             }
@@ -1677,6 +1789,11 @@ impl NetworkService {
                 println!("📤 External address expired: {}", address);
             }
             SwarmEvent::OutgoingConnectionError { peer_id, error, connection_id } => {
+                // Remove from pending dials
+                if let Some(pid) = peer_id {
+                    self.pending_dials.remove(&pid);
+                }
+                
                 // DIAGNOSTIC: Detailed outgoing connection failure analysis
                 let peer_str = peer_id.map(|p| p.to_string()).unwrap_or_else(|| "unknown".to_string());
                 let err_str = format!("{:?}", error);
@@ -1698,10 +1815,8 @@ impl NetworkService {
                     "OTHER"
                 };
                 
-                eprintln!("❌ OUTGOING CONNECTION FAILED [{}]", category);
-                eprintln!("   Peer: {}", peer_str);
-                eprintln!("   Connection ID: {:?}", connection_id);
-                eprintln!("   Error: {}", err_str);
+                eprintln!("[DIAL_ERR] Outgoing connection failed [{}] to {}: {}", category, peer_str, err_str);
+                eprintln!("[DIAL_ERR]   Connection ID: {:?}", connection_id);
             }
             SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, connection_id } => {
                 // Remove from tracking since connection failed
@@ -1775,9 +1890,10 @@ impl NetworkService {
             }
             SwarmEvent::Dialing { peer_id, connection_id } => {
                 if let Some(peer) = peer_id {
-                    println!("🔄 DIALING: Peer {} (connection {:?})", peer, connection_id);
+                    println!("[DIAL] Dialing peer: {} (conn_id={:?})", peer, connection_id);
+                    self.pending_dials.insert(peer);
                 } else {
-                    println!("🔄 DIALING: Unknown peer (connection {:?})", connection_id);
+                    println!("[DIAL] Dialing unknown peer (conn_id={:?})", connection_id);
                 }
             }
             SwarmEvent::IncomingConnection { local_addr, send_back_addr, connection_id } => {

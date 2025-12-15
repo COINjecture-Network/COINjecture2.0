@@ -158,6 +158,21 @@ pub struct NodeConfig {
     /// Requires compilation with --features adzdb
     #[arg(long)]
     pub use_adzdb: bool,
+
+    // ==========================================================================
+    // NETWORK CONNECTIVITY
+    // ==========================================================================
+
+    /// External/public address to advertise to peers (multiaddr format)
+    /// Use this when running behind NAT or Docker to ensure peers dial the correct address.
+    /// Example: /ip4/143.110.139.166/tcp/30333
+    #[arg(long)]
+    pub external_addr: Option<String>,
+
+    /// Allow private RFC1918 addresses (for local/LAN testing)
+    /// By default, private addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x) are rejected
+    #[arg(long)]
+    pub allow_private_addrs: bool,
 }
 
 impl NodeConfig {
@@ -297,6 +312,8 @@ mod tests {
             hf_token: None,
             hf_dataset_name: None,
             use_adzdb: false,
+            external_addr: None,
+            allow_private_addrs: false,
         }
     }
 

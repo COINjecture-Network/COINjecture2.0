@@ -345,12 +345,21 @@ impl CoinjectNode {
         // Keypair path for persistent PeerId
         let keypair_path = self.config.data_dir.join("network_key");
         
+        // Build address filter config based on CLI flags
+        let addr_filter_config = if self.config.allow_private_addrs {
+            Some(coinject_network::AddressFilterConfig::local_dev())
+        } else {
+            Some(coinject_network::AddressFilterConfig::default())
+        };
+        
         let network_config = NetworkConfig {
             listen_addr: self.config.p2p_addr.clone(),
             chain_id: self.config.chain_id.clone(),
             max_peers: self.config.max_peers,
             enable_mdns: true,
             keypair_path: Some(keypair_path),
+            external_addr: self.config.external_addr.clone(),
+            addr_filter_config,
         };
 
         let (mut network_service, mut event_rx) = NetworkService::new(network_config, Arc::clone(&peer_count))?;
