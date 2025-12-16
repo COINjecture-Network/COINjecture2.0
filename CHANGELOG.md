@@ -2,6 +2,17 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.77] - 2025-12-16
+
+### Fixed
+- **Parallel RR Block Request Handling - CRITICAL**
+  - RR block requests were timing out because events were processed sequentially
+  - With 50+ concurrent requests, they queued up and exceeded 120s timeout
+  - Fix: Handle `BlocksRequested` with `rr_request_id` in PARALLEL via `tokio::spawn`
+  - Each RR request now runs in its own task, preventing queue blocking
+  - Other events still processed sequentially (maintains ordering for block processing)
+  - **Files Changed**: `node/src/service.rs`
+
 ## [4.7.76] - 2025-12-16
 
 ### Added

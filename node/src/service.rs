@@ -746,6 +746,62 @@ impl CoinjectNode {
 
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
+                // CRITICAL: Handle BlocksRequested with rr_request_id in PARALLEL
+                // These have tight timeouts (120s) and must not block other events
+                if let NetworkEvent::BlocksRequested { peer, from_height, to_height, rr_request_id: Some(request_id) } = &event {
+                    // Spawn RR block requests as separate tasks for parallel processing
+                    let chain_clone = Arc::clone(&chain);
+                    let network_tx_clone = network_tx_for_events.clone();
+                    let peer_clone = *peer;
+                    let from_h = *from_height;
+                    let to_h = *to_height;
+                    let req_id = *request_id;
+                    
+                    tokio::spawn(async move {
+                        println!(
+                            "📮 [PARALLEL] Blocks requested by {:?}: heights {}-{} (rr_id: {})",
+                            peer_clone, from_h, to_h, req_id
+                        );
+                        
+                        // Collect blocks
+                        let mut blocks = Vec::new();
+                        for height in from_h..=to_h {
+                            match chain_clone.get_block_by_height(height) {
+                                Ok(Some(block)) => {
+                                    blocks.push(block);
+                                }
+                                Ok(None) => {
+                                    // Continue to collect other blocks
+                                }
+                                Err(e) => {
+                                    eprintln!("Error fetching block {}: {}", height, e);
+                                    let _ = network_tx_clone.send(NetworkCommand::SendErrorResponse { 
+                                        request_id: req_id, 
+                                        message: format!("Error fetching block {}: {}", height, e) 
+                                    });
+                                    return;
+                                }
+                            }
+                        }
+                        
+                        // Send response
+                        if !blocks.is_empty() {
+                            println!("📤 [PARALLEL] Sending {} blocks via RR (id: {})", blocks.len(), req_id);
+                            let _ = network_tx_clone.send(NetworkCommand::SendBlocksResponse { 
+                                request_id: req_id, 
+                                blocks 
+                            });
+                        } else {
+                            let _ = network_tx_clone.send(NetworkCommand::SendErrorResponse { 
+                                request_id: req_id, 
+                                message: format!("No blocks found in range {}-{}", from_h, to_h) 
+                            });
+                        }
+                    });
+                    continue; // Skip normal handling for this event
+                }
+                
+                // Normal sequential handling for all other events
                 Self::handle_network_event(
                     event,
                     &chain,
