@@ -25,14 +25,14 @@
 
 use crate::light_sync::{LightSyncServer, LightClientVerifier, LightSyncMessage, FlyClientProof};
 use crate::node_types::{
-    NodeType, NodeClassificationManager, NodeBehaviorMetrics, 
-    ClassificationResult, NodeTypeStatus, HardwareRequirements,
+    NodeType, NodeClassificationManager, 
+    ClassificationResult, NodeTypeStatus,
 };
 use coinject_core::{Block, BlockHeader, Hash, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::{mpsc, RwLock, broadcast};
 
 // =============================================================================

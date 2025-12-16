@@ -9,11 +9,11 @@
 // INSTITUTIONAL QUALITY: This is the single integration point between
 // blockchain state and economic calculations.
 
-use coinject_core::{Block, Hash};
+use coinject_core::Block;
 use coinject_tokenomics::network_metrics::{NetworkMetrics, NetworkSnapshot, FaultType};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 // =============================================================================

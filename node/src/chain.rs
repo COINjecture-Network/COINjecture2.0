@@ -209,8 +209,15 @@ impl ChainState {
 
         // Check if this extends the best chain
         let current_best_height = *self.best_height.read().await;
+        let current_best_hash = *self.best_hash.read().await;
 
         if block_height > current_best_height {
+            // Verify this block actually extends our current best chain
+            if block.header.prev_hash != current_best_hash {
+                // Block doesn't extend current chain - don't update best chain
+                return Ok(false);
+            }
+            
             // New best block
             *self.best_height.write().await = block_height;
             *self.best_hash.write().await = block_hash;
@@ -356,9 +363,28 @@ impl ChainState {
 
         while their_height > our_height {
             if let Some(block) = self.get_block_by_hash(&their_hash)? {
+                // Check if this block's prev_hash matches our chain at the previous height
+                // This allows finding common ancestors even when intermediate blocks are missing
+                if their_height > 0 {
+                    if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height - 1) {
+                        if block.header.prev_hash == our_block_at_height.header.hash() {
+                            // Found common ancestor!
+                            return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
+                        }
+                    }
+                }
                 their_hash = block.header.prev_hash;
                 their_height -= 1;
             } else {
+                // Block missing in their chain - check if we have a block at this height in our chain
+                // If their_hash matches our block hash at this height, that's the common ancestor
+                if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height) {
+                    if their_hash == our_block_at_height.header.hash() {
+                        // Found common ancestor!
+                        return Ok(Some((their_hash, their_height)));
+                    }
+                }
+                // Can't continue - no common ancestor found at this point
                 return Ok(None);
             }
         }
@@ -368,12 +394,41 @@ impl ChainState {
             if let Some(our_block) = self.get_block_by_hash(&our_hash)? {
                 our_hash = our_block.header.prev_hash;
             } else {
+                // Missing block in our chain - check if their chain has a block that matches our height
+                // This handles gaps in our chain
+                if let Ok(Some(their_block)) = self.get_block_by_hash(&their_hash) {
+                    // Check if their prev_hash matches any block we have at this height
+                    if let Ok(Some(our_block_at_height)) = self.get_block_by_height(our_height) {
+                        if their_block.header.prev_hash == our_block_at_height.header.hash() {
+                            // Found common ancestor!
+                            return Ok(Some((our_block_at_height.header.hash(), our_height)));
+                        }
+                    }
+                }
                 return Ok(None);
             }
 
             if let Some(their_block) = self.get_block_by_hash(&their_hash)? {
+                // Check if their block's prev_hash matches our block at the previous height
+                if their_height > 0 {
+                    if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height - 1) {
+                        if their_block.header.prev_hash == our_block_at_height.header.hash() {
+                            // Found common ancestor!
+                            return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
+                        }
+                    }
+                }
                 their_hash = their_block.header.prev_hash;
             } else {
+                // Missing block in their chain - check if we have a block at this height
+                // If their_hash matches our block hash at this height, that's the common ancestor
+                if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height) {
+                    if their_hash == our_block_at_height.header.hash() {
+                        // Found common ancestor!
+                        return Ok(Some((their_hash, their_height)));
+                    }
+                }
+                // Can't continue - no common ancestor found
                 return Ok(None);
             }
 

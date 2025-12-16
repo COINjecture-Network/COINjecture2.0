@@ -19,6 +19,7 @@ services:
       - RUST_LOG=info
       - RUST_BACKTRACE=1
       - ADZDB_ENABLED=false  # Disable ADZDB for local testing
+      - DATA_DIR=/data  # Debug log path
     networks:
       - coinject-network
     healthcheck:

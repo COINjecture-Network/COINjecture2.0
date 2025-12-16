@@ -83,6 +83,30 @@ impl BlockValidator {
 
         // 2. Validate previous hash
         if block.header.prev_hash != *prev_hash {
+            // #region agent log
+            {
+                use std::fs::OpenOptions;
+                use std::io::Write;
+                                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(crate::service::get_debug_log_path()) {
+                    let log_entry = serde_json::json!({
+                        "id": format!("log_{}_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(), block.header.height),
+                        "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
+                        "location": "validator.rs:85",
+                        "message": "InvalidPrevHash detected",
+                        "data": {
+                            "block_height": block.header.height,
+                            "block_prev_hash": format!("{:?}", block.header.prev_hash),
+                            "expected_prev_hash": format!("{:?}", prev_hash),
+                            "mismatch": true
+                        },
+                        "sessionId": "debug-session",
+                        "runId": "run1",
+                        "hypothesisId": "A"
+                    });
+                    let _ = writeln!(file, "{}", log_entry);
+                }
+            }
+            // #endregion
             return Err(ValidationError::InvalidPrevHash);
         }
 

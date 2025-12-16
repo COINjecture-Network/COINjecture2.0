@@ -281,7 +281,39 @@ pub struct Database {
 impl Database {
     /// Create a new database
     pub fn create(config: Config) -> Result<Self> {
-        std::fs::create_dir_all(&config.path)?;
+        // Ensure the path is a directory, not a file
+        if config.path.exists() {
+            let metadata = std::fs::metadata(&config.path)?;
+            if metadata.is_file() {
+                return Err(Error::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Path exists but is a file, not a directory: {:?}", config.path)
+                )));
+            }
+        }
+        
+        // Create directory if it doesn't exist
+        std::fs::create_dir_all(&config.path).map_err(|e| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to create ADZDB directory {:?}: {}", config.path, e)
+            ))
+        })?;
+        
+        // Verify the directory was created and is actually a directory
+        let metadata = std::fs::metadata(&config.path).map_err(|e| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to verify ADZDB directory {:?}: {}", config.path, e)
+            ))
+        })?;
+        
+        if !metadata.is_dir() {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::Other,
+                format!("ADZDB path is not a directory after creation: {:?}", config.path)
+            )));
+        }
         
         let index_path = config.path.join("adzdb.idx");
         let data_path = config.path.join("adzdb.dat");
@@ -293,12 +325,19 @@ impl Database {
             return Err(Error::AlreadyExists);
         }
         
-        // Create files
+        // Create files with better error messages
         let index_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(&index_path)?;
+            .open(&index_path)
+            .map_err(|e| {
+                Error::Io(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Failed to create index file {:?}: {} (parent dir exists: {})", 
+                        index_path, e, config.path.exists())
+                ))
+            })?;
             
         let data_file = OpenOptions::new()
             .read(true)
@@ -340,6 +379,22 @@ impl Database {
     
     /// Open an existing database
     pub fn open(config: Config) -> Result<Self> {
+        // Verify path is a directory
+        if !config.path.exists() {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("ADZDB path does not exist: {:?}", config.path)
+            )));
+        }
+        
+        let metadata = std::fs::metadata(&config.path)?;
+        if !metadata.is_dir() {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::Other,
+                format!("ADZDB path is not a directory: {:?}", config.path)
+            )));
+        }
+        
         let index_path = config.path.join("adzdb.idx");
         let data_path = config.path.join("adzdb.dat");
         let height_path = config.path.join("adzdb.hgt");

@@ -191,6 +191,7 @@ docker run -d \
     -p ${RPCPort}:9933 \
     -p ${MetricsPort}:9090 \
     -v ${DATA_VOLUME}:/data \
+    -e DATA_DIR=/data \
     $IMAGE_NAME \
     --data-dir /data \
     --p2p-addr /ip4/0.0.0.0/tcp/$P2PPort \

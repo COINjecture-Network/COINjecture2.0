@@ -8,10 +8,10 @@ set -e
 DROPLET1="143.110.139.166"
 DROPLET2="68.183.205.12"
 # Peer IDs (discovered from network_getInfo RPC)
-DROPLET1_PEER_ID="12D3KooWJp1LjiE8sLN4kN9JpqZJWGvrMZR2eH4x2Trs3AdYdPwx"
-DROPLET2_PEER_ID="12D3KooWLnKgJxYo1pxMCXxfJsGt1o9j5iExBepUmaMV4NtvWAWQ"
+DROPLET1_PEER_ID="12D3KooWL3Q7KmTocqNGLfyz4X4mhyyPD8b4zx6MBk1qnDAT8FYs"
+DROPLET2_PEER_ID="12D3KooWQwpXp7NJG9gMVJMFH7oBfYQizbtPAB3RfRqxyvQ5WZfv"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/COINjecture-Key}"
-IMAGE_NAME="gcr.io/coinjecture/coinject-node:v4.7.42"
+IMAGE_NAME="${IMAGE_NAME:-coinject-node:debug-fork-detection}"
 CONTAINER_NAME="coinject-node"
 DATA_VOLUME="coinject-data"
 HF_TOKEN="${HF_TOKEN:-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}"
@@ -21,18 +21,13 @@ echo "🚀 Deploying Docker image to nodes..."
 echo "📦 Image: $IMAGE_NAME"
 echo ""
 
-# Check if image exists locally, pull if needed
+# Check if image exists locally
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
-    echo "📥 Pulling image from GCR (AMD64 platform)..."
-    if ! docker pull --platform linux/amd64 "$IMAGE_NAME"; then
-        echo "❌ Failed to pull image from GCR!"
-        echo "💡 Make sure you're authenticated: gcloud auth configure-docker"
-        exit 1
-    fi
-    echo "✅ Image pulled: $IMAGE_NAME"
-else
-    echo "✅ Image found locally: $IMAGE_NAME"
+    echo "❌ Image not found locally: $IMAGE_NAME"
+    echo "💡 Please build the image first: docker build -t $IMAGE_NAME ."
+    exit 1
 fi
+echo "✅ Image found locally: $IMAGE_NAME"
 echo ""
 
 # Function to deploy to a node
@@ -54,14 +49,14 @@ deploy_to_node() {
     
     # Transfer image to remote node
     echo "📤 Transferring image to $NODE_IP..."
-    scp -i "$SSH_KEY" /tmp/coinject-node.tar root@$NODE_IP:/tmp/
+    scp -i "$SSH_KEY" -o ConnectTimeout=60 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 /tmp/coinject-node.tar root@$NODE_IP:/tmp/
     
     # Clean up local tar
     rm -f /tmp/coinject-node.tar
     
     # Deploy and restart on remote node
     # Pass variables as environment variables to SSH session
-    ssh -i "$SSH_KEY" root@$NODE_IP "CONTAINER_NAME='$CONTAINER_NAME' IMAGE_NAME='$IMAGE_NAME' DATA_VOLUME='$DATA_VOLUME' HF_TOKEN='$HF_TOKEN' HF_DATASET='$HF_DATASET' BOOTNODES_ARG='$BOOTNODES' bash -s" << 'ENDSSH'
+    ssh -i "$SSH_KEY" -o ConnectTimeout=60 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 root@$NODE_IP "CONTAINER_NAME='$CONTAINER_NAME' IMAGE_NAME='$IMAGE_NAME' DATA_VOLUME='$DATA_VOLUME' HF_TOKEN='$HF_TOKEN' HF_DATASET='$HF_DATASET' BOOTNODES_ARG='$BOOTNODES' bash -s" << 'ENDSSH'
 set -e
 
 # Check and install Docker if needed
@@ -123,6 +118,7 @@ if [ -n "$BOOTNODES_ARG" ]; then
       -p 9933:9933 \
       -p 9090:9090 \
       -v $DATA_VOLUME:/data \
+      -e DATA_DIR=/data \
       $IMAGE_NAME \
       --data-dir /data \
       --p2p-addr /ip4/0.0.0.0/tcp/30333 \
@@ -140,6 +136,7 @@ else
       -p 9933:9933 \
       -p 9090:9090 \
       -v $DATA_VOLUME:/data \
+      -e DATA_DIR=/data \
       $IMAGE_NAME \
       --data-dir /data \
       --p2p-addr /ip4/0.0.0.0/tcp/30333 \
@@ -179,11 +176,11 @@ ENDSSH
 
 # Deploy to both nodes with mutual bootnodes (including Peer IDs for reliability)
 # Node 1: Connect to Node 2 as bootnode
-BOOTNODE2="/ip4/$DROPLET2/tcp/30333/p2p/$DROPLET2_PEER_ID"
+BOOTNODE2="/ip4/68.183.205.12/tcp/30333/p2p/$DROPLET2_PEER_ID"
 deploy_to_node "$DROPLET1" "Node 1" "$BOOTNODE2"
 
 # Node 2: Use Node 1 as bootnode
-BOOTNODE1="/ip4/$DROPLET1/tcp/30333/p2p/$DROPLET1_PEER_ID"
+BOOTNODE1="/ip4/143.110.139.166/tcp/30333/p2p/$DROPLET1_PEER_ID"
 deploy_to_node "$DROPLET2" "Node 2" "$BOOTNODE1"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -192,8 +189,8 @@ echo ""
 echo "📋 Container management commands:"
 echo ""
 echo "  # View logs"
-echo "  ssh root@$DROPLET1 'docker logs -f $CONTAINER_NAME'"
-echo "  ssh root@$DROPLET2 'docker logs -f $CONTAINER_NAME'"
+echo "  ssh -i $SSH_KEY -o ConnectTimeout=30 root@$DROPLET1 'docker logs -f $CONTAINER_NAME'"
+echo "  ssh -i $SSH_KEY -o ConnectTimeout=30 root@$DROPLET2 'docker logs -f $CONTAINER_NAME'"
 echo ""
 echo "  # Restart container"
 echo "  ssh root@$DROPLET1 'docker restart $CONTAINER_NAME'"

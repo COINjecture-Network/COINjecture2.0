@@ -27,9 +27,8 @@ use tokio::sync::RwLock;
 
 // Re-export FlyClient types for convenience
 pub use crate::light_sync::{
-    FlyClientProof, FlyClientError, LightSyncMessage, LightSyncServer,
-    LightClientVerifier, MerkleMountainRange, MMRInclusionProof,
-    SampledBlock, VerificationResult, FLYCLIENT_SECURITY_PARAM,
+    FlyClientProof, FlyClientError,
+    LightClientVerifier, MMRInclusionProof, VerificationResult,
 };
 
 // =============================================================================

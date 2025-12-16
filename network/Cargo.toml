@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 coinject-core = { path = "../core" }
 libp2p.workspace = true
-libp2p-request-response = { version = "0.11.0", default-features = false }
+libp2p-request-response = { version = "0.27.0", default-features = false }
 tokio.workspace = true
 async-trait.workspace = true
 serde.workspace = true

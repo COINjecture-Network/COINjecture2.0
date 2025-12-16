@@ -134,3 +134,4 @@ curl https://rpc1.coinjecture.com \
 
 You should get a JSON response with chain information (no certificate warnings).
 
+

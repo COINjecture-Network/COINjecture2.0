@@ -3,7 +3,7 @@
 // SEPARATE from user wallet keys
 
 use coinject_core::Address;
-use ed25519_dalek::{SigningKey, VerifyingKey, Signer};
+use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::fs;

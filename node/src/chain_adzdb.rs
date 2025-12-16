@@ -49,7 +49,16 @@ pub struct AdzdbChainState {
 impl AdzdbChainState {
     /// Create or open chain state database using ADZDB
     pub fn new<P: AsRef<Path>>(path: P, genesis_block: &Block) -> Result<Self, ChainError> {
-        let adzdb_path = path.as_ref().join("adzdb");
+        // If path is a file (like chain.db), use its parent directory
+        // Otherwise use the path directly
+        let base_path = if path.as_ref().is_file() {
+            path.as_ref().parent()
+                .ok_or_else(|| ChainError::AdzdbError("Cannot get parent directory".to_string()))?
+        } else {
+            path.as_ref()
+        };
+        
+        let adzdb_path = base_path.join("adzdb");
         let config = AdzConfig::new(&adzdb_path);
         
         let genesis_hash = genesis_block.header.hash();

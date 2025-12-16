@@ -332,7 +332,7 @@ impl PeerReputation {
     }
 
     /// Calculate positive actions bonus (dimensionless ratio)
-    fn calculate_positive_bonus(&self, metrics: &ReputationMetrics) -> f64 {
+    fn calculate_positive_bonus(&self, _metrics: &ReputationMetrics) -> f64 {
         // Use percentile-based scaling if we have network data
         // Maximum 20% bonus (0.2), scaled by η
         
