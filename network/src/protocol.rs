@@ -402,10 +402,12 @@ pub struct NetworkService {
     external_addr: Option<Multiaddr>,
     /// Track pending outbound dials to prevent simultaneous dial collisions
     pending_dials: HashSet<PeerId>,
-    /// Pending request-response channels for sync requests (keyed by request_id)
+    /// Pending request-response channels for sync requests (keyed by our internal request_id)
     pending_sync_channels: HashMap<u64, ResponseChannel<SyncResponse>>,
     /// Map outbound request IDs to peer IDs for tracking responses
     outbound_sync_requests: HashMap<OutboundRequestId, (PeerId, u64)>, // (peer, our_request_id)
+    /// Map inbound request IDs to our internal request_id for cleanup on InboundFailure
+    inbound_request_mapping: HashMap<request_response::InboundRequestId, u64>,
 }
 
 /// Events emitted by the network service
@@ -709,6 +711,7 @@ impl NetworkService {
                 pending_dials: HashSet::new(),
                 pending_sync_channels: HashMap::new(),
                 outbound_sync_requests: HashMap::new(),
+                inbound_request_mapping: HashMap::new(),
             },
             event_rx,
         ))
@@ -1852,11 +1855,15 @@ impl NetworkService {
                             // Incoming block request - store channel for response
                             match &request {
                                 SyncRequest::BlockRequest { from_height, to_height, request_id: req_id } => {
-                                    println!("📥 [RR-SYNC] Block request from {}: heights {}-{} (id: {})", 
-                                        peer, from_height, to_height, req_id);
+                                    println!("📥 [RR-SYNC] Block request from {}: heights {}-{} (id: {}, inbound_id: {:?})", 
+                                        peer, from_height, to_height, req_id, request_id);
                                     
-                                    // Store channel for response (keyed by the request_id in the message)
+                                    // Store channel for response (keyed by our internal request_id)
                                     self.pending_sync_channels.insert(*req_id, channel);
+                                    
+                                    // Store mapping from libp2p InboundRequestId to our internal req_id
+                                    // This allows cleanup on InboundFailure events
+                                    self.inbound_request_mapping.insert(request_id, *req_id);
                                     
                                     // Emit event to service layer to fetch blocks and respond
                                     let _ = self.event_tx.send(NetworkEvent::BlocksRequested {
@@ -1902,9 +1909,17 @@ impl NetworkService {
                 }
                 CoinjectBehaviourEvent::Sync(request_response::Event::InboundFailure { peer, request_id, error }) => {
                     eprintln!("❌ [RR-SYNC] Inbound request from {} failed (id: {:?}): {:?}", peer, request_id, error);
+                    // CRITICAL: Clean up the stored response channel to prevent resource leak
+                    if let Some(internal_req_id) = self.inbound_request_mapping.remove(&request_id) {
+                        if self.pending_sync_channels.remove(&internal_req_id).is_some() {
+                            println!("   🧹 Cleaned up pending channel for failed inbound request (internal_id: {})", internal_req_id);
+                        }
+                    }
                 }
                 CoinjectBehaviourEvent::Sync(request_response::Event::ResponseSent { peer, request_id }) => {
                     println!("✅ [RR-SYNC] Response sent to {} (id: {:?})", peer, request_id);
+                    // Clean up the mapping since response was sent successfully
+                    self.inbound_request_mapping.remove(&request_id);
                 }
                 
                 _ => {}

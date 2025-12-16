@@ -2,6 +2,18 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.78] - 2025-12-16
+
+### Fixed
+- **RR InboundFailure Channel Cleanup - Resource Leak Fix**
+  - Bug: `InboundFailure` events couldn't clean up `pending_sync_channels`
+  - Cause: Channel stored with internal `u64` key, but `InboundFailure` has `InboundRequestId` type
+  - Fix: Added `inbound_request_mapping: HashMap<InboundRequestId, u64>` to track mapping
+  - On `InboundFailure`: Look up internal req_id via mapping, remove channel
+  - On `ResponseSent`: Clean up the mapping entry
+  - Prevents indefinite channel accumulation when requests timeout
+  - **Files Changed**: `network/src/protocol.rs`
+
 ## [4.7.77] - 2025-12-16
 
 ### Fixed
