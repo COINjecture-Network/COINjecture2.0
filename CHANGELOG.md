@@ -2,6 +2,16 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.79] - 2025-12-16
+
+### Fixed
+- **Fork Detection Chunked Requests - Timeout Fix**
+  - Bug: Fork detection requested entire chain (0 to best_height) in single RR request
+  - Cause: Large requests (4000+ blocks) timeout before response can be sent
+  - Fix: Fork detection now uses adaptive chunking (50-100 blocks per request)
+  - Applies to both "peer ahead on fork" and "same height fork" scenarios
+  - **Files Changed**: `node/src/service.rs`
+
 ## [4.7.78] - 2025-12-16
 
 ### Fixed

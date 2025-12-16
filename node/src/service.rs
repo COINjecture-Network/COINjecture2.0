@@ -1532,15 +1532,29 @@ impl CoinjectNode {
                     };
 
                     if on_fork {
-                        println!("⚠️  Fork detected! Peer is ahead (height {}) and we're on a fork. Requesting full chain for reorganization...", best_height);
-                        // Request full chain from peer to check if it's longer and valid
-                        // Use request-response for reliable delivery
-                        if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
-                            peer,
-                            from_height: 0,
-                            to_height: best_height,
-                        }) {
-                            eprintln!("Failed to request full chain for fork analysis: {}", e);
+                        println!("⚠️  Fork detected! Peer is ahead (height {}) and we're on a fork. Requesting chain for reorganization...", best_height);
+                        // Request chain from peer in chunks to avoid timeout
+                        // Use adaptive chunking: larger chunks when far behind
+                        let delta_h = best_height;
+                        let base_chunk = 50u64; // Larger base for fork sync
+                        let lambda = 1.0 / std::f64::consts::SQRT_2;
+                        let adaptive_chunk = ((base_chunk as f64) * (1.0 + (delta_h as f64 * lambda / 100.0)))
+                            .min(100.0) as u64;
+                        
+                        println!("   📦 Using adaptive chunk size: {} (total: {} blocks)", adaptive_chunk, best_height);
+                        
+                        let mut current = 0u64;
+                        while current <= best_height {
+                            let end = std::cmp::min(current + adaptive_chunk - 1, best_height);
+                            if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
+                                peer,
+                                from_height: current,
+                                to_height: end,
+                            }) {
+                                eprintln!("Failed to request chain chunk {}-{}: {}", current, end, e);
+                                break;
+                            }
+                            current = end + 1;
                         }
                     } else {
                         // Normal sync - peer is ahead on same chain
@@ -1589,19 +1603,22 @@ impl CoinjectNode {
                     // Fork detected at same height - check if peer's chain is longer by requesting their chain
                     println!("⚠️  Fork detected at height {}! Our hash: {:?}, Peer hash: {:?}", 
                         best_height, our_hash, best_hash);
-                    println!("   Requesting peer's full chain to check for longer fork...");
+                    println!("   Requesting peer's chain in chunks to check for longer fork...");
                     
-                    // Request blocks from genesis to their best to validate their chain
-                    // We'll reorganize if their chain is valid and longer
-                    // Note: After receiving these blocks, we'll need to check if they form a longer chain
-                    // and trigger reorganization. This is handled by checking after block processing.
-                    // Use request-response for reliable delivery
-                    if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
-                        peer,
-                        from_height: 0,
-                        to_height: best_height,
-                    }) {
-                        eprintln!("Failed to request full chain for fork analysis: {}", e);
+                    // Request blocks in chunks to avoid timeout
+                    let chunk_size = 100u64;
+                    let mut current = 0u64;
+                    while current <= best_height {
+                        let end = std::cmp::min(current + chunk_size - 1, best_height);
+                        if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
+                            peer,
+                            from_height: current,
+                            to_height: end,
+                        }) {
+                            eprintln!("Failed to request chain chunk {}-{}: {}", current, end, e);
+                            break;
+                        }
+                        current = end + 1;
                     }
                     
                     // Also check if we already have the peer's best block stored
