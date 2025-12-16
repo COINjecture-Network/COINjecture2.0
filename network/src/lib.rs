@@ -11,6 +11,3 @@ pub use protocol::*;
 pub use eclipse::*;
 pub use reputation::*;
 pub use libp2p::PeerId;
-
-// Re-export request-response types for service layer
-pub use protocol::{SyncRequest, SyncResponse, SyncCodec};

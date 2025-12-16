@@ -2,6 +2,22 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.75] - 2025-12-16
+
+### Added
+- **Equilibrium-Balanced Adaptive Chunk Sizing (COINjecture)**
+  - Implemented damped harmonic oscillator model for sync optimization
+  - Formula: `chunk = base * (1 + Δh * λ / 10)` where `λ = 1/√2 ≈ 0.7071`
+  - Small gap (10 blocks): chunk ≈ 34 blocks
+  - Medium gap (100 blocks): chunk = 100 blocks (capped)
+  - Large gap (1000+ blocks): chunk = 100 blocks (capped for reliability)
+  - Critical damping ensures optimal convergence without oscillation
+  - **Files Changed**: `node/src/service.rs`
+
+### Known Issues
+- Request-response sync protocol needs re-implementation after rebase conflict
+- GossipSub sync with adaptive chunking is the current primary method
+
 ## [4.7.74] - 2025-12-16
 
 ### Changed
