@@ -2,6 +2,37 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.76] - 2025-12-16
+
+### Added
+- **Request-Response Sync Protocol - RE-IMPLEMENTED**
+  - Re-added `libp2p-request-response` based block sync after rebase loss
+  - **SyncRequest**: `BlockRequest { from_height, to_height, request_id }`
+  - **SyncResponse**: `BlockResponse { blocks, request_id }` or `Error { message, request_id }`
+  - **SyncCodec**: Full async codec for serialization/deserialization
+  - Integrated into `CoinjectBehaviour` with `/coinject/sync/1.0.0` protocol
+  - 120-second timeout for large block responses
+
+### Changed
+- **StatusUpdate Sync Logic Uses Request-Response**
+  - Normal sync now uses `RequestBlocksRR` to specific peer (reliable, ordered delivery)
+  - Fork detection also uses RR for full chain requests
+  - GossipSub `RequestBlocks` kept as fallback for broadcast scenarios
+  - Adaptive chunking (η = λ = 1/√2) applies to both RR and GossipSub
+
+### Fixed
+- **BlocksRequested Handler Updated for RR**
+  - Handles `rr_request_id: Option<u64>` field
+  - RR path: Collects all blocks, sends single `SendBlocksResponse`
+  - GossipSub path: Sends individual `SyncBlock` messages (legacy)
+
+### Technical Details
+- `NetworkCommand` additions: `RequestBlocksRR`, `SendBlocksResponse`, `SendErrorResponse`
+- `NetworkEvent::BlocksRequested` now includes `rr_request_id: Option<u64>`
+- `NetworkService` additions: `pending_sync_channels`, `outbound_sync_requests` tracking
+- Event handlers for `OutboundFailure`, `InboundFailure`, `ResponseSent`
+- **Files Changed**: `network/src/protocol.rs`, `node/src/service.rs`
+
 ## [4.7.75] - 2025-12-16
 
 ### Added

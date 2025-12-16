@@ -1,4 +1,4 @@
-// P2P Network Protocol with libp2p gossipsub
+// P2P Network Protocol with libp2p gossipsub and request-response
 use crate::addr_filter::{AddressFilterConfig, validate_multiaddr, filter_multiaddrs_with_logging};
 use coinject_core::{Block, Transaction, Hash};
 use futures::StreamExt;
@@ -13,12 +13,142 @@ use libp2p::{
     swarm::{NetworkBehaviour, SwarmEvent, dial_opts::{DialOpts, PeerCondition}},
     tcp, yamux, Multiaddr, PeerId, Swarm,
 };
+use libp2p_request_response::{self as request_response, ProtocolSupport, ResponseChannel, OutboundRequestId};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
+
+// ============================================================================
+// REQUEST-RESPONSE SYNC PROTOCOL
+// Reliable, ordered block delivery - bypasses GossipSub deduplication issues
+// ============================================================================
+
+/// Request types for the sync protocol
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncRequest {
+    /// Request blocks by height range
+    BlockRequest {
+        from_height: u64,
+        to_height: u64,
+        request_id: u64,
+    },
+}
+
+/// Response types for the sync protocol
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncResponse {
+    /// Block response with ordered blocks
+    BlockResponse {
+        blocks: Vec<Block>,
+        request_id: u64,
+    },
+    /// Error response
+    Error {
+        message: String,
+        request_id: u64,
+    },
+}
+
+/// Codec for serializing/deserializing sync messages
+#[derive(Debug, Clone, Default)]
+pub struct SyncCodec;
+
+impl request_response::Codec for SyncCodec {
+    type Protocol = &'static str;
+    type Request = SyncRequest;
+    type Response = SyncResponse;
+
+    fn read_request<'life0, 'life1, 'life2, 'async_trait, T>(
+        &'life0 mut self,
+        _protocol: &'life1 Self::Protocol,
+        io: &'life2 mut T,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<Self::Request>> + Send + 'async_trait>>
+    where
+        T: futures::AsyncRead + Unpin + Send + 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            use futures::AsyncReadExt;
+            let mut buf = Vec::new();
+            io.read_to_end(&mut buf).await?;
+            bincode::deserialize(&buf)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })
+    }
+
+    fn read_response<'life0, 'life1, 'life2, 'async_trait, T>(
+        &'life0 mut self,
+        _protocol: &'life1 Self::Protocol,
+        io: &'life2 mut T,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<Self::Response>> + Send + 'async_trait>>
+    where
+        T: futures::AsyncRead + Unpin + Send + 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            use futures::AsyncReadExt;
+            let mut buf = Vec::new();
+            io.read_to_end(&mut buf).await?;
+            bincode::deserialize(&buf)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })
+    }
+
+    fn write_request<'life0, 'life1, 'life2, 'async_trait, T>(
+        &'life0 mut self,
+        _protocol: &'life1 Self::Protocol,
+        io: &'life2 mut T,
+        req: Self::Request,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + 'async_trait>>
+    where
+        T: futures::AsyncWrite + Unpin + Send + 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            use futures::AsyncWriteExt;
+            let data = bincode::serialize(&req)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            io.write_all(&data).await?;
+            io.close().await?;
+            Ok(())
+        })
+    }
+
+    fn write_response<'life0, 'life1, 'life2, 'async_trait, T>(
+        &'life0 mut self,
+        _protocol: &'life1 Self::Protocol,
+        io: &'life2 mut T,
+        resp: Self::Response,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send + 'async_trait>>
+    where
+        T: futures::AsyncWrite + Unpin + Send + 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            use futures::AsyncWriteExt;
+            let data = bincode::serialize(&resp)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            io.write_all(&data).await?;
+            io.close().await?;
+            Ok(())
+        })
+    }
+}
 
 /// Node type for network messages (simplified for serialization)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,7 +296,7 @@ impl NetworkTopics {
     }
 }
 
-/// libp2p network behaviour combining gossipsub, mDNS, Kademlia, autonat, and relay
+/// libp2p network behaviour combining gossipsub, mDNS, Kademlia, autonat, relay, and sync
 #[derive(NetworkBehaviour)]
 pub struct CoinjectBehaviour {
     pub gossipsub: gossipsub::Behaviour,
@@ -175,6 +305,8 @@ pub struct CoinjectBehaviour {
     pub identify: identify::Behaviour,
     pub autonat: autonat::Behaviour,
     pub relay: relay::Behaviour,
+    /// Request-response protocol for reliable block sync
+    pub sync: request_response::Behaviour<SyncCodec>,
 }
 
 /// Network protocol configuration
@@ -270,6 +402,10 @@ pub struct NetworkService {
     external_addr: Option<Multiaddr>,
     /// Track pending outbound dials to prevent simultaneous dial collisions
     pending_dials: HashSet<PeerId>,
+    /// Pending request-response channels for sync requests (keyed by request_id)
+    pending_sync_channels: HashMap<u64, ResponseChannel<SyncResponse>>,
+    /// Map outbound request IDs to peer IDs for tracking responses
+    outbound_sync_requests: HashMap<OutboundRequestId, (PeerId, u64)>, // (peer, our_request_id)
 }
 
 /// Events emitted by the network service
@@ -292,10 +428,13 @@ pub enum NetworkEvent {
         node_type: NetworkNodeType,
     },
     /// Blocks requested by peer (for sync)
+    /// If rr_request_id is Some, this is a request-response request and needs a response via SendBlocksResponse
     BlocksRequested {
         peer: PeerId,
         from_height: u64,
         to_height: u64,
+        /// Request ID for request-response protocol (None for GossipSub requests)
+        rr_request_id: Option<u64>,
     },
     // === LIGHT SYNC EVENTS ===
     /// Headers requested by light client
@@ -458,6 +597,15 @@ impl NetworkService {
         // This allows nodes to connect through relay nodes when direct connection fails
         let relay = relay::Behaviour::new(local_peer_id, relay::Config::default());
 
+        // Create request-response protocol for reliable, ordered block sync
+        // This bypasses GossipSub deduplication issues that cause unreliable delivery
+        let sync_protocol = "/coinject/sync/1.0.0";
+        let sync = request_response::Behaviour::new(
+            [(sync_protocol, ProtocolSupport::Full)],
+            request_response::Config::default()
+                .with_request_timeout(Duration::from_secs(120)), // 2 minute timeout for large responses
+        );
+
         // Combine behaviours
         let behaviour = CoinjectBehaviour {
             gossipsub,
@@ -466,6 +614,7 @@ impl NetworkService {
             identify,
             autonat,
             relay,
+            sync,
         };
 
         // Configure TCP with nodelay to prevent Nagle's algorithm buffering small handshake packets
@@ -558,6 +707,8 @@ impl NetworkService {
                 addr_filter_config,
                 external_addr,
                 pending_dials: HashSet::new(),
+                pending_sync_channels: HashMap::new(),
+                outbound_sync_requests: HashMap::new(),
             },
             event_rx,
         ))
@@ -1276,6 +1427,92 @@ impl NetworkService {
         Ok(())
     }
 
+    // ========================================================================
+    // REQUEST-RESPONSE SYNC PROTOCOL
+    // Reliable, ordered block delivery - bypasses GossipSub deduplication issues
+    // ========================================================================
+
+    /// Request blocks from a specific peer via request-response protocol
+    /// Returns the request_id for tracking the response
+    pub fn request_blocks_rr(
+        &mut self,
+        peer: PeerId,
+        from_height: u64,
+        to_height: u64,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        // Generate unique request_id
+        let request_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+
+        let request = SyncRequest::BlockRequest {
+            from_height,
+            to_height,
+            request_id,
+        };
+
+        println!("📤 [RR-SYNC] Sending block request to {}: heights {}-{} (id: {})",
+            peer, from_height, to_height, request_id);
+
+        let outbound_request_id = self.swarm.behaviour_mut().sync.send_request(&peer, request);
+        
+        // Track this request so we can match the response
+        self.outbound_sync_requests.insert(outbound_request_id, (peer, request_id));
+
+        Ok(request_id)
+    }
+
+    /// Send blocks response via request-response protocol
+    /// Called by service layer when handling BlocksRequested with rr_request_id
+    pub fn send_blocks_response(
+        &mut self,
+        request_id: u64,
+        blocks: Vec<Block>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(channel) = self.pending_sync_channels.remove(&request_id) {
+            let num_blocks = blocks.len();
+            let response = SyncResponse::BlockResponse { blocks, request_id };
+            
+            println!("📤 [RR-SYNC] Sending {} blocks response (id: {})", num_blocks, request_id);
+            
+            match self.swarm.behaviour_mut().sync.send_response(channel, response) {
+                Ok(()) => Ok(()),
+                Err(resp) => {
+                    eprintln!("❌ [RR-SYNC] Failed to send blocks response: channel closed");
+                    Err(format!("Failed to send response: {:?}", resp).into())
+                }
+            }
+        } else {
+            eprintln!("❌ [RR-SYNC] No pending channel for request_id {}", request_id);
+            Err(format!("No pending channel for request_id {}", request_id).into())
+        }
+    }
+
+    /// Send error response via request-response protocol
+    pub fn send_error_response(
+        &mut self,
+        request_id: u64,
+        message: String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(channel) = self.pending_sync_channels.remove(&request_id) {
+            let response = SyncResponse::Error { message: message.clone(), request_id };
+            
+            println!("📤 [RR-SYNC] Sending error response (id: {}): {}", request_id, message);
+            
+            match self.swarm.behaviour_mut().sync.send_response(channel, response) {
+                Ok(()) => Ok(()),
+                Err(resp) => {
+                    eprintln!("❌ [RR-SYNC] Failed to send error response: channel closed");
+                    Err(format!("Failed to send response: {:?}", resp).into())
+                }
+            }
+        } else {
+            eprintln!("❌ [RR-SYNC] No pending channel for request_id {}", request_id);
+            Err(format!("No pending channel for request_id {}", request_id).into())
+        }
+    }
+
     /// Handle incoming gossipsub message
     fn handle_gossipsub_message(&mut self, peer: PeerId, message: Vec<u8>, topic_hash: &gossipsub::TopicHash) {
         // Check if this is a light sync message
@@ -1329,10 +1566,12 @@ impl NetworkService {
             }
             Ok(NetworkMessage::GetBlocks { from, to, request_id: _ }) => {
                 // request_id is only used to bypass gossipsub dedup, not needed after deserialize
+                // rr_request_id is None because this is a GossipSub request, not request-response
                 let _ = self.event_tx.send(NetworkEvent::BlocksRequested {
                     peer,
                     from_height: from,
                     to_height: to,
+                    rr_request_id: None, // GossipSub request - respond via GossipSub
                 });
             }
             Ok(_) => {
@@ -1602,6 +1841,72 @@ impl NetworkService {
                     println!("   From: {} → To: {}", src_peer_id, dst_peer_id);
                     println!("   🔄 Connection via relay is now active");
                 }
+                
+                // ============================================================
+                // REQUEST-RESPONSE SYNC PROTOCOL EVENTS
+                // Reliable, ordered block delivery - bypasses GossipSub issues
+                // ============================================================
+                CoinjectBehaviourEvent::Sync(request_response::Event::Message { peer, message }) => {
+                    match message {
+                        request_response::Message::Request { request, channel, request_id } => {
+                            // Incoming block request - store channel for response
+                            match &request {
+                                SyncRequest::BlockRequest { from_height, to_height, request_id: req_id } => {
+                                    println!("📥 [RR-SYNC] Block request from {}: heights {}-{} (id: {})", 
+                                        peer, from_height, to_height, req_id);
+                                    
+                                    // Store channel for response (keyed by the request_id in the message)
+                                    self.pending_sync_channels.insert(*req_id, channel);
+                                    
+                                    // Emit event to service layer to fetch blocks and respond
+                                    let _ = self.event_tx.send(NetworkEvent::BlocksRequested {
+                                        peer,
+                                        from_height: *from_height,
+                                        to_height: *to_height,
+                                        rr_request_id: Some(*req_id),
+                                    });
+                                }
+                            }
+                        }
+                        request_response::Message::Response { response, request_id } => {
+                            // Incoming block response - emit BlockReceived events
+                            if let Some((peer_id, our_req_id)) = self.outbound_sync_requests.remove(&request_id) {
+                                match response {
+                                    SyncResponse::BlockResponse { blocks, request_id: resp_id } => {
+                                        println!("📥 [RR-SYNC] Received {} blocks from {} (id: {})", 
+                                            blocks.len(), peer_id, resp_id);
+                                        // Emit BlockReceived events IN ORDER
+                                        for block in blocks {
+                                            let height = block.header.height;
+                                            println!("   ↳ Block {} received via RR", height);
+                                            let _ = self.event_tx.send(NetworkEvent::BlockReceived {
+                                                block,
+                                                peer: peer_id,
+                                                is_sync_block: true,
+                                            });
+                                        }
+                                    }
+                                    SyncResponse::Error { message, request_id: err_id } => {
+                                        eprintln!("❌ [RR-SYNC] Error from {} (id: {}): {}", peer_id, err_id, message);
+                                    }
+                                }
+                            } else {
+                                eprintln!("⚠️ [RR-SYNC] Received response for unknown request: {:?}", request_id);
+                            }
+                        }
+                    }
+                }
+                CoinjectBehaviourEvent::Sync(request_response::Event::OutboundFailure { peer, request_id, error }) => {
+                    eprintln!("❌ [RR-SYNC] Outbound request to {} failed (id: {:?}): {:?}", peer, request_id, error);
+                    self.outbound_sync_requests.remove(&request_id);
+                }
+                CoinjectBehaviourEvent::Sync(request_response::Event::InboundFailure { peer, request_id, error }) => {
+                    eprintln!("❌ [RR-SYNC] Inbound request from {} failed (id: {:?}): {:?}", peer, request_id, error);
+                }
+                CoinjectBehaviourEvent::Sync(request_response::Event::ResponseSent { peer, request_id }) => {
+                    println!("✅ [RR-SYNC] Response sent to {} (id: {:?})", peer, request_id);
+                }
+                
                 _ => {}
             },
             SwarmEvent::ConnectionEstablished { 

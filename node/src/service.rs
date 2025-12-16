@@ -47,6 +47,14 @@ enum NetworkCommand {
     RequestBlocks { from_height: u64, to_height: u64 },
     /// Legacy: Send block to specific peer (Sarah's approach - kept for compatibility)
     SendBlockToPeer { block: coinject_core::Block, peer: PeerId },
+    // === REQUEST-RESPONSE SYNC COMMANDS ===
+    // Reliable, ordered block delivery - bypasses GossipSub deduplication issues
+    /// Request blocks from a specific peer via request-response (preferred for sync)
+    RequestBlocksRR { peer: PeerId, from_height: u64, to_height: u64 },
+    /// Send blocks response via request-response
+    SendBlocksResponse { request_id: u64, blocks: Vec<coinject_core::Block> },
+    /// Send error response via request-response
+    SendErrorResponse { request_id: u64, message: String },
     // === LIGHT SYNC COMMANDS ===
     /// Send headers to a requesting peer
     SendHeaders { headers: Vec<coinject_core::BlockHeader>, request_id: u64 },
@@ -675,6 +683,36 @@ impl CoinjectNode {
                             NetworkCommand::RequestFlyClientProof { security_param } => {
                                 if let Err(e) = network.request_flyclient_proof(security_param) {
                                     eprintln!("Failed to request FlyClient proof: {}", e);
+                                }
+                            }
+                            // === REQUEST-RESPONSE SYNC COMMAND HANDLERS ===
+                            NetworkCommand::RequestBlocksRR { peer, from_height, to_height } => {
+                                println!("📡 [RR-SYNC] Requesting blocks {}-{} from peer {} via request-response", 
+                                    from_height, to_height, peer);
+                                match network.request_blocks_rr(peer, from_height, to_height) {
+                                    Ok(request_id) => {
+                                        println!("   ✅ Request sent (id: {})", request_id);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("   ❌ Failed to request blocks via RR: {}", e);
+                                        // Fallback to GossipSub
+                                        println!("   ↳ Falling back to GossipSub broadcast...");
+                                        if let Err(e) = network.request_blocks(from_height, to_height) {
+                                            eprintln!("   ❌ GossipSub fallback also failed: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                            NetworkCommand::SendBlocksResponse { request_id, blocks } => {
+                                println!("📤 [RR-SYNC] Sending {} blocks response (id: {})", blocks.len(), request_id);
+                                if let Err(e) = network.send_blocks_response(request_id, blocks) {
+                                    eprintln!("   ❌ Failed to send blocks response: {}", e);
+                                }
+                            }
+                            NetworkCommand::SendErrorResponse { request_id, message } => {
+                                println!("📤 [RR-SYNC] Sending error response (id: {}): {}", request_id, message);
+                                if let Err(e) = network.send_error_response(request_id, message) {
+                                    eprintln!("   ❌ Failed to send error response: {}", e);
                                 }
                             }
                         }
@@ -1440,7 +1478,9 @@ impl CoinjectNode {
                     if on_fork {
                         println!("⚠️  Fork detected! Peer is ahead (height {}) and we're on a fork. Requesting full chain for reorganization...", best_height);
                         // Request full chain from peer to check if it's longer and valid
-                        if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                        // Use request-response for reliable delivery
+                        if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
+                            peer,
                             from_height: 0,
                             to_height: best_height,
                         }) {
@@ -1466,20 +1506,23 @@ impl CoinjectNode {
                             .min(100.0) as u64;
 
                         println!(
-                            "🔄 Peer is ahead! Requesting blocks {}-{} (Δh: {}, adaptive_chunk: {})",
+                            "🔄 Peer is ahead! Requesting blocks {}-{} via RR (Δh: {}, adaptive_chunk: {})",
                             sync_from, sync_to, delta_h, adaptive_chunk
                         );
 
-                        // Request missing blocks in adaptive chunks
+                        // Request missing blocks in adaptive chunks via REQUEST-RESPONSE
+                        // This provides RELIABLE, ORDERED delivery - no GossipSub dedup issues!
                         let mut current = sync_from;
                         while current <= sync_to {
                             let end = std::cmp::min(current + adaptive_chunk - 1, sync_to);
 
-                            if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                            // Use request-response for reliable delivery
+                            if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
+                                peer,
                                 from_height: current,
                                 to_height: end,
                             }) {
-                                eprintln!("Failed to send RequestBlocks command: {}", e);
+                                eprintln!("Failed to send RequestBlocksRR command: {}", e);
                                 break;
                             }
 
@@ -1496,7 +1539,9 @@ impl CoinjectNode {
                     // We'll reorganize if their chain is valid and longer
                     // Note: After receiving these blocks, we'll need to check if they form a longer chain
                     // and trigger reorganization. This is handled by checking after block processing.
-                    if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                    // Use request-response for reliable delivery
+                    if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
+                        peer,
                         from_height: 0,
                         to_height: best_height,
                     }) {
@@ -1556,68 +1601,122 @@ impl CoinjectNode {
                     }
                 }
             }
-            NetworkEvent::BlocksRequested { peer, from_height, to_height } => {
+            NetworkEvent::BlocksRequested { peer, from_height, to_height, rr_request_id } => {
                 println!(
-                    "📮 Blocks requested by {:?}: heights {}-{}",
-                    peer, from_height, to_height
+                    "📮 Blocks requested by {:?}: heights {}-{} (rr_id: {:?})",
+                    peer, from_height, to_height, rr_request_id
                 );
 
-                // INSTITUTIONAL-GRADE: Use SyncBlock with unique request_id
-                // This is CRITICAL - using SendBlockToPeer or BroadcastBlock would be rejected
-                // as duplicate by gossipsub. The unique request_id ensures delivery.
-                let base_request_id = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos() as u64;
-                
-                let mut sent_count = 0;
-                for height in from_height..=to_height {
-                    match chain.get_block_by_height(height) {
-                        Ok(Some(block)) => {
-                            // Generate unique request_id: base timestamp + height offset
-                            // This guarantees EVERY sync message has a unique gossipsub message ID
-                            let request_id = base_request_id.wrapping_add(height);
-                            
-                            if height <= 20 || height % 100 == 0 {
-                            println!(
-                                    "   ↳ Serving sync block {} (hash {:?}) to {:?}",
-                                height,
-                                block.header.hash(),
-                                peer
-                            );
-                        }
-                            // Use SendSyncBlock with unique request_id - NOT SendBlockToPeer!
-                            if let Err(e) = network_tx.send(NetworkCommand::SendSyncBlock { 
-                                block, 
-                                request_id 
-                            }) {
-                                eprintln!("Failed to send sync block {}: {}", height, e);
-                                break;
+                // If this is a request-response request, collect blocks and send response
+                if let Some(request_id) = rr_request_id {
+                    // REQUEST-RESPONSE PATH: Collect blocks and send in one response
+                    // This provides RELIABLE, ORDERED delivery
+                    let mut blocks = Vec::new();
+                    for height in from_height..=to_height {
+                        match chain.get_block_by_height(height) {
+                            Ok(Some(block)) => {
+                                if height <= 20 || height % 100 == 0 {
+                                    println!("   ↳ Serving block {} via RR (hash {:?})", height, block.header.hash());
+                                }
+                                blocks.push(block);
                             }
-                            sent_count += 1;
-                        }
-                        Ok(None) => {
-                            // Block doesn't exist - log and continue to next block
-                            // Don't break immediately - try to serve other blocks in the range
-                            if height <= 20 || height % 100 == 0 {
-                            println!(
-                                    "   ↳ Missing requested block {} (first missing in range {}-{}) - continuing to serve other blocks",
-                                height, from_height, to_height
-                            );
-                        }
-                            // Continue to next block instead of breaking
-                            // This allows serving blocks that do exist even if some are missing
-                            continue;
-                        }
-                        Err(e) => {
-                            eprintln!("Error fetching block {}: {}", height, e);
-                            break;
+                            Ok(None) => {
+                                if height <= 20 || height % 100 == 0 {
+                                    println!("   ↳ Missing block {} in range {}-{}", height, from_height, to_height);
+                                }
+                                // Continue to collect other blocks
+                            }
+                            Err(e) => {
+                                eprintln!("Error fetching block {}: {}", height, e);
+                                // Send error response
+                                if let Err(e) = network_tx.send(NetworkCommand::SendErrorResponse { 
+                                    request_id, 
+                                    message: format!("Error fetching block {}: {}", height, e) 
+                                }) {
+                                    eprintln!("Failed to send error response: {}", e);
+                                }
+                                return;
+                            }
                         }
                     }
-                }
+                    
+                    // Send blocks response via request-response
+                    if !blocks.is_empty() {
+                        println!("📤 [RR-SYNC] Sending {} blocks via request-response (id: {})", blocks.len(), request_id);
+                        if let Err(e) = network_tx.send(NetworkCommand::SendBlocksResponse { 
+                            request_id, 
+                            blocks 
+                        }) {
+                            eprintln!("Failed to send blocks response: {}", e);
+                        }
+                    } else {
+                        // No blocks found - send error
+                        if let Err(e) = network_tx.send(NetworkCommand::SendErrorResponse { 
+                            request_id, 
+                            message: format!("No blocks found in range {}-{}", from_height, to_height) 
+                        }) {
+                            eprintln!("Failed to send error response: {}", e);
+                        }
+                    }
+                } else {
+                    // GOSSIPSUB PATH: Legacy - send via broadcast (fallback)
+                    // INSTITUTIONAL-GRADE: Use SyncBlock with unique request_id
+                    // This is CRITICAL - using SendBlockToPeer or BroadcastBlock would be rejected
+                    // as duplicate by gossipsub. The unique request_id ensures delivery.
+                    let base_request_id = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64;
+                    
+                    let mut sent_count = 0;
+                    for height in from_height..=to_height {
+                        match chain.get_block_by_height(height) {
+                            Ok(Some(block)) => {
+                                // Generate unique request_id: base timestamp + height offset
+                                // This guarantees EVERY sync message has a unique gossipsub message ID
+                                let request_id = base_request_id.wrapping_add(height);
+                                
+                                if height <= 20 || height % 100 == 0 {
+                                    println!(
+                                        "   ↳ Serving sync block {} (hash {:?}) to {:?}",
+                                        height,
+                                        block.header.hash(),
+                                        peer
+                                    );
+                                }
+                                // Use SendSyncBlock with unique request_id - NOT SendBlockToPeer!
+                                if let Err(e) = network_tx.send(NetworkCommand::SendSyncBlock { 
+                                    block, 
+                                    request_id 
+                                }) {
+                                    eprintln!("Failed to send sync block {}: {}", height, e);
+                                    break;
+                                }
+                                sent_count += 1;
+                            }
+                            Ok(None) => {
+                                // Block doesn't exist - log and continue to next block
+                                // Don't break immediately - try to serve other blocks in the range
+                                if height <= 20 || height % 100 == 0 {
+                                    println!(
+                                        "   ↳ Missing requested block {} (first missing in range {}-{}) - continuing to serve other blocks",
+                                        height, from_height, to_height
+                                    );
+                                }
+                                // Continue to next block instead of breaking
+                                // This allows serving blocks that do exist even if some are missing
+                                continue;
+                            }
+                            Err(e) => {
+                                eprintln!("Error fetching block {}: {}", height, e);
+                                break;
+                            }
+                        }
+                    }
 
-                if sent_count > 0 {
-                    println!("📤 Sent {} sync blocks (unique request_ids) to {:?}", sent_count, peer);
+                    if sent_count > 0 {
+                        println!("📤 Sent {} sync blocks (unique request_ids) to {:?}", sent_count, peer);
+                    }
                 }
             }
             // =========================================================================
