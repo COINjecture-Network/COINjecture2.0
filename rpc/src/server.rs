@@ -29,6 +29,17 @@ pub trait BlockchainReader: Send + Sync {
     fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, String>;
     fn get_block_by_hash(&self, hash: &Hash) -> Result<Option<Block>, String>;
     fn get_header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, String>;
+    /// Calculate cumulative work score up to given height (sum of all block work_scores)
+    fn calculate_chain_work(&self, up_to_height: u64) -> Result<u64, String> {
+        // Default implementation: sum work_scores from all headers
+        let mut total: u64 = 0;
+        for h in 0..=up_to_height {
+            if let Ok(Some(header)) = self.get_header_by_height(h) {
+                total = total.saturating_add(header.work_score as u64);
+            }
+        }
+        Ok(total)
+    }
 }
 
 /// RPC error codes
@@ -44,6 +55,10 @@ pub struct ChainInfo {
     pub best_hash: String,
     pub genesis_hash: String,
     pub peer_count: usize,
+    /// Cumulative work score of the best chain (fork-choice weight)
+    pub total_work: u64,
+    /// Whether the node is currently syncing
+    pub is_syncing: bool,
 }
 
 /// Network information response (for P2P debugging)
@@ -295,6 +310,8 @@ pub struct RpcServerState {
     pub local_peer_id: Option<String>,
     /// Listen addresses for the P2P network
     pub listen_addresses: Arc<RwLock<Vec<String>>>,
+    /// Whether the node is currently syncing
+    pub is_syncing: Arc<RwLock<bool>>,
 }
 
 /// RPC server implementation
@@ -555,12 +572,21 @@ impl CoinjectRpcServer for RpcServerImpl {
         let best_hash = *self.state.best_hash.read().await;
         let peer_count = *self.state.peer_count.read().await;
 
+        // Calculate cumulative work from chain (sum of work scores)
+        let total_work = self.state.blockchain.calculate_chain_work(best_height)
+            .unwrap_or(0);
+
+        // Check if syncing (simplified: syncing if we have peers but recent blocks are slow)
+        let is_syncing = *self.state.is_syncing.read().await;
+
         Ok(ChainInfo {
             chain_id: self.state.chain_id.clone(),
             best_height,
             best_hash: hex::encode(best_hash.as_bytes()),
             genesis_hash: hex::encode(self.state.genesis_hash.as_bytes()),
             peer_count,
+            total_work,
+            is_syncing,
         })
     }
 

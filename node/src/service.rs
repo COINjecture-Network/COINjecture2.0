@@ -248,6 +248,7 @@ impl CoinjectNode {
                 include_solver_address: false,
                 batch_size: 10,
                 batch_interval: Duration::from_secs(60),
+                min_confirmations: 20, // k-confirmation guard for reorg safety
             };
 
             match HuggingFaceSync::new(hf_config, energy_config, sync_config.clone()) {
@@ -567,6 +568,7 @@ impl CoinjectNode {
             block_submission_handler,
             local_peer_id: Some(local_peer_id_str.clone()),
             listen_addresses: Arc::clone(&listen_addresses),
+            is_syncing: Arc::new(tokio::sync::RwLock::new(false)), // Node starts not syncing
         });
 
         let rpc_server = RpcServer::new(rpc_addr, rpc_state).await?;
@@ -1178,7 +1180,61 @@ impl CoinjectNode {
                     let block_age = now - block.header.timestamp;
                     let skip_age_check = block_age > 7200; // 2 hours
 
-                    match validator.validate_block_with_options(&block, &best_hash, expected_height, skip_age_check) {
+                    // FORK HANDLING FIX: Check if block extends our current chain or is a fork block
+                    let extends_best_chain = block.header.prev_hash == best_hash;
+
+                    let validation_result = if extends_best_chain {
+                        // Normal case: block extends our best chain
+                        validator.validate_block_with_options(&block, &best_hash, expected_height, skip_age_check)
+                    } else {
+                        // Fork case: check if we have the parent block
+                        match chain.has_block(&block.header.prev_hash) {
+                            Ok(true) => {
+                                // We have the parent - this is a valid sidechain block
+                                println!("🔀 Fork block detected at height {}: extends {:?} (not our tip {:?})",
+                                    block.header.height,
+                                    &block.header.prev_hash.to_string()[..16],
+                                    &best_hash.to_string()[..16]);
+
+                                // Validate against its declared parent (not best_hash)
+                                // Note: We validate height as expected_height since that's what we're at
+                                // The block's prev_hash already points to a valid stored block
+                                validator.validate_block_with_options(&block, &block.header.prev_hash, expected_height, skip_age_check)
+                            }
+                            Ok(false) => {
+                                // Parent missing - this is an orphan block
+                                println!("👻 Orphan block {} received: parent {:?} not found, buffering...",
+                                    block.header.height,
+                                    &block.header.prev_hash.to_string()[..16]);
+
+                                // Buffer the orphan block
+                                let mut buffer = block_buffer.write().await;
+                                if !buffer.contains_key(&block.header.height) {
+                                    buffer.insert(block.header.height, block.clone());
+                                }
+                                drop(buffer);
+
+                                // Request the missing parent block
+                                // The parent should be at height - 1
+                                if block.header.height > 0 {
+                                    let missing_height = block.header.height - 1;
+                                    println!("📡 Requesting missing parent block at height {}", missing_height);
+                                    let _ = network_tx.send(NetworkCommand::RequestBlocks {
+                                        from_height: missing_height,
+                                        to_height: missing_height,
+                                    });
+                                }
+
+                                return; // Don't continue processing - wait for parent
+                            }
+                            Err(e) => {
+                                println!("❌ Error checking for parent block: {}", e);
+                                return;
+                            }
+                        }
+                    };
+
+                    match validation_result {
                         Ok(()) => {
                             // Store and apply block
                             match chain.store_block(&block).await {
@@ -1270,6 +1326,26 @@ impl CoinjectNode {
                                                 println!("❌ Failed to apply block transactions: {}", e);
                                             }
                                         }
+                                    } else {
+                                        // FORK HANDLING: Block was stored but didn't become best tip
+                                        // This means it's a sidechain block - check if we should reorganize
+                                        println!("🔀 Fork block {} stored (not best tip), checking for reorganization...",
+                                            block.header.height);
+
+                                        // Trigger reorg check - the fork chain might have more total work
+                                        Self::check_and_reorganize_chain(
+                                            chain,
+                                            state,
+                                            timelock_state,
+                                            escrow_state,
+                                            channel_state,
+                                            trustline_state,
+                                            dimensional_pool_state,
+                                            marketplace_state,
+                                            validator,
+                                            block_buffer,
+                                            Some(network_tx),
+                                        ).await;
                                     }
                                 }
                                 Err(e) => println!("❌ Failed to store block: {}", e),
@@ -2079,7 +2155,51 @@ impl CoinjectNode {
                     let block_age = now - block.header.timestamp;
                     let skip_age_check = block_age > 7200; // 2 hours
 
-                    match validator.validate_block_with_options(&block, &best_hash, next_height, skip_age_check) {
+                    // FORK HANDLING FIX: Check if buffered block extends our current chain or is a fork block
+                    let extends_best_chain = block.header.prev_hash == best_hash;
+
+                    let validation_result = if extends_best_chain {
+                        // Normal case: block extends our best chain
+                        validator.validate_block_with_options(&block, &best_hash, next_height, skip_age_check)
+                    } else {
+                        // Fork case: check if we have the parent block
+                        match chain.has_block(&block.header.prev_hash) {
+                            Ok(true) => {
+                                // We have the parent - this is a valid sidechain block
+                                println!("🔀 Buffered fork block detected at height {}: extends {:?} (not our tip {:?})",
+                                    block.header.height,
+                                    &block.header.prev_hash.to_string()[..16],
+                                    &best_hash.to_string()[..16]);
+
+                                // Validate against its declared parent (not best_hash)
+                                validator.validate_block_with_options(&block, &block.header.prev_hash, next_height, skip_age_check)
+                            }
+                            Ok(false) => {
+                                // Parent missing - this is an orphan block from a fork chain
+                                // We can't process it without its parent. Don't re-add to buffer
+                                // (that would cause infinite loop). The block will be re-sent by peers
+                                // during normal sync or gossip if we need it later.
+                                println!("👻 Buffered orphan block at height {}: parent {:?} not found - discarding fork block",
+                                    block.header.height,
+                                    &block.header.prev_hash.to_string()[..16]);
+
+                                // Request missing blocks from peers to help sync
+                                if let Some(net_tx) = network_tx {
+                                    let _ = net_tx.send(NetworkCommand::RequestBlocks {
+                                        from_height: next_height,
+                                        to_height: next_height + 10,
+                                    });
+                                }
+                                break; // Exit the loop - can't process more without syncing
+                            }
+                            Err(e) => {
+                                println!("❌ Error checking for parent block: {}", e);
+                                continue;
+                            }
+                        }
+                    };
+
+                    match validation_result {
                         Ok(()) => {
                             // Store and apply
                             // During sequential sync, we're processing blocks one by one starting from best_height + 1.

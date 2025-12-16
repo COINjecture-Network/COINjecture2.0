@@ -408,6 +408,8 @@ pub struct NetworkService {
     outbound_sync_requests: HashMap<OutboundRequestId, (PeerId, u64)>, // (peer, our_request_id)
     /// Map inbound request IDs to our internal request_id for cleanup on InboundFailure
     inbound_request_mapping: HashMap<request_response::InboundRequestId, u64>,
+    /// Sync DoS guardrails - rate limiting and inflight tracking
+    sync_guardrails: crate::sync_guardrails::SyncGuardrails,
 }
 
 /// Events emitted by the network service
@@ -712,6 +714,9 @@ impl NetworkService {
                 pending_sync_channels: HashMap::new(),
                 outbound_sync_requests: HashMap::new(),
                 inbound_request_mapping: HashMap::new(),
+                sync_guardrails: crate::sync_guardrails::SyncGuardrails::new(
+                    crate::sync_guardrails::SyncGuardConfig::default()
+                ),
             },
             event_rx,
         ))
@@ -1437,12 +1442,40 @@ impl NetworkService {
 
     /// Request blocks from a specific peer via request-response protocol
     /// Returns the request_id for tracking the response
+    ///
+    /// DoS Protection (Phase 1B):
+    /// - Checks per-peer inflight cap before sending
+    /// - Checks global inflight cap
+    /// - Validates request range size
+    /// - Registers request for tracking
     pub fn request_blocks_rr(
         &mut self,
         peer: PeerId,
         from_height: u64,
         to_height: u64,
     ) -> Result<u64, Box<dyn std::error::Error>> {
+        // DoS Guard: Check if we can make this request
+        if !self.sync_guardrails.can_request(&peer) {
+            let inflight = self.sync_guardrails.peer_inflight_count(&peer);
+            let total = self.sync_guardrails.total_inflight();
+            eprintln!("⚠️ [RR-SYNC] Request blocked by guardrails: peer {} has {} inflight, {} total",
+                peer, inflight, total);
+            return Err(format!(
+                "Rate limited: peer has {} inflight requests (total: {})",
+                inflight, total
+            ).into());
+        }
+
+        // DoS Guard: Validate request range
+        if !self.sync_guardrails.validate_request_range(from_height, to_height) {
+            eprintln!("⚠️ [RR-SYNC] Request blocked: invalid range {}-{}", from_height, to_height);
+            return Err(format!(
+                "Invalid request range: {}-{} (max {} blocks)",
+                from_height, to_height,
+                crate::sync_guardrails::SyncGuardConfig::default().max_blocks_per_request
+            ).into());
+        }
+
         // Generate unique request_id
         let request_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1455,15 +1488,45 @@ impl NetworkService {
             request_id,
         };
 
-        println!("📤 [RR-SYNC] Sending block request to {}: heights {}-{} (id: {})",
-            peer, from_height, to_height, request_id);
+        println!("📤 [RR-SYNC] Sending block request to {}: heights {}-{} (id: {}, inflight: {})",
+            peer, from_height, to_height, request_id,
+            self.sync_guardrails.peer_inflight_count(&peer) + 1);
 
         let outbound_request_id = self.swarm.behaviour_mut().sync.send_request(&peer, request);
-        
+
         // Track this request so we can match the response
         self.outbound_sync_requests.insert(outbound_request_id, (peer, request_id));
 
+        // DoS Guard: Register the request
+        self.sync_guardrails.register_request(request_id, peer, from_height, to_height);
+
         Ok(request_id)
+    }
+
+    /// Check if a sync request to this peer would be allowed
+    pub fn can_sync_request(&self, peer: &PeerId) -> bool {
+        self.sync_guardrails.can_request(peer)
+    }
+
+    /// Get current sync backpressure metrics
+    pub fn get_sync_metrics(&self) -> crate::sync_guardrails::BackpressureMetrics {
+        self.sync_guardrails.get_metrics()
+    }
+
+    /// Record chunk size for oscillation tracking
+    pub fn record_sync_chunk_size(&mut self, size: u64) {
+        self.sync_guardrails.record_chunk_size(size);
+    }
+
+    /// Check if peer has high failure rate
+    pub fn peer_has_high_sync_failure_rate(&self, peer: &PeerId) -> bool {
+        self.sync_guardrails.peer_has_high_failure_rate(peer)
+    }
+
+    /// Cleanup stale sync requests
+    pub fn cleanup_stale_sync_requests(&mut self) -> usize {
+        let stale = self.sync_guardrails.cleanup_stale_requests();
+        stale.len()
     }
 
     /// Send blocks response via request-response protocol
@@ -1880,8 +1943,12 @@ impl NetworkService {
                             if let Some((peer_id, our_req_id)) = self.outbound_sync_requests.remove(&request_id) {
                                 match response {
                                     SyncResponse::BlockResponse { blocks, request_id: resp_id } => {
-                                        println!("📥 [RR-SYNC] Received {} blocks from {} (id: {})", 
+                                        println!("📥 [RR-SYNC] Received {} blocks from {} (id: {})",
                                             blocks.len(), peer_id, resp_id);
+
+                                        // DoS Guard: Mark request as completed successfully
+                                        self.sync_guardrails.complete_request(our_req_id, true);
+
                                         // Emit BlockReceived events IN ORDER
                                         for block in blocks {
                                             let height = block.header.height;
@@ -1895,6 +1962,8 @@ impl NetworkService {
                                     }
                                     SyncResponse::Error { message, request_id: err_id } => {
                                         eprintln!("❌ [RR-SYNC] Error from {} (id: {}): {}", peer_id, err_id, message);
+                                        // DoS Guard: Mark request as failed
+                                        self.sync_guardrails.complete_request(our_req_id, false);
                                     }
                                 }
                             } else {
@@ -1905,7 +1974,10 @@ impl NetworkService {
                 }
                 CoinjectBehaviourEvent::Sync(request_response::Event::OutboundFailure { peer, request_id, error }) => {
                     eprintln!("❌ [RR-SYNC] Outbound request to {} failed (id: {:?}): {:?}", peer, request_id, error);
-                    self.outbound_sync_requests.remove(&request_id);
+                    // DoS Guard: Mark request as failed on outbound failure
+                    if let Some((_, our_req_id)) = self.outbound_sync_requests.remove(&request_id) {
+                        self.sync_guardrails.complete_request(our_req_id, false);
+                    }
                 }
                 CoinjectBehaviourEvent::Sync(request_response::Event::InboundFailure { peer, request_id, error }) => {
                     eprintln!("❌ [RR-SYNC] Inbound request from {} failed (id: {:?}): {:?}", peer, request_id, error);

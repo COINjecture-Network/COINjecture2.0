@@ -1,0 +1,236 @@
+# =============================================================================
+# COINjecture Network B - 7-Node Test Harness
+# =============================================================================
+# Usage:
+#   docker compose -f tests/harness/docker-compose.test.yml up -d
+#   docker compose -f tests/harness/docker-compose.test.yml down -v
+#
+# Features:
+#   - 7 nodes (bootnode + 6 peers) for realistic network conditions
+#   - Named volumes for cold/warm start testing
+#   - Network controls for partition simulation
+#   - Deterministic node IDs via seed files
+# =============================================================================
+
+version: '3.8'
+
+x-node-common: &node-common
+  image: coinject-node:latest
+  # If you need to rebuild from source, uncomment below:
+  # build:
+  #   context: ../..
+  #   dockerfile: Dockerfile
+  environment:
+    - RUST_LOG=${RUST_LOG:-info,coinject_network=debug}
+    - RUST_BACKTRACE=1
+    - ADZDB_ENABLED=false
+  networks:
+    - coinject-test-net
+  restart: "no"
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # BOOTNODE - Primary seed node (stable, always-on)
+  # ═══════════════════════════════════════════════════════════════════════════
+  bootnode:
+    <<: *node-common
+    container_name: coinject-test-bootnode
+    hostname: bootnode
+    ports:
+      - "30400:30400"
+      - "9940:9940"
+    volumes:
+      - bootnode-data:/data
+      - ./keys/bootnode:/keys:ro
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30400
+      --rpc-addr 0.0.0.0:9940
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    healthcheck:
+      # Simple process check - scenario runner handles RPC health
+      test: ["CMD", "true"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PEER NODES (A-F) - Connect to bootnode
+  # ═══════════════════════════════════════════════════════════════════════════
+  node-a:
+    <<: *node-common
+    container_name: coinject-test-node-a
+    hostname: node-a
+    ports:
+      - "30401:30401"
+      - "9941:9941"
+    volumes:
+      - node-a-data:/data
+      - ./keys/node-a:/keys:ro
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30401
+      --rpc-addr 0.0.0.0:9941
+      --bootnodes /dns4/bootnode/tcp/30400
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  node-b:
+    <<: *node-common
+    container_name: coinject-test-node-b
+    hostname: node-b
+    ports:
+      - "30402:30402"
+      - "9942:9942"
+    volumes:
+      - node-b-data:/data
+      - ./keys/node-b:/keys:ro
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30402
+      --rpc-addr 0.0.0.0:9942
+      --bootnodes /dns4/bootnode/tcp/30400
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  node-c:
+    <<: *node-common
+    container_name: coinject-test-node-c
+    hostname: node-c
+    ports:
+      - "30403:30403"
+      - "9943:9943"
+    volumes:
+      - node-c-data:/data
+      - ./keys/node-c:/keys:ro
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30403
+      --rpc-addr 0.0.0.0:9943
+      --bootnodes /dns4/bootnode/tcp/30400
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  node-d:
+    <<: *node-common
+    container_name: coinject-test-node-d
+    hostname: node-d
+    ports:
+      - "30404:30404"
+      - "9944:9944"
+    volumes:
+      - node-d-data:/data
+      - ./keys/node-d:/keys:ro
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30404
+      --rpc-addr 0.0.0.0:9944
+      --bootnodes /dns4/bootnode/tcp/30400
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  node-e:
+    <<: *node-common
+    container_name: coinject-test-node-e
+    hostname: node-e
+    ports:
+      - "30405:30405"
+      - "9945:9945"
+    volumes:
+      - node-e-data:/data
+      - ./keys/node-e:/keys:ro
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30405
+      --rpc-addr 0.0.0.0:9945
+      --bootnodes /dns4/bootnode/tcp/30400
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  node-f:
+    <<: *node-common
+    container_name: coinject-test-node-f
+    hostname: node-f
+    ports:
+      - "30406:30406"
+      - "9946:9946"
+    volumes:
+      - node-f-data:/data
+      - ./keys/node-f:/keys:ro
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30406
+      --rpc-addr 0.0.0.0:9946
+      --bootnodes /dns4/bootnode/tcp/30400
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LATE-JOINER NODE (for join-late scenario)
+  # ═══════════════════════════════════════════════════════════════════════════
+  node-late:
+    <<: *node-common
+    container_name: coinject-test-node-late
+    hostname: node-late
+    ports:
+      - "30407:30407"
+      - "9947:9947"
+    volumes:
+      - node-late-data:/data
+    command: >
+      --mine
+      --data-dir /data
+      --p2p-addr /ip4/0.0.0.0/tcp/30407
+      --rpc-addr 0.0.0.0:9947
+      --bootnodes /dns4/bootnode/tcp/30400
+      --difficulty ${DIFFICULTY:-3}
+      --block-time ${BLOCK_TIME:-30}
+    profiles:
+      - late-join
+    depends_on:
+      bootnode:
+        condition: service_healthy
+
+volumes:
+  bootnode-data:
+  node-a-data:
+  node-b-data:
+  node-c-data:
+  node-d-data:
+  node-e-data:
+  node-f-data:
+  node-late-data:
+
+networks:
+  coinject-test-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
