@@ -1276,7 +1276,42 @@ impl CoinjectNode {
                             }
                         }
                         Err(e) => {
-                            println!("❌ Block validation failed: {}", e);
+                            let error_str = e.to_string();
+                            println!("❌ Block validation failed: {}", error_str);
+                            
+                            // CRITICAL FIX: If validation failed due to "Invalid previous hash",
+                            // this block may be from a valid fork chain (same genesis, different branch).
+                            // Store it and trigger reorganization to compare chains.
+                            if error_str.contains("Invalid previous hash") && is_sync_block {
+                                println!("🔀 Block {} may be from a fork chain - storing for reorganization analysis", block.header.height);
+                                
+                                // Store as fork block
+                                if let Err(store_err) = chain.store_block(&block).await {
+                                    println!("   ⚠️ Could not store fork block: {}", store_err);
+                                } else {
+                                    println!("   ✅ Fork block {} stored for reorganization", block.header.height);
+                                    
+                                    // Also buffer it for later processing after reorganization
+                                    let mut buffer = block_buffer.write().await;
+                                    buffer.insert(block.header.height, block.clone());
+                                    drop(buffer);
+                                    
+                                    // Trigger reorganization check
+                                    Self::check_and_reorganize_chain(
+                                        chain,
+                                        state,
+                                        timelock_state,
+                                        escrow_state,
+                                        channel_state,
+                                        trustline_state,
+                                        dimensional_pool_state,
+                                        marketplace_state,
+                                        validator,
+                                        block_buffer,
+                                        Some(network_tx),
+                                    ).await;
+                                }
+                            }
                         }
                     }
                 } else if block.header.height > expected_height {
@@ -2253,22 +2288,42 @@ impl CoinjectNode {
                     },
                     Ok(None) => {
                         // COMPLETE FORK DETECTED: No common ancestor means we're on a completely different chain
-                        // This requires a full chain review from genesis
+                        // This requires a full chain review from genesis OR complete chain replacement
                         println!("🚨 COMPLETE FORK DETECTED: Buffered blocks at height {} have no common ancestor with current chain", max_buffered_height);
-                        println!("   Requesting full chain from genesis for validation...");
                         
-                        // Request full chain from genesis to validate and compare
-                        if let Some(network_tx) = network_cmd_tx {
-                            if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
-                                from_height: 0,
-                                to_height: max_buffered_height,
-                            }) {
-                                eprintln!("⚠️  Failed to request full chain from genesis: {}", e);
+                        // Check if the buffered chain is longer than ours
+                        if max_buffered_height > current_best_height {
+                            println!("   🔀 Fork chain is LONGER ({} > {})", max_buffered_height, current_best_height);
+                            println!("   💡 Consider clearing local data and syncing fresh from the longer chain");
+                            
+                            // Try to validate the fork chain from the buffered blocks
+                            // If we have enough blocks and they form a valid chain from genesis,
+                            // we could replace our chain. For now, request the full chain via RR.
+                            if let Some(network_tx) = network_cmd_tx {
+                                // Use chunked RR requests instead of single large GossipSub request
+                                let chunk_size = 100u64;
+                                let mut current = 0u64;
+                                println!("   📦 Requesting fork chain in {} block chunks via RR...", chunk_size);
+                                
+                                while current <= max_buffered_height {
+                                    let end = std::cmp::min(current + chunk_size - 1, max_buffered_height);
+                                    // Note: RequestBlocks is broadcast, we don't have a specific peer here
+                                    // The fork blocks should come from status updates
+                                    if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
+                                        from_height: current,
+                                        to_height: end,
+                                    }) {
+                                        eprintln!("⚠️  Failed to request chain chunk {}-{}: {}", current, end, e);
+                                        break;
+                                    }
+                                    current = end + 1;
+                                }
+                                println!("   ✅ Requested full chain from genesis (0 to {}) in chunks", max_buffered_height);
                             } else {
-                                println!("   ✅ Requested full chain from genesis (0 to {})", max_buffered_height);
+                                println!("   ⚠️  No network command channel available to request full chain");
                             }
                         } else {
-                            println!("   ⚠️  No network command channel available to request full chain");
+                            println!("   ℹ️ Fork chain is NOT longer ({} <= {}), keeping current chain", max_buffered_height, current_best_height);
                         }
                     },
                     Err(e) => {

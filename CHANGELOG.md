@@ -2,6 +2,23 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.7.80] - 2025-12-16
+
+### Fixed
+- **Fork Block Storage and Reorganization Trigger**
+  - When block validation fails with "Invalid previous hash" during sync, block is now stored as fork block
+  - Triggers reorganization check to compare chains
+  - Also buffers fork blocks for later processing after reorganization
+  - **Files Changed**: `node/src/service.rs`
+- **Complete Fork Detection Enhanced**
+  - When COMPLETE FORK detected (no common ancestor), requests chain in chunks instead of single large request
+  - Uses adaptive chunk size (100 blocks) to avoid timeout
+  - Better logging for fork length comparison
+  - **Files Changed**: `node/src/service.rs`
+- **Updated Peer IDs**
+  - Node 1: `12D3KooWN7FAZ3LcPLDhhGqsAZ4Fgv2KzXWGQWjb2T7PP5Uw2BRs`
+  - Node 2: `12D3KooWL7wfTZBEjjYPMabGnwrXPnSFYaQjtQAmxsSJWde5GYTs`
+
 ## [4.7.79] - 2025-12-16
 
 ### Fixed
