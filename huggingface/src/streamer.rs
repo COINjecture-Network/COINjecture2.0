@@ -16,6 +16,21 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// MEMORY BOUNDS - Prevent unbounded growth
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Maximum published record IDs to track (LRU-style FIFO eviction)
+const MAX_PUBLISHED_RECORDS: usize = 50_000;
+/// Eviction batch size when limit exceeded
+const PUBLISHED_EVICTION_BATCH: usize = 5_000;
+/// Maximum pending blocks in queue (ring buffer behavior)
+const MAX_PENDING_BLOCKS: usize = 1_000;
+/// Maximum age for pending blocks before expiry (1 hour)
+const PENDING_BLOCK_TTL_SECS: i64 = 3600;
+/// Maximum orphaned block hashes to store in reorg event (use summary for larger)
+const MAX_ORPHAN_HASHES_INLINE: usize = 50;
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // FEED RECORD TYPES
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -78,6 +93,7 @@ pub struct ConfirmedBlockRecord {
 }
 
 /// Feed C: Reorg event record (forensic log)
+/// For large reorgs (>50 blocks), uses summary format instead of full hash lists
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReorgEventRecord {
     /// Unique event ID (hash of event data)
@@ -98,10 +114,30 @@ pub struct ReorgEventRecord {
     pub reorg_depth: u64,
     /// Work difference (new_work - old_work, positive means more work)
     pub work_delta: f64,
-    /// Hashes of orphaned blocks (rolled back)
+    /// Total count of orphaned blocks
+    pub orphaned_count: usize,
+    /// Hashes of orphaned blocks (capped at MAX_ORPHAN_HASHES_INLINE, first/last for larger)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub orphaned_blocks: Vec<String>,
-    /// Hashes of new blocks (rolled forward)
+    /// First orphaned block hash (for large reorgs where full list is truncated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphaned_first: Option<String>,
+    /// Last orphaned block hash (for large reorgs where full list is truncated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphaned_last: Option<String>,
+    /// Total count of new blocks
+    pub new_count: usize,
+    /// Hashes of new blocks (capped at MAX_ORPHAN_HASHES_INLINE, first/last for larger)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub new_blocks: Vec<String>,
+    /// First new block hash (for large reorgs)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_first: Option<String>,
+    /// Last new block hash (for large reorgs)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_last: Option<String>,
+    /// Whether block lists are truncated (true if count > inline limit)
+    pub lists_truncated: bool,
     /// Timestamp when reorg detected
     pub detected_at: i64,
     /// Node ID that detected this reorg
@@ -195,16 +231,22 @@ impl StreamerState {
         self.published_records.contains_key(record_id)
     }
 
-    /// Mark a record as published
+    /// Mark a record as published (bounded LRU - FIFO eviction at 50k)
     pub fn mark_published(&mut self, record_id: String) {
         self.published_records.insert(record_id, true);
-        // Keep map bounded (last 10000 records)
-        if self.published_records.len() > 10000 {
-            // Remove oldest entries (this is a simple approach)
-            let keys: Vec<_> = self.published_records.keys().take(1000).cloned().collect();
+
+        // Keep map bounded with FIFO eviction
+        if self.published_records.len() > MAX_PUBLISHED_RECORDS {
+            // Remove oldest entries in batch
+            let keys: Vec<_> = self.published_records.keys()
+                .take(PUBLISHED_EVICTION_BATCH)
+                .cloned()
+                .collect();
             for key in keys {
                 self.published_records.remove(&key);
             }
+            eprintln!("📊 HF Streamer: Evicted {} old record IDs (bounded at {})",
+                PUBLISHED_EVICTION_BATCH, MAX_PUBLISHED_RECORDS);
         }
     }
 
@@ -214,6 +256,37 @@ impl StreamerState {
         format!("reorg_{}_{}",
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
             self.event_counter)
+    }
+
+    /// Add pending block with ring buffer bounds and TTL
+    pub fn add_pending_block(&mut self, block: PendingBlock) {
+        // Enforce ring buffer limit
+        while self.pending_blocks.len() >= MAX_PENDING_BLOCKS {
+            if let Some(evicted) = self.pending_blocks.pop_front() {
+                eprintln!("📊 HF Streamer: Evicted old pending block {} (ring buffer full)",
+                    evicted.height);
+            }
+        }
+        self.pending_blocks.push_back(block);
+    }
+
+    /// Expire pending blocks older than TTL
+    pub fn expire_old_pending_blocks(&mut self) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let before_count = self.pending_blocks.len();
+        self.pending_blocks.retain(|pb| {
+            now - pb.received_at < PENDING_BLOCK_TTL_SECS
+        });
+
+        let expired = before_count - self.pending_blocks.len();
+        if expired > 0 {
+            eprintln!("📊 HF Streamer: Expired {} stale pending blocks (TTL={}s)",
+                expired, PENDING_BLOCK_TTL_SECS);
+        }
     }
 }
 
@@ -362,10 +435,15 @@ impl DualFeedStreamer {
             data_version: "v3.1".to_string(),
         };
 
-        // Add to pending blocks for confirmation tracking
+        // Add to pending blocks for confirmation tracking (bounded ring buffer)
         {
             let mut state = self.state.lock().await;
-            state.pending_blocks.push_back(PendingBlock {
+
+            // Expire stale pending blocks first
+            state.expire_old_pending_blocks();
+
+            // Add new block using bounded method
+            state.add_pending_block(PendingBlock {
                 block_hash: block_hash.clone(),
                 prev_hash: record.prev_hash.clone(),
                 height: block.header.height,
@@ -520,6 +598,28 @@ impl DualFeedStreamer {
 
         let reorg_depth = old_height.saturating_sub(common_ancestor_height);
 
+        // Build bounded orphan/new block lists (cap at MAX_ORPHAN_HASHES_INLINE)
+        let orphaned_count = orphaned_blocks.len();
+        let new_count = new_blocks.len();
+        let lists_truncated = orphaned_count > MAX_ORPHAN_HASHES_INLINE || new_count > MAX_ORPHAN_HASHES_INLINE;
+
+        // For small reorgs, include full lists; for large ones, use first/last summary
+        let (orphaned_hashes, orphaned_first, orphaned_last) = if orphaned_count <= MAX_ORPHAN_HASHES_INLINE {
+            (orphaned_blocks.iter().map(|h| hex::encode(h.as_bytes())).collect(), None, None)
+        } else {
+            let first = orphaned_blocks.first().map(|h| hex::encode(h.as_bytes()));
+            let last = orphaned_blocks.last().map(|h| hex::encode(h.as_bytes()));
+            (Vec::new(), first, last)
+        };
+
+        let (new_hashes, new_first, new_last) = if new_count <= MAX_ORPHAN_HASHES_INLINE {
+            (new_blocks.iter().map(|h| hex::encode(h.as_bytes())).collect(), None, None)
+        } else {
+            let first = new_blocks.first().map(|h| hex::encode(h.as_bytes()));
+            let last = new_blocks.last().map(|h| hex::encode(h.as_bytes()));
+            (Vec::new(), first, last)
+        };
+
         let record = ReorgEventRecord {
             event_id: event_id.clone(),
             old_tip: hex::encode(old_tip.as_bytes()),
@@ -530,12 +630,19 @@ impl DualFeedStreamer {
             common_ancestor_height,
             reorg_depth,
             work_delta: new_work - old_work,
-            orphaned_blocks: orphaned_blocks.iter().map(|h| hex::encode(h.as_bytes())).collect(),
-            new_blocks: new_blocks.iter().map(|h| hex::encode(h.as_bytes())).collect(),
+            orphaned_count,
+            orphaned_blocks: orphaned_hashes,
+            orphaned_first,
+            orphaned_last,
+            new_count,
+            new_blocks: new_hashes,
+            new_first,
+            new_last,
+            lists_truncated,
             detected_at: timestamp,
             node_id: self.config.node_id.clone(),
             feed: "reorg_events".to_string(),
-            data_version: "v3.1".to_string(),
+            data_version: "v3.2".to_string(), // Bump version for new format
         };
 
         eprintln!("⚠️  HF Feed C: Reorg detected! Depth={}, old_height={} -> new_height={}",
