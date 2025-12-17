@@ -173,6 +173,11 @@ pub struct NodeConfig {
     /// By default, private addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x) are rejected
     #[arg(long)]
     pub allow_private_addrs: bool,
+
+    /// Disable mDNS peer discovery (for network isolation testing)
+    /// Useful for partition/fork testing where you don't want local nodes to find each other
+    #[arg(long)]
+    pub disable_mdns: bool,
 }
 
 impl NodeConfig {
