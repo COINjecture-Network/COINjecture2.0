@@ -125,6 +125,34 @@ pub struct RevealParams {
     pub salt: String,    // Hex-encoded 32-byte salt
 }
 
+/// Public SubsetSum problem submission (Phase 2 MVP - simple API)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicSubsetSumParams {
+    /// Numbers in the subset sum problem
+    pub numbers: Vec<i64>,
+    /// Target sum to find
+    pub target: i64,
+    /// Bounty in tokens (must have sufficient balance)
+    pub bounty: Balance,
+    /// Minimum work score required for solution
+    pub min_work_score: f64,
+    /// Days until expiration (1-365)
+    pub expiration_days: u64,
+    /// Submitter's hex-encoded address
+    pub submitter: String,
+}
+
+/// Solution submission parameters (Phase 2 MVP)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolutionSubmissionParams {
+    /// Problem ID (hex-encoded)
+    pub problem_id: String,
+    /// Selected indices that sum to target
+    pub selected_indices: Vec<usize>,
+    /// Solver's hex-encoded address
+    pub solver: String,
+}
+
 /// TimeLock information response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeLockInfo {
@@ -236,6 +264,16 @@ pub trait CoinjectRpc {
     /// Reveal problem for private bounty
     #[method(name = "marketplace_revealProblem")]
     async fn reveal_problem(&self, params: RevealParams) -> RpcResult<bool>;
+
+    /// Submit a public SubsetSum problem (Phase 2 MVP - simple API)
+    /// Returns problem_id on success
+    #[method(name = "marketplace_submitPublicSubsetSum")]
+    async fn submit_public_subset_sum(&self, params: PublicSubsetSumParams) -> RpcResult<String>;
+
+    /// Submit solution to an open problem (Phase 2 MVP)
+    /// Returns true if solution is valid and bounty awarded
+    #[method(name = "marketplace_submitSolution")]
+    async fn submit_solution(&self, params: SolutionSubmissionParams) -> RpcResult<bool>;
 
     /// Get timelocks for a recipient address
     #[method(name = "timelock_getByRecipient")]
@@ -695,6 +733,105 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Submit reveal to marketplace state
         self.state.marketplace_state.reveal_problem(problem_id, reveal)
             .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        Ok(true)
+    }
+
+    async fn submit_public_subset_sum(&self, params: PublicSubsetSumParams) -> RpcResult<String> {
+        // Parse submitter address
+        let submitter = self.parse_address(&params.submitter)?;
+
+        // Validate parameters
+        if params.numbers.is_empty() {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Numbers array cannot be empty",
+                None::<()>,
+            ));
+        }
+        if params.numbers.len() > 1000 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Numbers array too large (max 1000)",
+                None::<()>,
+            ));
+        }
+        if params.bounty == 0 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Bounty must be greater than 0",
+                None::<()>,
+            ));
+        }
+        if params.expiration_days == 0 || params.expiration_days > 365 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Expiration must be 1-365 days",
+                None::<()>,
+            ));
+        }
+
+        // Check submitter has sufficient balance for bounty
+        let balance = self.state.account_state.get_balance(&submitter);
+        if balance < params.bounty {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                format!("Insufficient balance: have {}, need {}", balance, params.bounty),
+                None::<()>,
+            ));
+        }
+
+        // Create SubsetSum problem
+        let problem = ProblemType::SubsetSum {
+            numbers: params.numbers,
+            target: params.target,
+        };
+
+        // Submit to marketplace state
+        let problem_id = self.state.marketplace_state.submit_public_problem(
+            problem,
+            submitter,
+            params.bounty,
+            params.min_work_score,
+            params.expiration_days,
+        )
+        .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        // Deduct bounty from submitter's balance (escrow)
+        let new_balance = balance - params.bounty;
+        self.state.account_state.set_balance(&submitter, new_balance)
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        println!("📌 SubsetSum problem submitted: {} (bounty: {})", hex::encode(problem_id.as_bytes()), params.bounty);
+
+        Ok(hex::encode(problem_id.as_bytes()))
+    }
+
+    async fn submit_solution(&self, params: SolutionSubmissionParams) -> RpcResult<bool> {
+        // Parse solver address
+        let solver = self.parse_address(&params.solver)?;
+
+        // Parse problem ID
+        let problem_id = self.parse_hash(&params.problem_id)?;
+
+        // Create solution
+        let solution = coinject_core::Solution::SubsetSum(params.selected_indices);
+
+        // Submit solution to marketplace state (validates and updates status)
+        self.state.marketplace_state.submit_solution(problem_id, solver, solution)
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        // Claim bounty and credit solver
+        let (solver_addr, bounty) = self.state.marketplace_state.claim_bounty(problem_id)
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        // Credit solver's account with bounty
+        let current_balance = self.state.account_state.get_balance(&solver_addr);
+        let new_balance = current_balance + bounty;
+        self.state.account_state.set_balance(&solver_addr, new_balance)
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e.to_string(), None::<()>))?;
+
+        println!("🎉 Solution accepted! Solver {} awarded {} tokens", hex::encode(solver_addr.as_bytes()), bounty);
 
         Ok(true)
     }

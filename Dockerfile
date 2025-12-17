@@ -1,8 +1,13 @@
 # Multi-stage build for COINjecture blockchain node
 # Using Rust 1.88 to support all dependencies
+#
+# TROUBLESHOOTING: If apt-get times out, check Docker Desktop proxy settings:
+#   docker info | grep -i proxy
+# Disable proxy in Docker Desktop Settings > Resources > Proxies if builds fail.
+#
 FROM rust:1.88-slim AS builder
 
-# Install build dependencies
+# Install build dependencies (using default Debian repos)
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \

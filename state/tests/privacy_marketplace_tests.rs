@@ -369,3 +369,148 @@ fn test_different_problems_different_commitments() {
 
     assert_ne!(commitment1, commitment2); // Different problems = different commitments
 }
+
+// ============================================================================
+// PHASE 2 MVP TESTS - Public SubsetSum Flow
+// ============================================================================
+
+#[test]
+fn test_public_subset_sum_mvp_flow() {
+    let (marketplace, _temp_dir) = create_test_marketplace();
+
+    let submitter = Address::from_bytes([1u8; 32]);
+    let solver = Address::from_bytes([2u8; 32]);
+
+    // Step 1: Submit a public SubsetSum problem
+    // Problem: Find subset of [10, 25, 30, 45, 50] that sums to 75
+    let problem = ProblemType::SubsetSum {
+        numbers: vec![10, 25, 30, 45, 50],
+        target: 75,
+    };
+
+    let bounty: Balance = 5000;
+    let min_work_score = 1.0;
+    let expiration_days = 7;
+
+    let problem_id = marketplace
+        .submit_public_problem(problem.clone(), submitter, bounty, min_work_score, expiration_days)
+        .expect("Failed to submit SubsetSum problem");
+
+    println!("Problem ID: {:?}", problem_id);
+
+    // Step 2: Verify problem is open and queryable
+    let stored = marketplace
+        .get_problem(&problem_id)
+        .expect("Failed to query problem")
+        .expect("Problem not found");
+
+    assert_eq!(stored.status, ProblemStatus::Open);
+    assert_eq!(stored.bounty, bounty);
+    assert!(stored.problem_reveal.is_none()); // Public problems don't need reveal
+
+    // Step 3: Query open problems (marketplace listing)
+    let open_problems = marketplace
+        .get_open_problems()
+        .expect("Failed to get open problems");
+
+    assert_eq!(open_problems.len(), 1);
+    assert_eq!(open_problems[0].problem_id, problem_id);
+
+    // Step 4: Submit a valid solution
+    // Solution: indices [1, 4] -> numbers[1]=25, numbers[4]=50 -> 25+50=75 ✓
+    let solution = Solution::SubsetSum(vec![1, 4]);
+
+    // Verify solution locally first
+    assert!(solution.verify(&problem), "Solution should be valid");
+
+    marketplace
+        .submit_solution(problem_id, solver, solution)
+        .expect("Failed to submit solution");
+
+    // Step 5: Verify problem is now solved
+    let solved = marketplace
+        .get_problem(&problem_id)
+        .expect("Failed to query problem")
+        .expect("Problem not found");
+
+    assert_eq!(solved.status, ProblemStatus::Solved);
+    assert_eq!(solved.solver, Some(solver));
+
+    // Step 6: Claim bounty
+    let (awarded_solver, awarded_bounty) = marketplace
+        .claim_bounty(problem_id)
+        .expect("Failed to claim bounty");
+
+    assert_eq!(awarded_solver, solver);
+    assert_eq!(awarded_bounty, bounty);
+
+    // Step 7: Verify stats updated
+    let stats = marketplace.get_stats().expect("Failed to get stats");
+    assert_eq!(stats.solved_problems, 1);
+    assert_eq!(stats.total_bounty_pool, 0); // Bounty claimed
+}
+
+#[test]
+fn test_invalid_solution_rejected() {
+    let (marketplace, _temp_dir) = create_test_marketplace();
+
+    let submitter = Address::from_bytes([1u8; 32]);
+    let solver = Address::from_bytes([2u8; 32]);
+
+    // Problem: Find subset of [10, 20, 30] that sums to 50
+    let problem = ProblemType::SubsetSum {
+        numbers: vec![10, 20, 30],
+        target: 50,
+    };
+
+    let problem_id = marketplace
+        .submit_public_problem(problem.clone(), submitter, 1000, 1.0, 7)
+        .expect("Failed to submit problem");
+
+    // Invalid solution: indices [0, 1] -> 10+20=30 != 50
+    let bad_solution = Solution::SubsetSum(vec![0, 1]);
+    assert!(!bad_solution.verify(&problem), "Bad solution should fail verification");
+
+    let result = marketplace.submit_solution(problem_id, solver, bad_solution);
+    assert!(result.is_err(), "Invalid solution should be rejected");
+
+    // Problem should still be open
+    let stored = marketplace
+        .get_problem(&problem_id)
+        .expect("Failed to query problem")
+        .expect("Problem not found");
+
+    assert_eq!(stored.status, ProblemStatus::Open);
+}
+
+#[test]
+fn test_multiple_subset_sum_problems() {
+    let (marketplace, _temp_dir) = create_test_marketplace();
+
+    let submitter = Address::from_bytes([1u8; 32]);
+
+    // Submit 3 different SubsetSum problems
+    let problems = vec![
+        (vec![1, 2, 3, 4, 5], 9, 100),   // target=9, bounty=100
+        (vec![10, 20, 30, 40], 50, 200), // target=50, bounty=200
+        (vec![7, 14, 21, 28], 42, 300),  // target=42, bounty=300
+    ];
+
+    let mut problem_ids = Vec::new();
+    for (numbers, target, bounty) in problems {
+        let problem = ProblemType::SubsetSum { numbers, target };
+        let id = marketplace
+            .submit_public_problem(problem, submitter, bounty, 1.0, 7)
+            .expect("Failed to submit problem");
+        problem_ids.push(id);
+    }
+
+    // Verify all problems are open
+    let open = marketplace.get_open_problems().expect("Failed to get open problems");
+    assert_eq!(open.len(), 3);
+
+    // Verify total bounty pool
+    let stats = marketplace.get_stats().expect("Failed to get stats");
+    assert_eq!(stats.total_bounty_pool, 600); // 100+200+300
+    assert_eq!(stats.open_problems, 3);
+}
