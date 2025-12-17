@@ -1,16 +1,26 @@
-// Hugging Face Dataset Integration - INSTITUTIONAL GRADE v3.0
+// Hugging Face Dataset Integration - INSTITUTIONAL GRADE v3.1
 // Comprehensive metrics collection for academic research and transparency
 // Real-time sync of marketplace problem and solution data to Hugging Face
+//
+// Phase 1C: Dual-Feed Streaming Architecture
+// - Feed A: head_unconfirmed - Real-time blocks (may contain future orphans)
+// - Feed B: canonical_confirmed - Only k-confirmed blocks
+// - Feed C: reorg_events - Forensic log of chain reorganizations
 
 pub mod client;
 pub mod energy;
 pub mod metrics;
 pub mod serialize;
+pub mod streamer;
 
 pub use client::{HuggingFaceClient, HuggingFaceConfig, DatasetRecord};
 pub use energy::{EnergyMeasurement, EnergyMeasurementMethod, EnergyConfig};
 pub use metrics::{MetricsCollector, NetworkContext, HardwareContext};
 pub use serialize::{serialize_problem, serialize_solution};
+pub use streamer::{
+    DualFeedStreamer, StreamerConfig, StreamerState, StreamerStateSummary,
+    UnconfirmedBlockRecord, ConfirmedBlockRecord, ReorgEventRecord, StreamerError,
+};
 
 use coinject_state::ProblemSubmission;
 use coinject_core::Block;

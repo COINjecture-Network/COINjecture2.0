@@ -17,7 +17,10 @@ use coinject_mempool::{ProblemMarketplace, TransactionPool};
 use coinject_network::{NetworkConfig, NetworkEvent, NetworkService, PeerId};
 use coinject_rpc::{RpcServer, RpcServerState};
 use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
-use coinject_huggingface::{HuggingFaceSync, HuggingFaceConfig, EnergyConfig, EnergyMeasurementMethod, SyncConfig};
+use coinject_huggingface::{
+    HuggingFaceSync, HuggingFaceConfig, EnergyConfig, EnergyMeasurementMethod, SyncConfig,
+    DualFeedStreamer, StreamerConfig,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -89,6 +92,8 @@ pub struct CoinjectNode {
     network_cmd_tx: Option<mpsc::UnboundedSender<NetworkCommand>>,
     rpc: Option<RpcServer>,
     hf_sync: Option<Arc<HuggingFaceSync>>,
+    /// Phase 1C: Dual-feed HuggingFace streamer
+    dual_feed_streamer: Option<Arc<DualFeedStreamer>>,
     /// Node type classification manager (6 specialized types)
     node_classification: Arc<RwLock<crate::node_types::NodeClassificationManager>>,
     /// Light client state (for headers-only mode)
@@ -265,6 +270,30 @@ impl CoinjectNode {
             None
         };
 
+        // Initialize Phase 1C: Dual-Feed Streamer (alongside legacy hf_sync)
+        let dual_feed_streamer = if config.hf_token.is_some() {
+            println!("📊 Initializing Phase 1C Dual-Feed Streamer...");
+            println!("   Feed A: head_unconfirmed (real-time blocks)");
+            println!("   Feed B: canonical_confirmed (k-confirmed blocks)");
+            println!("   Feed C: reorg_events (chain reorganizations)");
+
+            let streamer_config = StreamerConfig {
+                min_confirmations: 20, // Same k as legacy sync
+                batch_size: 10,
+                batch_interval_secs: 60,
+                enabled: true,
+                node_id: None, // Will be set when network starts
+                data_dir: config.data_dir.clone(),
+            };
+
+            let streamer = DualFeedStreamer::new(streamer_config);
+            println!("   ✅ Dual-feed streamer initialized");
+            println!();
+            Some(Arc::new(streamer))
+        } else {
+            None
+        };
+
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
 
@@ -340,6 +369,7 @@ impl CoinjectNode {
             network_cmd_tx: None,
             rpc: None,
             hf_sync,
+            dual_feed_streamer,
             node_classification,
             light_client,
             node_manager,
@@ -1122,6 +1152,28 @@ impl CoinjectNode {
                     }
                 }
             });
+        }
+
+        // Spawn Phase 1C: Dual-feed streamer confirmation processing task
+        if let Some(ref streamer) = self.dual_feed_streamer {
+            let streamer_for_task = Arc::clone(streamer);
+            let chain_for_streamer = Arc::clone(&self.chain);
+            tokio::spawn(async move {
+                loop {
+                    // Process confirmations every 30 seconds
+                    tokio::task::spawn_blocking(|| {
+                        std::thread::sleep(Duration::from_secs(30));
+                    }).await.unwrap();
+
+                    let current_height = chain_for_streamer.best_block_height().await;
+
+                    // Process pending blocks for k-confirmation promotion
+                    if let Err(e) = streamer_for_task.process_confirmations(current_height).await {
+                        eprintln!("⚠️  Dual-feed streamer confirmation error: {}", e);
+                    }
+                }
+            });
+            eprintln!("📊 Phase 1C: Dual-feed confirmation processor started");
         }
 
         Ok(())
