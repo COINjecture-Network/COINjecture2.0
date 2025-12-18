@@ -1011,14 +1011,23 @@ mod tests {
         BlockHeader {
             version: 1,
             height,
+            prev_hash: Hash::ZERO,
             timestamp: 1000000 + height as i64,
-            parent_hash: Hash::default(),
-            merkle_root: Hash::default(),
-            state_root: Hash::default(),
+            transactions_root: Hash::ZERO,
+            solutions_root: Hash::ZERO,
+            commitment: coinject_core::Commitment {
+                hash: Hash::ZERO,
+                problem_hash: Hash::ZERO,
+            },
+            work_score: 0.0,
+            miner: Address::from_bytes([0u8; 32]),
             nonce: 0,
-            difficulty: 4,
-            miner: Address::default(),
-            work_score: 0,
+            solve_time_us: 0,
+            verify_time_us: 0,
+            time_asymmetry_ratio: 0.0,
+            solution_quality: 0.0,
+            complexity_weight: 0.0,
+            energy_estimate_joules: 0.0,
         }
     }
 

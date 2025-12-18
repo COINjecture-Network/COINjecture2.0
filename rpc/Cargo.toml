@@ -18,3 +18,7 @@ bincode.workspace = true
 hex.workspace = true
 tower = "0.4.13"
 tower-http = { version = "0.5.0", features = ["cors"] }
+
+[dev-dependencies]
+adzdb = { path = "../adzdb" }
+redb.workspace = true

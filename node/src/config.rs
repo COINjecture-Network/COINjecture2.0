@@ -319,6 +319,7 @@ mod tests {
             use_adzdb: false,
             external_addr: None,
             allow_private_addrs: false,
+            disable_mdns: false,
         }
     }
 

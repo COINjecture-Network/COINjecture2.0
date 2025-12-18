@@ -1098,6 +1098,7 @@ mod tests {
             block_submission_handler: None,
             local_peer_id: Some("test-peer-id".to_string()),
             listen_addresses: Arc::new(RwLock::new(vec![])),
+            is_syncing: Arc::new(RwLock::new(false)),
         });
 
         let rpc = RpcServerImpl::new(state);
@@ -1138,6 +1139,7 @@ mod tests {
             block_submission_handler: None,
             local_peer_id: Some("test-peer-id".to_string()),
             listen_addresses: Arc::new(RwLock::new(vec![])),
+            is_syncing: Arc::new(RwLock::new(false)),
         });
 
         let rpc = RpcServerImpl::new(state);
