@@ -14,7 +14,7 @@ use crate::validator::BlockValidator;
 use coinject_consensus::{Miner, MiningConfig};
 use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
-use coinject_network::{NetworkConfig, NetworkEvent, NetworkService, PeerId};
+// libp2p removed - using CPP protocol only
 use coinject_network::cpp::{CppNetwork, NetworkEvent as CppNetworkEvent, NetworkCommand as CppNetworkCommand, CppConfig, NodeType as CppNodeType};
 use coinject_rpc::{RpcServer, RpcServerState};
 use coinject_rpc::websocket::{WebSocketRpc, RpcEvent as WebSocketRpcEvent, RpcCommand as WebSocketRpcCommand};
@@ -620,6 +620,8 @@ impl CoinjectNode {
         // Phase 3: Initialize CPP Network and WebSocket RPC
         // =====================================================================
         println!("🌐 Starting CPP Network (Phase 3)...");
+        println!("   CPP P2P address: {}", self.config.cpp_p2p_addr);
+        println!("   CPP WebSocket address: {}", self.config.cpp_ws_addr);
         
         let genesis_hash = self.chain.genesis_hash();
         let local_peer_id_bytes: [u8; 32] = {
@@ -631,10 +633,36 @@ impl CoinjectNode {
             bytes
         };
         
+        // Parse CPP bootnodes from config (format: "IP:PORT" or multiaddr "/ip4/IP/tcp/PORT/p2p/PEER_ID")
+        // For CPP, we extract IP:PORT from multiaddr format or use as-is if already IP:PORT
+        // If no bootnodes provided, CPP will work in standalone mode
+        let cpp_bootnodes: Vec<String> = if self.config.bootnodes.is_empty() {
+            vec![] // No bootnodes - standalone mode
+        } else {
+            self.config.bootnodes.iter()
+                .filter_map(|addr| {
+                    // Try parsing as multiaddr first
+                    if addr.starts_with('/') {
+                        // Extract IP:PORT from multiaddr format: /ip4/IP/tcp/PORT/p2p/PEER_ID
+                        let parts: Vec<&str> = addr.split('/').collect();
+                        if parts.len() >= 5 && parts[1] == "ip4" && parts[3] == "tcp" {
+                            let ip = parts[2];
+                            let port = parts[4];
+                            return Some(format!("{}:{}", ip, port));
+                        }
+                        None
+                    } else {
+                        // Already in IP:PORT format
+                        Some(addr.clone())
+                    }
+                })
+                .collect()
+        };
+        
         let cpp_config = CppConfig {
-            p2p_listen: format!("0.0.0.0:{}", 707), // CPP_PORT
-            ws_listen: format!("0.0.0.0:{}", 8080), // WEBSOCKET_PORT
-            bootnodes: self.config.bootnodes.clone(),
+            p2p_listen: self.config.cpp_p2p_addr.clone(),
+            ws_listen: self.config.cpp_ws_addr.clone(),
+            bootnodes: cpp_bootnodes.clone(),
             max_peers: self.config.max_peers,
             enable_websocket: true,
             node_type: CppNodeType::Full, // TODO: Get from node classification
@@ -643,10 +671,40 @@ impl CoinjectNode {
         let (cpp_network, cpp_network_cmd_tx, mut cpp_network_event_rx) = 
             CppNetwork::new(cpp_config, local_peer_id_bytes, genesis_hash);
         
-        // Spawn CPP network task
+        // Connect to CPP bootnodes after a short delay
+        let cpp_bootnodes_for_connect = cpp_bootnodes.clone();
+        let cpp_network_cmd_tx_clone = cpp_network_cmd_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = cpp_network.start().await {
-                eprintln!("CPP Network error: {}", e);
+            // Wait a bit for network to start listening
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            
+            // Connect to each bootnode
+            for bootnode_addr in cpp_bootnodes_for_connect {
+                if let Ok(addr) = bootnode_addr.parse::<std::net::SocketAddr>() {
+                    println!("[CPP] Connecting to bootnode: {}", addr);
+                    if let Err(e) = cpp_network_cmd_tx_clone.send(
+                        coinject_network::cpp::NetworkCommand::ConnectBootnode { addr }
+                    ) {
+                        eprintln!("[CPP] Failed to send connect command: {}", e);
+                    }
+                } else {
+                    eprintln!("[CPP] Invalid bootnode address format: {}", bootnode_addr);
+                }
+            }
+        });
+        
+        // Spawn CPP network task
+        let cpp_p2p_addr_clone = self.config.cpp_p2p_addr.clone();
+        tokio::spawn(async move {
+            println!("[CPP] Starting CPP network task...");
+            match cpp_network.start().await {
+                Ok(()) => {
+                    println!("[CPP] Network task completed normally");
+                }
+                Err(e) => {
+                    eprintln!("[CPP] Network error: {}", e);
+                    eprintln!("[CPP] Failed to bind to: {}", cpp_p2p_addr_clone);
+                }
             }
         });
         
@@ -678,7 +736,7 @@ impl CoinjectNode {
         
         // Initialize WebSocket RPC
         println!("🔌 Starting WebSocket RPC (Phase 3)...");
-        let ws_addr: std::net::SocketAddr = format!("0.0.0.0:8080")
+        let ws_addr: std::net::SocketAddr = self.config.cpp_ws_addr
             .parse()
             .map_err(|e| format!("Invalid WebSocket address: {}", e))?;
         
@@ -686,9 +744,17 @@ impl CoinjectNode {
             WebSocketRpc::new(ws_addr);
         
         // Spawn WebSocket RPC task
+        let ws_addr_clone = self.config.cpp_ws_addr.clone();
         tokio::spawn(async move {
-            if let Err(e) = websocket_rpc.start().await {
-                eprintln!("WebSocket RPC error: {}", e);
+            println!("[WebSocket] Starting WebSocket RPC task...");
+            match websocket_rpc.start().await {
+                Ok(()) => {
+                    println!("[WebSocket] RPC task completed normally");
+                }
+                Err(e) => {
+                    eprintln!("[WebSocket] RPC error: {}", e);
+                    eprintln!("[WebSocket] Failed to bind to: {}", ws_addr_clone);
+                }
             }
         });
         
@@ -716,8 +782,8 @@ impl CoinjectNode {
         self.cpp_network_cmd_tx = Some(cpp_network_cmd_tx);
         self.websocket_rpc_cmd_tx = Some(websocket_rpc_cmd_tx);
         
-        println!("   CPP Network listening on: 0.0.0.0:707");
-        println!("   WebSocket RPC listening on: 0.0.0.0:8080");
+        println!("   CPP Network listening on: {}", self.config.cpp_p2p_addr);
+        println!("   WebSocket RPC listening on: {}", self.config.cpp_ws_addr);
         println!();
 
         // Start event loop

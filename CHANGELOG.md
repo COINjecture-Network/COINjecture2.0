@@ -2,6 +2,110 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.8.1] - 2025-12-18
+
+### Added
+- **Docker Support for CPP Network**
+  - Multi-stage Dockerfile (`Dockerfile.cpp`) for optimized production builds
+  - Exposes CPP network ports: 707 (P2P), 8080 (WebSocket), 9933 (RPC), 9090 (Metrics)
+  - Build script: `scripts/build-docker.sh` for easy image creation
+  - Deployment script: `scripts/deploy-docker-droplets.sh` for DigitalOcean droplet deployment
+  - Container-based deployment with persistent data volumes
+  - **Files Added**: `Dockerfile.cpp`, `scripts/build-docker.sh`, `scripts/deploy-docker-droplets.sh`
+
+- **CPP Network Configuration via CLI**
+  - `--cpp-p2p-addr` argument for CPP P2P listen address (default: `0.0.0.0:707`)
+  - `--cpp-ws-addr` argument for CPP WebSocket listen address (default: `0.0.0.0:8080`)
+  - Bootnode address parsing: extracts IP:PORT from multiaddr format for CPP protocol
+  - Automatic CPP bootnode connection (2-second delay after network startup)
+  - **Files Changed**: `node/src/config.rs`, `node/src/service.rs`
+
+- **Local Testing Infrastructure**
+  - Comprehensive local test script: `scripts/test-local-cpp.sh`
+  - Two-node testing setup (bootnode + Node 2)
+  - Automatic PeerId extraction from logs
+  - Port binding verification
+  - WebSocket connectivity testing
+  - **Files Added**: `scripts/test-local-cpp.sh` (updated with CPP support)
+
+- **Deployment Documentation**
+  - CPP network deployment guide: `docs/CPP_DEPLOYMENT.md`
+  - Architecture overview and prerequisites
+  - Local testing procedures
+  - DigitalOcean droplet deployment steps
+  - Monitoring and troubleshooting
+  - **Files Added**: `docs/CPP_DEPLOYMENT.md`
+- **Complete CPP Network Service Implementation (Phase 3)**
+  - Full `CppNetwork` service with comprehensive message handling
+  - Handshake protocol (`Hello`/`HelloAck`) with chain validation
+  - Peer connection management with concurrent read/write streams
+  - Message handlers for all protocol types: `Status`, `GetBlocks`, `Blocks`, `NewBlock`, `NewTransaction`, `Ping`, `Pong`
+  - Equilibrium-based peer selection for broadcasting (η ≈ 0.7071)
+  - Flow control with adaptive window sizing
+  - Periodic maintenance: ping/pong keepalive, stale peer cleanup, metrics updates
+  - **Files Changed**: `network/src/cpp/network.rs`, `network/src/cpp/peer.rs`, `network/src/cpp/protocol.rs`
+
+- **WebSocket RPC Service for Light Clients**
+  - Full `WebSocketRpc` implementation for browser-based mining
+  - Light client connection management and work queue
+  - Mining work distribution and submission handling
+  - Real-time block notifications and reward updates
+  - Client metrics and connection lifecycle management
+  - **Files Changed**: `rpc/src/websocket.rs`
+
+- **Node Service Integration**
+  - Integrated `CppNetwork` and `WebSocketRpc` into main node service
+  - Replaced `libp2p` network with CPP protocol
+  - Unified event loop handling `NetworkEvent` and `RpcEvent`
+  - Command dispatch for broadcasting blocks/transactions
+  - **Files Changed**: `node/src/service.rs`
+
+- **Comprehensive Test Suite**
+  - CPP protocol tests: handshake, block propagation, sync, reputation, error handling
+  - CPP network unit tests: creation, broadcasting, chain state updates, peer management
+  - WebSocket RPC tests: connection handling, work queue, message serialization
+  - End-to-end integration tests: multi-peer scenarios, event/command handling
+  - Two-node synchronization tests: network creation, event types, block broadcasting
+  - **Files Changed**: `network/tests/cpp_protocol_tests.rs`, `network/tests/cpp_network_tests.rs`, `network/tests/cpp_e2e_tests.rs`, `network/tests/cpp_two_node_sync.rs`, `rpc/tests/websocket_rpc_tests.rs`
+
+### Changed
+- **Peer Architecture Refactoring**
+  - Split `TcpStream` into read/write halves for concurrent I/O
+  - Implemented `mpsc::UnboundedSender` for non-blocking message sending
+  - Each peer now has dedicated read loop and write task
+  - Enables full-duplex communication without blocking
+  - **Files Changed**: `network/src/cpp/peer.rs`
+
+- **Network Module Exposure**
+  - Exposed `cpp` module for external use (tests, integration)
+  - **Files Changed**: `network/src/lib.rs`
+
+### Technical Details
+- **Protocol Features**:
+  - Equilibrium-based flow control (η = λ = 1/√2 ≈ 0.7071)
+  - Dimensional message priorities
+  - Reputation-based peer selection
+  - Adaptive chunk sizing for sync
+  - Graceful error handling and timeout management
+
+- **Concurrency Model**:
+  - `tokio::select!` for main event loops
+  - Spawned tasks for peer message loops
+  - `RwLock` for shared state (peers, metrics)
+  - `broadcast` channels for event distribution
+
+- **Dependencies Added**:
+  - `tokio-tungstenite` for WebSocket support
+  - `futures` for async utilities
+  - `chrono` for timestamp generation
+
+### Deployment Ready
+- All tests passing
+- Full error handling implemented
+- Memory-safe concurrent I/O
+- Production-ready network service
+- Ready for bootnode deployment (ports 707, 8080)
+
 ## [4.7.80] - 2025-12-16
 
 ### Fixed

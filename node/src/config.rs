@@ -106,6 +106,14 @@ pub struct NodeConfig {
     #[arg(long, default_value = "127.0.0.1:9933")]
     pub rpc_addr: String,
 
+    /// CPP P2P listen address (for CPP protocol, default: 0.0.0.0:707)
+    #[arg(long, default_value = "0.0.0.0:707")]
+    pub cpp_p2p_addr: String,
+
+    /// CPP WebSocket listen address (for light client mining, default: 0.0.0.0:8080)
+    #[arg(long, default_value = "0.0.0.0:8080")]
+    pub cpp_ws_addr: String,
+
     /// Prometheus metrics listen address
     #[arg(long, default_value = "127.0.0.1:9090")]
     pub metrics_addr: String,
@@ -304,6 +312,8 @@ mod tests {
             miner_address: Some("0000000000000000000000000000000000000000000000000000000000000001".to_string()),
             p2p_addr: "/ip4/0.0.0.0/tcp/30333".to_string(),
             rpc_addr: "127.0.0.1:9933".to_string(),
+            cpp_p2p_addr: "0.0.0.0:707".to_string(),
+            cpp_ws_addr: "0.0.0.0:8080".to_string(),
             metrics_addr: "127.0.0.1:9090".to_string(),
             bootnodes: vec![],
             chain_id: "test".to_string(),

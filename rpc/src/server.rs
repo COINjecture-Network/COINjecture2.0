@@ -1075,13 +1075,15 @@ mod tests {
     fn test_address_parsing() {
         let temp_dir = std::env::temp_dir().join("coinject-rpc-test-addr");
         let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
 
         // Create test database for state objects
         let db_path = temp_dir.join("test.db");
         let db = Arc::new(redb::Database::create(&db_path).unwrap());
+        let account_db_path = temp_dir.join("accounts.db");
 
         let state = Arc::new(RpcServerState {
-            account_state: Arc::new(AccountState::new(&temp_dir).unwrap()),
+            account_state: Arc::new(AccountState::new(&account_db_path).unwrap()),
             timelock_state: Arc::new(TimeLockState::new(db.clone()).unwrap()),
             escrow_state: Arc::new(EscrowState::new(db.clone()).unwrap()),
             channel_state: Arc::new(ChannelState::new(db.clone()).unwrap()),
@@ -1120,9 +1122,10 @@ mod tests {
         // Create test database for state objects
         let db_path = temp_dir.join("test.db");
         let db = Arc::new(redb::Database::create(&db_path).unwrap());
+        let account_db_path = temp_dir.join("accounts.db");
 
         let state = Arc::new(RpcServerState {
-            account_state: Arc::new(AccountState::new(&temp_dir).unwrap()),
+            account_state: Arc::new(AccountState::new(&account_db_path).unwrap()),
             timelock_state: Arc::new(TimeLockState::new(db.clone()).unwrap()),
             escrow_state: Arc::new(EscrowState::new(db.clone()).unwrap()),
             channel_state: Arc::new(ChannelState::new(db.clone()).unwrap()),

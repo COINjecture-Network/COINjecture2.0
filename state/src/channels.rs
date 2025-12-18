@@ -474,8 +474,8 @@ mod tests {
             participant_b: Address::from_bytes([3u8; 32]),
             deposit_a: 10000,
             deposit_b: 5000,
-            balance_a: 8000,
-            balance_b: 7000,
+            balance_a: 10000, // Initial balance must equal deposit
+            balance_b: 5000,  // Initial balance must equal deposit
             sequence: 5,
             dispute_timeout: 86400,
             status: ChannelStatus::Open,
@@ -486,6 +486,8 @@ mod tests {
 
         state.open_channel(channel.clone()).unwrap();
 
+        // Update balances before closing (simulating channel state updates)
+        // Then close with final balances
         state
             .close_cooperative(&channel.channel_id, 8000, 7000, 200)
             .unwrap();

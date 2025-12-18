@@ -1147,7 +1147,10 @@ mod tests {
             Some(header),
         );
 
-        assert_eq!(manager.current_type().await, NodeType::Light);
+        // For Light nodes, current_type() defaults to Full until classification runs
+        // But we can verify the target type and that headers_only is set
+        assert_eq!(manager.target_type, NodeType::Light);
+        assert!(manager.classification.read().await.local_metrics.headers_only);
         assert!(manager.light_sync_server.is_none());
         assert!(manager.flyclient_verifier.is_some());
     }
