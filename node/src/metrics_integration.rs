@@ -405,7 +405,7 @@ impl StakingTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coinject_core::{BlockHeader, Address, Commitment, CoinbaseTransaction, SolutionReveal};
+    use coinject_core::{BlockHeader, Address, Commitment, CoinbaseTransaction, SolutionReveal, Hash};
 
     fn create_test_block(height: u64) -> Block {
         let commitment = Commitment {

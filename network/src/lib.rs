@@ -6,6 +6,7 @@ pub mod protocol;
 pub mod eclipse;
 pub mod reputation;
 pub mod sync_guardrails;
+pub mod cpp; // COINjecture P2P Protocol (CPP)
 
 pub use addr_filter::{AddressFilterConfig, AddressFilterResult, validate_multiaddr, filter_multiaddrs_with_logging};
 pub use protocol::*;

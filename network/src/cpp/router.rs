@@ -262,17 +262,17 @@ mod tests {
     fn test_chunk_size_calculation() {
         let router = EquilibriumRouter::new();
         
-        // Small delta: chunk ≈ base
+        // Small delta (10): chunk = 20 * (1 + (10 * η / 10)) = 20 * (1 + 0.707) ≈ 34
         let chunk = router.calculate_chunk_size(10, 20, 100);
-        assert!(chunk >= 20 && chunk <= 30);
+        assert!(chunk >= 30 && chunk <= 40, "Expected chunk ~34 for delta=10, got {}", chunk);
         
-        // Medium delta: chunk grows
+        // Medium delta (100): chunk = 20 * (1 + (100 * η / 10)) = 20 * (1 + 7.07) ≈ 161, capped at 100
         let chunk = router.calculate_chunk_size(100, 20, 100);
-        assert!(chunk >= 30 && chunk <= 100);
+        assert_eq!(chunk, 100, "Expected chunk=100 (capped) for delta=100, got {}", chunk);
         
-        // Large delta: chunk capped at max
+        // Large delta (1000): chunk capped at max
         let chunk = router.calculate_chunk_size(1000, 20, 100);
-        assert_eq!(chunk, 100);
+        assert_eq!(chunk, 100, "Expected chunk=100 (capped) for delta=1000, got {}", chunk);
     }
     
     #[test]

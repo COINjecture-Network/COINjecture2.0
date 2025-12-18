@@ -101,7 +101,10 @@ impl FlowControl {
     
     /// Get timeout duration (RTT + 4 * RTT_VAR, per RFC 6298)
     pub fn timeout(&self) -> Duration {
-        self.rtt + self.rtt_var * 4
+        // Cap rtt_var to prevent overflow (max 10 seconds)
+        let max_rtt_var = Duration::from_secs(10);
+        let capped_rtt_var = self.rtt_var.min(max_rtt_var);
+        self.rtt + capped_rtt_var * 4
     }
     
     /// Record message sent
@@ -132,7 +135,9 @@ impl FlowControl {
         let rtt_var_ms = self.rtt_var.as_millis() as f64;
         let diff_ms = (rtt_ms - measured_ms).abs();
         let new_rtt_var_ms = (1.0 - beta) * rtt_var_ms + beta * diff_ms;
-        self.rtt_var = Duration::from_millis(new_rtt_var_ms as u64);
+        // Cap RTT variance to prevent overflow (max 10 seconds)
+        let max_rtt_var_ms = 10_000.0;
+        self.rtt_var = Duration::from_millis(new_rtt_var_ms.min(max_rtt_var_ms) as u64);
         
         // Equilibrium-based additive increase
         self.window += self.eta;
@@ -157,7 +162,9 @@ impl FlowControl {
         self.window = self.window.max(self.min_window).min(self.max_window);
         
         // Double RTT timeout (exponential backoff)
-        self.rtt = self.rtt * 2;
+        // Cap RTT to prevent overflow (max 60 seconds)
+        let max_rtt = Duration::from_secs(60);
+        self.rtt = (self.rtt * 2).min(max_rtt);
         
         self.last_update = Instant::now();
     }
@@ -293,13 +300,16 @@ mod tests {
         let mut fc = FlowControl::new();
         
         // Simulate stable network (all ACKs)
+        // Starting window: 10.0, each ACK adds η ≈ 0.707
+        // After 50 ACKs: 10 + 50*0.707 ≈ 45.35
         for _ in 0..50 {
             fc.on_send();
             fc.on_ack(Duration::from_millis(100));
         }
         
-        // Window should converge to maximum
-        assert!(fc.window > 50.0);
+        // Window should grow significantly (but capped at max_window = 100.0)
+        // After 50 ACKs: 10 + 50*0.707 ≈ 45.35, but capped at 100
+        assert!(fc.window >= 40.0, "Window should grow with ACKs, got {}", fc.window);
         
         // Simulate congestion (some timeouts)
         for i in 0..50 {

@@ -298,23 +298,28 @@ mod tests {
     
     #[test]
     fn test_node_classification() {
-        // Archive node
+        // Validator: high validation speed (>= 10.0 blocks/sec) overrides storage
         let mut metrics = NodeMetrics::new();
-        metrics.storage_ratio = 0.96;
-        metrics.blocks_observed = 1000;
-        assert_eq!(metrics.classify(), CppNodeType::Archive);
-        
-        // Full node
-        metrics.storage_ratio = 0.60;
-        assert_eq!(metrics.classify(), CppNodeType::Full);
-        
-        // Light node
-        metrics.storage_ratio = 0.005;
-        assert_eq!(metrics.classify(), CppNodeType::Light);
-        
-        // Validator (high validation speed overrides storage)
         metrics.validation_speed = 15.0;
-        assert_eq!(metrics.classify(), CppNodeType::Validator);
+        metrics.blocks_observed = 1000;
+        metrics.uptime_ratio = 0.5; // Set low to avoid Oracle classification
+        assert_eq!(metrics.classify(), CppNodeType::Validator, "High validation speed should classify as Validator");
+        
+        // Archive node: storage_ratio >= 0.95
+        metrics.validation_speed = 0.0; // Reset
+        metrics.storage_ratio = 0.96;
+        metrics.uptime_ratio = 0.5; // Set low to avoid Oracle classification (default is 1.0 which triggers Oracle)
+        assert_eq!(metrics.classify(), CppNodeType::Archive, "High storage ratio should classify as Archive");
+        
+        // Full node: storage_ratio >= 0.50 but < 0.95
+        metrics.storage_ratio = 0.60;
+        metrics.uptime_ratio = 0.5; // Set low to avoid Oracle classification
+        assert_eq!(metrics.classify(), CppNodeType::Full, "Medium storage ratio should classify as Full");
+        
+        // Light node: storage_ratio < 0.50
+        metrics.storage_ratio = 0.005;
+        metrics.uptime_ratio = 0.5; // Set low to avoid Oracle classification
+        assert_eq!(metrics.classify(), CppNodeType::Light, "Low storage ratio should classify as Light");
     }
     
     #[test]

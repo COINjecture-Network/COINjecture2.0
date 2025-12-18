@@ -269,7 +269,10 @@ impl Peer {
     pub async fn send_ping(&mut self) -> Result<(), ProtocolError> {
         let nonce = rand::random::<u64>();
         let msg = PingMessage {
-            timestamp: chrono::Utc::now().timestamp() as u64,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
             nonce,
         };
         
@@ -344,23 +347,9 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     
-    fn create_test_peer() -> Peer {
-        // Note: This won't actually work in tests without a real TcpStream,
-        // but demonstrates the API
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 707);
-        
-        // We can't create a real TcpStream in tests, so this is just for API demonstration
-        // In real tests, we'd use a mock or test harness
-        
-        // Peer::new(
-        //     [1u8; 32],
-        //     addr,
-        //     stream,
-        //     NodeType::Full,
-        //     100,
-        //     Hash::ZERO,
-        //     Hash::ZERO,
-        // )
+    fn create_test_peer_addr() -> SocketAddr {
+        // Helper used only to demonstrate API shape in docs/tests
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 707)
     }
     
     #[test]
@@ -373,14 +362,17 @@ mod tests {
         let rate = 5.0 / 10.0;  // 5 msg/s normalized by 10 msg/s
         let bandwidth = 0.1;
         
-        let score = 
+        let score: f64 = 
             quality * 0.4 +
             uptime * 0.3 +
             rate * 0.2 +
             bandwidth * 0.1;
         
+        // Calculate expected: 0.8*0.4 + 0.95*0.3 + 0.5*0.2 + 0.1*0.1
+        // = 0.32 + 0.285 + 0.1 + 0.01 = 0.715
         assert!(score >= 0.0 && score <= 1.0);
-        assert!((score - 0.735).abs() < 0.01);
+        let expected: f64 = 0.715;
+        assert!((score - expected).abs() < 0.01_f64, "Expected score ~{}, got {}", expected, score);
     }
     
     #[test]
