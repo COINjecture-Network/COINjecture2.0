@@ -6,11 +6,13 @@
 use crate::cpp::{
     config::{NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL},
     message::*,
-    protocol::{MessageCodec, ProtocolError},
+    protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     flow_control::FlowControl,
 };
 use coinject_core::Hash;
 use tokio::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 use tokio::time::{Instant, Duration};
 use std::net::SocketAddr;
 
@@ -38,8 +40,8 @@ pub struct Peer {
     /// Socket address
     pub addr: SocketAddr,
     
-    /// TCP stream
-    pub stream: TcpStream,
+    /// Channel for sending messages to write task
+    pub send_tx: mpsc::UnboundedSender<Vec<u8>>,
     
     /// Connection state
     pub state: PeerState,
@@ -92,6 +94,7 @@ pub struct Peer {
 
 impl Peer {
     /// Create new peer connection
+    /// Returns (Peer, read_half) - the read half must be used in a separate task
     pub fn new(
         id: PeerId,
         addr: SocketAddr,
@@ -100,11 +103,29 @@ impl Peer {
         best_height: u64,
         best_hash: Hash,
         genesis_hash: Hash,
-    ) -> Self {
-        Peer {
+    ) -> (Self, tokio::io::ReadHalf<TcpStream>) {
+        // Split stream into read and write halves
+        let (read_half, mut write_half) = tokio::io::split(stream);
+        
+        // Create channel for sending messages
+        let (send_tx, mut send_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        
+        // Spawn write task (move write_half into the task)
+        tokio::spawn(async move {
+            while let Some(data) = send_rx.recv().await {
+                if write_half.write_all(&data).await.is_err() {
+                    break;
+                }
+                if write_half.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+        
+        let peer = Peer {
             id,
             addr,
-            stream,
+            send_tx,
             state: PeerState::Connecting,
             node_type,
             best_height,
@@ -121,7 +142,15 @@ impl Peer {
             bytes_sent: 0,
             bytes_received: 0,
             connected_at: Instant::now(),
-        }
+        };
+        
+        (peer, read_half)
+    }
+    
+    /// Send message to peer (non-blocking)
+    pub fn send_message(&self, data: Vec<u8>) -> Result<(), String> {
+        self.send_tx.send(data)
+            .map_err(|e| format!("Failed to send message: {}", e))
     }
     
     /// Check if peer is connected
@@ -266,7 +295,10 @@ impl Peer {
     }
     
     /// Send ping to peer
-    pub async fn send_ping(&mut self) -> Result<(), ProtocolError> {
+    pub fn send_ping(&mut self) -> Result<(), String> {
+        use crate::cpp::protocol::MessageEnvelope;
+        use crate::cpp::message::MessageType;
+        
         let nonce = rand::random::<u64>();
         let msg = PingMessage {
             timestamp: std::time::SystemTime::now()
@@ -276,11 +308,16 @@ impl Peer {
             nonce,
         };
         
-        MessageCodec::send_ping(&mut self.stream, &msg).await?;
+        // Serialize and send via channel
+        let envelope = MessageEnvelope::new(MessageType::Ping, &msg)
+            .map_err(|e| format!("Failed to create ping envelope: {}", e))?;
+        let data = envelope.encode();
+        
+        self.send_message(data.clone())?;
         
         self.last_ping = Some(Instant::now());
         self.pending_ping_nonce = Some(nonce);
-        self.on_message_sent(std::mem::size_of::<PingMessage>());
+        self.on_message_sent(data.len());
         
         Ok(())
     }

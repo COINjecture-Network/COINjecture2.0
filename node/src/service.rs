@@ -15,7 +15,9 @@ use coinject_consensus::{Miner, MiningConfig};
 use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 use coinject_network::{NetworkConfig, NetworkEvent, NetworkService, PeerId};
+use coinject_network::cpp::{CppNetwork, NetworkEvent as CppNetworkEvent, NetworkCommand as CppNetworkCommand, CppConfig, NodeType as CppNodeType};
 use coinject_rpc::{RpcServer, RpcServerState};
+use coinject_rpc::websocket::{WebSocketRpc, RpcEvent as WebSocketRpcEvent, RpcCommand as WebSocketRpcCommand};
 use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
 use coinject_huggingface::{
     HuggingFaceSync, HuggingFaceConfig, EnergyConfig, EnergyMeasurementMethod, SyncConfig,
@@ -91,6 +93,10 @@ pub struct CoinjectNode {
     faucet: Option<Arc<Faucet>>,
     network_cmd_tx: Option<mpsc::UnboundedSender<NetworkCommand>>,
     rpc: Option<RpcServer>,
+    /// CPP Network service (Phase 3)
+    cpp_network_cmd_tx: Option<mpsc::UnboundedSender<CppNetworkCommand>>,
+    /// WebSocket RPC service (Phase 3)
+    websocket_rpc_cmd_tx: Option<mpsc::UnboundedSender<WebSocketRpcCommand>>,
     hf_sync: Option<Arc<HuggingFaceSync>>,
     /// Phase 1C: Dual-feed HuggingFace streamer
     dual_feed_streamer: Option<Arc<DualFeedStreamer>>,
@@ -368,6 +374,8 @@ impl CoinjectNode {
             faucet,
             network_cmd_tx: None,
             rpc: None,
+            cpp_network_cmd_tx: None,
+            websocket_rpc_cmd_tx: None,
             hf_sync,
             dual_feed_streamer,
             node_classification,
@@ -607,6 +615,110 @@ impl CoinjectNode {
 
         self.network_cmd_tx = Some(network_cmd_tx.clone());
         self.rpc = Some(rpc_server);
+
+        // =====================================================================
+        // Phase 3: Initialize CPP Network and WebSocket RPC
+        // =====================================================================
+        println!("🌐 Starting CPP Network (Phase 3)...");
+        
+        let genesis_hash = self.chain.genesis_hash();
+        let local_peer_id_bytes: [u8; 32] = {
+            // Convert PeerId to bytes (simplified - in production use actual peer ID)
+            let peer_id_str = local_peer_id_str.as_bytes();
+            let mut bytes = [0u8; 32];
+            let len = peer_id_str.len().min(32);
+            bytes[..len].copy_from_slice(&peer_id_str[..len]);
+            bytes
+        };
+        
+        let cpp_config = CppConfig {
+            p2p_listen: format!("0.0.0.0:{}", 707), // CPP_PORT
+            ws_listen: format!("0.0.0.0:{}", 8080), // WEBSOCKET_PORT
+            bootnodes: self.config.bootnodes.clone(),
+            max_peers: self.config.max_peers,
+            enable_websocket: true,
+            node_type: CppNodeType::Full, // TODO: Get from node classification
+        };
+        
+        let (cpp_network, cpp_network_cmd_tx, mut cpp_network_event_rx) = 
+            CppNetwork::new(cpp_config, local_peer_id_bytes, genesis_hash);
+        
+        // Spawn CPP network task
+        tokio::spawn(async move {
+            if let Err(e) = cpp_network.start().await {
+                eprintln!("CPP Network error: {}", e);
+            }
+        });
+        
+        // Spawn CPP network event handler
+        let chain_clone = Arc::clone(&self.chain);
+        let tx_pool_clone = Arc::clone(&self.tx_pool);
+        tokio::spawn(async move {
+            while let Some(event) = cpp_network_event_rx.recv().await {
+                match event {
+                    CppNetworkEvent::BlockReceived { block, peer_id: _ } => {
+                        // TODO: Process received block
+                        println!("CPP: Received block at height {}", block.header.height);
+                    }
+                    CppNetworkEvent::TransactionReceived { transaction, peer_id: _ } => {
+                        // TODO: Add transaction to pool
+                        let mut pool = tx_pool_clone.write().await;
+                        let _ = pool.add(transaction);
+                    }
+                    CppNetworkEvent::BlocksReceived { blocks, request_id: _, peer_id: _ } => {
+                        // TODO: Process sync blocks
+                        println!("CPP: Received {} blocks for sync", blocks.len());
+                    }
+                    _ => {
+                        // Handle other events
+                    }
+                }
+            }
+        });
+        
+        // Initialize WebSocket RPC
+        println!("🔌 Starting WebSocket RPC (Phase 3)...");
+        let ws_addr: std::net::SocketAddr = format!("0.0.0.0:8080")
+            .parse()
+            .map_err(|e| format!("Invalid WebSocket address: {}", e))?;
+        
+        let (websocket_rpc, websocket_rpc_cmd_tx, mut websocket_rpc_event_rx) = 
+            WebSocketRpc::new(ws_addr);
+        
+        // Spawn WebSocket RPC task
+        tokio::spawn(async move {
+            if let Err(e) = websocket_rpc.start().await {
+                eprintln!("WebSocket RPC error: {}", e);
+            }
+        });
+        
+        // Spawn WebSocket RPC event handler
+        let tx_pool_clone2 = Arc::clone(&self.tx_pool);
+        tokio::spawn(async move {
+            while let Some(event) = websocket_rpc_event_rx.recv().await {
+                match event {
+                    WebSocketRpcEvent::WorkSubmitted { client_id: _, work_id: _, solution: _, nonce: _ } => {
+                        // TODO: Validate and process PoW submission
+                        println!("WebSocket RPC: Received work submission");
+                    }
+                    WebSocketRpcEvent::TransactionSubmitted { transaction, client_id: _ } => {
+                        // TODO: Add transaction to pool
+                        let mut pool = tx_pool_clone2.write().await;
+                        let _ = pool.add(transaction);
+                    }
+                    _ => {
+                        // Handle other events
+                    }
+                }
+            }
+        });
+        
+        self.cpp_network_cmd_tx = Some(cpp_network_cmd_tx);
+        self.websocket_rpc_cmd_tx = Some(websocket_rpc_cmd_tx);
+        
+        println!("   CPP Network listening on: 0.0.0.0:707");
+        println!("   WebSocket RPC listening on: 0.0.0.0:8080");
+        println!();
 
         // Start event loop
         println!("✅ Node is ready!");

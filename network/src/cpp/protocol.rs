@@ -187,6 +187,59 @@ impl MessageCodec {
         MessageEnvelope::decode(stream).await
     }
     
+    /// Receive a message from read half of split stream
+    pub async fn receive_from_read_half(
+        read_half: &mut tokio::io::ReadHalf<TcpStream>
+    ) -> Result<MessageEnvelope, ProtocolError> {
+        // Read header (4 + 1 + 1 + 4 = 10 bytes)
+        let mut header = [0u8; 10];
+        read_half.read_exact(&mut header).await?;
+        
+        // Verify magic
+        let magic: [u8; 4] = header[0..4].try_into().unwrap();
+        if magic != MAGIC {
+            return Err(ProtocolError::InvalidMagic(magic));
+        }
+        
+        // Verify version
+        let version = header[4];
+        if version != VERSION {
+            return Err(ProtocolError::InvalidVersion(version));
+        }
+        
+        // Parse message type
+        let msg_type_byte = header[5];
+        let msg_type = MessageType::from_u8(msg_type_byte)
+            .map_err(|_| ProtocolError::InvalidMessageType(msg_type_byte))?;
+        
+        // Parse payload length
+        let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
+        
+        // Check size limit
+        if payload_len > MAX_MESSAGE_SIZE {
+            return Err(ProtocolError::MessageTooLarge(payload_len));
+        }
+        
+        // Read payload
+        let mut payload = vec![0u8; payload_len];
+        read_half.read_exact(&mut payload).await?;
+        
+        // Read checksum
+        let mut checksum = [0u8; 32];
+        read_half.read_exact(&mut checksum).await?;
+        
+        // Verify checksum
+        let computed = blake3::hash(&payload);
+        if computed.as_bytes() != &checksum {
+            return Err(ProtocolError::InvalidChecksum);
+        }
+        
+        Ok(MessageEnvelope {
+            msg_type,
+            payload,
+        })
+    }
+    
     /// Send Hello message
     pub async fn send_hello(
         stream: &mut TcpStream,
