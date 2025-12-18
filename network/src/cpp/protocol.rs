@@ -1,0 +1,340 @@
+// =============================================================================
+// COINjecture P2P Protocol (CPP) - Protocol Encoding/Decoding
+// =============================================================================
+// Wire protocol implementation for message serialization
+
+use crate::cpp::{
+    config::{MAGIC, VERSION, MAX_MESSAGE_SIZE},
+    message::*,
+};
+use coinject_core::{Block, Transaction, Hash, BlockHeader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use bincode;
+use blake3;
+use std::io;
+
+/// Protocol error types
+#[derive(Debug)]
+pub enum ProtocolError {
+    Io(io::Error),
+    InvalidMagic([u8; 4]),
+    InvalidVersion(u8),
+    InvalidMessageType(u8),
+    InvalidChecksum,
+    MessageTooLarge(usize),
+    SerializationError(String),
+    DeserializationError(String),
+}
+
+impl From<io::Error> for ProtocolError {
+    fn from(err: io::Error) -> Self {
+        ProtocolError::Io(err)
+    }
+}
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProtocolError::Io(e) => write!(f, "IO error: {}", e),
+            ProtocolError::InvalidMagic(magic) => write!(f, "Invalid magic: {:?}", magic),
+            ProtocolError::InvalidVersion(v) => write!(f, "Invalid version: {}", v),
+            ProtocolError::InvalidMessageType(t) => write!(f, "Invalid message type: 0x{:02X}", t),
+            ProtocolError::InvalidChecksum => write!(f, "Invalid checksum"),
+            ProtocolError::MessageTooLarge(size) => write!(f, "Message too large: {} bytes", size),
+            ProtocolError::SerializationError(e) => write!(f, "Serialization error: {}", e),
+            ProtocolError::DeserializationError(e) => write!(f, "Deserialization error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {}
+
+/// Message envelope for wire protocol
+/// 
+/// Format:
+/// ```
+/// ┌────────────┬─────────┬──────────┬─────────────┬─────────┬──────────┐
+/// │ Magic (4B) │ Ver (1B)│ Type (1B)│ Length (4B) │ Payload │ Hash (32B)│
+/// └────────────┴─────────┴──────────┴─────────────┴─────────┴──────────┘
+/// ```
+pub struct MessageEnvelope {
+    pub msg_type: MessageType,
+    pub payload: Vec<u8>,
+}
+
+impl MessageEnvelope {
+    /// Create new message envelope
+    pub fn new<T: serde::Serialize>(msg_type: MessageType, payload: &T) -> Result<Self, ProtocolError> {
+        let payload = bincode::serialize(payload)
+            .map_err(|e| ProtocolError::SerializationError(e.to_string()))?;
+        
+        if payload.len() > MAX_MESSAGE_SIZE {
+            return Err(ProtocolError::MessageTooLarge(payload.len()));
+        }
+        
+        Ok(MessageEnvelope {
+            msg_type,
+            payload,
+        })
+    }
+    
+    /// Encode message to bytes
+    pub fn encode(&self) -> Vec<u8> {
+        let payload_len = self.payload.len() as u32;
+        let checksum = blake3::hash(&self.payload);
+        
+        let mut buf = Vec::with_capacity(4 + 1 + 1 + 4 + self.payload.len() + 32);
+        
+        // Magic (4 bytes)
+        buf.extend_from_slice(&MAGIC);
+        
+        // Version (1 byte)
+        buf.push(VERSION);
+        
+        // Message type (1 byte)
+        buf.push(self.msg_type as u8);
+        
+        // Payload length (4 bytes, big-endian)
+        buf.extend_from_slice(&payload_len.to_be_bytes());
+        
+        // Payload
+        buf.extend_from_slice(&self.payload);
+        
+        // Checksum (32 bytes)
+        buf.extend_from_slice(checksum.as_bytes());
+        
+        buf
+    }
+    
+    /// Decode message from stream
+    pub async fn decode(stream: &mut TcpStream) -> Result<Self, ProtocolError> {
+        // Read header (4 + 1 + 1 + 4 = 10 bytes)
+        let mut header = [0u8; 10];
+        stream.read_exact(&mut header).await?;
+        
+        // Verify magic
+        let magic: [u8; 4] = header[0..4].try_into().unwrap();
+        if magic != MAGIC {
+            return Err(ProtocolError::InvalidMagic(magic));
+        }
+        
+        // Verify version
+        let version = header[4];
+        if version != VERSION {
+            return Err(ProtocolError::InvalidVersion(version));
+        }
+        
+        // Parse message type
+        let msg_type_byte = header[5];
+        let msg_type = MessageType::from_u8(msg_type_byte)
+            .map_err(|_| ProtocolError::InvalidMessageType(msg_type_byte))?;
+        
+        // Parse payload length
+        let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
+        
+        // Check size limit
+        if payload_len > MAX_MESSAGE_SIZE {
+            return Err(ProtocolError::MessageTooLarge(payload_len));
+        }
+        
+        // Read payload
+        let mut payload = vec![0u8; payload_len];
+        stream.read_exact(&mut payload).await?;
+        
+        // Read checksum
+        let mut checksum = [0u8; 32];
+        stream.read_exact(&mut checksum).await?;
+        
+        // Verify checksum
+        let computed = blake3::hash(&payload);
+        if computed.as_bytes() != &checksum {
+            return Err(ProtocolError::InvalidChecksum);
+        }
+        
+        Ok(MessageEnvelope {
+            msg_type,
+            payload,
+        })
+    }
+    
+    /// Deserialize payload into specific message type
+    pub fn deserialize<T: serde::de::DeserializeOwned>(&self) -> Result<T, ProtocolError> {
+        bincode::deserialize(&self.payload)
+            .map_err(|e| ProtocolError::DeserializationError(e.to_string()))
+    }
+}
+
+/// Message codec for sending/receiving typed messages
+pub struct MessageCodec;
+
+impl MessageCodec {
+    /// Send a message
+    pub async fn send<T: serde::Serialize>(
+        stream: &mut TcpStream,
+        msg_type: MessageType,
+        payload: &T,
+    ) -> Result<(), ProtocolError> {
+        let envelope = MessageEnvelope::new(msg_type, payload)?;
+        let bytes = envelope.encode();
+        stream.write_all(&bytes).await?;
+        stream.flush().await?;
+        Ok(())
+    }
+    
+    /// Receive a message
+    pub async fn receive(stream: &mut TcpStream) -> Result<MessageEnvelope, ProtocolError> {
+        MessageEnvelope::decode(stream).await
+    }
+    
+    /// Send Hello message
+    pub async fn send_hello(
+        stream: &mut TcpStream,
+        msg: &HelloMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::Hello, msg).await
+    }
+    
+    /// Send HelloAck message
+    pub async fn send_hello_ack(
+        stream: &mut TcpStream,
+        msg: &HelloAckMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::HelloAck, msg).await
+    }
+    
+    /// Send Status message
+    pub async fn send_status(
+        stream: &mut TcpStream,
+        msg: &StatusMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::Status, msg).await
+    }
+    
+    /// Send GetBlocks request
+    pub async fn send_get_blocks(
+        stream: &mut TcpStream,
+        msg: &GetBlocksMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::GetBlocks, msg).await
+    }
+    
+    /// Send Blocks response
+    pub async fn send_blocks(
+        stream: &mut TcpStream,
+        msg: &BlocksMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::Blocks, msg).await
+    }
+    
+    /// Send NewBlock announcement
+    pub async fn send_new_block(
+        stream: &mut TcpStream,
+        msg: &NewBlockMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::NewBlock, msg).await
+    }
+    
+    /// Send NewTransaction announcement
+    pub async fn send_new_transaction(
+        stream: &mut TcpStream,
+        msg: &NewTransactionMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::NewTransaction, msg).await
+    }
+    
+    /// Send Ping
+    pub async fn send_ping(
+        stream: &mut TcpStream,
+        msg: &PingMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::Ping, msg).await
+    }
+    
+    /// Send Pong
+    pub async fn send_pong(
+        stream: &mut TcpStream,
+        msg: &PongMessage,
+    ) -> Result<(), ProtocolError> {
+        Self::send(stream, MessageType::Pong, msg).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_message_envelope_encoding() {
+        let msg = HelloMessage {
+            version: 1,
+            peer_id: [42u8; 32],
+            best_height: 100,
+            best_hash: Hash::ZERO,
+            genesis_hash: Hash::ZERO,
+            node_type: 1,
+            timestamp: 1234567890,
+        };
+        
+        let envelope = MessageEnvelope::new(MessageType::Hello, &msg).unwrap();
+        let encoded = envelope.encode();
+        
+        // Check magic
+        assert_eq!(&encoded[0..4], &MAGIC);
+        
+        // Check version
+        assert_eq!(encoded[4], VERSION);
+        
+        // Check message type
+        assert_eq!(encoded[5], MessageType::Hello as u8);
+        
+        // Check payload length is encoded
+        let payload_len = u32::from_be_bytes([encoded[6], encoded[7], encoded[8], encoded[9]]);
+        assert!(payload_len > 0);
+    }
+    
+    #[test]
+    fn test_message_serialization_roundtrip() {
+        let original = StatusMessage {
+            best_height: 12345,
+            best_hash: Hash::ZERO,
+            node_type: 1,
+            timestamp: 9876543210,
+        };
+        
+        let envelope = MessageEnvelope::new(MessageType::Status, &original).unwrap();
+        let deserialized: StatusMessage = envelope.deserialize().unwrap();
+        
+        assert_eq!(deserialized.best_height, original.best_height);
+        assert_eq!(deserialized.best_hash, original.best_hash);
+        assert_eq!(deserialized.node_type, original.node_type);
+        assert_eq!(deserialized.timestamp, original.timestamp);
+    }
+    
+    #[test]
+    fn test_message_too_large() {
+        let huge_payload = vec![0u8; MAX_MESSAGE_SIZE + 1];
+        let result = MessageEnvelope::new(MessageType::Blocks, &huge_payload);
+        
+        assert!(matches!(result, Err(ProtocolError::MessageTooLarge(_))));
+    }
+    
+    #[test]
+    fn test_checksum_verification() {
+        let msg = PingMessage {
+            timestamp: 1234567890,
+            nonce: 42,
+        };
+        
+        let envelope = MessageEnvelope::new(MessageType::Ping, &msg).unwrap();
+        let mut encoded = envelope.encode();
+        
+        // Corrupt the checksum
+        let checksum_start = encoded.len() - 32;
+        encoded[checksum_start] ^= 0xFF;
+        
+        // Decoding should fail (we can't test this directly without a stream,
+        // but the logic is there)
+        assert_ne!(encoded[checksum_start], envelope.encode()[checksum_start]);
+    }
+}

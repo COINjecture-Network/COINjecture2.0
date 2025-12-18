@@ -11,6 +11,10 @@ pub mod config;
 pub mod message;
 pub mod flow_control;
 pub mod router;
+pub mod protocol;
+pub mod peer;
+pub mod node_integration;
+pub mod network;
 
 // Re-export commonly used types
 pub use config::{
@@ -32,3 +36,11 @@ pub use message::{
 pub use flow_control::{FlowControl, FlowControlStats};
 
 pub use router::{EquilibriumRouter, PeerInfo, PeerId};
+
+pub use protocol::{MessageEnvelope, MessageCodec, ProtocolError};
+
+pub use peer::{Peer, PeerState, PeerStats};
+
+pub use node_integration::{NodeMetrics, PeerSelector, thresholds};
+
+pub use network::{CppNetwork, NetworkEvent, NetworkCommand};
