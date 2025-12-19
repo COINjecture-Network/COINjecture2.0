@@ -146,3 +146,4 @@ If deployment fails:
 3. Check ports: `netstat -tulpn | grep -E '30333|9933|9090'`
 4. Check logs: `docker logs coinject-node`
 
+

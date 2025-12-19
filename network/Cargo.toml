@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 coinject-core = { path = "../core" }
+# libp2p temporarily kept for legacy modules (addr_filter, protocol, eclipse, sync_guardrails)
+# These will be removed after full CPP migration
 libp2p.workspace = true
 libp2p-request-response = { version = "0.27.0", default-features = false }
 tokio.workspace = true

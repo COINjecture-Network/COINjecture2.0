@@ -15,7 +15,10 @@ use coinject_consensus::{Miner, MiningConfig};
 use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 // libp2p removed - using CPP protocol only
-use coinject_network::cpp::{CppNetwork, NetworkEvent as CppNetworkEvent, NetworkCommand as CppNetworkCommand, CppConfig, NodeType as CppNodeType};
+use coinject_network::cpp::{
+    CppNetwork, NetworkEvent as CppNetworkEvent, NetworkCommand as CppNetworkCommand, 
+    CppConfig, NodeType as CppNodeType, PeerId as CppPeerId
+};
 use coinject_rpc::{RpcServer, RpcServerState};
 use coinject_rpc::websocket::{WebSocketRpc, RpcEvent as WebSocketRpcEvent, RpcCommand as WebSocketRpcCommand};
 use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
@@ -28,6 +31,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
+use blake3;
+use hex;
 
 /// Get the debug log path from DATA_DIR environment variable
 pub fn get_debug_log_path() -> std::path::PathBuf {
@@ -36,6 +41,7 @@ pub fn get_debug_log_path() -> std::path::PathBuf {
 }
 
 /// Commands that can be sent to the network task
+#[derive(Debug)]
 enum NetworkCommand {
     /// Broadcast newly mined block to all peers
     BroadcastBlock(coinject_core::Block),
@@ -50,12 +56,12 @@ enum NetworkCommand {
         node_type: coinject_network::NetworkNodeType,
     },
     RequestBlocks { from_height: u64, to_height: u64 },
-    /// Legacy: Send block to specific peer (Sarah's approach - kept for compatibility)
-    SendBlockToPeer { block: coinject_core::Block, peer: PeerId },
+    /// Legacy: Send block to specific peer (kept for compatibility)
+    SendBlockToPeer { block: coinject_core::Block, peer: CppPeerId },
     // === REQUEST-RESPONSE SYNC COMMANDS ===
     // Reliable, ordered block delivery - bypasses GossipSub deduplication issues
     /// Request blocks from a specific peer via request-response (preferred for sync)
-    RequestBlocksRR { peer: PeerId, from_height: u64, to_height: u64 },
+    RequestBlocksRR { peer: CppPeerId, from_height: u64, to_height: u64 },
     /// Send blocks response via request-response
     SendBlocksResponse { request_id: u64, blocks: Vec<coinject_core::Block> },
     /// Send error response via request-response
@@ -389,56 +395,33 @@ impl CoinjectNode {
 
     /// Start the node services
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Start P2P network
-        println!("🌐 Starting P2P network...");
+        // libp2p removed - using CPP protocol only
+        println!("🌐 Starting CPP Network (libp2p removed)...");
 
-        // Create shared peer count for RPC and network service
+        // Create shared peer count for RPC
         let peer_count = Arc::new(RwLock::new(0));
 
-        // Keypair path for persistent PeerId
-        let keypair_path = self.config.data_dir.join("network_key");
-        
-        // Build address filter config based on CLI flags
-        let addr_filter_config = if self.config.allow_private_addrs {
-            Some(coinject_network::AddressFilterConfig::local_dev())
-        } else {
-            Some(coinject_network::AddressFilterConfig::default())
+        // Generate CPP PeerId from data directory (deterministic per node)
+        let peer_id_seed = format!("{}{}", self.config.data_dir.display(), self.config.chain_id);
+        let peer_id_hash = blake3::hash(peer_id_seed.as_bytes());
+        let local_peer_id_bytes: CppPeerId = {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&peer_id_hash.as_bytes()[..32]);
+            bytes
         };
+        let local_peer_id_str = hex::encode(local_peer_id_bytes);
         
-        let network_config = NetworkConfig {
-            listen_addr: self.config.p2p_addr.clone(),
-            chain_id: self.config.chain_id.clone(),
-            max_peers: self.config.max_peers,
-            enable_mdns: true,
-            keypair_path: Some(keypair_path),
-            external_addr: self.config.external_addr.clone(),
-            addr_filter_config,
-        };
-
-        let (mut network_service, mut event_rx) = NetworkService::new(network_config, Arc::clone(&peer_count))?;
-        
-        // Get local PeerId for RPC and logging
-        let local_peer_id = network_service.local_peer_id();
-        let local_peer_id_str = local_peer_id.to_string();
-        
-        network_service.start_listening(&self.config.p2p_addr)?;
-        network_service.subscribe_topics()?;
-
-        // Connect to bootnodes if provided
-        if !self.config.bootnodes.is_empty() {
-            println!("   Connecting to {} bootnode(s)...", self.config.bootnodes.len());
-            network_service.connect_to_bootnodes(&self.config.bootnodes)?;
-        }
-
-        println!("   Listening on: {}", self.config.p2p_addr);
-        println!("   PeerId: {}", local_peer_id_str);
+        println!("   CPP PeerId: {}", local_peer_id_str);
         println!();
         
-        // Track listen addresses for RPC
-        let listen_addresses: Arc<RwLock<Vec<String>>> = Arc::new(RwLock::new(vec![self.config.p2p_addr.clone()]));
+        // Track listen addresses for RPC (CPP addresses)
+        let listen_addresses: Arc<RwLock<Vec<String>>> = Arc::new(RwLock::new(vec![
+            format!("cpp://{}", self.config.cpp_p2p_addr),
+            format!("ws://{}", self.config.cpp_ws_addr),
+        ]));
 
-        // Create command channel for network operations
-        let (network_cmd_tx, mut network_cmd_rx) = mpsc::unbounded_channel::<NetworkCommand>();
+        // Create command channel for CPP network operations (legacy NetworkCommand kept for compatibility)
+        let (network_cmd_tx, _network_cmd_rx) = mpsc::unbounded_channel::<NetworkCommand>();
 
         // Start RPC server
         println!("🔌 Starting JSON-RPC server...");
@@ -668,12 +651,23 @@ impl CoinjectNode {
             node_type: CppNodeType::Full, // TODO: Get from node classification
         };
         
+        // Get current chain state before creating CPP network
+        let current_height = self.chain.best_block_height().await;
+        let current_hash = self.chain.best_block_hash().await;
+        
         let (cpp_network, cpp_network_cmd_tx, mut cpp_network_event_rx) = 
-            CppNetwork::new(cpp_config, local_peer_id_bytes, genesis_hash);
+            CppNetwork::new_with_chain_state(cpp_config, local_peer_id_bytes, genesis_hash, current_height, current_hash);
+        
+        println!("✅ Initialized CPP network chain state: height={}, hash={:?}", current_height, current_hash);
+        
+        // Clone cpp_network_cmd_tx for multiple uses (before any moves)
+        let cpp_network_cmd_tx_for_bootnodes = cpp_network_cmd_tx.clone();
+        let cpp_network_cmd_tx_for_legacy = cpp_network_cmd_tx.clone();
+        let cpp_network_cmd_tx_for_mining = cpp_network_cmd_tx.clone(); // For mining loop
+        let cpp_network_cmd_tx_for_storage = cpp_network_cmd_tx.clone(); // Store for later use
         
         // Connect to CPP bootnodes after a short delay
         let cpp_bootnodes_for_connect = cpp_bootnodes.clone();
-        let cpp_network_cmd_tx_clone = cpp_network_cmd_tx.clone();
         tokio::spawn(async move {
             // Wait a bit for network to start listening
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -682,7 +676,7 @@ impl CoinjectNode {
             for bootnode_addr in cpp_bootnodes_for_connect {
                 if let Ok(addr) = bootnode_addr.parse::<std::net::SocketAddr>() {
                     println!("[CPP] Connecting to bootnode: {}", addr);
-                    if let Err(e) = cpp_network_cmd_tx_clone.send(
+                    if let Err(e) = cpp_network_cmd_tx_for_bootnodes.send(
                         coinject_network::cpp::NetworkCommand::ConnectBootnode { addr }
                     ) {
                         eprintln!("[CPP] Failed to send connect command: {}", e);
@@ -700,35 +694,243 @@ impl CoinjectNode {
             match cpp_network.start().await {
                 Ok(()) => {
                     println!("[CPP] Network task completed normally");
-                }
-                Err(e) => {
+                                    }
+                                    Err(e) => {
                     eprintln!("[CPP] Network error: {}", e);
                     eprintln!("[CPP] Failed to bind to: {}", cpp_p2p_addr_clone);
                 }
             }
         });
         
-        // Spawn CPP network event handler
+        // Spawn CPP network event handler - fully integrated
         let chain_clone = Arc::clone(&self.chain);
+        let state_clone = Arc::clone(&self.state);
+        let timelock_state_clone = Arc::clone(&self.timelock_state);
+        let escrow_state_clone = Arc::clone(&self.escrow_state);
+        let channel_state_clone = Arc::clone(&self.channel_state);
+        let trustline_state_clone = Arc::clone(&self.trustline_state);
+        let dimensional_pool_state_clone = Arc::clone(&self.dimensional_pool_state);
+        let marketplace_state_clone = Arc::clone(&self.marketplace_state);
+        let validator_clone = Arc::clone(&self.validator);
         let tx_pool_clone = Arc::clone(&self.tx_pool);
+        let best_known_peer_height_clone = Arc::clone(&best_known_peer_height);
+        let peer_count_clone = Arc::clone(&peer_count);
+        let peer_consensus_clone = Arc::clone(&peer_consensus);
+        let cpp_network_cmd_tx_for_events = cpp_network_cmd_tx.clone();
+        let hf_sync_clone = self.hf_sync.clone();
+        
         tokio::spawn(async move {
             while let Some(event) = cpp_network_event_rx.recv().await {
                 match event {
-                    CppNetworkEvent::BlockReceived { block, peer_id: _ } => {
-                        // TODO: Process received block
-                        println!("CPP: Received block at height {}", block.header.height);
+                    CppNetworkEvent::BlockReceived { block, peer_id } => {
+                        println!("📥 [CPP] Received block {} from peer {:?}", block.header.height, hex::encode(peer_id));
+                        
+                        let best_height = chain_clone.best_block_height().await;
+                        let best_hash = chain_clone.best_block_hash().await;
+                        let expected_height = best_height + 1;
+                        
+                        // Validate block height
+                        if block.header.height != expected_height {
+                            println!("⚠️  [CPP] Block height mismatch: expected {}, got {}", expected_height, block.header.height);
+                            continue;
+                        }
+                        
+                        // Validate previous hash
+                        if block.header.prev_hash != best_hash {
+                            println!("⚠️  [CPP] Block prev_hash mismatch: expected {}, got {}", best_hash, block.header.prev_hash);
+                            continue;
+                        }
+                        
+                        // Validate block
+                        match validator_clone.validate_block_with_options(&block, &best_hash, expected_height, false) {
+                            Ok(()) => {
+                                // Store block
+                                match chain_clone.store_block(&block).await {
+                                    Ok(is_new_best) => {
+                                        if is_new_best {
+                                            println!("✅ [CPP] Block {} stored and applied", block.header.height);
+                                            
+                                            // Update CPP network chain state
+                                            let new_height = block.header.height;
+                                            let new_hash = block.header.hash();
+                                            if let Err(e) = cpp_network_cmd_tx_for_legacy.send(CppNetworkCommand::UpdateChainState {
+                                                best_height: new_height,
+                                                best_hash: new_hash,
+                                            }) {
+                                                eprintln!("⚠️  Failed to update CPP network chain state: {}", e);
+                                            }
+                                            
+                                            // Apply block transactions
+                                            if let Err(e) = Self::apply_block_transactions(
+                                                &block,
+                                                &state_clone,
+                                                &timelock_state_clone,
+                                                &escrow_state_clone,
+                                                &channel_state_clone,
+                                                &trustline_state_clone,
+                                                &dimensional_pool_state_clone,
+                                                &marketplace_state_clone,
+                                            ) {
+                                                eprintln!("❌ [CPP] Failed to apply block transactions: {}", e);
+                                            } else {
+                                                // Remove applied transactions from pool
+                                                let mut pool = tx_pool_clone.write().await;
+                                                for tx in &block.transactions {
+                                                    pool.remove(&tx.hash());
+                                                }
+                                                
+                                                // Update best known peer height
+                                                let mut best_peer = best_known_peer_height_clone.write().await;
+                                                if block.header.height > *best_peer {
+                                                    *best_peer = block.header.height;
+                                                }
+                                                
+                                                // Push to Hugging Face if enabled
+                                                if let Some(ref hf_sync) = hf_sync_clone {
+                                                    let hf_sync_clone2 = Arc::clone(hf_sync);
+                                                    let block_clone = block.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) = hf_sync_clone2.push_consensus_block(&block_clone, false).await {
+                                                            eprintln!("⚠️  [CPP] Failed to push block to Hugging Face: {}", e);
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("❌ [CPP] Failed to store block: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("❌ [CPP] Block validation failed: {:?}", e);
+                            }
+                        }
                     }
-                    CppNetworkEvent::TransactionReceived { transaction, peer_id: _ } => {
-                        // TODO: Add transaction to pool
+                    CppNetworkEvent::TransactionReceived { transaction, peer_id } => {
+                        println!("📨 [CPP] Received transaction {:?} from peer {:?}", transaction.hash(), hex::encode(peer_id));
                         let mut pool = tx_pool_clone.write().await;
-                        let _ = pool.add(transaction);
+                        if let Err(e) = pool.add(transaction) {
+                            eprintln!("⚠️  [CPP] Failed to add transaction to pool: {}", e);
+                        }
                     }
-                    CppNetworkEvent::BlocksReceived { blocks, request_id: _, peer_id: _ } => {
-                        // TODO: Process sync blocks
-                        println!("CPP: Received {} blocks for sync", blocks.len());
+                    CppNetworkEvent::BlocksReceived { blocks, request_id: _, peer_id } => {
+                        println!("📦 [CPP] Received {} blocks for sync from peer {:?}", blocks.len(), hex::encode(peer_id));
+                        // Process sync blocks sequentially
+                        for block in blocks {
+                            let best_height = chain_clone.best_block_height().await;
+                            let best_hash = chain_clone.best_block_hash().await;
+                            let expected_height = best_height + 1;
+                            
+                            if block.header.height == expected_height && block.header.prev_hash == best_hash {
+                                // Validate and store (skip age check for sync blocks)
+                                if let Ok(()) = validator_clone.validate_block_with_options(&block, &best_hash, expected_height, true) {
+                                    if let Ok(is_new_best) = chain_clone.store_block(&block).await {
+                                        if is_new_best {
+                                            // Update CPP network chain state
+                                            let new_height = block.header.height;
+                                            let new_hash = block.header.hash();
+                                            if let Err(e) = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::UpdateChainState {
+                                                best_height: new_height,
+                                                best_hash: new_hash,
+                                            }) {
+                                                eprintln!("⚠️  Failed to update CPP network chain state: {}", e);
+                                            }
+                                            
+                                            match Self::apply_block_transactions(
+                                                &block,
+                                                &state_clone,
+                                                &timelock_state_clone,
+                                                &escrow_state_clone,
+                                                &channel_state_clone,
+                                                &trustline_state_clone,
+                                                &dimensional_pool_state_clone,
+                                                &marketplace_state_clone,
+                                            ) {
+                                                Ok(_) => {
+                                                    // Success - sync block applied
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("❌ [CPP] Failed to apply sync block transactions: {}", e);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    CppNetworkEvent::PeerConnected { peer_id, addr, node_type: _, best_height, best_hash } => {
+                        println!("🤝 [CPP] Peer connected: {:?} at {}", hex::encode(peer_id), addr);
+                        // Update peer count
+                        {
+                            let mut count = peer_count_clone.write().await;
+                            *count += 1;
+                            println!("   📊 Peer count: {}", *count);
+                        }
+                        // Update peer consensus tracker
+                        let peer_id_str = hex::encode(peer_id);
+                        let best_hash_bytes: [u8; 32] = *best_hash.as_bytes();
+                        peer_consensus_clone.update_peer(peer_id_str, best_height, best_hash_bytes).await;
+                        // Update best known peer height
+                        {
+                            let mut best_height_guard = best_known_peer_height_clone.write().await;
+                            if best_height > *best_height_guard {
+                                *best_height_guard = best_height;
+                            }
+                        }
+                        // Use peer consensus mathematics to determine if we need to sync
+                        // This uses median height and adaptive thresholds (COINjecture consensus framework)
+                        let current_height = chain_clone.best_block_height().await;
+                        let median_height = peer_consensus_clone.median_peer_height().await;
+                        let sync_threshold = peer_consensus_clone.config.sync_threshold_blocks;
+                        
+                        // Check if we're behind the median peer height by more than sync_threshold
+                        // This is more robust than checking individual peer heights
+                        if current_height + sync_threshold < median_height {
+                            let blocks_behind = median_height - current_height;
+                            let from_height = current_height + 1;
+                            let to_height = median_height.min(current_height + 100); // Request up to 100 blocks at a time
+                            println!("📡 [Consensus Math] Behind median peer height: {} blocks (our: {}, median: {}, threshold: {}), requesting blocks {}-{} for sync", 
+                                blocks_behind, current_height, median_height, sync_threshold, from_height, to_height);
+                            let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
+                                peer_id,
+                                from_height,
+                                to_height,
+                                request_id: rand::random(),
+                            });
+                        } else if best_height > current_height {
+                            // Fallback: if this specific peer is ahead (but median check didn't trigger)
+                            // This handles edge cases where median is close but individual peer is ahead
+                            let from_height = current_height + 1;
+                            let to_height = best_height.min(current_height + 100);
+                            println!("📡 Peer is ahead (peer: {}, us: {}), requesting blocks {}-{} for sync", 
+                                best_height, current_height, from_height, to_height);
+                            let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
+                                peer_id,
+                                from_height,
+                                to_height,
+                                request_id: rand::random(),
+                            });
+                        }
+                    }
+                    CppNetworkEvent::PeerDisconnected { peer_id, reason: _ } => {
+                        println!("👋 [CPP] Peer disconnected: {:?}", hex::encode(peer_id));
+                        // Update peer count
+                        {
+                            let mut count = peer_count_clone.write().await;
+                            if *count > 0 {
+                                *count -= 1;
+                            }
+                            println!("   📊 Peer count: {}", *count);
+                        }
+                        // Mark peer as disconnected in consensus tracker
+                        let peer_id_str = hex::encode(peer_id);
+                        peer_consensus_clone.mark_peer_disconnected(&peer_id_str).await;
                     }
                     _ => {
-                        // Handle other events
+                        // Handle other events as needed
                     }
                 }
             }
@@ -779,7 +981,7 @@ impl CoinjectNode {
             }
         });
         
-        self.cpp_network_cmd_tx = Some(cpp_network_cmd_tx);
+        self.cpp_network_cmd_tx = Some(cpp_network_cmd_tx_for_storage);
         self.websocket_rpc_cmd_tx = Some(websocket_rpc_cmd_tx);
         
         println!("   CPP Network listening on: {}", self.config.cpp_p2p_addr);
@@ -791,149 +993,47 @@ impl CoinjectNode {
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!();
 
-        // Spawn network task (processes events and commands)
-        // CRITICAL FIX: Use tokio::spawn instead of spawn_local
-        // spawn_local runs on a single thread (LocalSet), which starves libp2p's
-        // internal connection tasks on Linux. tokio::spawn runs on worker threads
-        // allowing proper I/O scheduling for Noise/Yamux handshakes.
+        // libp2p network task removed - using CPP protocol only
+        // Legacy NetworkCommand channel kept for compatibility but commands are routed to CPP network
+        let cpp_network_cmd_tx_for_legacy = cpp_network_cmd_tx.clone();
+        let mut network_cmd_rx_for_legacy = _network_cmd_rx;
         tokio::spawn(async move {
-            let mut network = network_service;
-            let mut bootnode_retry_interval = time::interval(Duration::from_secs(10)); // Retry bootnodes every 10 seconds
-            bootnode_retry_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-            
-            loop {
-                tokio::select! {
-                    // Process network events
-                    _ = network.process_events() => {},
-
-                    // Periodic bootnode retry
-                    _ = bootnode_retry_interval.tick() => {
-                        network.retry_bootnodes();
-                    },
-
-                    // Handle commands from other tasks
-                    Some(cmd) = network_cmd_rx.recv() => {
-                        match cmd {
-                            NetworkCommand::BroadcastBlock(block) => {
-                                match network.broadcast_block(block) {
-                                    Err(e) if e.to_string().contains("InsufficientPeers") => {
-                                        // Silently ignore InsufficientPeers - it's expected when no peers are connected
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to broadcast block: {}", e);
-                                    }
-                                    Ok(_) => {}
-                                }
-                            }
-                            NetworkCommand::SendSyncBlock { block, request_id } => {
-                                // INSTITUTIONAL-GRADE: Use unique request_id to bypass gossipsub dedup
-                                match network.send_sync_block(block, request_id) {
-                                    Err(e) if e.to_string().contains("InsufficientPeers") => {
-                                        // Silently ignore - expected when no peers connected
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to send sync block: {}", e);
-                                    }
-                                    Ok(_) => {}
-                                }
-                            }
-                            NetworkCommand::BroadcastTransaction(tx) => {
-                                if let Err(e) = network.broadcast_transaction(tx) {
-                                    eprintln!("Failed to broadcast transaction: {}", e);
-                                }
-                            }
-                            NetworkCommand::BroadcastStatus { best_height, best_hash, genesis_hash, node_type } => {
-                                match network.broadcast_status(best_height, best_hash, genesis_hash, node_type) {
-                                    Err(e) if e.to_string().contains("InsufficientPeers") => {
-                                        // Silently ignore InsufficientPeers - it's expected when no peers are connected
-                                    }
-                                    Err(e) => {
-                                        eprintln!("Failed to broadcast status: {}", e);
-                                    }
-                                    Ok(_) => {}
-                                }
-                            }
-                            NetworkCommand::RequestBlocks { from_height, to_height } => {
-                                println!("📡 Requesting blocks {}-{} from network", from_height, to_height);
-                                if let Err(e) = network.request_blocks(from_height, to_height) {
-                                    eprintln!("Failed to request blocks: {}", e);
-                                }
-                            }
-                            NetworkCommand::SendBlockToPeer { block, peer } => {
-                                if let Err(e) = network.send_block_to_peer(block, peer) {
-                                    eprintln!("Failed to send block to peer {}: {}", peer, e);
-                                }
-                            }
-                            // === LIGHT SYNC COMMAND HANDLERS ===
-                            NetworkCommand::SendHeaders { headers, request_id } => {
-                                if let Err(e) = network.send_headers(headers, request_id) {
-                                    eprintln!("Failed to send headers: {}", e);
-                                }
-                            }
-                            NetworkCommand::SendFlyClientProof { proof_data, request_id } => {
-                                if let Err(e) = network.send_flyclient_proof(proof_data, request_id) {
-                                    eprintln!("Failed to send FlyClient proof: {}", e);
-                                }
-                            }
-                            NetworkCommand::SendMMRProof { header, proof_data, mmr_root, request_id } => {
-                                if let Err(e) = network.send_mmr_proof(header, proof_data, mmr_root, request_id) {
-                                    eprintln!("Failed to send MMR proof: {}", e);
-                                }
-                            }
-                            NetworkCommand::SendChainTip { height, hash, mmr_root, total_work, request_id } => {
-                                if let Err(e) = network.send_chain_tip(height, hash, mmr_root, total_work, request_id) {
-                                    eprintln!("Failed to send chain tip: {}", e);
-                                }
-                            }
-                            NetworkCommand::RequestHeaders { start_height, max_headers } => {
-                                if let Err(e) = network.request_headers(start_height, max_headers) {
-                                    eprintln!("Failed to request headers: {}", e);
-                                }
-                            }
-                            NetworkCommand::RequestFlyClientProof { security_param } => {
-                                if let Err(e) = network.request_flyclient_proof(security_param) {
-                                    eprintln!("Failed to request FlyClient proof: {}", e);
-                                }
-                            }
-                            // === REQUEST-RESPONSE SYNC COMMAND HANDLERS ===
-                            NetworkCommand::RequestBlocksRR { peer, from_height, to_height } => {
-                                println!("📡 [RR-SYNC] Requesting blocks {}-{} from peer {} via request-response", 
-                                    from_height, to_height, peer);
-                                match network.request_blocks_rr(peer, from_height, to_height) {
-                                    Ok(request_id) => {
-                                        println!("   ✅ Request sent (id: {})", request_id);
-                                    }
-                                    Err(e) => {
-                                        eprintln!("   ❌ Failed to request blocks via RR: {}", e);
-                                        // Fallback to GossipSub
-                                        println!("   ↳ Falling back to GossipSub broadcast...");
-                                        if let Err(e) = network.request_blocks(from_height, to_height) {
-                                            eprintln!("   ❌ GossipSub fallback also failed: {}", e);
-                                        }
-                                    }
-                                }
-                            }
-                            NetworkCommand::SendBlocksResponse { request_id, blocks } => {
-                                println!("📤 [RR-SYNC] Sending {} blocks response (id: {})", blocks.len(), request_id);
-                                if let Err(e) = network.send_blocks_response(request_id, blocks) {
-                                    eprintln!("   ❌ Failed to send blocks response: {}", e);
-                                }
-                            }
-                            NetworkCommand::SendErrorResponse { request_id, message } => {
-                                println!("📤 [RR-SYNC] Sending error response (id: {}): {}", request_id, message);
-                                if let Err(e) = network.send_error_response(request_id, message) {
-                                    eprintln!("   ❌ Failed to send error response: {}", e);
-                                }
-                            }
+            while let Some(cmd) = network_cmd_rx_for_legacy.recv().await {
+                // Route legacy NetworkCommand to CPP network
+                match cmd {
+                    NetworkCommand::BroadcastBlock(block) => {
+                        // Route to CPP network
+                        if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
+                            CppNetworkCommand::BroadcastBlock { block }
+                        ) {
+                            eprintln!("Failed to broadcast block via CPP: {}", e);
                         }
+                    }
+                    NetworkCommand::BroadcastTransaction(tx) => {
+                        // Route to CPP network
+                        if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
+                            CppNetworkCommand::BroadcastTransaction { transaction: tx }
+                        ) {
+                            eprintln!("Failed to broadcast transaction via CPP: {}", e);
+                        }
+                    }
+                    _ => {
+                        // Other commands not yet implemented in CPP - log for now
+                        eprintln!("⚠️  Legacy NetworkCommand not yet routed to CPP: {:?}", cmd);
                     }
                 }
             }
         });
 
-        // Create block buffer for out-of-order blocks
+        // TEMPORARY: libp2p event handler commented out - will be removed after CPP testing
+        // The entire libp2p event processing block (~1500 lines) is temporarily disabled
+        // CPP network events are handled separately above (cpp_network_event_rx)
+        
+        // Create block buffer for out-of-order blocks (still used by CPP)
         let block_buffer: Arc<RwLock<HashMap<u64, coinject_core::Block>>> = Arc::new(RwLock::new(HashMap::new()));
 
+        // TEMPORARY: libp2p event handler spawn disabled - CPP events handled above
+        /*
         // Spawn network event handler
         let chain = Arc::clone(&self.chain);
         let state = Arc::clone(&self.state);
@@ -1035,35 +1135,11 @@ impl CoinjectNode {
                 ).await;
             }
         });
+        */
 
-        // Spawn periodic status broadcast task
-        let chain_for_status = Arc::clone(&self.chain);
-        let genesis_hash = self.chain.genesis_hash();
-        let network_tx_for_status = network_cmd_tx.clone();
-
-        tokio::spawn(async move {
-            // Increased from 10s to 30s to reduce gossipsub duplicate errors
-            // When height doesn't change, same message gets rejected as duplicate
-            let mut interval = time::interval(Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                let best_height = chain_for_status.best_block_height().await;
-                let best_hash = chain_for_status.best_block_hash().await;
-
-                // TODO: Get actual node type from config
-                // For now, default to Full. The node_manager tracks the actual type.
-                let node_type = coinject_network::NetworkNodeType::Full;
-                
-                if let Err(e) = network_tx_for_status.send(NetworkCommand::BroadcastStatus {
-                    best_height,
-                    best_hash,
-                    genesis_hash,
-                    node_type,
-                }) {
-                    eprintln!("Failed to send status broadcast command: {}", e);
-                }
-            }
-        });
+        // TEMPORARY: Periodic status broadcast disabled (was libp2p)
+        // CPP network handles status updates internally
+        // TODO: Re-enable with CPP network status broadcasting
 
         // Spawn periodic reorganization check task (every 60 seconds)
         let chain_periodic = Arc::clone(&self.chain);
@@ -1357,9 +1433,10 @@ impl CoinjectNode {
         Ok(())
     }
 
-    /// Handle network events
+    /// Handle network events (TEMPORARILY DISABLED - libp2p removed, using CPP)
+    #[allow(dead_code, unused_variables)]
     async fn handle_network_event(
-        event: NetworkEvent,
+        _event: (/* NetworkEvent - libp2p removed, using CPP events */),
         chain: &Arc<ChainState>,
         state: &Arc<AccountState>,
         timelock_state: &Arc<TimeLockState>,
@@ -1379,7 +1456,11 @@ impl CoinjectNode {
         node_manager: &Arc<crate::node_manager::NodeTypeManager>,
         capability_router: &Arc<crate::node_manager::CapabilityRouter>,
     ) {
-        match event {
+        // TEMPORARY: libp2p event handling disabled - using CPP events
+        // This entire function body (~1000 lines) is commented out
+        return; // Early return - will be removed after CPP testing
+        /*
+        match _event {
             NetworkEvent::BlockReceived { block, peer, is_sync_block } => {
                 println!("📥 Received block {} from {:?} (sync_block: {})", block.header.height, peer, is_sync_block);
 
@@ -2343,6 +2424,7 @@ impl CoinjectNode {
                 }
             }
         }
+        */
     }
 
     /// Process buffered blocks sequentially
@@ -3269,10 +3351,10 @@ impl CoinjectNode {
         timelock_state: &Arc<TimeLockState>,
         escrow_state: &Arc<EscrowState>,
         channel_state: &Arc<ChannelState>,
-        trustline_state: &Arc<TrustLineState>,
-        dimensional_pool_state: &Arc<DimensionalPoolState>,
-        marketplace_state: &Arc<MarketplaceState>,
-        block_height: u64,
+        _trustline_state: &Arc<TrustLineState>,
+        _dimensional_pool_state: &Arc<DimensionalPoolState>,
+        _marketplace_state: &Arc<MarketplaceState>,
+        _block_height: u64,
     ) -> Result<(), String> {
         use coinject_core::{EscrowType, ChannelType};
         use coinject_state::{EscrowStatus, ChannelStatus};

@@ -2,6 +2,75 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.8.2] - 2025-12-18
+
+### Changed
+- **CPP Network Chain State Initialization**
+  - Modified `CppNetwork::new` to accept initial `best_height` and `best_hash` parameters
+  - CPP network now initializes with actual chain state from node service
+  - Added `new_with_chain_state` function to `ChainState` for proper initialization
+  - **Files Changed**: `network/src/cpp/network.rs`, `node/src/service.rs`
+
+- **Block Validation During Sync**
+  - Added `skip_age_check` parameter to `validate_block_with_options` function
+  - Sync blocks now bypass timestamp age validation (allows historical blocks)
+  - Prevents `TooOldTimestamp` errors during chain synchronization
+  - **Files Changed**: `node/src/validator.rs`, `node/src/service.rs`
+
+- **Chain State Updates**
+  - Added `UpdateChainState` commands sent to CPP network when blocks are mined or received
+  - Ensures CPP network's internal chain state stays synchronized with actual chain
+  - **Files Changed**: `node/src/service.rs`
+
+### Fixed
+- **Peer Count Reporting**
+  - Fixed issue where peer count was not updated when `PeerConnected`/`PeerDisconnected` events were received
+  - Mining now correctly detects peer count and resumes when sufficient peers are connected
+  - **Files Changed**: `node/src/service.rs`
+
+- **Peer State After Handshake**
+  - Fixed `PeerState` not being updated from `Connecting` to `Connected` after successful handshake
+  - Prevents premature disconnections with "early eof" errors
+  - **Files Changed**: `network/src/cpp/network.rs`
+
+### Known Issues
+- **Node 2 Sync Failure - Chain State Race Condition**
+  - **Symptom**: Node 2 connects to bootnode but reports height 0 during handshake, preventing sync requests
+  - **Observed Behavior**:
+    - Bootnode mines blocks and updates its chain state
+    - Node 2 connects and performs handshake
+    - Handshake reports height 0 from both nodes (stale chain state)
+    - Sync request logic (`best_height > current_height`) never triggers
+    - Node 2 remains stuck at height 0
+  - **Root Cause Analysis**:
+    - CPP network's internal `ChainState` is initialized at height 0 during `CppNetwork::new`
+    - `UpdateChainState` commands are sent when blocks are mined/received, but may not be processed before handshake
+    - Race condition: Handshake reads chain state before `UpdateChainState` commands are processed
+    - Even with initial chain state passed to `CppNetwork::new`, timing issues may cause stale state during handshake
+  - **Workarounds Attempted**:
+    - Passed initial chain state to `CppNetwork::new` (v4.8.2) - Still shows height 0 in handshake
+    - Added `UpdateChainState` commands when blocks are mined/received - May not process before handshake
+    - Modified handshake to read chain state directly from chain service - Not yet implemented
+  - **Next Steps Required**:
+    - Consider reading chain state directly from chain service during handshake instead of using cached `ChainState`
+    - Add periodic chain state sync to ensure CPP network's state stays current
+    - Implement handshake retry logic if chain state is detected as stale
+    - Consider using peer consensus mathematics (median height, adaptive thresholds) for sync decisions instead of simple height comparison
+
+- **libp2p Removal Incomplete**
+  - **Status**: `libp2p` networking stack is partially removed but not fully cleaned up
+  - **Remaining Work**:
+    - Large blocks of `libp2p` code are commented out in `node/src/service.rs` but not deleted
+    - `libp2p` dependencies removed from `Cargo.toml` files
+    - `libp2p` module exports commented out in `network/src/lib.rs`
+    - Need to fully remove commented code and clean up remaining references
+  - **Impact**: Codebase contains dead code that should be removed for maintainability
+
+- **Docker Deployment Port Conflicts**
+  - **Symptom**: Port conflicts when deploying multiple nodes on same machine
+  - **Workaround**: Deploy to separate DigitalOcean droplets (each node on separate machine)
+  - **Note**: Both nodes can use same ports (707, 8080, 9933) when on separate machines
+
 ## [4.8.1] - 2025-12-18
 
 ### Added

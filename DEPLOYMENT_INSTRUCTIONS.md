@@ -112,3 +112,4 @@ If you need to manually set the log path:
 docker run ... -e DEBUG_LOG_PATH=/data/debug.log ...
 ```
 
+

@@ -16,8 +16,10 @@ echo "=========================================="
 echo "Tag: $TAG"
 echo ""
 
-# Build Docker image
-docker build -f Dockerfile.cpp -t "$TAG" .
+# Build Docker image for linux/amd64 (DigitalOcean droplets)
+# Use buildx for cross-platform builds (Mac ARM64 -> Linux AMD64)
+echo "Building for linux/amd64 platform..."
+docker buildx build --platform linux/amd64 -f Dockerfile.cpp -t "$TAG" --load .
 
 echo ""
 echo "✅ Docker image built successfully: $TAG"

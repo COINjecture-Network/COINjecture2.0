@@ -196,11 +196,30 @@ impl CppNetwork {
         mpsc::UnboundedSender<NetworkCommand>,
         mpsc::UnboundedReceiver<NetworkEvent>,
     ) {
+        Self::new_with_chain_state(config, local_peer_id, genesis_hash, 0, genesis_hash)
+    }
+    
+    /// Create new CPP network service with initial chain state
+    pub fn new_with_chain_state(
+        config: CppConfig,
+        local_peer_id: PeerId,
+        genesis_hash: Hash,
+        initial_height: u64,
+        initial_hash: Hash,
+    ) -> (
+        Self,
+        mpsc::UnboundedSender<NetworkCommand>,
+        mpsc::UnboundedReceiver<NetworkEvent>,
+    ) {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
         
-        let chain_state = Arc::new(RwLock::new(ChainState::new(genesis_hash)));
+        let chain_state = Arc::new(RwLock::new(ChainState {
+            best_height: initial_height,
+            best_hash: initial_hash,
+            genesis_hash,
+        }));
         
         let network = CppNetwork {
             config,
@@ -343,10 +362,14 @@ impl CppNetwork {
             chain_state.read().await.genesis_hash,
         );
         
-        // Add peer to peer list
+        // Add peer to peer list and set state to Connected
         {
             let mut peers_guard = peers.write().await;
             peers_guard.insert(peer_id, peer);
+            // Update peer state to Connected after successful handshake
+            if let Some(p) = peers_guard.get_mut(&peer_id) {
+                p.state = PeerState::Connected;
+            }
         }
         
         // Send PeerConnected event
@@ -611,10 +634,14 @@ impl CppNetwork {
         
         let peer_id = peer.id;
         
-        // Add peer to peer list
+        // Add peer to peer list and set state to Connected
         {
             let mut peers = self.peers.write().await;
             peers.insert(peer_id, peer);
+            // Update peer state to Connected after successful handshake
+            if let Some(p) = peers.get_mut(&peer_id) {
+                p.state = PeerState::Connected;
+            }
         }
         
         // Update router
@@ -622,6 +649,15 @@ impl CppNetwork {
             let _router = self.router.write().await;
             // TODO: Add peer to router
         }
+        
+        // Send PeerConnected event
+        let _ = self.event_tx.send(NetworkEvent::PeerConnected {
+            peer_id,
+            addr,
+            node_type,
+            best_height: hello_ack.best_height,
+            best_hash: hello_ack.best_hash,
+        });
         
         // Start message loop for this peer
         let peers_clone = self.peers.clone();

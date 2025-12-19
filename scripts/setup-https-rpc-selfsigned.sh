@@ -114,3 +114,4 @@ echo "⚠️  Note: Browsers will show security warnings"
 echo "🔗 Test: curl -k https://$NODE_IP -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"chain_getInfo\",\"params\":[],\"id\":1}'"
 
 
+
