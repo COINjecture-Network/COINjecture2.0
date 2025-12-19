@@ -929,6 +929,26 @@ impl CoinjectNode {
                         let peer_id_str = hex::encode(peer_id);
                         peer_consensus_clone.mark_peer_disconnected(&peer_id_str).await;
                     }
+                    CppNetworkEvent::StatusUpdate { peer_id, best_height, best_hash, node_type } => {
+                        println!("📡 [CPP] Status update from peer {:?}: height {}, hash {:?}", 
+                            hex::encode(peer_id), best_height, best_hash);
+                        
+                        // Update peer consensus tracker
+                        let peer_id_str = hex::encode(peer_id);
+                        let hash_bytes: [u8; 32] = *best_hash.as_bytes();
+                        peer_consensus_clone.update_peer(peer_id_str, best_height, hash_bytes).await;
+                        
+                        // Update best known peer height
+                        {
+                            let mut best_height_guard = best_known_peer_height_clone.write().await;
+                            if best_height > *best_height_guard {
+                                *best_height_guard = best_height;
+                                println!("   📊 Updated best known peer height: {}", best_height);
+                            }
+                        }
+                        
+                        println!("   ✅ Peer height tracker updated for peer {:?}", hex::encode(peer_id));
+                    }
                     _ => {
                         // Handle other events as needed
                     }
