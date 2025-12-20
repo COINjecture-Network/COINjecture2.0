@@ -258,6 +258,8 @@ impl CppNetwork {
         let mut status_interval = interval(Duration::from_secs(10)); // Status broadcast every 10s
         let mut sync_check_interval = interval(Duration::from_secs(10)); // Sync check every 10s
         
+        println!("✅ [CPP] Event loop starting with {} intervals", 5);
+        
         loop {
             tokio::select! {
                 // Accept incoming connections
@@ -311,11 +313,13 @@ impl CppNetwork {
                 
                 // Periodic: Broadcast status to peers
                 _ = status_interval.tick() => {
+                    println!("⏰ [CPP] Status interval fired!");
                     self.broadcast_status().await;
                 }
                 
                 // Periodic: Check if sync is needed
                 _ = sync_check_interval.tick() => {
+                    println!("⏰ [CPP] Sync check interval fired!");
                     self.check_sync_status().await;
                 }
                 
