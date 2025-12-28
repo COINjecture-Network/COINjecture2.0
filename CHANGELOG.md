@@ -2,6 +2,41 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.8.3] - 12/28/25
+
+### Added
+- **Connection Instrumentation Logging**
+  - Added `[CPP][CONN][READ_ERR]` logs with error type classification (IO, InvalidMagic, TooLarge, etc.)
+  - Added `[CPP][CONN][WRITE_ERR]` logs with message type and frame length
+  - Added `[CPP][CONN][READ_TIMEOUT]` and `[CPP][CONN][WRITE_CLOSE]` for connection lifecycle tracking
+  - **Files Changed**: `network/src/cpp/peer.rs`, `network/src/cpp/network.rs`
+
+- **BlockProvider Trait for Sync**
+  - New `BlockProvider` trait for abstracting canonical chain access
+  - `ChainBlockProvider` implementation wraps chain service for sync requests
+  - Enables CPP network to serve blocks to peers during join-late sync
+  - **Files Changed**: `network/src/cpp/block_provider.rs`, `network/src/cpp/mod.rs`, `node/src/service.rs`
+
+- **Bootnode Reconnection with Exponential Backoff**
+  - Automatic reconnection to bootnodes when peer count drops to 0
+  - Exponential backoff: 1s → 2s → 4s → ... → 60s max
+  - Checks every 5 seconds, resets backoff on successful connection
+  - **Files Changed**: `network/src/cpp/network.rs`
+
+### Fixed
+- **M2 Join-Late Sync "Early EOF" Bug**
+  - Added `MAX_BLOCKS_PER_RESPONSE = 16` constant to cap sync responses
+  - GetBlocks handler now clamps requests to prevent large frame overflow
+  - Sync requests capped to 16 blocks per chunk (prevents memory/frame issues)
+  - Progressive sync: client requests blocks in chunks until caught up
+  - **Files Changed**: `network/src/cpp/config.rs`, `network/src/cpp/network.rs`
+
+### Changed
+- **CppNetwork Constructor**
+  - Added `new_with_block_provider()` to accept custom block provider
+  - Block provider enables serving actual blocks instead of empty responses
+  - **Files Changed**: `network/src/cpp/network.rs`
+
 ## [4.8.2] - 2025-12-18
 
 ### Changed

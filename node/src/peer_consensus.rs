@@ -132,6 +132,11 @@ impl PeerConsensus {
     pub fn with_defaults() -> Self {
         Self::new(ConsensusConfig::default())
     }
+
+    /// Get sync threshold from config
+    pub fn sync_threshold_blocks(&self) -> u64 {
+        self.config.sync_threshold_blocks
+    }
     
     /// Update a peer's state when we receive a StatusUpdate
     pub async fn update_peer(&self, peer_id: String, height: u64, hash: [u8; 32]) {

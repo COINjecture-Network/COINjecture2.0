@@ -59,6 +59,12 @@ pub const MAX_PEERS: usize = 50;
 /// Maximum number of pending connections
 pub const MAX_PENDING_CONNECTIONS: usize = 10;
 
+/// Maximum blocks per sync response (prevents large frame overflow)
+/// Keeps message sizes predictable and prevents "early eof" on big syncs
+pub const MAX_BLOCKS_PER_RESPONSE: u64 = 16;
+
+/// Maximum frame bytes for sync responses (1 MB)
+pub const MAX_SYNC_FRAME_BYTES: usize = 1_000_000;
 /// Equilibrium constant: η = λ = 1/√2 ≈ 0.7071
 /// 
 /// This constant governs:

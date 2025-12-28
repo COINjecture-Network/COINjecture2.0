@@ -3,7 +3,8 @@
 // =============================================================================
 
 use crate::cpp::{
-    config::{CppConfig, NodeType, CPP_PORT, PEER_TIMEOUT, KEEPALIVE_INTERVAL},
+    config::{CppConfig, NodeType, CPP_PORT, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE},
+    block_provider::{BlockProvider, EmptyBlockProvider},
     message::*,
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     peer::{Peer, PeerState, PeerId},
@@ -181,8 +182,17 @@ pub struct CppNetwork {
     shutdown_tx: broadcast::Sender<()>,
     shutdown_rx: broadcast::Receiver<()>,
     
+    /// Block provider for serving sync requests
+    block_provider: Arc<dyn BlockProvider>,
+
     /// Pending block requests (for tracking responses)
     pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
+
+    /// Bootnode reconnection backoff times
+    bootnode_backoff: Arc<RwLock<HashMap<SocketAddr, Duration>>>,
+
+    /// Last bootnode connection attempt times
+    last_bootnode_attempt: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
 }
 
 impl CppNetwork {
@@ -199,6 +209,50 @@ impl CppNetwork {
         Self::new_with_chain_state(config, local_peer_id, genesis_hash, 0, genesis_hash)
     }
     
+    
+    /// Create new CPP network service with custom block provider (for sync)
+    pub fn new_with_block_provider(
+        config: CppConfig,
+        local_peer_id: PeerId,
+        genesis_hash: Hash,
+        initial_height: u64,
+        initial_hash: Hash,
+        block_provider: Arc<dyn BlockProvider>,
+    ) -> (
+        Self,
+        mpsc::UnboundedSender<NetworkCommand>,
+        mpsc::UnboundedReceiver<NetworkEvent>,
+    ) {
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        
+        let chain_state = Arc::new(RwLock::new(ChainState {
+            best_height: initial_height,
+            best_hash: initial_hash,
+            genesis_hash,
+        }));
+        
+        let network = CppNetwork {
+            config,
+            local_peer_id,
+            peers: Arc::new(RwLock::new(HashMap::new())),
+            router: Arc::new(RwLock::new(EquilibriumRouter::new())),
+            reputation: Arc::new(RwLock::new(ReputationManager::new())),
+            metrics: Arc::new(RwLock::new(NodeMetrics::new())),
+            chain_state,
+            event_tx,
+            command_rx,
+            shutdown_tx,
+            shutdown_rx,
+            block_provider,
+            pending_requests: Arc::new(RwLock::new(HashMap::new())),
+            bootnode_backoff: Arc::new(RwLock::new(HashMap::new())),
+            last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
+        };
+        
+        (network, command_tx, event_rx)
+    }
     /// Create new CPP network service with initial chain state
     pub fn new_with_chain_state(
         config: CppConfig,
@@ -233,7 +287,10 @@ impl CppNetwork {
             command_rx,
             shutdown_tx,
             shutdown_rx,
+            block_provider: Arc::new(EmptyBlockProvider),
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
+            bootnode_backoff: Arc::new(RwLock::new(HashMap::new())),
+            last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
         };
         
         (network, command_tx, event_rx)
@@ -255,7 +312,8 @@ impl CppNetwork {
         let mut ping_interval = interval(KEEPALIVE_INTERVAL);
         let mut cleanup_interval = interval(Duration::from_secs(60));
         let mut metrics_interval = interval(Duration::from_secs(300)); // 5 minutes
-        let mut status_interval = interval(Duration::from_secs(10)); // Status broadcast every 10s
+        let mut status_interval = interval(Duration::from_secs(10));
+        let mut bootnode_reconnect_interval = interval(Duration::from_secs(5)); // Status broadcast every 10s
         let mut sync_check_interval = interval(Duration::from_secs(10)); // Sync check every 10s
         
         println!("✅ [CPP] Event loop starting with {} intervals", 5);
@@ -271,6 +329,7 @@ impl CppNetwork {
                     let event_tx = self.event_tx.clone();
                     let local_peer_id = self.local_peer_id;
                     let shutdown = self.shutdown_tx.subscribe();
+                    let block_provider = self.block_provider.clone();
                     
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_incoming_connection(
@@ -282,6 +341,7 @@ impl CppNetwork {
                             reputation,
                             chain_state,
                             event_tx,
+                            block_provider,
                             shutdown,
                         ).await {
                             eprintln!("Connection error from {}: {}", addr, e);
@@ -323,6 +383,11 @@ impl CppNetwork {
                     self.check_sync_status().await;
                 }
                 
+                // Periodic: Check bootnode reconnection
+                _ = bootnode_reconnect_interval.tick() => {
+                    self.check_bootnode_reconnection().await;
+                }
+                
                 // Shutdown signal
                 _ = self.shutdown_rx.recv() => {
                     println!("CPP Network shutting down");
@@ -348,6 +413,7 @@ impl CppNetwork {
         _reputation: Arc<RwLock<ReputationManager>>,
         chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
+        block_provider: Arc<dyn BlockProvider>,
         _shutdown: broadcast::Receiver<()>,
     ) -> Result<(), NetworkError> {
         // Perform handshake
@@ -401,6 +467,7 @@ impl CppNetwork {
         let peers_clone = peers.clone();
         let chain_state_clone = chain_state.clone();
         let event_tx_clone = event_tx.clone();
+            let block_provider_clone = block_provider.clone();
         let peer_id_clone = peer_id;
         
         tokio::spawn(async move {
@@ -410,6 +477,7 @@ impl CppNetwork {
                 peers_clone,
                 chain_state_clone,
                 event_tx_clone,
+                block_provider_clone,
             ).await {
                 eprintln!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
             }
@@ -431,6 +499,7 @@ impl CppNetwork {
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
         chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
+        block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         loop {
             // Check if peer still exists and is connected
@@ -451,11 +520,23 @@ impl CppNetwork {
                 MessageCodec::receive_from_read_half(&mut read_half),
             ).await;
             
+            let peer_id_short: String = peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
             let envelope = match envelope_result {
                 Ok(Ok(envelope)) => envelope,
                 Ok(Err(e)) => {
-                    eprintln!("Protocol error from peer {}: {}", 
-                        peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                    // Detailed READ_ERR logging for M2 debugging
+                    let err_type = match &e {
+                        crate::cpp::protocol::ProtocolError::Io(io_err) => format!("IO({})", io_err.kind()),
+                        crate::cpp::protocol::ProtocolError::InvalidMagic(_) => "InvalidMagic".to_string(),
+                        crate::cpp::protocol::ProtocolError::InvalidVersion(_) => "InvalidVersion".to_string(),
+                        crate::cpp::protocol::ProtocolError::InvalidMessageType(_) => "InvalidMsgType".to_string(),
+                        crate::cpp::protocol::ProtocolError::InvalidChecksum => "InvalidChecksum".to_string(),
+                        crate::cpp::protocol::ProtocolError::MessageTooLarge(sz) => format!("TooLarge({})", sz),
+                        crate::cpp::protocol::ProtocolError::SerializationError(_) => "SerializeErr".to_string(),
+                        crate::cpp::protocol::ProtocolError::DeserializationError(_) => "DeserializeErr".to_string(),
+                    };
+                    eprintln!("[CPP][CONN][READ_ERR] peer={} stage=MessageRead err_type={} err={}",
+                        peer_id_short, err_type, e);
                     break;
                 }
                 Err(_) => {
@@ -463,6 +544,7 @@ impl CppNetwork {
                     let peers_guard = peers.read().await;
                     if let Some(p) = peers_guard.get(&peer_id) {
                         if p.is_timed_out() {
+                            eprintln!("[CPP][CONN][READ_TIMEOUT] peer={}", peer_id_short);
                             break;
                         }
                     }
@@ -474,6 +556,7 @@ impl CppNetwork {
             let peers_clone = peers.clone();
             let chain_state_clone = chain_state.clone();
             let event_tx_clone = event_tx.clone();
+            let block_provider_clone = block_provider.clone();
             let peer_id_clone = peer_id;
             
             if let Err(e) = Self::handle_peer_message(
@@ -482,6 +565,7 @@ impl CppNetwork {
                 peers_clone,
                 chain_state_clone,
                 event_tx_clone,
+                block_provider_clone,
             ).await {
                 eprintln!("Error handling message from peer {}: {}", 
                     peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
@@ -507,6 +591,7 @@ impl CppNetwork {
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
         chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
+        block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         // Update peer's last_seen
         {
@@ -518,19 +603,19 @@ impl CppNetwork {
         
         match envelope.msg_type {
             MessageType::Status => {
-                Self::handle_status(peer_id, &envelope, peers, event_tx).await?;
+                Self::handle_status(peer_id, &envelope, peers, event_tx, block_provider.clone()).await?;
             }
             MessageType::GetBlocks => {
-                Self::handle_get_blocks(peer_id, &envelope, peers, chain_state).await?;
+                Self::handle_get_blocks(peer_id, &envelope, peers, block_provider).await?;
             }
             MessageType::Blocks => {
-                Self::handle_blocks(peer_id, &envelope, event_tx).await?;
+                Self::handle_blocks(peer_id, &envelope, event_tx, block_provider.clone()).await?;
             }
             MessageType::NewBlock => {
-                Self::handle_new_block(peer_id, &envelope, event_tx).await?;
+                Self::handle_new_block(peer_id, &envelope, event_tx, block_provider.clone()).await?;
             }
             MessageType::NewTransaction => {
-                Self::handle_new_transaction(peer_id, &envelope, event_tx).await?;
+                Self::handle_new_transaction(peer_id, &envelope, event_tx, block_provider.clone()).await?;
             }
             MessageType::Ping => {
                 Self::handle_ping(peer_id, &envelope, peers).await?;
@@ -678,6 +763,7 @@ impl CppNetwork {
         // Start message loop for this peer
         let peers_clone = self.peers.clone();
         let chain_state_clone = self.chain_state.clone();
+        let block_provider_clone = self.block_provider.clone();
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id;
         
@@ -688,6 +774,7 @@ impl CppNetwork {
                 peers_clone,
                 chain_state_clone,
                 event_tx_clone,
+                block_provider_clone,
             ).await {
                 eprintln!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
             }
@@ -775,6 +862,7 @@ impl CppNetwork {
         envelope: &MessageEnvelope,
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
+        block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let status: StatusMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
@@ -801,20 +889,37 @@ impl CppNetwork {
         Ok(())
     }
     
-    /// Handle GetBlocks request from peer
+    /// Handle GetBlocks request from peer - with chunking support for M2 fix
     async fn handle_get_blocks(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
-        chain_state: Arc<RwLock<ChainState>>,
+        block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let get_blocks: GetBlocksMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
         
-        // TODO: Query blocks from chain state
-        // For now, send empty response
+        let peer_id_short: String = peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
+        
+        // Clamp request to MAX_BLOCKS_PER_RESPONSE to prevent large frames causing "early eof"
+        let requested_count = get_blocks.to_height.saturating_sub(get_blocks.from_height) + 1;
+        let clamped_to = if requested_count > MAX_BLOCKS_PER_RESPONSE {
+            let clamped = get_blocks.from_height + MAX_BLOCKS_PER_RESPONSE - 1;
+            println!("[CPP][SYNC] Clamping GetBlocks: peer={} requested {}-{} ({} blocks), serving {}-{} ({} blocks)",
+                peer_id_short, get_blocks.from_height, get_blocks.to_height, requested_count,
+                get_blocks.from_height, clamped, MAX_BLOCKS_PER_RESPONSE);
+            clamped
+        } else {
+            get_blocks.to_height
+        };
+        
+        // Get blocks from the canonical chain via block provider
+        let blocks = block_provider.get_blocks_range(get_blocks.from_height, clamped_to);
+        println!("[CPP][SYNC] Serving {} blocks (heights {}-{}) to peer {}",
+            blocks.len(), get_blocks.from_height, clamped_to, peer_id_short);
+        
         let blocks_msg = BlocksMessage {
-            blocks: vec![],
+            blocks,
             request_id: get_blocks.request_id,
         };
         
@@ -824,6 +929,8 @@ impl CppNetwork {
             let envelope = MessageEnvelope::new(MessageType::Blocks, &blocks_msg)
                 .map_err(|e| NetworkError::Protocol(e))?;
             let data = envelope.encode();
+            
+            println!("[CPP][SYNC] Sending Blocks response: peer={} frame_len={} bytes", peer_id_short, data.len());
             
             peer.send_message(data.clone())
                 .map_err(|e| NetworkError::InvalidHandshake(e))?;
@@ -839,12 +946,14 @@ impl CppNetwork {
         
         Ok(())
     }
+
     
     /// Handle Blocks response from peer
     async fn handle_blocks(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
+        block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let blocks_msg: BlocksMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
@@ -864,6 +973,7 @@ impl CppNetwork {
         peer_id: PeerId,
         envelope: &MessageEnvelope,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
+        block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let new_block: NewBlockMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
@@ -882,6 +992,7 @@ impl CppNetwork {
         peer_id: PeerId,
         envelope: &MessageEnvelope,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
+        block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let new_tx: NewTransactionMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
@@ -1201,7 +1312,8 @@ impl CppNetwork {
         let status = StatusMessage {
             best_height,
             best_hash,
-            node_type: self.config.node_type,
+            node_type: self.config.node_type.as_u8(),
+            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
         };
         
         let envelope = match MessageEnvelope::new(MessageType::Status, &status) {
@@ -1270,10 +1382,10 @@ impl CppNetwork {
             if let Some(peer_id) = best_peer {
                 // Calculate optimal chunk size: √(Δh) × η ≈ √(Δh) × 0.7071
                 const ETA: f64 = 0.7071067811865476; // 1/√2
-                let chunk_size = ((delta_h as f64).sqrt() * ETA).max(10.0).min(1000.0) as u64;
+                let chunk_size = ((delta_h as f64).sqrt() * ETA).max(10.0).min(MAX_BLOCKS_PER_RESPONSE as f64) as u64;
                 
                 println!("🚀 [CPP] Requesting sync: blocks {}-{} from peer {:?} (chunk size: {})", 
-                    our_height + 1, median_height, hex::encode(peer_id), chunk_size);
+                    our_height + 1, median_height, peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), chunk_size);
                 
                 // Send RequestBlocks command
                 let _ = self.event_tx.send(NetworkEvent::BlocksReceived {
@@ -1289,6 +1401,86 @@ impl CppNetwork {
         }
     }
     
+    
+    /// Check if we need to reconnect to bootnodes (for M2 recovery)
+    async fn check_bootnode_reconnection(&mut self) {
+        // Get current peer count
+        let peer_count = {
+            let peers = self.peers.read().await;
+            peers.len()
+        };
+        
+        // If we have enough peers, no need to reconnect
+        if peer_count >= 1 {
+            return;
+        }
+        
+        println!("[CPP][BOOTNODE] No connected peers, checking bootnode reconnection...");
+        
+        let now = Instant::now();
+        let initial_backoff = Duration::from_secs(1);
+        let max_backoff = Duration::from_secs(60);
+        
+        for bootnode_str in &self.config.bootnodes.clone() {
+            // Parse bootnode address
+            let addr: SocketAddr = match bootnode_str.parse() {
+                Ok(a) => a,
+                Err(_) => {
+                    eprintln!("[CPP][BOOTNODE] Invalid bootnode address: {}", bootnode_str);
+                    continue;
+                }
+            };
+            
+            // Check if we should attempt to reconnect (exponential backoff)
+            let should_attempt = {
+                let last_attempt = self.last_bootnode_attempt.read().await;
+                let backoff = self.bootnode_backoff.read().await;
+                
+                if let Some(last) = last_attempt.get(&addr) {
+                    let current_backoff = backoff.get(&addr).copied().unwrap_or(initial_backoff);
+                    now.duration_since(*last) >= current_backoff
+                } else {
+                    true // Never attempted, should try
+                }
+            };
+            
+            if !should_attempt {
+                continue;
+            }
+            
+            println!("[CPP][BOOTNODE] Attempting reconnection to {}", addr);
+            
+            // Record this attempt
+            {
+                let mut last_attempt = self.last_bootnode_attempt.write().await;
+                last_attempt.insert(addr, now);
+            }
+            
+            // Try to connect
+            match self.connect_bootnode(addr).await {
+                Ok(()) => {
+                    println!("[CPP][BOOTNODE] Successfully reconnected to {}", addr);
+                    // Reset backoff on success
+                    {
+                        let mut backoff = self.bootnode_backoff.write().await;
+                        backoff.insert(addr, initial_backoff);
+                    }
+                    break; // One successful connection is enough to start
+                }
+                Err(e) => {
+                    eprintln!("[CPP][BOOTNODE] Failed to reconnect to {}: {}", addr, e);
+                    // Increase backoff exponentially (double it, up to max)
+                    {
+                        let mut backoff = self.bootnode_backoff.write().await;
+                        let current = backoff.get(&addr).copied().unwrap_or(initial_backoff);
+                        let new_backoff = (current * 2).min(max_backoff);
+                        backoff.insert(addr, new_backoff);
+                        println!("[CPP][BOOTNODE] Next retry for {} in {:?}", addr, new_backoff);
+                    }
+                }
+            }
+        }
+    }
     /// Update node metrics
     async fn update_metrics(&self) {
         let _metrics = self.metrics.write().await;

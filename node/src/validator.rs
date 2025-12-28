@@ -162,10 +162,11 @@ impl BlockValidator {
             return Err(ValidationError::FutureTimestamp);
         }
 
-        // Check if block is too old (skip during initial sync to allow historical blocks)
-        if !skip_age_check && timestamp < now - self.max_block_age {
-            return Err(ValidationError::TooOldTimestamp);
-        }
+        // M0 FIX: REMOVED too old vs now rejection
+        // Historical blocks are valid during sync
+        let delta = now - timestamp;
+        println!("⏱️  [TIMESTAMP] block_ts={}, now_ts={}, delta={}s", timestamp, now, delta);
+
 
         Ok(())
     }

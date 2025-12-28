@@ -44,3 +44,6 @@ pub use peer::{Peer, PeerState, PeerStats};
 pub use node_integration::{NodeMetrics, PeerSelector, thresholds};
 
 pub use network::{CppNetwork, NetworkEvent, NetworkCommand};
+pub mod block_provider;
+
+pub use block_provider::{BlockProvider, EmptyBlockProvider, MAX_BLOCKS_PER_REQUEST};

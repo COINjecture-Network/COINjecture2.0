@@ -609,3 +609,58 @@ impl coinject_rpc::BlockchainReader for ChainState {
         self.get_header_by_height(height).map_err(|e| e.to_string())
     }
 }
+
+// =============================================================================
+// BlockProvider Adapter for Custom P2P
+// =============================================================================
+// This adapter allows the CPP network to query blocks from the canonical chain
+// for serving sync requests to peers.
+
+use coinject_network::cpp::BlockProvider;
+
+/// Wrapper that implements BlockProvider for ChainState
+/// 
+/// This adapter bridges the node's chain storage (ChainState) with the
+/// CPP network's block provider interface, enabling the network to serve
+/// blocks to peers during sync.
+/// 
+/// CRITICAL: All block queries go through the canonical height index,
+/// ensuring only best-chain blocks are served.
+pub struct ChainBlockProvider {
+    chain: std::sync::Arc<ChainState>,
+    /// Cached best height (updated on block storage)
+    best_height: std::sync::Arc<tokio::sync::RwLock<u64>>,
+}
+
+impl ChainBlockProvider {
+    /// Create new block provider wrapping a ChainState
+    pub fn new(chain: std::sync::Arc<ChainState>) -> Self {
+        let best_height = chain.best_height_ref();
+        ChainBlockProvider {
+            chain,
+            best_height,
+        }
+    }
+}
+
+impl BlockProvider for ChainBlockProvider {
+    fn get_block_by_height(&self, height: u64) -> Option<Block> {
+        match self.chain.get_block_by_height(height) {
+            Ok(block) => block,
+            Err(e) => {
+                eprintln!("[BlockProvider] Error fetching block at height {}: {}", height, e);
+                None
+            }
+        }
+    }
+
+    fn get_best_height(&self) -> u64 {
+        // Use blocking read since BlockProvider is sync
+        // In production, consider caching this value
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                *self.best_height.read().await
+            })
+        })
+    }
+}

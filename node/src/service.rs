@@ -3,7 +3,7 @@
 
 // Conditional ChainState: uses ADZDB when compiled with --features adzdb
 #[cfg(not(feature = "adzdb"))]
-use crate::chain::ChainState;
+use crate::chain::{ChainState, ChainBlockProvider};
 #[cfg(feature = "adzdb")]
 use crate::chain_adzdb::AdzdbChainState as ChainState;
 use crate::config::NodeConfig;
@@ -17,7 +17,7 @@ use coinject_mempool::{ProblemMarketplace, TransactionPool};
 // libp2p removed - using CPP protocol only
 use coinject_network::cpp::{
     CppNetwork, NetworkEvent as CppNetworkEvent, NetworkCommand as CppNetworkCommand, 
-    CppConfig, NodeType as CppNodeType, PeerId as CppPeerId
+    CppConfig, NodeType as CppNodeType, PeerId as CppPeerId, BlockProvider
 };
 use coinject_rpc::{RpcServer, RpcServerState};
 use coinject_rpc::websocket::{WebSocketRpc, RpcEvent as WebSocketRpcEvent, RpcCommand as WebSocketRpcCommand};
@@ -655,10 +655,13 @@ impl CoinjectNode {
         let current_height = self.chain.best_block_height().await;
         let current_hash = self.chain.best_block_hash().await;
         
-        let (cpp_network, cpp_network_cmd_tx, mut cpp_network_event_rx) = 
-            CppNetwork::new_with_chain_state(cpp_config, local_peer_id_bytes, genesis_hash, current_height, current_hash);
+        // Create block provider for serving sync requests to peers
+        let block_provider: Arc<dyn BlockProvider> = Arc::new(ChainBlockProvider::new(self.chain.clone()));
         
-        println!("✅ Initialized CPP network chain state: height={}, hash={:?}", current_height, current_hash);
+        let (cpp_network, cpp_network_cmd_tx, mut cpp_network_event_rx) = 
+            CppNetwork::new_with_block_provider(cpp_config, local_peer_id_bytes, genesis_hash, current_height, current_hash, block_provider);
+        
+        println!("✅ Initialized CPP network with BlockProvider: height={}, hash={:?}", current_height, current_hash);
         
         // Clone cpp_network_cmd_tx for multiple uses (before any moves)
         let cpp_network_cmd_tx_for_bootnodes = cpp_network_cmd_tx.clone();
@@ -723,7 +726,7 @@ impl CoinjectNode {
             while let Some(event) = cpp_network_event_rx.recv().await {
                 match event {
                     CppNetworkEvent::BlockReceived { block, peer_id } => {
-                        println!("📥 [CPP] Received block {} from peer {:?}", block.header.height, hex::encode(peer_id));
+                        println!("[GOSSIP] recv block height={} hash={:?} ts={}", block.header.height, block.header.hash(), block.header.timestamp);
                         
                         let best_height = chain_clone.best_block_height().await;
                         let best_hash = chain_clone.best_block_hash().await;
@@ -748,7 +751,7 @@ impl CoinjectNode {
                                 match chain_clone.store_block(&block).await {
                                     Ok(is_new_best) => {
                                         if is_new_best {
-                                            println!("✅ [CPP] Block {} stored and applied", block.header.height);
+                                            println!("[APPLY] applied height={} new_best={:?}", block.header.height, block.header.hash());
                                             
                                             // Update CPP network chain state
                                             let new_height = block.header.height;
@@ -828,6 +831,7 @@ impl CoinjectNode {
                                 if let Ok(()) = validator_clone.validate_block_with_options(&block, &best_hash, expected_height, true) {
                                     if let Ok(is_new_best) = chain_clone.store_block(&block).await {
                                         if is_new_best {
+                                            println!("[SYNC_APPLY] Block {} applied, new_height={}", block.header.height, block.header.height);
                                             // Update CPP network chain state
                                             let new_height = block.header.height;
                                             let new_hash = block.header.hash();
@@ -884,7 +888,7 @@ impl CoinjectNode {
                         // This uses median height and adaptive thresholds (COINjecture consensus framework)
                         let current_height = chain_clone.best_block_height().await;
                         let median_height = peer_consensus_clone.median_peer_height().await;
-                        let sync_threshold = peer_consensus_clone.config.sync_threshold_blocks;
+                        let sync_threshold = peer_consensus_clone.sync_threshold_blocks();
                         
                         // Check if we're behind the median peer height by more than sync_threshold
                         // This is more robust than checking individual peer heights
@@ -1022,6 +1026,7 @@ impl CoinjectNode {
                 // Route legacy NetworkCommand to CPP network
                 match cmd {
                     NetworkCommand::BroadcastBlock(block) => {
+                        println!("[LEGACY] Forwarding BroadcastBlock for height {} to CPP", block.header.height);
                         // Route to CPP network
                         if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
                             CppNetworkCommand::BroadcastBlock { block }
@@ -1396,9 +1401,10 @@ impl CoinjectNode {
             let dev_mode = self.config.dev;
 
             // CRITICAL FIX: Use tokio::spawn for multi-threaded I/O scheduling
+            let cpp_tx_for_mining = cpp_network_cmd_tx_for_mining;
             tokio::spawn(async move {
                 println!("🔧 Mining task started");
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining, peer_consensus_for_mining, dev_mode).await;
+                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, cpp_tx_for_mining, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining, peer_consensus_for_mining, dev_mode).await;
                 println!("⚠️ Mining loop exited (unexpected)");
             });
         }
@@ -4481,6 +4487,7 @@ impl CoinjectNode {
         marketplace_state: Arc<MarketplaceState>,
         tx_pool: Arc<RwLock<TransactionPool>>,
         network_tx: mpsc::UnboundedSender<NetworkCommand>,
+        cpp_network_tx: mpsc::UnboundedSender<coinject_network::cpp::NetworkCommand>,
         hf_sync: Option<Arc<HuggingFaceSync>>,
         peer_count: Arc<RwLock<usize>>,
         best_known_peer_height: Arc<RwLock<u64>>,
@@ -4760,7 +4767,15 @@ impl CoinjectNode {
                 if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block.clone())) {
                     println!("❌ Failed to send broadcast command: {}", e);
                 } else {
-                    println!("📡 Broadcasted block to network");
+                    println!("[GOSSIP] sent block height={} hash={:?} ts={}", block.header.height, block.header.hash(), block.header.timestamp);
+                }
+
+                // Update CPP network chain state so it broadcasts correct height to peers
+                if let Err(e) = cpp_network_tx.send(coinject_network::cpp::NetworkCommand::UpdateChainState {
+                    best_height: block.header.height,
+                    best_hash: block.header.hash(),
+                }) {
+                    eprintln!("⚠️ Failed to update CPP chain state: {}", e);
                 }
 
                 // Push consensus block to Hugging Face (inline within mining loop)

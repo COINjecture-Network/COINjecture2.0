@@ -700,6 +700,13 @@ impl Miner {
                 .unwrap()
                 .as_secs() as i64
         };
+        // M1.1 DEBUG: Log mined timestamp vs current time
+        let now_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let delta = now_ts - timestamp;
+        println!("⏱️  [MINER] height={} mined_ts={} now_ts={} delta={}s", height, timestamp, now_ts, delta);
 
         let transactions_root = Self::merkle_root(&transactions);
         let solutions_root = Hash::new(&bincode::serialize(&solution).unwrap_or_default());

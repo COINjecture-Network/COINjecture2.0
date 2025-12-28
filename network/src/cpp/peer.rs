@@ -110,16 +110,37 @@ impl Peer {
         // Create channel for sending messages
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         
-        // Spawn write task (move write_half into the task)
+        // Spawn write task with instrumented logging for M2 debugging
+        let peer_id_short: String = id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
         tokio::spawn(async move {
             while let Some(data) = send_rx.recv().await {
-                if write_half.write_all(&data).await.is_err() {
+                let frame_len = data.len();
+                let msg_type = if data.len() >= 6 { data[5] } else { 0xFF };
+                let msg_type_name = match msg_type {
+                    0x01 => "Hello",
+                    0x02 => "HelloAck",
+                    0x10 => "Status",
+                    0x11 => "GetBlocks",
+                    0x12 => "Blocks",
+                    0x20 => "NewBlock",
+                    0x21 => "NewTransaction",
+                    0xF0 => "Ping",
+                    0xF1 => "Pong",
+                    _ => "Other",
+                };
+
+                if let Err(e) = write_half.write_all(&data).await {
+                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} err={}",
+                        peer_id_short, msg_type_name, frame_len, e);
                     break;
                 }
-                if write_half.flush().await.is_err() {
+                if let Err(e) = write_half.flush().await {
+                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} flush_err={}",
+                        peer_id_short, msg_type_name, frame_len, e);
                     break;
                 }
             }
+            eprintln!("[CPP][CONN][WRITE_CLOSE] peer={} write task exiting", peer_id_short);
         });
         
         let peer = Peer {
