@@ -1333,24 +1333,25 @@ impl CppNetwork {
     }
     
     /// Check if sync is needed using equilibrium mathematics
+    /// This runs every 10 seconds and triggers sync requests if we're behind peers
     async fn check_sync_status(&self) {
         // Get our current height
         let chain_state = self.chain_state.read().await;
         let our_height = chain_state.best_height;
         drop(chain_state);
-        
+
         // Get peer heights
         let peers = self.peers.read().await;
         if peers.is_empty() {
             return; // No peers to sync from
         }
-        
+
         // Calculate median peer height (robust to outliers)
         let mut peer_heights: Vec<u64> = peers.values()
             .map(|p| p.best_height)
             .collect();
         peer_heights.sort();
-        
+
         let median_height = if peer_heights.is_empty() {
             return;
         } else if peer_heights.len() % 2 == 0 {
@@ -1359,44 +1360,37 @@ impl CppNetwork {
         } else {
             peer_heights[peer_heights.len() / 2]
         };
-        
+
         if median_height <= our_height {
             return; // We're caught up
         }
-        
+
         let delta_h = median_height - our_height;
-        
-        // Dimensionless sync threshold: Δh / h_consensus > η (≈ 0.7071)
-        // But for practical sync, use a lower threshold (e.g., > 5 blocks)
-        if delta_h > 5 {
-            println!("🔄 [CPP] Equilibrium sync check: we're at {}, median at {} (Δh = {})", 
+
+        // Sync if we're behind by more than 1 block (reduced from 5 for faster sync)
+        if delta_h > 1 {
+            println!("🔄 [CPP] Equilibrium sync check: we're at {}, median at {} (Δh = {})",
                 our_height, median_height, delta_h);
-            
+
             // Select best peer (highest height with good quality)
             let best_peer = peers.iter()
                 .max_by_key(|(_, p)| p.best_height)
-                .map(|(id, _)| *id);
-            
+                .map(|(id, p)| (*id, p.best_height));
+
             drop(peers);
-            
-            if let Some(peer_id) = best_peer {
-                // Calculate optimal chunk size: √(Δh) × η ≈ √(Δh) × 0.7071
-                const ETA: f64 = 0.7071067811865476; // 1/√2
-                let chunk_size = ((delta_h as f64).sqrt() * ETA).max(10.0).min(MAX_BLOCKS_PER_RESPONSE as f64) as u64;
-                
-                println!("🚀 [CPP] Requesting sync: blocks {}-{} from peer {:?} (chunk size: {})", 
-                    our_height + 1, median_height, peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), chunk_size);
-                
-                // Send RequestBlocks command
-                let _ = self.event_tx.send(NetworkEvent::BlocksReceived {
-                    blocks: vec![], // Placeholder - actual request will be sent via command
-                    request_id: 0,
-                    peer_id,
-                });
-                
-                // Actually, we need to send a command, not an event
-                // The node service should handle this by sending RequestBlocks command back to us
-                // For now, just log that sync is needed
+
+            if let Some((peer_id, peer_height)) = best_peer {
+                // Calculate optimal chunk size: capped by MAX_BLOCKS_PER_RESPONSE (16)
+                let from_height = our_height + 1;
+                let to_height = peer_height.min(our_height + MAX_BLOCKS_PER_RESPONSE);
+
+                println!("🚀 [CPP] Requesting sync: blocks {}-{} from peer {:?}",
+                    from_height, to_height, peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>());
+
+                // === FIX: Actually request the blocks instead of sending placeholder event ===
+                if let Err(e) = self.request_blocks(peer_id, from_height, to_height, rand::random()).await {
+                    eprintln!("[CPP] Failed to request sync blocks: {}", e);
+                }
             }
         }
     }

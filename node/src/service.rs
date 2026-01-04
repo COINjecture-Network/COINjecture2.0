@@ -934,14 +934,14 @@ impl CoinjectNode {
                         peer_consensus_clone.mark_peer_disconnected(&peer_id_str).await;
                     }
                     CppNetworkEvent::StatusUpdate { peer_id, best_height, best_hash, node_type } => {
-                        println!("📡 [CPP] Status update from peer {:?}: height {}, hash {:?}", 
+                        println!("📡 [CPP] Status update from peer {:?}: height {}, hash {:?}",
                             hex::encode(peer_id), best_height, best_hash);
-                        
+
                         // Update peer consensus tracker
                         let peer_id_str = hex::encode(peer_id);
                         let hash_bytes: [u8; 32] = *best_hash.as_bytes();
                         peer_consensus_clone.update_peer(peer_id_str, best_height, hash_bytes).await;
-                        
+
                         // Update best known peer height
                         {
                             let mut best_height_guard = best_known_peer_height_clone.write().await;
@@ -950,8 +950,26 @@ impl CoinjectNode {
                                 println!("   📊 Updated best known peer height: {}", best_height);
                             }
                         }
-                        
-                        println!("   ✅ Peer height tracker updated for peer {:?}", hex::encode(peer_id));
+
+                        // === FIX: Trigger sync on StatusUpdate ===
+                        // Previously, StatusUpdate only updated trackers but never requested blocks.
+                        // This caused nodes to stay stuck even when peers announced higher heights.
+                        let current_height = chain_clone.best_block_height().await;
+                        if best_height > current_height {
+                            let from_height = current_height + 1;
+                            // Request up to 100 blocks at a time, capped by MAX_BLOCKS_PER_RESPONSE (16)
+                            let to_height = best_height.min(current_height + 100);
+                            println!("🔄 [StatusUpdate Sync] Peer is ahead (peer: {}, us: {}), requesting blocks {}-{}",
+                                best_height, current_height, from_height, to_height);
+                            let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
+                                peer_id,
+                                from_height,
+                                to_height,
+                                request_id: rand::random(),
+                            });
+                        } else {
+                            println!("   ✅ In sync with peer (peer: {}, us: {})", best_height, current_height);
+                        }
                     }
                     _ => {
                         // Handle other events as needed
