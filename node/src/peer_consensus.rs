@@ -202,7 +202,13 @@ impl PeerConsensus {
             .max()
             .unwrap_or(0)
     }
-    
+
+    /// Get the height of a specific peer (by peer_id string)
+    pub async fn get_peer_height(&self, peer_id: &str) -> Option<u64> {
+        let peers = self.peers.read().await;
+        peers.get(peer_id).map(|p| p.best_height)
+    }
+
     /// Get the median height across all active peers
     /// More robust than max (resistant to outliers/attackers)
     pub async fn median_peer_height(&self) -> u64 {

@@ -705,6 +705,9 @@ impl CoinjectNode {
             }
         });
         
+        // Create block buffer for out-of-order blocks (used by CPP sync)
+        let block_buffer: Arc<RwLock<HashMap<u64, coinject_core::Block>>> = Arc::new(RwLock::new(HashMap::new()));
+
         // Spawn CPP network event handler - fully integrated
         let chain_clone = Arc::clone(&self.chain);
         let state_clone = Arc::clone(&self.state);
@@ -721,6 +724,7 @@ impl CoinjectNode {
         let peer_consensus_clone = Arc::clone(&peer_consensus);
         let cpp_network_cmd_tx_for_events = cpp_network_cmd_tx.clone();
         let hf_sync_clone = self.hf_sync.clone();
+        let block_buffer_clone = Arc::clone(&block_buffer);
         
         tokio::spawn(async move {
             while let Some(event) = cpp_network_event_rx.recv().await {
@@ -820,17 +824,26 @@ impl CoinjectNode {
                     }
                     CppNetworkEvent::BlocksReceived { blocks, request_id: _, peer_id } => {
                         println!("📦 [CPP] Received {} blocks for sync from peer {:?}", blocks.len(), hex::encode(peer_id));
-                        // Process sync blocks sequentially
+
+                        let mut highest_received: u64 = 0;
+                        let mut blocks_applied: u64 = 0;
+
+                        // Process sync blocks - buffer future blocks, apply sequential ones
                         for block in blocks {
                             let best_height = chain_clone.best_block_height().await;
                             let best_hash = chain_clone.best_block_hash().await;
                             let expected_height = best_height + 1;
-                            
+
+                            if block.header.height > highest_received {
+                                highest_received = block.header.height;
+                            }
+
                             if block.header.height == expected_height && block.header.prev_hash == best_hash {
                                 // Validate and store (skip age check for sync blocks)
                                 if let Ok(()) = validator_clone.validate_block_with_options(&block, &best_hash, expected_height, true) {
                                     if let Ok(is_new_best) = chain_clone.store_block(&block).await {
                                         if is_new_best {
+                                            blocks_applied += 1;
                                             println!("[SYNC_APPLY] Block {} applied, new_height={}", block.header.height, block.header.height);
                                             // Update CPP network chain state
                                             let new_height = block.header.height;
@@ -841,7 +854,7 @@ impl CoinjectNode {
                                             }) {
                                                 eprintln!("⚠️  Failed to update CPP network chain state: {}", e);
                                             }
-                                            
+
                                             match Self::apply_block_transactions(
                                                 &block,
                                                 &state_clone,
@@ -861,8 +874,89 @@ impl CoinjectNode {
                                             }
                                         }
                                     }
+                                } else {
+                                    println!("⚠️  [CPP] Block {} validation failed, buffering", block.header.height);
+                                    let mut buffer = block_buffer_clone.write().await;
+                                    buffer.insert(block.header.height, block);
                                 }
+                            } else if block.header.height > expected_height {
+                                // Future block - buffer it for later
+                                println!("🗃️  [CPP] Buffering future block {} (expected: {})", block.header.height, expected_height);
+                                let mut buffer = block_buffer_clone.write().await;
+                                buffer.insert(block.header.height, block);
+                            } else {
+                                println!("⏭️  [CPP] Skipping block {} (already have height {})", block.header.height, best_height);
                             }
+                        }
+
+                        // Process any buffered blocks that might now be sequential
+                        loop {
+                            let best_height = chain_clone.best_block_height().await;
+                            let best_hash = chain_clone.best_block_hash().await;
+                            let next_height = best_height + 1;
+
+                            let block_opt = {
+                                let mut buffer = block_buffer_clone.write().await;
+                                buffer.remove(&next_height)
+                            };
+
+                            match block_opt {
+                                Some(block) => {
+                                    if block.header.prev_hash == best_hash {
+                                        if let Ok(()) = validator_clone.validate_block_with_options(&block, &best_hash, next_height, true) {
+                                            if let Ok(is_new_best) = chain_clone.store_block(&block).await {
+                                                if is_new_best {
+                                                    blocks_applied += 1;
+                                                    println!("[SYNC_BUFFER] Block {} applied from buffer", block.header.height);
+                                                    let new_height = block.header.height;
+                                                    let new_hash = block.header.hash();
+                                                    let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::UpdateChainState {
+                                                        best_height: new_height,
+                                                        best_hash: new_hash,
+                                                    });
+                                                    let _ = Self::apply_block_transactions(
+                                                        &block,
+                                                        &state_clone,
+                                                        &timelock_state_clone,
+                                                        &escrow_state_clone,
+                                                        &channel_state_clone,
+                                                        &trustline_state_clone,
+                                                        &dimensional_pool_state_clone,
+                                                        &marketplace_state_clone,
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Put it back - wrong prev_hash
+                                        let mut buffer = block_buffer_clone.write().await;
+                                        buffer.insert(block.header.height, block);
+                                        break;
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+
+                        // Check if we need to request more blocks (continuation)
+                        let current_height = chain_clone.best_block_height().await;
+                        let peer_height = peer_consensus_clone.get_peer_height(&hex::encode(peer_id)).await.unwrap_or(0);
+
+                        println!("📊 [CPP] Sync progress: applied {} blocks, now at height {}, peer at {}",
+                            blocks_applied, current_height, peer_height);
+
+                        if peer_height > current_height {
+                            // Still behind - request more blocks
+                            let from_height = current_height + 1;
+                            let to_height = peer_height.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
+                            println!("🔄 [CPP] Requesting continuation: blocks {}-{} from peer {:?}",
+                                from_height, to_height, hex::encode(peer_id));
+                            let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
+                                peer_id,
+                                from_height,
+                                to_height,
+                                request_id: rand::random(),
+                            });
                         }
                     }
                     CppNetworkEvent::PeerConnected { peer_id, addr, node_type: _, best_height, best_hash } => {
@@ -1071,9 +1165,7 @@ impl CoinjectNode {
         // TEMPORARY: libp2p event handler commented out - will be removed after CPP testing
         // The entire libp2p event processing block (~1500 lines) is temporarily disabled
         // CPP network events are handled separately above (cpp_network_event_rx)
-        
-        // Create block buffer for out-of-order blocks (still used by CPP)
-        let block_buffer: Arc<RwLock<HashMap<u64, coinject_core::Block>>> = Arc::new(RwLock::new(HashMap::new()));
+        // Note: block_buffer is now created above and passed to CPP event handler
 
         // TEMPORARY: libp2p event handler spawn disabled - CPP events handled above
         /*
