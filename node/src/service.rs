@@ -26,6 +26,7 @@ use coinject_huggingface::{
     HuggingFaceSync, HuggingFaceConfig, EnergyConfig, EnergyMeasurementMethod, SyncConfig,
     DualFeedStreamer, StreamerConfig,
 };
+use rand;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

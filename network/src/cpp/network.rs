@@ -13,6 +13,7 @@ use crate::cpp::{
 };
 use crate::reputation::ReputationManager;
 use coinject_core::{Block, Transaction, Hash, BlockHeader};
+use rand::Rng;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, RwLock, broadcast};
 use tokio::time::{interval, Duration, Instant};
@@ -1388,7 +1389,8 @@ impl CppNetwork {
                     from_height, to_height, peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>());
 
                 // === FIX: Actually request the blocks instead of sending placeholder event ===
-                if let Err(e) = self.request_blocks(peer_id, from_height, to_height, rand::random()).await {
+                let request_id: u64 = rand::thread_rng().gen();
+                if let Err(e) = self.request_blocks(peer_id, from_height, to_height, request_id).await {
                     eprintln!("[CPP] Failed to request sync blocks: {}", e);
                 }
             }
