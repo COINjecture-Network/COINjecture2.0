@@ -10,6 +10,7 @@ use crate::cpp::{
     peer::{Peer, PeerState, PeerId},
     router::EquilibriumRouter,
     node_integration::{NodeMetrics, PeerSelector},
+    flock::{FlockState, FlockStateCompact, MurmurationRules},
 };
 use crate::reputation::ReputationManager;
 use coinject_core::{Block, Transaction, Hash, BlockHeader};
@@ -193,6 +194,9 @@ pub struct CppNetwork {
 
     /// Last bootnode connection attempt times
     last_bootnode_attempt: Arc<RwLock<HashMap<SocketAddr, Instant>>>,
+
+    /// Murmuration flock state for swarm coordination
+    flock_state: Arc<RwLock<FlockState>>,
 }
 
 impl CppNetwork {
@@ -249,6 +253,7 @@ impl CppNetwork {
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             bootnode_backoff: Arc::new(RwLock::new(HashMap::new())),
             last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
+            flock_state: Arc::new(RwLock::new(FlockState::new(&genesis_hash, initial_height, &local_peer_id))),
         };
         
         (network, command_tx, event_rx)
@@ -291,6 +296,7 @@ impl CppNetwork {
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
             bootnode_backoff: Arc::new(RwLock::new(HashMap::new())),
             last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
+            flock_state: Arc::new(RwLock::new(FlockState::new(&genesis_hash, initial_height, &local_peer_id))),
         };
         
         (network, command_tx, event_rx)
@@ -1309,11 +1315,17 @@ impl CppNetwork {
         println!("📡 [CPP] Broadcasting Status: height {}, hash {:?} to {} peers", 
             best_height, best_hash, peer_count);
         
+        // Get flock state for murmuration coordination
+        let flock_state = self.flock_state.read().await;
+        let flock_compact = FlockStateCompact::from(&*flock_state);
+        drop(flock_state);
+        
         let status = StatusMessage {
             best_height,
             best_hash,
             node_type: self.config.node_type.as_u8(),
             timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+            flock_state: Some(flock_compact),
         };
         
         let envelope = match MessageEnvelope::new(MessageType::Status, &status) {

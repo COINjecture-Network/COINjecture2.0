@@ -5,6 +5,7 @@
 
 use coinject_core::{Block, Transaction, Hash, BlockHeader};
 use serde::{Deserialize, Serialize};
+use crate::cpp::flock::FlockStateCompact;
 
 /// Message type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,17 +177,20 @@ pub struct HelloAckMessage {
     pub timestamp: u64,
 }
 
-/// Status update message
+/// Status update message with murmuration coordination
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusMessage {
     /// Best block height
     pub best_height: u64,
     /// Best block hash
     pub best_hash: Hash,
-    /// Node type (may change, e.g., Light → Full)
+    /// Node type (may change, e.g., Light -> Full)
     pub node_type: u8,
     /// Timestamp
     pub timestamp: u64,
+    /// Flock state for murmuration coordination (optional for backwards compat)
+    #[serde(default)]
+    pub flock_state: Option<FlockStateCompact>,
 }
 
 /// GetBlocks request

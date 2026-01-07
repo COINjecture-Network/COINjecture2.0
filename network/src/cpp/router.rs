@@ -1,31 +1,42 @@
 // =============================================================================
-// COINjecture P2P Protocol (CPP) - Equilibrium-Based Routing
+// COINjecture P2P Protocol (CPP) - Equilibrium-Based Routing with Murmuration
 // =============================================================================
 // Message routing using the equilibrium constant η = λ = 1/√2 ≈ 0.7071
+// Enhanced with GoldenSeed-inspired murmuration for swarm coordination
 
 use crate::cpp::config::{ETA, SQRT_2};
+use crate::cpp::flock::{FlockStateCompact, PHI_INV};
 use std::collections::HashMap;
 
 /// Peer ID (32-byte hash)
 pub type PeerId = [u8; 32];
 
-/// Peer information for routing decisions
+/// Peer information for routing decisions with murmuration support
 #[derive(Debug, Clone)]
 pub struct PeerInfo {
     /// Peer ID
     pub id: PeerId,
-    
+
     /// Best block height
     pub best_height: u64,
-    
+
     /// Node type
     pub node_type: u8,
-    
+
     /// Connection quality (0.0 = poor, 1.0 = excellent)
     pub quality: f64,
-    
+
     /// Last seen timestamp
     pub last_seen: u64,
+
+    /// Flock phase for murmuration coordination (0..7)
+    pub flock_phase: u8,
+
+    /// Flock epoch this peer is in
+    pub flock_epoch: u64,
+
+    /// Height velocity (blocks per update period)
+    pub velocity: f64,
 }
 
 /// Equilibrium-based message router
@@ -207,6 +218,126 @@ impl EquilibriumRouter {
             }
         }
     }
+
+    // =========================================================================
+    // Murmuration-Aware Peer Selection
+    // =========================================================================
+
+    /// Select peers for broadcast using murmuration flocking rules
+    ///
+    /// Combines equilibrium fanout with Reynolds flocking:
+    /// - SEPARATION: Avoid peers with divergent chain views
+    /// - ALIGNMENT: Prefer peers with similar height velocity
+    /// - COHESION: Prefer peers near swarm center (median height)
+    ///
+    /// Fanout = √n × η × cohesion_factor
+    pub fn select_broadcast_peers_flock(&self, our_height: u64, our_phase: u8) -> Vec<PeerId> {
+        let n = self.peers.len() as f64;
+
+        if n == 0.0 {
+            return vec![];
+        }
+
+        // Calculate swarm metrics
+        let heights: Vec<u64> = self.peers.values().map(|p| p.best_height).collect();
+        let swarm_center = self.calculate_median(&heights);
+        let cohesion = self.calculate_cohesion(&heights, swarm_center);
+
+        // Adaptive fanout based on swarm cohesion
+        // High cohesion -> lower fanout (swarm is aligned)
+        // Low cohesion -> higher fanout (need to re-converge)
+        let cohesion_factor = 1.0 + (1.0 - cohesion) * PHI_INV;
+        let fanout = (n.sqrt() * self.eta * cohesion_factor).ceil() as usize;
+
+        // Score all peers using flocking rules
+        let mut scored: Vec<(&PeerInfo, f64)> = self.peers.values()
+            .map(|p| {
+                let sep = self.separation_score(p.best_height, our_height, swarm_center);
+                let align = self.alignment_score(p, our_phase);
+                let coh = self.cohesion_score(p.best_height, swarm_center, cohesion);
+                let total = sep + align + coh + p.quality * 0.5;
+                (p, total)
+            })
+            .collect();
+
+        // Sort by score (highest first)
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        scored.into_iter()
+            .take(fanout)
+            .map(|(p, _)| p.id)
+            .collect()
+    }
+
+    /// Calculate median height of peer set
+    fn calculate_median(&self, heights: &[u64]) -> u64 {
+        if heights.is_empty() {
+            return 0;
+        }
+        let mut sorted = heights.to_vec();
+        sorted.sort();
+        sorted[sorted.len() / 2]
+    }
+
+    /// Calculate swarm cohesion (0.0 = fragmented, 1.0 = tight)
+    fn calculate_cohesion(&self, heights: &[u64], center: u64) -> f64 {
+        if heights.is_empty() {
+            return 1.0;
+        }
+        let mean = heights.iter().sum::<u64>() as f64 / heights.len() as f64;
+        let variance = heights.iter()
+            .map(|h| (*h as f64 - mean).powi(2))
+            .sum::<f64>() / heights.len() as f64;
+
+        // Cohesion = 1 / (1 + normalized_variance)
+        let normalized_var = variance.sqrt() / (mean.max(1.0) * self.eta);
+        1.0 / (1.0 + normalized_var)
+    }
+
+    /// Separation score: penalize peers far from our height
+    fn separation_score(&self, peer_height: u64, our_height: u64, swarm_center: u64) -> f64 {
+        let delta = (peer_height as i64 - our_height as i64).abs() as f64;
+        let threshold = (swarm_center as f64) * self.eta;
+
+        if delta > threshold {
+            // Exponential penalty for divergent peers
+            -((delta - threshold) / threshold.max(1.0)).exp() * PHI_INV
+        } else {
+            0.0
+        }
+    }
+
+    /// Alignment score: prefer peers in same flock phase
+    fn alignment_score(&self, peer: &PeerInfo, our_phase: u8) -> f64 {
+        // Peers in same phase get bonus (they broadcast together)
+        let phase_match = if peer.flock_phase == our_phase { 0.3 } else { 0.0 };
+
+        // Also consider velocity alignment
+        let vel_factor = 1.0 / (1.0 + peer.velocity.abs());
+
+        self.eta * (phase_match + vel_factor * 0.2)
+    }
+
+    /// Cohesion score: prefer peers near swarm center
+    fn cohesion_score(&self, peer_height: u64, swarm_center: u64, cohesion: f64) -> f64 {
+        let distance = (peer_height as f64 - swarm_center as f64).abs();
+        // Higher score for peers closer to consensus
+        (1.0 - PHI_INV) * cohesion / (1.0 + distance * self.eta)
+    }
+
+    /// Update peer with flock state from StatusMessage
+    pub fn update_peer_flock(&mut self, peer_id: &PeerId, flock: &FlockStateCompact, new_height: u64) {
+        if let Some(peer) = self.peers.get_mut(peer_id) {
+            // Calculate velocity (height change rate)
+            let height_delta = new_height as f64 - peer.best_height as f64;
+            peer.velocity = peer.velocity * (1.0 - self.eta) + height_delta * self.eta;
+
+            // Update flock state
+            peer.flock_phase = flock.phase;
+            peer.flock_epoch = flock.epoch;
+            peer.best_height = new_height;
+        }
+    }
 }
 
 impl Default for EquilibriumRouter {
@@ -226,6 +357,9 @@ mod tests {
             node_type: 1,
             quality,
             last_seen: 0,
+            flock_phase: id % 8,
+            flock_epoch: 0,
+            velocity: 0.0,
         }
     }
     

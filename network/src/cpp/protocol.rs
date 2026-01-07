@@ -353,6 +353,7 @@ mod tests {
             best_hash: Hash::ZERO,
             node_type: 1,
             timestamp: 9876543210,
+            flock_state: None,
         };
         
         let envelope = MessageEnvelope::new(MessageType::Status, &original).unwrap();

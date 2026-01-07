@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod peer;
 pub mod node_integration;
 pub mod network;
+pub mod flock;
 
 // Re-export commonly used types
 pub use config::{
@@ -47,3 +48,8 @@ pub use network::{CppNetwork, NetworkEvent, NetworkCommand};
 pub mod block_provider;
 
 pub use block_provider::{BlockProvider, EmptyBlockProvider, MAX_BLOCKS_PER_REQUEST};
+
+pub use flock::{
+    GoldenGenerator, FlockState, FlockStateCompact, MurmurationRules,
+    PHI, PHI_INV, GOLDEN_SEED, FLOCK_EPOCH_BLOCKS, FLOCK_PHASES,
+};

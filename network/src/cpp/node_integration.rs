@@ -196,6 +196,10 @@ impl From<&Peer> for PeerInfo {
             node_type: peer.node_type as u8,
             quality: peer.quality,
             last_seen: peer.last_seen.elapsed().as_secs(),
+            // Murmuration fields - default until updated from StatusMessage
+            flock_phase: 0,
+            flock_epoch: 0,
+            velocity: 0.0,
         }
     }
 }
