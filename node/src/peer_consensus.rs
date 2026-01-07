@@ -141,22 +141,28 @@ impl PeerConsensus {
     /// Update a peer's state when we receive a StatusUpdate
     pub async fn update_peer(&self, peer_id: String, height: u64, hash: [u8; 32]) {
         let mut peers = self.peers.write().await;
-        
+
         if let Some(peer) = peers.get_mut(&peer_id) {
+            let old_height = peer.best_height;
             peer.best_height = height;
             peer.best_hash = hash;
             peer.work_score = height; // TODO: Implement proper work score
             peer.last_seen = Instant::now();
             peer.missed_rounds = 0; // Reset missed rounds on update
-            
+
             // Un-filter peer if they're back online
             if peer.is_filtered {
                 println!("🔄 Peer {} back online, removing from Negative UNL", peer_id);
                 peer.is_filtered = false;
             }
+
+            // Log height changes
+            if height != old_height {
+                println!("📡 Peer {} height updated: {} -> {}", &peer_id[..8.min(peer_id.len())], old_height, height);
+            }
         } else {
             peers.insert(peer_id.clone(), PeerState::new(height, hash));
-            println!("📡 New peer tracked: {} at height {}", peer_id, height);
+            println!("📡 New peer tracked: {} at height {}", &peer_id[..8.min(peer_id.len())], height);
         }
     }
     
@@ -266,7 +272,22 @@ impl PeerConsensus {
     /// Returns (should_mine, reason)
     pub async fn should_mine(&self, our_height: u64) -> (bool, String) {
         let active_count = self.active_peer_count().await;
-        
+
+        // DIAGNOSTIC: Log all peers and their states
+        {
+            let peers = self.peers.read().await;
+            let total = peers.len();
+            let stale_count = peers.values().filter(|p| p.is_stale()).count();
+            let filtered_count = peers.values().filter(|p| p.is_filtered).count();
+            println!("📊 [PeerConsensus] Total peers: {}, Active: {}, Stale: {}, Filtered: {}",
+                total, active_count, stale_count, filtered_count);
+            for (id, state) in peers.iter() {
+                let status = if state.is_stale() { "STALE" } else if state.is_filtered { "FILTERED" } else { "ACTIVE" };
+                println!("   - {} height={} last_seen={}s ago [{}]",
+                    &id[..8.min(id.len())], state.best_height, state.last_seen.elapsed().as_secs(), status);
+            }
+        }
+
         // Check 1: Do we have enough peers?
         if active_count < self.config.min_peers_for_mining {
             return (false, format!(
