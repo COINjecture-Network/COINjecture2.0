@@ -128,6 +128,16 @@ impl CoinjectNode {
         // Validate configuration
         config.validate()?;
 
+        // Log block version configuration (P2P.F: Prove the F)
+        println!("📋 Block Version Configuration:");
+        println!("   Supported versions: {:?}", crate::config::SUPPORTED_VERSIONS);
+        println!("   Minimum accepted:   v{} ({})", config.min_block_version, crate::config::version_name(config.min_block_version));
+        println!("   Produce version:    v{} ({})", config.produce_block_version, crate::config::version_name(config.produce_block_version));
+        if config.strict_version {
+            println!("   ⚠️  STRICT MODE: Only accepting v{} blocks", config.produce_block_version);
+        }
+        println!();
+
         // Create data directory (parent directory for database files)
         std::fs::create_dir_all(&config.data_dir)?;
 
@@ -729,12 +739,24 @@ impl CoinjectNode {
         let cpp_network_cmd_tx_for_events = cpp_network_cmd_tx.clone();
         let hf_sync_clone = self.hf_sync.clone();
         let block_buffer_clone = Arc::clone(&block_buffer);
-        
+        // Clone config for version checking in event handler
+        let config_clone = self.config.clone();
+
         tokio::spawn(async move {
             while let Some(event) = cpp_network_event_rx.recv().await {
                 match event {
                     CppNetworkEvent::BlockReceived { block, peer_id } => {
-                        println!("[GOSSIP] recv block height={} hash={:?} ts={}", block.header.height, block.header.hash(), block.header.timestamp);
+                        // Log block with version info (P2P.F: Prove the F)
+                        let version_info = config_clone.version_info(block.header.version);
+                        println!("[BLOCK] Received block height={} {} hash={:?}",
+                            block.header.height, version_info, block.header.hash());
+
+                        // Check version policy before validation
+                        if let Err(reason) = config_clone.should_accept_version(block.header.version) {
+                            println!("[BLOCK] REJECTED block height={} {} ({})",
+                                block.header.height, version_info, reason);
+                            continue;
+                        }
                         
                         let best_height = chain_clone.best_block_height().await;
                         let best_hash = chain_clone.best_block_hash().await;
@@ -831,9 +853,19 @@ impl CoinjectNode {
 
                         let mut highest_received: u64 = 0;
                         let mut blocks_applied: u64 = 0;
+                        let mut blocks_rejected_version: u64 = 0;
 
                         // Process sync blocks - buffer future blocks, apply sequential ones
                         for block in blocks {
+                            // Check version policy first (P2P.F: Prove the F)
+                            let version_info = config_clone.version_info(block.header.version);
+                            if let Err(reason) = config_clone.should_accept_version(block.header.version) {
+                                println!("[BLOCK] REJECTED sync block height={} {} ({})",
+                                    block.header.height, version_info, reason);
+                                blocks_rejected_version += 1;
+                                continue;
+                            }
+
                             let best_height = chain_clone.best_block_height().await;
                             let best_hash = chain_clone.best_block_hash().await;
                             let expected_height = best_height + 1;
@@ -848,7 +880,7 @@ impl CoinjectNode {
                                     if let Ok(is_new_best) = chain_clone.store_block(&block).await {
                                         if is_new_best {
                                             blocks_applied += 1;
-                                            println!("[SYNC_APPLY] Block {} applied, new_height={}", block.header.height, block.header.height);
+                                            println!("[SYNC_APPLY] Block {} {} applied", block.header.height, version_info);
                                             // Update CPP network chain state
                                             let new_height = block.header.height;
                                             let new_hash = block.header.hash();
@@ -906,12 +938,21 @@ impl CoinjectNode {
 
                             match block_opt {
                                 Some(block) => {
+                                    // Check version policy for buffered blocks (P2P.F: Prove the F)
+                                    let buffer_version_info = config_clone.version_info(block.header.version);
+                                    if let Err(reason) = config_clone.should_accept_version(block.header.version) {
+                                        println!("[BLOCK] REJECTED buffered block height={} {} ({})",
+                                            block.header.height, buffer_version_info, reason);
+                                        blocks_rejected_version += 1;
+                                        continue;
+                                    }
+
                                     if block.header.prev_hash == best_hash {
                                         if let Ok(()) = validator_clone.validate_block_with_options(&block, &best_hash, next_height, true) {
                                             if let Ok(is_new_best) = chain_clone.store_block(&block).await {
                                                 if is_new_best {
                                                     blocks_applied += 1;
-                                                    println!("[SYNC_BUFFER] Block {} applied from buffer", block.header.height);
+                                                    println!("[SYNC_BUFFER] Block {} {} applied from buffer", block.header.height, buffer_version_info);
                                                     let new_height = block.header.height;
                                                     let new_hash = block.header.hash();
                                                     let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::UpdateChainState {
@@ -946,8 +987,13 @@ impl CoinjectNode {
                         let current_height = chain_clone.best_block_height().await;
                         let peer_height = peer_consensus_clone.get_peer_height(&hex::encode(peer_id)).await.unwrap_or(0);
 
-                        println!("📊 [CPP] Sync progress: applied {} blocks, now at height {}, peer at {}",
-                            blocks_applied, current_height, peer_height);
+                        if blocks_rejected_version > 0 {
+                            println!("📊 [CPP] Sync progress: applied {} blocks, rejected {} (version), now at height {}, peer at {}",
+                                blocks_applied, blocks_rejected_version, current_height, peer_height);
+                        } else {
+                            println!("📊 [CPP] Sync progress: applied {} blocks, now at height {}, peer at {}",
+                                blocks_applied, current_height, peer_height);
+                        }
 
                         if peer_height > current_height {
                             // Still behind - request more blocks

@@ -519,6 +519,89 @@ All multi-byte integers use **little-endian** encoding:
 
 ---
 
+## 12. Version Policy and Upgrade Path
+
+### 12.1 Current Policy
+
+**Default Behavior (v2-capable nodes)**:
+- Accept both v1 (standard) and v2 (golden-enhanced) blocks
+- Produce v2 blocks by default
+- Log all block versions for debugging
+
+**CLI Configuration**:
+```bash
+# Default: accept v1+v2, produce v2
+coinject-node
+
+# Accept only v2 blocks (hard fork mode)
+coinject-node --min-block-version 2
+
+# Produce v1 blocks (legacy mode)
+coinject-node --produce-block-version 1
+
+# Strict mode: only accept blocks matching produce version
+coinject-node --strict-version --produce-block-version 2
+```
+
+### 12.2 Log Output Examples
+
+```
+[BLOCK] Received block height=147 version=2 (golden-enhanced) hash=0x1234...
+[BLOCK] Received block height=148 version=1 (standard) hash=0x5678...
+[BLOCK] REJECTED block height=150 version=1 (version 1 below minimum 2 (node requires version >= 2))
+```
+
+Sync progress with version rejection:
+```
+📊 [CPP] Sync progress: applied 47 blocks, rejected 3 (version), now at height 147, peer at 200
+```
+
+### 12.3 Hard Fork Transition Path
+
+**Phase 1: Announce (current)**
+- All nodes updated to v2-capable code
+- Default: accept v1+v2, produce v2
+- Monitor network for v2 adoption
+
+**Phase 2: Soft Deadline**
+- Announce hard fork height (e.g., block 100,000)
+- Nodes update `--min-block-version 2` after height
+- v1 blocks still accepted below fork height
+
+**Phase 3: Hard Fork**
+- At fork height, v1 blocks rejected network-wide
+- Nodes not upgraded will fork off
+- v2 (golden-enhanced) becomes mandatory
+
+### 12.4 Testing Recommendations
+
+**DO NOT mix versions during testing**:
+- Use `--produce-block-version 2` for all test nodes
+- Or use `--strict-version` to enforce consistency
+- Version mismatch during testing can cause confusing sync issues
+
+**Test version rejection**:
+```bash
+# Node A: v2 only
+coinject-node --min-block-version 2 --strict-version
+
+# Node B: v1 only (will be rejected)
+coinject-node --produce-block-version 1 --strict-version
+```
+
+### 12.5 Supported Versions
+
+| Version | Name | Hash Scheme | Status |
+|---------|------|-------------|--------|
+| 1 | standard | H(left \|\| right) | Legacy |
+| 2 | golden-enhanced | H(MERKLE_NODE \|\| golden_key \|\| level \|\| left \|\| right) | Current |
+
+**Future versions** (reserved):
+- Version 3: Reserved for post-quantum cryptography
+- Version 4+: Reserved
+
+---
+
 ## Appendix A: Reference Implementation
 
 See:
@@ -534,6 +617,7 @@ See:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-01-09 | Initial specification |
+| 1.1 | 2026-01-09 | Added Section 12: Version Policy and Upgrade Path |
 
 ---
 

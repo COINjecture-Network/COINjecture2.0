@@ -10,8 +10,25 @@
 // - Oracle: External data feeds
 
 use clap::{Parser, ValueEnum};
+use coinject_core::{BLOCK_VERSION_STANDARD, BLOCK_VERSION_GOLDEN};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+// =============================================================================
+// Block Version Configuration
+// =============================================================================
+
+/// Supported block versions (locked at compile-time)
+pub const SUPPORTED_VERSIONS: [u32; 2] = [BLOCK_VERSION_STANDARD, BLOCK_VERSION_GOLDEN];
+
+/// Human-readable version name
+pub fn version_name(version: u32) -> &'static str {
+    match version {
+        1 => "standard",
+        2 => "golden-enhanced",
+        _ => "unknown",
+    }
+}
 
 /// Node type preference (actual classification is based on behavior)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -186,6 +203,25 @@ pub struct NodeConfig {
     /// Useful for partition/fork testing where you don't want local nodes to find each other
     #[arg(long)]
     pub disable_mdns: bool,
+
+    // ==========================================================================
+    // BLOCK VERSION CONFIGURATION
+    // ==========================================================================
+
+    /// Minimum block version to accept (1=standard, 2=golden-enhanced)
+    /// Blocks below this version will be rejected with clear logging
+    #[arg(long, default_value = "1")]
+    pub min_block_version: u32,
+
+    /// Produce blocks with this version (1=standard, 2=golden-enhanced)
+    /// Default is v2 (golden-enhanced) for new blocks
+    #[arg(long, default_value = "2")]
+    pub produce_block_version: u32,
+
+    /// Strict version mode: reject blocks not matching produce_block_version
+    /// WARNING: Use only for testing version upgrades
+    #[arg(long)]
+    pub strict_version: bool,
 }
 
 impl NodeConfig {
@@ -260,6 +296,54 @@ impl NodeConfig {
         self.target_node_type().hardware_requirements().min_storage_gb
     }
 
+    // =========================================================================
+    // Block Version Helpers
+    // =========================================================================
+
+    /// Check if a block version is supported
+    pub fn is_version_supported(&self, version: u32) -> bool {
+        SUPPORTED_VERSIONS.contains(&version)
+    }
+
+    /// Check if a block version meets minimum requirements
+    pub fn meets_version_requirement(&self, version: u32) -> bool {
+        version >= self.min_block_version
+    }
+
+    /// Check if a block should be accepted based on version policy
+    pub fn should_accept_version(&self, version: u32) -> Result<(), String> {
+        // Check if version is in supported list
+        if !self.is_version_supported(version) {
+            return Err(format!(
+                "unsupported version {} (supported: {:?})",
+                version, SUPPORTED_VERSIONS
+            ));
+        }
+
+        // Check minimum version requirement
+        if version < self.min_block_version {
+            return Err(format!(
+                "version {} below minimum {} (node requires version >= {})",
+                version, self.min_block_version, self.min_block_version
+            ));
+        }
+
+        // Strict mode: must match produce version exactly
+        if self.strict_version && version != self.produce_block_version {
+            return Err(format!(
+                "strict mode requires version {} (got {})",
+                self.produce_block_version, version
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Get version info string for logging
+    pub fn version_info(&self, version: u32) -> String {
+        format!("version={} ({})", version, version_name(version))
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         // Validate miner address format if provided
         if let Some(ref addr) = self.miner_address {
@@ -289,6 +373,26 @@ impl NodeConfig {
         // Warn about conflicting settings
         if self.headers_only && self.mine {
             return Err("Cannot mine in headers-only mode (Light nodes don't store full blocks)".to_string());
+        }
+
+        // Validate block version configuration
+        if !SUPPORTED_VERSIONS.contains(&self.min_block_version) {
+            return Err(format!(
+                "min_block_version {} not in supported versions {:?}",
+                self.min_block_version, SUPPORTED_VERSIONS
+            ));
+        }
+        if !SUPPORTED_VERSIONS.contains(&self.produce_block_version) {
+            return Err(format!(
+                "produce_block_version {} not in supported versions {:?}",
+                self.produce_block_version, SUPPORTED_VERSIONS
+            ));
+        }
+        if self.produce_block_version < self.min_block_version {
+            return Err(format!(
+                "produce_block_version {} cannot be lower than min_block_version {}",
+                self.produce_block_version, self.min_block_version
+            ));
         }
 
         Ok(())
@@ -330,6 +434,9 @@ mod tests {
             external_addr: None,
             allow_private_addrs: false,
             disable_mdns: false,
+            min_block_version: 1,
+            produce_block_version: 2,
+            strict_version: false,
         }
     }
 
@@ -381,5 +488,86 @@ mod tests {
         config.oracle_mode = true;
         config.oracle_sources = vec!["https://api.example.com".to_string()];
         assert!(config.is_oracle_mode());
+    }
+
+    // =========================================================================
+    // Block Version Tests
+    // =========================================================================
+
+    #[test]
+    fn test_version_supported() {
+        let config = test_config();
+        assert!(config.is_version_supported(1));
+        assert!(config.is_version_supported(2));
+        assert!(!config.is_version_supported(0));
+        assert!(!config.is_version_supported(3));
+    }
+
+    #[test]
+    fn test_version_meets_requirement() {
+        let mut config = test_config();
+        config.min_block_version = 1;
+        assert!(config.meets_version_requirement(1));
+        assert!(config.meets_version_requirement(2));
+
+        config.min_block_version = 2;
+        assert!(!config.meets_version_requirement(1));
+        assert!(config.meets_version_requirement(2));
+    }
+
+    #[test]
+    fn test_should_accept_version_default() {
+        let config = test_config(); // min=1, produce=2, strict=false
+        assert!(config.should_accept_version(1).is_ok());
+        assert!(config.should_accept_version(2).is_ok());
+        assert!(config.should_accept_version(0).is_err());
+        assert!(config.should_accept_version(3).is_err());
+    }
+
+    #[test]
+    fn test_should_accept_version_strict() {
+        let mut config = test_config();
+        config.strict_version = true;
+        config.produce_block_version = 2;
+
+        // Strict mode: only accept exact match
+        assert!(config.should_accept_version(2).is_ok());
+        assert!(config.should_accept_version(1).is_err());
+    }
+
+    #[test]
+    fn test_should_accept_version_v2_only() {
+        let mut config = test_config();
+        config.min_block_version = 2;
+
+        // V2-only mode: reject v1
+        assert!(config.should_accept_version(2).is_ok());
+        assert!(config.should_accept_version(1).is_err());
+    }
+
+    #[test]
+    fn test_invalid_version_config() {
+        let mut config = test_config();
+
+        // Invalid min_block_version
+        config.min_block_version = 99;
+        assert!(config.validate().is_err());
+
+        // Reset and test invalid produce_block_version
+        config.min_block_version = 1;
+        config.produce_block_version = 99;
+        assert!(config.validate().is_err());
+
+        // Reset and test produce < min
+        config.produce_block_version = 1;
+        config.min_block_version = 2;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_version_name() {
+        assert_eq!(version_name(1), "standard");
+        assert_eq!(version_name(2), "golden-enhanced");
+        assert_eq!(version_name(99), "unknown");
     }
 }
