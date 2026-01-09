@@ -169,12 +169,32 @@ impl GoldenGenerator {
     ///
     /// {z*phi} = z*phi - floor(z*phi)
     ///
-    /// This provides the equidistribution property used for
-    /// deterministic leaf ordering in merkle trees.
+    /// WARNING: This uses floating-point arithmetic and should NOT be used
+    /// for consensus-critical operations (merkle ordering, hash inputs).
+    /// Use `golden_sort_key()` instead for deterministic ordering.
+    ///
+    /// Safe uses: display, P2P scoring, non-consensus metrics.
     #[inline]
     pub fn golden_fractional(z: u64) -> f64 {
         let product = (z as f64) * PHI;
         product - product.floor()
+    }
+
+    /// Generate deterministic sort key using integer golden multiplication
+    ///
+    /// Uses the integer golden ratio constant: 0x9E3779B97F4A7C15
+    /// This is 2^64 / phi, providing the same equidistribution property
+    /// as floating-point golden_fractional but with perfect determinism.
+    ///
+    /// CONSENSUS-SAFE: Pure integer arithmetic, no floats.
+    /// Use this for merkle leaf ordering and any consensus-critical sorting.
+    #[inline]
+    pub fn golden_sort_key(z: u64) -> u64 {
+        /// Integer golden ratio: 2^64 / phi = 0x9E3779B97F4A7C15
+        /// This is the same constant used in hash functions (e.g., xxHash)
+        /// and provides optimal bit mixing via wrapping multiplication.
+        const GOLDEN_STEP: u64 = 0x9E3779B97F4A7C15;
+        z.wrapping_mul(GOLDEN_STEP)
     }
 
     /// Generate deterministic f64 in range [0, 1)
@@ -288,5 +308,44 @@ mod tests {
         let flip1 = gen.coin_flip(42);
         let flip2 = gen.coin_flip(42);
         assert_eq!(flip1, flip2);
+    }
+
+    #[test]
+    fn test_golden_sort_key_deterministic() {
+        // Same input always produces same output (pure integer math)
+        let key1 = GoldenGenerator::golden_sort_key(42);
+        let key2 = GoldenGenerator::golden_sort_key(42);
+        assert_eq!(key1, key2);
+
+        // Different inputs produce different outputs
+        let key3 = GoldenGenerator::golden_sort_key(43);
+        assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_golden_sort_key_distribution() {
+        // Verify keys are well-distributed (no obvious patterns)
+        let mut keys: Vec<u64> = (0..100).map(|i| GoldenGenerator::golden_sort_key(i)).collect();
+        let original = keys.clone();
+        keys.sort();
+
+        // Should not be sorted in original order (well-mixed)
+        assert_ne!(keys, original);
+
+        // All keys should be unique
+        keys.dedup();
+        assert_eq!(keys.len(), 100);
+    }
+
+    #[test]
+    fn test_golden_sort_key_known_values() {
+        // Verify the golden step constant is correct
+        // 0x9E3779B97F4A7C15 = 11400714819323198485
+        assert_eq!(GoldenGenerator::golden_sort_key(0), 0);
+        assert_eq!(GoldenGenerator::golden_sort_key(1), 0x9E3779B97F4A7C15);
+
+        // Verify wrapping behavior (z=2 should wrap correctly)
+        let key2 = GoldenGenerator::golden_sort_key(2);
+        assert_eq!(key2, 0x9E3779B97F4A7C15_u64.wrapping_mul(2));
     }
 }

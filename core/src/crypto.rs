@@ -211,25 +211,30 @@ impl MerkleTree {
 
     /// Create merkle tree with golden-ordered leaves
     ///
-    /// Uses `golden_fractional(index)` to deterministically order leaves
+    /// Uses `golden_sort_key(index)` to deterministically order leaves
     /// before building the tree. This provides consistent ordering across
     /// all nodes with better distribution properties.
+    ///
+    /// CONSENSUS-SAFE: Uses integer golden multiplication (no floats).
+    /// See docs/GOLDEN_PHI_AUDIT.md for rationale.
     ///
     /// # Arguments
     /// * `data` - Raw data to include in the merkle tree
     /// * `genesis_hash` - Genesis hash from handshake (seed foundation)
     /// * `epoch` - Epoch number (typically `block_height / 100`)
     pub fn new_with_golden_ordering(data: Vec<Vec<u8>>, genesis_hash: &Hash, epoch: u64) -> Self {
-        // Sort leaves by golden_fractional(index) for deterministic ordering
+        // Sort leaves by golden_sort_key(index) for deterministic ordering
+        // Uses pure integer arithmetic - consensus safe across all platforms
         let mut indexed_data: Vec<(usize, Vec<u8>)> = data
             .into_iter()
             .enumerate()
             .collect();
 
         indexed_data.sort_by(|a, b| {
-            let frac_a = GoldenGenerator::golden_fractional(a.0 as u64);
-            let frac_b = GoldenGenerator::golden_fractional(b.0 as u64);
-            frac_a.partial_cmp(&frac_b).unwrap_or(std::cmp::Ordering::Equal)
+            let key_a = GoldenGenerator::golden_sort_key(a.0 as u64);
+            let key_b = GoldenGenerator::golden_sort_key(b.0 as u64);
+            // Primary sort by golden key, tie-break by original index
+            key_a.cmp(&key_b).then_with(|| a.0.cmp(&b.0))
         });
 
         // Extract ordered data
