@@ -9,6 +9,7 @@ pub mod problem;
 pub mod commitment;
 pub mod dimensional;
 pub mod privacy;
+pub mod golden;
 
 // Re-exports
 pub use types::*;
@@ -19,3 +20,4 @@ pub use problem::*;
 pub use commitment::*;
 pub use dimensional::*;
 pub use privacy::*;
+pub use golden::*;

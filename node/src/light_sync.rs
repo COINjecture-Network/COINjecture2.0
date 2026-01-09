@@ -12,7 +12,7 @@
 //
 // CRITICAL: This enables verification of 1M+ block chains with tiny proofs!
 
-use coinject_core::{BlockHeader, Hash};
+use coinject_core::{golden::GoldenGenerator, BlockHeader, Hash};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -109,6 +109,47 @@ impl MerkleMountainRange {
         ((self.leaf_count - 1) >> height) & 1 == 1
     }
 
+    // =========================================================================
+    // GoldenSeed-Enhanced MMR Methods
+    // =========================================================================
+
+    /// Append a new leaf with golden-enhanced node hashing
+    ///
+    /// Uses golden keys derived from the handshake-established genesis_hash
+    /// for position-specific entropy in MMR node hashing.
+    ///
+    /// # Arguments
+    /// * `leaf_hash` - Hash of the block header to append
+    /// * `genesis_hash` - Genesis hash from handshake (seed foundation)
+    ///
+    /// # Returns
+    /// The new MMR root after appending the leaf
+    pub fn append_with_golden(&mut self, leaf_hash: Hash, genesis_hash: &Hash) -> Hash {
+        self.leaf_count += 1;
+        self.mmr_size += 1;
+
+        // Generate position-specific golden keys
+        // Use leaf_count as height to ensure unique keys per position
+        let mut gen = GoldenGenerator::from_genesis_epoch(genesis_hash, self.leaf_count);
+
+        // Add as new peak
+        let mut new_peak = leaf_hash;
+        let mut height = 0u32;
+
+        // Merge with existing peaks of same height
+        while self.has_peak_at_height(height) {
+            let left_peak = self.peaks.pop().unwrap();
+            // Get golden key for this merge operation
+            let golden_key = gen.next_bytes();
+            new_peak = hash_mmr_node_with_golden(&left_peak, &new_peak, height, &golden_key);
+            self.mmr_size += 1;
+            height += 1;
+        }
+
+        self.peaks.push(new_peak);
+        self.root()
+    }
+
     /// Get the MMR root (bag of peaks)
     pub fn root(&self) -> Hash {
         if self.peaks.is_empty() {
@@ -180,6 +221,33 @@ fn hash_bag(left: &Hash, right: &Hash) -> Hash {
     let mut hasher = Sha256::new();
     // Domain separation: "MMR_BAG" || left || right
     hasher.update(b"MMR_BAG");
+    hasher.update(left.as_bytes());
+    hasher.update(right.as_bytes());
+    Hash::from_bytes(hasher.finalize().into())
+}
+
+// =============================================================================
+// GoldenSeed-Enhanced MMR Hashing
+// =============================================================================
+
+/// Hash two MMR nodes together with golden key enhancement
+///
+/// Enhanced domain separation: "MMR_NODE" || height || golden_key || left || right
+///
+/// The golden_key is derived from the handshake-established genesis_hash,
+/// ensuring all nodes produce identical MMR structures.
+fn hash_mmr_node_with_golden(
+    left: &Hash,
+    right: &Hash,
+    height: u32,
+    golden_key: &[u8; 16],
+) -> Hash {
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    // Domain separation: "MMR_NODE" || height || golden_key || left || right
+    hasher.update(b"MMR_NODE");
+    hasher.update(height.to_le_bytes());
+    hasher.update(golden_key);
     hasher.update(left.as_bytes());
     hasher.update(right.as_bytes());
     Hash::from_bytes(hasher.finalize().into())

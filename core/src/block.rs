@@ -4,6 +4,25 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+// =============================================================================
+// Block Version Constants
+// =============================================================================
+
+/// Block version 1: Standard hashing (original implementation)
+/// - Commitments: H(problem || salt || H(solution))
+/// - Merkle tree: H(left || right)
+/// - MMR: H("MMR_NODE" || height || left || right)
+pub const BLOCK_VERSION_STANDARD: u32 = 1;
+
+/// Block version 2: GoldenSeed-enhanced hashing
+/// - Commitments: H(problem || salt || golden_stream || H(solution))
+/// - Merkle tree: H("MERKLE_NODE" || golden_key || level || left || right)
+/// - MMR: H("MMR_NODE" || height || golden_key || left || right)
+///
+/// Golden streams are derived from handshake-established genesis_hash.
+/// See: GoldenSeed Merkle Tree Integration Design Plan
+pub const BLOCK_VERSION_GOLDEN: u32 = 2;
+
 /// Block header (mined with commitment)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockHeader {
@@ -73,6 +92,28 @@ impl BlockHeader {
     /// Epoch salt derived from parent hash (prevents pre-mining)
     pub fn epoch_salt(&self) -> Hash {
         self.prev_hash
+    }
+
+    // =========================================================================
+    // GoldenSeed Enhancement Methods
+    // =========================================================================
+
+    /// Check if this block uses golden-enhanced hashing
+    ///
+    /// Returns true if block version >= BLOCK_VERSION_GOLDEN (2).
+    /// Golden-enhanced blocks use:
+    /// - Enhanced commitments with golden stream
+    /// - Enhanced merkle trees with golden keys
+    /// - Enhanced MMR with golden keys
+    #[inline]
+    pub fn uses_golden_enhancements(&self) -> bool {
+        self.version >= BLOCK_VERSION_GOLDEN
+    }
+
+    /// Check if this block uses standard (v1) hashing
+    #[inline]
+    pub fn uses_standard_hashing(&self) -> bool {
+        self.version < BLOCK_VERSION_GOLDEN
     }
 }
 

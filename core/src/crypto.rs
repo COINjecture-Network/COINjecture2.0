@@ -1,6 +1,9 @@
-use crate::{Address, Hash};
+use crate::{golden::GoldenGenerator, Address, Hash};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+
+/// Domain separator for golden-enhanced merkle node hashing
+const MERKLE_NODE_DOMAIN: &[u8] = b"MERKLE_NODE";
 
 /// Ed25519 key pair for signing transactions
 pub struct KeyPair {
@@ -135,5 +138,266 @@ impl MerkleTree {
 
     pub fn root(&self) -> Hash {
         self.root
+    }
+
+    // =========================================================================
+    // GoldenSeed-Enhanced Merkle Tree Methods
+    // =========================================================================
+    // These methods integrate golden ratio streams derived from the handshake
+    // genesis_hash for enhanced self-referential properties.
+    // See: GoldenSeed Merkle Tree Integration Design Plan
+
+    /// Create merkle tree with golden-enhanced node hashing
+    ///
+    /// Node hash: H("MERKLE_NODE" || golden_key || level || left || right)
+    ///
+    /// The golden_key is derived from the handshake-established genesis_hash,
+    /// ensuring all nodes produce identical merkle roots for the same inputs.
+    ///
+    /// # Arguments
+    /// * `data` - Raw data to include in the merkle tree
+    /// * `genesis_hash` - Genesis hash from handshake (seed foundation)
+    /// * `epoch` - Epoch number (typically `block_height / 100`)
+    pub fn new_with_golden(data: Vec<Vec<u8>>, genesis_hash: &Hash, epoch: u64) -> Self {
+        let leaves: Vec<Hash> = data.iter().map(|d| Hash::new(d)).collect();
+        let root = Self::calculate_root_with_golden(&leaves, genesis_hash, epoch);
+        MerkleTree { leaves, root }
+    }
+
+    /// Calculate merkle root with golden-enhanced hashing
+    fn calculate_root_with_golden(leaves: &[Hash], genesis_hash: &Hash, epoch: u64) -> Hash {
+        if leaves.is_empty() {
+            return Hash::ZERO;
+        }
+        if leaves.len() == 1 {
+            return leaves[0];
+        }
+
+        // Generate golden generator for this epoch
+        // Use epoch * 100 as height to ensure same epoch calculation as from_genesis_epoch
+        let mut golden_gen = GoldenGenerator::from_genesis_epoch(genesis_hash, epoch * 100);
+
+        let mut current_level = leaves.to_vec();
+        let mut level = 0u32;
+
+        while current_level.len() > 1 {
+            // Get golden key for this level
+            let golden_key = golden_gen.next_bytes();
+            let mut next_level = Vec::new();
+
+            for chunk in current_level.chunks(2) {
+                let combined = if chunk.len() == 2 {
+                    // Enhanced hashing: H("MERKLE_NODE" || golden_key || level || left || right)
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update(MERKLE_NODE_DOMAIN);
+                    hasher.update(&golden_key);
+                    hasher.update(&level.to_le_bytes());
+                    hasher.update(chunk[0].as_bytes());
+                    hasher.update(chunk[1].as_bytes());
+                    Hash::from_bytes(*hasher.finalize().as_bytes())
+                } else {
+                    // Odd leaf - pass through unchanged
+                    chunk[0]
+                };
+                next_level.push(combined);
+            }
+
+            current_level = next_level;
+            level += 1;
+        }
+
+        current_level[0]
+    }
+
+    /// Create merkle tree with golden-ordered leaves
+    ///
+    /// Uses `golden_fractional(index)` to deterministically order leaves
+    /// before building the tree. This provides consistent ordering across
+    /// all nodes with better distribution properties.
+    ///
+    /// # Arguments
+    /// * `data` - Raw data to include in the merkle tree
+    /// * `genesis_hash` - Genesis hash from handshake (seed foundation)
+    /// * `epoch` - Epoch number (typically `block_height / 100`)
+    pub fn new_with_golden_ordering(data: Vec<Vec<u8>>, genesis_hash: &Hash, epoch: u64) -> Self {
+        // Sort leaves by golden_fractional(index) for deterministic ordering
+        let mut indexed_data: Vec<(usize, Vec<u8>)> = data
+            .into_iter()
+            .enumerate()
+            .collect();
+
+        indexed_data.sort_by(|a, b| {
+            let frac_a = GoldenGenerator::golden_fractional(a.0 as u64);
+            let frac_b = GoldenGenerator::golden_fractional(b.0 as u64);
+            frac_a.partial_cmp(&frac_b).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Extract ordered data
+        let ordered_data: Vec<Vec<u8>> = indexed_data
+            .into_iter()
+            .map(|(_, d)| d)
+            .collect();
+
+        // Build merkle tree with golden-enhanced hashing
+        Self::new_with_golden(ordered_data, genesis_hash, epoch)
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_merkle_tree_standard() {
+        let data = vec![
+            b"tx1".to_vec(),
+            b"tx2".to_vec(),
+            b"tx3".to_vec(),
+            b"tx4".to_vec(),
+        ];
+
+        let tree = MerkleTree::new(data.clone());
+        let root = tree.root();
+
+        // Root should not be zero
+        assert_ne!(root, Hash::ZERO);
+
+        // Same data should produce same root
+        let tree2 = MerkleTree::new(data);
+        assert_eq!(tree.root(), tree2.root());
+    }
+
+    #[test]
+    fn test_golden_merkle_deterministic() {
+        let data = vec![
+            b"tx1".to_vec(),
+            b"tx2".to_vec(),
+            b"tx3".to_vec(),
+            b"tx4".to_vec(),
+        ];
+        let genesis = Hash::new(b"genesis_block");
+        let epoch = 1;
+
+        let tree1 = MerkleTree::new_with_golden(data.clone(), &genesis, epoch);
+        let tree2 = MerkleTree::new_with_golden(data, &genesis, epoch);
+
+        // Same inputs should produce same root
+        assert_eq!(tree1.root(), tree2.root());
+    }
+
+    #[test]
+    fn test_golden_vs_standard_different() {
+        let data = vec![
+            b"tx1".to_vec(),
+            b"tx2".to_vec(),
+            b"tx3".to_vec(),
+            b"tx4".to_vec(),
+        ];
+        let genesis = Hash::new(b"genesis_block");
+        let epoch = 1;
+
+        let standard = MerkleTree::new(data.clone());
+        let golden = MerkleTree::new_with_golden(data, &genesis, epoch);
+
+        // Golden and standard should produce different roots
+        assert_ne!(standard.root(), golden.root());
+    }
+
+    #[test]
+    fn test_golden_merkle_epoch_sensitivity() {
+        let data = vec![
+            b"tx1".to_vec(),
+            b"tx2".to_vec(),
+        ];
+        let genesis = Hash::new(b"genesis_block");
+
+        let tree_epoch0 = MerkleTree::new_with_golden(data.clone(), &genesis, 0);
+        let tree_epoch1 = MerkleTree::new_with_golden(data, &genesis, 1);
+
+        // Different epochs should produce different roots
+        assert_ne!(tree_epoch0.root(), tree_epoch1.root());
+    }
+
+    #[test]
+    fn test_golden_merkle_genesis_sensitivity() {
+        let data = vec![
+            b"tx1".to_vec(),
+            b"tx2".to_vec(),
+        ];
+        let genesis1 = Hash::new(b"genesis_block_1");
+        let genesis2 = Hash::new(b"genesis_block_2");
+        let epoch = 1;
+
+        let tree1 = MerkleTree::new_with_golden(data.clone(), &genesis1, epoch);
+        let tree2 = MerkleTree::new_with_golden(data, &genesis2, epoch);
+
+        // Different genesis should produce different roots
+        assert_ne!(tree1.root(), tree2.root());
+    }
+
+    #[test]
+    fn test_golden_ordering_deterministic() {
+        let data = vec![
+            b"tx1".to_vec(),
+            b"tx2".to_vec(),
+            b"tx3".to_vec(),
+            b"tx4".to_vec(),
+        ];
+        let genesis = Hash::new(b"genesis_block");
+        let epoch = 1;
+
+        let tree1 = MerkleTree::new_with_golden_ordering(data.clone(), &genesis, epoch);
+        let tree2 = MerkleTree::new_with_golden_ordering(data, &genesis, epoch);
+
+        // Same inputs should produce same root with ordering
+        assert_eq!(tree1.root(), tree2.root());
+    }
+
+    #[test]
+    fn test_golden_ordering_vs_golden_different() {
+        let data = vec![
+            b"tx1".to_vec(),
+            b"tx2".to_vec(),
+            b"tx3".to_vec(),
+            b"tx4".to_vec(),
+        ];
+        let genesis = Hash::new(b"genesis_block");
+        let epoch = 1;
+
+        let ordered = MerkleTree::new_with_golden_ordering(data.clone(), &genesis, epoch);
+        let unordered = MerkleTree::new_with_golden(data, &genesis, epoch);
+
+        // Ordered and unordered should produce different roots
+        // (unless by chance the ordering happens to match)
+        assert_ne!(ordered.root(), unordered.root());
+    }
+
+    #[test]
+    fn test_merkle_empty() {
+        let empty: Vec<Vec<u8>> = vec![];
+        let genesis = Hash::new(b"genesis_block");
+
+        let standard = MerkleTree::new(empty.clone());
+        let golden = MerkleTree::new_with_golden(empty, &genesis, 1);
+
+        // Empty trees should return ZERO
+        assert_eq!(standard.root(), Hash::ZERO);
+        assert_eq!(golden.root(), Hash::ZERO);
+    }
+
+    #[test]
+    fn test_merkle_single_leaf() {
+        let data = vec![b"only_tx".to_vec()];
+        let genesis = Hash::new(b"genesis_block");
+
+        let standard = MerkleTree::new(data.clone());
+        let golden = MerkleTree::new_with_golden(data, &genesis, 1);
+
+        // Single leaf should return the leaf hash (same for both)
+        assert_eq!(standard.root(), golden.root());
     }
 }

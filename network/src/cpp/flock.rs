@@ -17,157 +17,22 @@ use coinject_core::Hash;
 use std::collections::HashMap;
 
 // =============================================================================
-// Mathematical Constants (from GoldenSeed)
+// Re-export GoldenSeed primitives from core crate
 // =============================================================================
+// The golden primitives are now in core/src/golden.rs for use by
+// commitment and merkle tree code. Re-exported here for backward compatibility.
 
-/// Golden ratio φ = (1 + √5) / 2 ≈ 1.618033988749895
-/// The "most irrational" number - provides maximal equidistribution
-pub const PHI: f64 = 1.618033988749894848204586834365638118;
+pub use coinject_core::golden::{
+    GoldenGenerator, PHI, PHI_INV, GOLDEN_SEED, GOLDEN_EPOCH_BLOCKS,
+};
 
-/// Inverse golden ratio φ⁻¹ = φ - 1 ≈ 0.618033988749895
-pub const PHI_INV: f64 = 0.618033988749894848204586834365638118;
-
-/// Golden ratio as 32-byte seed (SHA-256 of φ's decimal expansion)
-pub const GOLDEN_SEED: [u8; 32] = [
-    0x9e, 0x37, 0x79, 0xb9, 0x7f, 0x4a, 0x7c, 0x15,
-    0xf3, 0x9c, 0xc0, 0x60, 0x5c, 0xee, 0xdc, 0x83,
-    0x41, 0x08, 0x2c, 0x12, 0x4a, 0xfc, 0x05, 0x51,
-    0xc7, 0xab, 0x88, 0x26, 0x6e, 0xcf, 0x1f, 0x17,
-];
-
-/// Murmuration epoch duration (in blocks)
-/// Flock seed rotates every epoch to prevent stale coordination
-pub const FLOCK_EPOCH_BLOCKS: u64 = 100;
+/// Murmuration epoch duration (in blocks) - alias for GOLDEN_EPOCH_BLOCKS
+/// Kept for backward compatibility with existing network code
+pub const FLOCK_EPOCH_BLOCKS: u64 = GOLDEN_EPOCH_BLOCKS;
 
 /// Murmuration phase divisions (how many phases per epoch)
 /// Nodes are assigned to phases for staggered broadcasts
 pub const FLOCK_PHASES: u64 = 8;
-
-// =============================================================================
-// Golden Ratio Stream Generator (Rust port of GoldenSeed)
-// =============================================================================
-
-/// Deterministic stream generator using the golden ratio
-///
-/// Port of GoldenSeed's UniversalQKD generator to Rust.
-/// Produces identical output given identical seeds across all platforms.
-#[derive(Debug, Clone)]
-pub struct GoldenGenerator {
-    /// Current state (256 bits)
-    state: [u8; 32],
-    /// Stream counter
-    counter: u64,
-    /// Cached fractional values for coin flips
-    frac_cache: Vec<f64>,
-}
-
-impl GoldenGenerator {
-    /// Create new generator from seed
-    pub fn new(seed: &[u8; 32]) -> Self {
-        // Initialize state via BLAKE3 hash of seed
-        let state = blake3::hash(seed);
-
-        GoldenGenerator {
-            state: *state.as_bytes(),
-            counter: 0,
-            frac_cache: Vec::with_capacity(256),
-        }
-    }
-
-    /// Create generator from flock seed (derived from chain state)
-    pub fn from_flock_seed(genesis: &Hash, height: u64) -> Self {
-        let epoch = height / FLOCK_EPOCH_BLOCKS;
-
-        // Combine genesis hash + epoch into deterministic seed
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(genesis.as_bytes());
-        hasher.update(&epoch.to_le_bytes());
-        hasher.update(&GOLDEN_SEED);
-
-        let hash = hasher.finalize();
-        Self::new(hash.as_bytes())
-    }
-
-    /// Generate next 16 bytes of deterministic stream
-    ///
-    /// Uses XOR folding for uniform distribution:
-    /// 1. Collect 256 "sifted" bits via basis matching
-    /// 2. XOR fold into 128 output bits (16 bytes)
-    pub fn next_bytes(&mut self) -> [u8; 16] {
-        let mut sifted_bits: Vec<u8> = Vec::with_capacity(256);
-
-        // Collect 256 sifted bits
-        while sifted_bits.len() < 256 {
-            // Hash state + counter
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&self.state);
-            hasher.update(&self.counter.to_le_bytes());
-            let hash = hasher.finalize();
-
-            // Basis matching: extract bits where positions 1 and 2 match
-            for byte in hash.as_bytes() {
-                if Self::basis_match(*byte) {
-                    sifted_bits.push(byte & 1);
-                    if sifted_bits.len() >= 256 {
-                        break;
-                    }
-                }
-            }
-
-            // Ratchet state forward
-            self.state = *hash.as_bytes();
-            self.counter += 1;
-        }
-
-        // XOR fold: combine first 128 bits with second 128 bits
-        let mut output = [0u8; 16];
-        for i in 0..128 {
-            let bit = sifted_bits[i] ^ sifted_bits[i + 128];
-            output[i / 8] |= bit << (i % 8);
-        }
-
-        output
-    }
-
-    /// Basis matching predicate (simulates QKD sifting)
-    /// Returns true if bits at positions 1 and 2 are equal
-    #[inline]
-    fn basis_match(byte: u8) -> bool {
-        ((byte >> 1) & 1) == ((byte >> 2) & 1)
-    }
-
-    /// Generate a golden ratio coin flip for integer z
-    ///
-    /// Uses the equidistribution property: {z·φ} is uniform in [0,1)
-    /// Returns 0 if fractional part < 0.5, else 1
-    pub fn coin_flip(&self, z: u64) -> u8 {
-        let frac = Self::golden_fractional(z);
-        if frac < 0.5 { 0 } else { 1 }
-    }
-
-    /// Compute fractional part of z·φ
-    ///
-    /// {z·φ} = z·φ - floor(z·φ)
-    #[inline]
-    pub fn golden_fractional(z: u64) -> f64 {
-        let product = (z as f64) * PHI;
-        product - product.floor()
-    }
-
-    /// Generate deterministic f64 in range [0, 1)
-    pub fn next_f64(&mut self) -> f64 {
-        let bytes = self.next_bytes();
-        let bits = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-        // Use 53 bits for f64 mantissa precision
-        (bits >> 11) as f64 / (1u64 << 53) as f64
-    }
-
-    /// Generate deterministic u64
-    pub fn next_u64(&mut self) -> u64 {
-        let bytes = self.next_bytes();
-        u64::from_le_bytes(bytes[0..8].try_into().unwrap())
-    }
-}
 
 // =============================================================================
 // Flock State (Shared Swarm Coordination)
