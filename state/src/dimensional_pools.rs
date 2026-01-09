@@ -13,6 +13,7 @@
 use coinject_core::{
     Address, Balance, DimensionalPool, Hash,
     ConsensusState, DimensionalScales, DimensionalEconomics, VivianiOracle,
+    ETA, LAMBDA, // Import dimensionless constants from core (re-exported via `pub use dimensional::*;`)
 };
 use serde::{Deserialize, Serialize};
 use redb::{Database, TableDefinition, ReadableTable};
@@ -25,9 +26,8 @@ const CONSENSUS_STATE_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new(
 const WORK_SCORE_HISTORY_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("work_score_history");
 const CONSENSUS_METRICS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("consensus_metrics");
 
-/// Satoshi Constant: η = λ = 1/√2 (critical damping at unit circle)
-pub const SATOSHI_ETA: f64 = 0.7071067811865476; // 1/√2
-pub const SATOSHI_LAMBDA: f64 = 0.7071067811865476; // 1/√2
+// Use dimensionless constants from core (no duplicates)
+// ETA and LAMBDA are imported from coinject_core::dimensional
 
 /// All 8 dimensional economic scales (dimensionless time points τn)
 /// From white paper Section 6.2: D_n = e^(-η·τ_n)
@@ -147,8 +147,8 @@ pub struct ConsensusMetrics {
 impl Default for ConsensusMetrics {
     fn default() -> Self {
         Self {
-            measured_eta: SATOSHI_ETA,       // Start at theoretical value
-            measured_lambda: SATOSHI_LAMBDA,  // Start at theoretical value
+            measured_eta: ETA,       // Start at theoretical value
+            measured_lambda: LAMBDA,  // Start at theoretical value
             measured_oracle_delta: 0.231,     // Theoretical Δ at critical equilibrium
             convergence_confidence: 0.0,      // No data yet
             sample_size: 0,
@@ -294,12 +294,12 @@ impl DimensionalPoolState {
 
     /// Calculate dimensional factor: D_n = e^(-η·τ_n)
     pub fn calculate_dimensional_factor(&self, tau: f64) -> f64 {
-        (-SATOSHI_ETA * tau).exp()
+        (-ETA * tau).exp()
     }
 
     /// Calculate phase evolution: θ(τ) = λτ = τ/√2
     pub fn calculate_phase(&self, tau: f64) -> f64 {
-        SATOSHI_LAMBDA * tau
+        LAMBDA * tau
     }
 
     /// Get normalized allocation ratio for pool
@@ -484,7 +484,7 @@ impl DimensionalPoolState {
 
     /// Get Viviani Oracle metric for current network state
     pub fn get_oracle_metric(&self) -> VivianiOracle {
-        VivianiOracle::calculate(SATOSHI_ETA, SATOSHI_LAMBDA)
+        VivianiOracle::calculate(ETA, LAMBDA)
     }
 
     /// Get complete dimensional economics state
@@ -706,7 +706,7 @@ impl DimensionalPoolState {
 
         // Take most recent window
         if entries.len() < 10 {
-            return Ok((SATOSHI_ETA, 0.0)); // Not enough data
+            return Ok((ETA, 0.0)); // Not enough data
         }
 
         let start_idx = entries.len().saturating_sub(window_size);
@@ -735,7 +735,7 @@ impl DimensionalPoolState {
         // Slope = (n·Σxy - Σx·Σy) / (n·Σx² - (Σx)²)
         let denominator = n * sum_x2 - sum_x * sum_x;
         if denominator.abs() < 1e-10 {
-            return Ok((SATOSHI_ETA, 0.0)); // Degenerate case
+            return Ok((ETA, 0.0)); // Degenerate case
         }
 
         let slope = (n * sum_xy - sum_x * sum_y) / denominator;
@@ -880,8 +880,8 @@ impl DimensionalPoolState {
     pub fn test_conjecture(&self) -> Option<ConjectureStatus> {
         let metrics = self.get_consensus_metrics()?;
 
-        let eta_error = (metrics.measured_eta - SATOSHI_ETA).abs();
-        let lambda_error = (metrics.measured_lambda - SATOSHI_LAMBDA).abs();
+        let eta_error = (metrics.measured_eta - ETA).abs();
+        let lambda_error = (metrics.measured_lambda - LAMBDA).abs();
         let delta_error = (metrics.measured_oracle_delta - 0.231).abs();
 
         Some(ConjectureStatus {
@@ -902,14 +902,14 @@ mod tests {
     fn test_satoshi_constant() {
         // Verify η = λ = 1/√2
         let sqrt_2 = 2.0_f64.sqrt();
-        assert!((SATOSHI_ETA - 1.0 / sqrt_2).abs() < 1e-10);
-        assert!((SATOSHI_LAMBDA - 1.0 / sqrt_2).abs() < 1e-10);
+        assert!((ETA - 1.0 / sqrt_2).abs() < 1e-10);
+        assert!((LAMBDA - 1.0 / sqrt_2).abs() < 1e-10);
     }
 
     #[test]
     fn test_unit_circle_constraint() {
         // Verify |μ|² = η² + λ² = 1
-        let magnitude_squared = SATOSHI_ETA.powi(2) + SATOSHI_LAMBDA.powi(2);
+        let magnitude_squared = ETA.powi(2) + LAMBDA.powi(2);
         assert!((magnitude_squared - 1.0).abs() < 1e-10);
     }
 
@@ -917,7 +917,7 @@ mod tests {
     fn test_dimensional_factors() {
         // Verify D_n = e^(-η·τ_n)
         for (_, tau, expected_d, _) in DIMENSIONAL_SCALES.iter() {
-            let calculated_d = (-SATOSHI_ETA * tau).exp();
+            let calculated_d = (-ETA * tau).exp();
             assert!((calculated_d - expected_d).abs() < 0.01,
                 "D_n mismatch for τ={}: expected {}, got {}", tau, expected_d, calculated_d);
         }
@@ -935,7 +935,7 @@ mod tests {
     fn test_phase_evolution() {
         // θ(τ) = λτ = τ/√2
         let tau = 1.0;
-        let phase = SATOSHI_LAMBDA * tau;
+        let phase = LAMBDA * tau;
         let expected = tau / 2.0_f64.sqrt();
         assert!((phase - expected).abs() < 1e-10);
     }

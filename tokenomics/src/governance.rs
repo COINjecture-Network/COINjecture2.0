@@ -4,7 +4,7 @@
 // =============================================================================
 // Rewards long-term holders across multiple dimensions
 
-use crate::dimensions::ETA;
+use coinject_core::ETA; // Import from core (single source of truth)
 use crate::pools::PoolType;
 use crate::staking::delta_critical;
 use coinject_core::Address;

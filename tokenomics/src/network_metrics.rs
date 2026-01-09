@@ -18,7 +18,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
-use crate::dimensions::ETA;
+// Import ETA from core via re-export (core/src/lib.rs does `pub use dimensional::*;`)
+// This is the single source of truth for the dimensionless constant
+use coinject_core::ETA;
 
 // =============================================================================
 // Mathematical Constants (from η = 1/√2, these are NOT arbitrary)

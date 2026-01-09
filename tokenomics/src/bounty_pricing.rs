@@ -4,7 +4,7 @@
 // =============================================================================
 // Dynamic pricing based on computational asymmetry
 
-use crate::dimensions::ETA;
+use coinject_core::ETA; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 
 /// The golden ratio φ for BEST strategy premium

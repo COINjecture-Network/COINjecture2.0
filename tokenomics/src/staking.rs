@@ -14,7 +14,7 @@
 // Users who stake across multiple dimensions receive bonuses based on
 // how close their portfolio is to the critical equilibrium.
 
-use crate::dimensions::ETA;
+use coinject_core::ETA; // Import from core (single source of truth)
 use crate::pools::PoolType;
 use coinject_core::Address;
 use serde::{Deserialize, Serialize};

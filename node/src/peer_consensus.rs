@@ -73,7 +73,9 @@ impl Default for ConsensusConfig {
             // BOOTSTRAP MODE (peers < 4): 50% - prioritizes liveness
             // SECURE MODE (peers >= 4): 80% - prioritizes safety (BFT)
             consensus_threshold: 0.80,       // Target for production
-            peer_stale_timeout: Duration::from_secs(300), // Increased to 5 minutes for sync tolerance
+            // peer_stale_timeout: Should be network-derived (ETA * network_median_peer_lifetime)
+            // For now, using ETA-scaled value: 300s * ETA ≈ 212s effective timeout
+            peer_stale_timeout: Duration::from_secs_f64(300.0 * coinject_core::ETA), // ETA-scaled peer timeout
             max_missed_rounds: 5,
         }
     }

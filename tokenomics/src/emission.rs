@@ -13,7 +13,7 @@
 //
 // The network decides its own emission through consensus strength.
 
-use crate::dimensions::ETA;
+use coinject_core::ETA; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 
 // Mathematical constants (from φ = golden ratio)

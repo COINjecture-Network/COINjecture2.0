@@ -8,7 +8,7 @@
 // - Phase Evolution: θ(τ) = λτ = τ/√2
 // - Viviani Oracle: Δ = (d₁ + d₂ + d₃)/(√3/2) - 1
 
-use coinject_core::{Address, Balance, Hash};
+use coinject_core::{Address, Balance, Hash, ETA, LAMBDA}; // Import dimensionless constants from core (re-exported)
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -16,9 +16,8 @@ use std::sync::Arc;
 // Table definition for redb
 const TRUSTLINES_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("trustlines");
 
-/// Satoshi Constant: η = λ = 1/√2 (critical damping at unit circle)
-pub const SATOSHI_ETA: f64 = 0.7071067811865476; // 1/√2
-pub const SATOSHI_LAMBDA: f64 = 0.7071067811865476; // 1/√2
+// Use dimensionless constants from core (no duplicates)
+// ETA and LAMBDA are imported from coinject_core::dimensional
 
 /// Eight dimensional economic scales for trustlines (time points in years)
 const TRUSTLINE_DIMENSIONAL_SCALES: [(u8, f64, &str); 8] = [
@@ -100,12 +99,12 @@ impl TrustLine {
         }
 
         let (_, tau_n, _) = TRUSTLINE_DIMENSIONAL_SCALES[self.dimensional_scale as usize - 1];
-        (-SATOSHI_ETA * tau_n).exp()
+        (-ETA * tau_n).exp()
     }
 
     /// Calculate phase evolution θ(τ) = λτ = τ/√2
     pub fn phase_evolution(&self) -> f64 {
-        SATOSHI_LAMBDA * self.tau
+        LAMBDA * self.tau
     }
 
     /// Calculate effective credit limit A→B with dimensional scaling

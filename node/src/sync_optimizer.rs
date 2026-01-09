@@ -2,15 +2,18 @@
 // Using η = λ = 1/√2 for optimal convergence
 // Applies exponential dimensional scaling to block sync for 20-30% speedup
 
-use coinject_tokenomics::dimensions::ETA;
+use coinject_core::{ETA, TAU_C}; // Import dimensionless constants from core
 use std::time::Duration;
 
 /// Critical damping constants
 const LAMBDA: f64 = ETA; // λ = η = 1/√2 for critical equilibrium
-const TAU_C: f64 = 20.0; // Dimensionless time scale (~√2 * block_time)
-const MAX_BATCH_SIZE: usize = 1024; // Maximum safe batch size
+// TAU_C is now imported from core (√2, the consensus time constant)
+// Note: TAU_C = √2 is dimensionless; actual time scales are TAU_C * network_median_block_time
+const MAX_BATCH_SIZE: usize = 1024; // Maximum safe batch size (could be ETA-derived: 2^10 = 1024)
 const MIN_BATCH_SIZE: usize = 10; // Minimum batch size for efficiency
-const BASE_RETRY_DELAY_MS: f64 = 500.0; // Base retry delay in milliseconds
+// BASE_RETRY_DELAY_MS should ideally be network-derived: ETA * network_median_latency
+// For now, using reasonable default that scales with ETA
+const BASE_RETRY_DELAY_MS: f64 = 500.0 * ETA; // Base retry delay scaled by ETA
 
 /// Compute exponential batch size using critical damping
 /// Uses inverted exp: D_n = 1 - e^(-η τ_n) → starts small, grows to 1

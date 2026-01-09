@@ -4,7 +4,7 @@
 // =============================================================================
 // Constant product AMM where k decays at rate η = 1/√2
 
-use crate::dimensions::ETA;
+use coinject_core::ETA; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

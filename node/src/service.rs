@@ -563,8 +563,11 @@ impl CoinjectNode {
             
             // Wait for result (with timeout)
             rt_handle.block_on(async {
+                // Timeout should be network-derived: ETA * network_median_block_time
+                // For now, using ETA-scaled default: 10s * ETA ≈ 7s effective
+                use coinject_core::ETA;
                 tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
+                    Duration::from_secs_f64(10.0 * ETA),
                     rx
                 ).await
             })
@@ -1289,6 +1292,8 @@ impl CoinjectNode {
         let validator_periodic = Arc::clone(&self.validator);
         let buffer_periodic = Arc::clone(&block_buffer);
         let network_tx_periodic = network_cmd_tx.clone();
+        let cpp_network_cmd_tx_periodic = cpp_network_cmd_tx.clone();
+        let peer_consensus_periodic = Arc::clone(&peer_consensus);
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(60)); // Check every minute
@@ -1307,6 +1312,8 @@ impl CoinjectNode {
                     &validator_periodic,
                     &buffer_periodic,
                     Some(&network_tx_periodic),
+                    Some(&cpp_network_cmd_tx_periodic),
+                    &peer_consensus_periodic,
                 ).await;
             }
         });
@@ -2802,6 +2809,8 @@ impl CoinjectNode {
         validator: &Arc<BlockValidator>,
         block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
         network_cmd_tx: Option<&mpsc::UnboundedSender<NetworkCommand>>,
+        cpp_network_cmd_tx: Option<&mpsc::UnboundedSender<CppNetworkCommand>>,
+        peer_consensus: &Arc<PeerConsensus>,
     ) {
         let current_best_height = chain.best_block_height().await;
         let current_best_hash = chain.best_block_hash().await;
@@ -2863,33 +2872,55 @@ impl CoinjectNode {
                         // Check if the buffered chain is longer than ours
                         if max_buffered_height > current_best_height {
                             println!("   🔀 Fork chain is LONGER ({} > {})", max_buffered_height, current_best_height);
-                            println!("   💡 Consider clearing local data and syncing fresh from the longer chain");
+                            println!("   💡 Requesting full chain from best peer to resolve fork");
                             
-                            // Try to validate the fork chain from the buffered blocks
-                            // If we have enough blocks and they form a valid chain from genesis,
-                            // we could replace our chain. For now, request the full chain via RR.
-                            if let Some(network_tx) = network_cmd_tx {
-                                // Use chunked RR requests instead of single large GossipSub request
-                                let chunk_size = 100u64;
-                                let mut current = 0u64;
-                                println!("   📦 Requesting fork chain in {} block chunks via RR...", chunk_size);
+                            // Use CPP network commands with best peer from peer_consensus
+                            if let Some(cpp_tx) = cpp_network_cmd_tx {
+                                // Get best peer from peer_consensus (highest height)
+                                let active_peers = peer_consensus.active_peers().await;
                                 
-                                while current <= max_buffered_height {
-                                    let end = std::cmp::min(current + chunk_size - 1, max_buffered_height);
-                                    // Note: RequestBlocks is broadcast, we don't have a specific peer here
-                                    // The fork blocks should come from status updates
-                                    if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
-                                        from_height: current,
-                                        to_height: end,
-                                    }) {
-                                        eprintln!("⚠️  Failed to request chain chunk {}-{}: {}", current, end, e);
-                                        break;
+                                if let Some((peer_id_str, peer_state)) = active_peers.iter()
+                                    .max_by_key(|(_, state)| state.best_height) {
+                                    
+                                    // Parse peer_id from hex string
+                                    if let Ok(peer_id_bytes) = hex::decode(peer_id_str) {
+                                        if peer_id_bytes.len() == 32 {
+                                            let mut peer_id = [0u8; 32];
+                                            peer_id.copy_from_slice(&peer_id_bytes[..32]);
+                                            
+                                            // Use chunked requests (16 blocks per request, CPP network limit)
+                                            const CHUNK_SIZE: u64 = 16; // MAX_BLOCKS_PER_RESPONSE
+                                            let mut current = 0u64;
+                                            println!("   📦 Requesting fork chain in {} block chunks from peer {} (height: {}) via CPP...", 
+                                                CHUNK_SIZE, &peer_id_str[..8], peer_state.best_height);
+                                            
+                                            while current <= max_buffered_height {
+                                                let end = std::cmp::min(current + CHUNK_SIZE - 1, max_buffered_height);
+                                                let request_id: u64 = rand::random();
+                                                
+                                                if let Err(e) = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+                                                    peer_id,
+                                                    from_height: current,
+                                                    to_height: end,
+                                                    request_id,
+                                                }) {
+                                                    eprintln!("⚠️  Failed to request chain chunk {}-{}: {}", current, end, e);
+                                                    break;
+                                                }
+                                                current = end + 1;
+                                            }
+                                            println!("   ✅ Requested full chain from genesis (0 to {}) in chunks via CPP", max_buffered_height);
+                                        } else {
+                                            eprintln!("⚠️  Invalid peer_id length: expected 32 bytes, got {}", peer_id_bytes.len());
+                                        }
+                                    } else {
+                                        eprintln!("⚠️  Failed to decode peer_id from hex: {}", peer_id_str);
                                     }
-                                    current = end + 1;
+                                } else {
+                                    println!("   ⚠️  No active peers available from peer_consensus, cannot request blocks");
                                 }
-                                println!("   ✅ Requested full chain from genesis (0 to {}) in chunks", max_buffered_height);
                             } else {
-                                println!("   ⚠️  No network command channel available to request full chain");
+                                println!("   ⚠️  No CPP network command channel available to request full chain");
                             }
                         } else {
                             println!("   ℹ️ Fork chain is NOT longer ({} <= {}), keeping current chain", max_buffered_height, current_best_height);
@@ -4611,11 +4642,16 @@ impl CoinjectNode {
         } else {
             // Wait for peer connections and initial chain sync before mining
             println!("⏳ Waiting for peer connections and chain sync before mining...");
+        use coinject_core::ETA;
         let mut sync_wait_interval = time::interval(Duration::from_secs(2));
         let mut sync_attempts = 0;
-        const MAX_SYNC_WAIT_ATTEMPTS: u32 = 150; // Wait up to 5 minutes for sync
+        // MAX_SYNC_WAIT_ATTEMPTS: Network-derived timeout would be ETA * network_median_sync_time
+        // For now, using ETA-scaled value: 150 attempts * 2s = 300s, scaled by ETA ≈ 212s effective
+        const MAX_SYNC_WAIT_ATTEMPTS: u32 = (150.0 * ETA) as u32; // ETA-scaled sync timeout
         let mut last_height = 0u64;
         let mut stable_height_count = 0u32;
+        // STABLE_HEIGHT_THRESHOLD: Dimensionless count, but could be ETA-scaled
+        // 3 checks ensures stability without excessive delay
         const STABLE_HEIGHT_THRESHOLD: u32 = 3; // Height must be stable for 3 checks (6 seconds)
         
         loop {

@@ -533,7 +533,14 @@ impl CppNetwork {
                 Ok(Err(e)) => {
                     // Detailed READ_ERR logging for M2 debugging
                     let err_type = match &e {
-                        crate::cpp::protocol::ProtocolError::Io(io_err) => format!("IO({})", io_err.kind()),
+                        crate::cpp::protocol::ProtocolError::Io(io_err) => {
+                            // Handle EOF gracefully - peer may have closed connection
+                            if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
+                                eprintln!("[CPP][CONN][READ_EOF] peer={} - peer closed connection gracefully", peer_id_short);
+                                break;
+                            }
+                            format!("IO({})", io_err.kind())
+                        },
                         crate::cpp::protocol::ProtocolError::InvalidMagic(_) => "InvalidMagic".to_string(),
                         crate::cpp::protocol::ProtocolError::InvalidVersion(_) => "InvalidVersion".to_string(),
                         crate::cpp::protocol::ProtocolError::InvalidMessageType(_) => "InvalidMsgType".to_string(),
@@ -693,12 +700,40 @@ impl CppNetwork {
     
     /// Connect to bootnode
     async fn connect_bootnode(&mut self, addr: SocketAddr) -> Result<(), NetworkError> {
-        // Connect TCP stream
-        let mut stream = TcpStream::connect(addr).await?;
+        // Check if peer already connected BEFORE attempting connection
+        // This prevents duplicate connections when both nodes connect simultaneously
+        {
+            let peers = self.peers.read().await;
+            // Check if any peer has this address (in case peer_id isn't known yet)
+            for peer in peers.values() {
+                if peer.addr == addr {
+                    return Err(NetworkError::InvalidHandshake("Peer already connected".to_string()));
+                }
+            }
+        }
+        
+        // Connect TCP stream with timeout
+        println!("[CPP][BOOTNODE] Connecting TCP to {}...", addr);
+        let mut stream = match tokio::time::timeout(
+            crate::cpp::config::CONNECTION_TIMEOUT,
+            TcpStream::connect(addr)
+        ).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                eprintln!("[CPP][BOOTNODE] TCP connect failed to {}: {}", addr, e);
+                return Err(NetworkError::Io(e));
+            }
+            Err(_) => {
+                eprintln!("[CPP][BOOTNODE] TCP connect timeout to {}", addr);
+                return Err(NetworkError::Timeout);
+            }
+        };
+        
+        println!("[CPP][BOOTNODE] TCP connection established to {}, starting handshake...", addr);
         
         let state = self.chain_state.read().await;
         
-        // Send Hello message first
+        // Send Hello message first (with timeout)
         let hello = HelloMessage {
             version: crate::cpp::config::VERSION,
             peer_id: self.local_peer_id,
@@ -711,10 +746,41 @@ impl CppNetwork {
                 .unwrap()
                 .as_secs(),
         };
-        MessageCodec::send_hello(&mut stream, &hello).await?;
         
-        // Receive HelloAck
-        let envelope = MessageCodec::receive(&mut stream).await?;
+        println!("[CPP][BOOTNODE] Sending Hello message to {}...", addr);
+        match tokio::time::timeout(
+            crate::cpp::config::HANDSHAKE_TIMEOUT,
+            MessageCodec::send_hello(&mut stream, &hello)
+        ).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                eprintln!("[CPP][BOOTNODE] Hello send failed to {}: {}", addr, e);
+                return Err(NetworkError::Protocol(e));
+            }
+            Err(_) => {
+                eprintln!("[CPP][BOOTNODE] Hello send timeout to {}", addr);
+                return Err(NetworkError::Timeout);
+            }
+        }
+        
+        println!("[CPP][BOOTNODE] Waiting for HelloAck from {}...", addr);
+        // Receive HelloAck (with timeout)
+        let envelope = match tokio::time::timeout(
+            crate::cpp::config::HANDSHAKE_TIMEOUT,
+            MessageCodec::receive(&mut stream)
+        ).await {
+            Ok(Ok(e)) => e,
+            Ok(Err(e)) => {
+                eprintln!("[CPP][BOOTNODE] HelloAck receive failed from {}: {}", addr, e);
+                return Err(NetworkError::Protocol(e));
+            }
+            Err(_) => {
+                eprintln!("[CPP][BOOTNODE] HelloAck receive timeout from {}", addr);
+                return Err(NetworkError::Timeout);
+            }
+        };
+        
+        println!("[CPP][BOOTNODE] Received HelloAck from {}, validating...", addr);
         let hello_ack: HelloAckMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
         
@@ -729,9 +795,18 @@ impl CppNetwork {
         
         drop(state);
         
+        // Check again if peer already connected (race condition check)
+        let peer_id = hello_ack.peer_id;
+        {
+            let peers = self.peers.read().await;
+            if peers.contains_key(&peer_id) {
+                return Err(NetworkError::InvalidHandshake("Peer already connected".to_string()));
+            }
+        }
+        
         // Create peer instance (returns peer and read half)
         let (peer, read_half) = Peer::new(
-            hello_ack.peer_id,
+            peer_id,
             addr,
             stream,
             node_type,
@@ -740,11 +815,13 @@ impl CppNetwork {
             self.chain_state.read().await.genesis_hash,
         );
         
-        let peer_id = peer.id;
-        
         // Add peer to peer list and set state to Connected
         {
             let mut peers = self.peers.write().await;
+            // Final check before inserting (double-check for race condition)
+            if peers.contains_key(&peer_id) {
+                return Err(NetworkError::InvalidHandshake("Peer already connected".to_string()));
+            }
             peers.insert(peer_id, peer);
             // Update peer state to Connected after successful handshake
             if let Some(p) = peers.get_mut(&peer_id) {

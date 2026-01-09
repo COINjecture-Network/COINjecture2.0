@@ -4,7 +4,7 @@
 // =============================================================================
 // Creates natural deflation tied to network utility
 
-use crate::dimensions::ETA;
+use coinject_core::ETA; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 
 /// Lambda constant (λ = 1/√2 = η)

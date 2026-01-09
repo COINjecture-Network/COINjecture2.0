@@ -1,10 +1,13 @@
 // Exponential Dimensional Distribution
 // η = 1/√2 = 0.7071067811865476
+//
+// IMPORTANT: Use dimensionless constants from core, not local duplicates
+// This ensures consistency across the entire codebase
 
+// Import ETA from core via re-export (core/src/lib.rs does `pub use dimensional::*;`)
+// This is the single source of truth for the dimensionless constant
+use coinject_core::ETA;
 use serde::{Deserialize, Serialize};
-
-/// The critical constant η = 1/√2
-pub const ETA: f64 = 0.7071067811865476;
 
 /// Exponential dimension with lock period
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,6 +21,7 @@ pub struct Dimension {
 
 impl Dimension {
     /// Calculate dimension scale: D_n = e^(-ηt_n)
+    /// Uses ETA from core (imported at module level)
     pub fn calculate_scale(n: u8) -> f64 {
         let t_n = n as f64;
         (-ETA * t_n).exp()

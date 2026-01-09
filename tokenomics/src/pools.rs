@@ -4,7 +4,7 @@
 // =============================================================================
 // Each pool serves a specific economic function with mathematically-derived allocations
 
-use crate::dimensions::ETA;
+use coinject_core::ETA; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

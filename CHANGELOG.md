@@ -2,6 +2,77 @@
 
 All notable changes to COINjecture will be documented in this file.
 
+## [4.8.4] - 2026-01-07
+
+### Fixed
+- **Fork Detection Uses CPP Network Commands**
+  - Fixed complete fork detection to use `CppNetworkCommand::RequestBlocks` instead of legacy `NetworkCommand::RequestBlocks`
+  - Fork detection now properly requests blocks from best peer via CPP network (routed correctly)
+  - Uses `peer_consensus` to get best peer instead of broadcast requests
+  - Blocks requested in proper chunks (16 blocks per request, CPP network limit)
+  - **Files Changed**: `node/src/service.rs`
+  - **Impact**: When a complete fork is detected, nodes can now properly request and sync the correct chain
+
+- **Connection Timeout and Error Logging**
+  - Added detailed logging for bootnode connection attempts
+  - Added timeout handling for TCP connection, Hello send, and HelloAck receive
+  - Better error messages to diagnose connection failures
+  - **Files Changed**: `network/src/cpp/network.rs`
+  - **Impact**: Easier diagnosis of connection issues between nodes
+
+### Changed
+- **Consolidated Dimensionless Constants**
+  - Removed duplicate ETA/LAMBDA definitions from 3 files (`tokenomics/src/dimensions.rs`, `state/src/dimensional_pools.rs`, `state/src/trustlines.rs`)
+  - All modules now import ETA/LAMBDA from `core::dimensional` (single source of truth)
+  - Updated 8+ tokenomics modules to use core constants
+  - Added re-export in `tokenomics/src/lib.rs` for convenience
+  - **Files Changed**: `tokenomics/src/*.rs`, `state/src/dimensional_pools.rs`, `state/src/trustlines.rs`, `core/src/dimensional.rs`
+  - **Impact**: Eliminates potential inconsistencies, improves maintainability
+
+- **Network-Derived Timeouts**
+  - Made critical timeouts ETA-scaled instead of hardcoded
+  - `MAX_SYNC_WAIT_ATTEMPTS` now uses `ETA * 150` instead of hardcoded 150
+  - Block submission timeout uses `ETA * 10s` instead of hardcoded 10s
+  - Peer stale timeout uses `ETA * 300s` instead of hardcoded 300s
+  - `TAU_C` now uses mathematical constant √2 from core instead of hardcoded 20.0
+  - **Files Changed**: `node/src/service.rs`, `node/src/peer_consensus.rs`, `node/src/sync_optimizer.rs`
+  - **Impact**: Timeouts are now self-referential and scale with network equilibrium constant
+
+### Known Issues
+- **Peer Connection Stability**
+  - **Symptom**: Server 2 (159.89.145.211) cannot maintain stable connection to Server 1 (167.172.221.42)
+  - **Observed Behavior**:
+    - Server 1 sees Server 2 as STALE peer (last seen 500+ seconds ago)
+    - Server 2 shows 0 peers despite attempting reconnection
+    - Connection attempts are made but handshake may be timing out
+    - Port 30333 is reachable (not a firewall issue)
+  - **Root Cause Analysis**:
+    - Connection attempts are logged but no error messages appear after "Attempting reconnection"
+    - Handshake may be hanging during HelloAck receive
+    - Possible race condition when both nodes attempt to connect simultaneously
+    - "Peer already connected" errors suggest duplicate connection attempts
+  - **Workarounds Attempted**:
+    - Added timeout handling for connection and handshake operations
+    - Added detailed logging to diagnose connection failures
+    - Improved duplicate connection checks in `connect_bootnode`
+  - **Next Steps Required**:
+    - Investigate why handshake hangs (may need to add timeout to MessageCodec::receive)
+    - Consider implementing connection retry with exponential backoff
+    - Review peer state management to prevent stale peer entries
+    - Consider using bidirectional connection establishment (both nodes can initiate)
+
+- **Fork Detection Requires Active Connection**
+  - **Symptom**: Fork detection fix works correctly but requires peers to be connected
+  - **Status**: Code is correct, but connection issues prevent fork detection from being tested
+  - **Impact**: Once connection stability is fixed, fork detection will automatically work
+
+- **Chain Sync Stalled on Fork**
+  - **Symptom**: Server 2 stuck at height 248 while Server 1 is at height 400+
+  - **Observed Behavior**:
+    - Server 2 detects complete fork but cannot request blocks (no active peers)
+    - Fork detection correctly identifies longer chain but cannot sync
+  - **Resolution**: Will be resolved once connection stability is fixed
+
 ## [4.8.3] - 12/28/25
 
 ### Added
