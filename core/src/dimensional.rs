@@ -26,7 +26,7 @@ pub const TAU_C: f64 = SQRT_2;
 pub const ORACLE_DELTA: f64 = 0.231;
 
 /// Golden ratio inverse φ^(-1) = (√5 - 1) / 2 ≈ 0.618034
-pub const PHI_INV: f64 = 0.618033988749895; // (√5 - 1) / 2
+// PHI_INV is canonical in golden.rs (re-exported at crate level)
 
 /// Golden ratio squared inverse φ^(-2) = (3 - √5) / 2 ≈ 0.382
 pub const PHI_INV_2: f64 = 0.381966011250105; // (3 - √5) / 2
@@ -336,6 +336,7 @@ impl DimensionalEconomics {
 
 #[cfg(test)]
 mod tests {
+    use crate::golden::PHI_INV;
     use super::*;
 
     #[test]
