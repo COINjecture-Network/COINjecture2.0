@@ -308,6 +308,9 @@ pub struct MiningConfig {
     pub target_block_time: Duration,
     pub min_difficulty: u32,
     pub max_difficulty: u32,
+    /// Block height at which golden-enhanced features activate
+    /// Before: produce v1 blocks, After: produce v2 blocks
+    pub golden_activation_height: u64,
 }
 
 impl Default for MiningConfig {
@@ -317,6 +320,18 @@ impl Default for MiningConfig {
             target_block_time: Duration::from_secs(60), // 1 minute blocks
             min_difficulty: 2,
             max_difficulty: 8,
+            golden_activation_height: 0, // Golden active from genesis
+        }
+    }
+}
+
+impl MiningConfig {
+    /// Determine block version for a given height
+    pub fn block_version_for_height(&self, height: u64) -> u32 {
+        if self.golden_activation_height > 0 && height < self.golden_activation_height {
+            1 // BLOCK_VERSION_STANDARD
+        } else {
+            2 // BLOCK_VERSION_GOLDEN
         }
     }
 }
@@ -1002,8 +1017,15 @@ impl Miner {
         let transactions_root = Self::merkle_root(&transactions);
         let solutions_root = Hash::new(&bincode::serialize(&solution).unwrap_or_default());
 
+        // Determine block version based on golden activation height
+        let block_version = self.config.block_version_for_height(height);
+        println!("[BLOCK] Producing block version={} ({}) at height={}", 
+            block_version,
+            if block_version >= 2 { "golden-enhanced" } else { "standard" },
+            height);
+
         let mut header = BlockHeader {
-            version: 1,
+            version: block_version,
             height,
             prev_hash,
             timestamp,

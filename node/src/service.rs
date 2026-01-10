@@ -237,9 +237,15 @@ impl CoinjectNode {
                 target_block_time: Duration::from_secs(config.block_time),
                 min_difficulty: config.difficulty,
                 max_difficulty: config.difficulty + 20,
+                golden_activation_height: config.golden_activation_height,
             };
 
             println!("   Miner address: {}", hex::encode(miner_address.as_bytes()));
+            if config.golden_activation_height > 0 {
+                println!("   Golden activation height: {}", config.golden_activation_height);
+            } else {
+                println!("   Golden features: active from genesis");
+            }
             println!("   Target block time: {}s", config.block_time);
             println!();
 

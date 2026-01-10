@@ -222,6 +222,17 @@ pub struct NodeConfig {
     /// WARNING: Use only for testing version upgrades
     #[arg(long)]
     pub strict_version: bool,
+
+    // ==========================================================================
+    // GOLDEN ACTIVATION (height-based upgrade)
+    // ==========================================================================
+
+    /// Block height at which golden-enhanced features activate
+    /// Before this height: produce v1 (standard) blocks
+    /// At/after this height: produce v2 (golden-enhanced) blocks
+    /// Default: 0 (golden features active from genesis)
+    #[arg(long, default_value = "0")]
+    pub golden_activation_height: u64,
 }
 
 impl NodeConfig {
@@ -344,6 +355,28 @@ impl NodeConfig {
         format!("version={} ({})", version, version_name(version))
     }
 
+    /// Determine which block version to produce at a given height
+    ///
+    /// If golden_activation_height is set:
+    /// - Heights < activation: produce v1 (standard)
+    /// - Heights >= activation: produce v2 (golden-enhanced)
+    ///
+    /// If golden_activation_height is 0, uses produce_block_version directly.
+    pub fn block_version_for_height(&self, height: u64) -> u32 {
+        if self.golden_activation_height > 0 && height < self.golden_activation_height {
+            BLOCK_VERSION_STANDARD
+        } else if self.golden_activation_height > 0 {
+            BLOCK_VERSION_GOLDEN
+        } else {
+            self.produce_block_version
+        }
+    }
+
+    /// Check if golden features should be active at a given height
+    pub fn is_golden_active(&self, height: u64) -> bool {
+        self.block_version_for_height(height) >= BLOCK_VERSION_GOLDEN
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         // Validate miner address format if provided
         if let Some(ref addr) = self.miner_address {
@@ -437,6 +470,7 @@ mod tests {
             min_block_version: 1,
             produce_block_version: 2,
             strict_version: false,
+            golden_activation_height: 0,
         }
     }
 
@@ -569,5 +603,39 @@ mod tests {
         assert_eq!(version_name(1), "standard");
         assert_eq!(version_name(2), "golden-enhanced");
         assert_eq!(version_name(99), "unknown");
+    }
+
+    // =========================================================================
+    // Golden Activation Tests
+    // =========================================================================
+
+    #[test]
+    fn test_golden_activation_height_zero() {
+        // When activation_height is 0, use produce_block_version
+        let mut config = test_config();
+        config.golden_activation_height = 0;
+        config.produce_block_version = 2;
+        
+        assert_eq!(config.block_version_for_height(0), 2);
+        assert_eq!(config.block_version_for_height(100), 2);
+        assert!(config.is_golden_active(0));
+    }
+
+    #[test]
+    fn test_golden_activation_height_set() {
+        let mut config = test_config();
+        config.golden_activation_height = 1000;
+        
+        // Before activation: v1
+        assert_eq!(config.block_version_for_height(0), 1);
+        assert_eq!(config.block_version_for_height(500), 1);
+        assert_eq!(config.block_version_for_height(999), 1);
+        assert!(!config.is_golden_active(999));
+        
+        // At/after activation: v2
+        assert_eq!(config.block_version_for_height(1000), 2);
+        assert_eq!(config.block_version_for_height(1001), 2);
+        assert_eq!(config.block_version_for_height(10000), 2);
+        assert!(config.is_golden_active(1000));
     }
 }
