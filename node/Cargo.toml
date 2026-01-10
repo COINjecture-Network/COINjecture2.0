@@ -48,7 +48,8 @@ sha2 = "0.10"
 
 [features]
 default = []
-adzdb = ["dep:adzdb"]
+# Use ADZDB for both chain and state storage (avoids Windows file locking issues)
+adzdb = ["dep:adzdb", "coinject-state/adzdb"]
 
 [dev-dependencies]
 tokio = { version = "1.35", features = ["macros", "rt-multi-thread", "test-util"] }

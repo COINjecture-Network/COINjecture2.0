@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 COINjecture Network B - Scenario Test Runner
 =============================================
@@ -19,6 +20,12 @@ import os
 import subprocess
 import sys
 import time
+
+# Fix Windows console encoding for Unicode emoji support
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path

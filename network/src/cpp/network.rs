@@ -324,11 +324,12 @@ impl CppNetwork {
         let mut sync_check_interval = interval(Duration::from_secs(10)); // Sync check every 10s
         
         println!("✅ [CPP] Event loop starting with {} intervals", 5);
-        
+
         loop {
             tokio::select! {
                 // Accept incoming connections
                 Ok((stream, addr)) = listener.accept() => {
+                    println!("[CPP][ACCEPT] Incoming connection from {}", addr);
                     let peers = self.peers.clone();
                     let router = self.router.clone();
                     let reputation = self.reputation.clone();
@@ -423,6 +424,7 @@ impl CppNetwork {
         block_provider: Arc<dyn BlockProvider>,
         _shutdown: broadcast::Receiver<()>,
     ) -> Result<(), NetworkError> {
+        println!("[CPP][INCOMING] Starting handshake with {}", addr);
         // Perform handshake
         let state = chain_state.read().await;
         let (peer_id, node_type, best_height, best_hash) = Self::handshake(
@@ -656,8 +658,10 @@ impl CppNetwork {
         local_peer_id: PeerId,
         chain_state: &ChainState,
     ) -> Result<(PeerId, NodeType, u64, Hash), NetworkError> {
+        println!("[CPP][HANDSHAKE] Waiting for Hello message...");
         // Receive Hello message
         let envelope = MessageCodec::receive(stream).await?;
+        println!("[CPP][HANDSHAKE] Received Hello message");
         
         let hello: HelloMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
@@ -688,8 +692,11 @@ impl CppNetwork {
                 .as_secs(),
         };
         
+        println!("[CPP][HANDSHAKE] Sending HelloAck...");
         MessageCodec::send_hello_ack(stream, &hello_ack).await?;
-        
+        println!("[CPP][HANDSHAKE] HelloAck sent successfully, peer_id={}",
+            hello.peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>());
+
         Ok((
             hello.peer_id,
             node_type,
@@ -1159,34 +1166,44 @@ impl CppNetwork {
     async fn broadcast_block(&self, block: Block) -> Result<(), NetworkError> {
         // Select peers (equilibrium fanout: √n × η)
         let peer_ids = self.select_broadcast_peers(MessageType::NewBlock).await;
-        
+
+        // Collect sent data info first (to avoid holding read lock while getting write lock)
+        let mut sent_info: Vec<(PeerId, usize)> = Vec::new();
+
         // Send NewBlock message to each peer
-        let peers = self.peers.read().await;
-        for peer_id in peer_ids {
-            if let Some(peer) = peers.get(&peer_id) {
-                let new_block_msg = NewBlockMessage { block: block.clone() };
-                
-                // Serialize message
-                let envelope = MessageEnvelope::new(MessageType::NewBlock, &new_block_msg)
-                    .map_err(|e| NetworkError::Protocol(e))?;
-                let data = envelope.encode();
-                
-                // Send via channel
-                if let Err(e) = peer.send_message(data.clone()) {
-                    eprintln!("Failed to send NewBlock to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
-                    continue;
-                }
-                
-                // Update peer stats
-                {
-                    let mut peers_guard = self.peers.write().await;
-                    if let Some(p) = peers_guard.get_mut(&peer_id) {
-                        p.on_message_sent(data.len());
+        {
+            let peers = self.peers.read().await;
+            for peer_id in peer_ids {
+                if let Some(peer) = peers.get(&peer_id) {
+                    let new_block_msg = NewBlockMessage { block: block.clone() };
+
+                    // Serialize message
+                    let envelope = MessageEnvelope::new(MessageType::NewBlock, &new_block_msg)
+                        .map_err(|e| NetworkError::Protocol(e))?;
+                    let data = envelope.encode();
+
+                    // Send via channel
+                    if let Err(e) = peer.send_message(data.clone()) {
+                        eprintln!("Failed to send NewBlock to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                        continue;
                     }
+
+                    // Track for stats update (will update after dropping read lock)
+                    sent_info.push((peer_id, data.len()));
+                }
+            }
+        } // Read lock dropped here
+
+        // Update peer stats (now we can safely get write lock)
+        if !sent_info.is_empty() {
+            let mut peers_guard = self.peers.write().await;
+            for (peer_id, data_len) in sent_info {
+                if let Some(p) = peers_guard.get_mut(&peer_id) {
+                    p.on_message_sent(data_len);
                 }
             }
         }
-        
+
         Ok(())
     }
     
@@ -1194,34 +1211,44 @@ impl CppNetwork {
     async fn broadcast_transaction(&self, tx: Transaction) -> Result<(), NetworkError> {
         // Select peers (equilibrium fanout)
         let peer_ids = self.select_broadcast_peers(MessageType::NewTransaction).await;
-        
+
+        // Collect sent data info first (to avoid holding read lock while getting write lock)
+        let mut sent_info: Vec<(PeerId, usize)> = Vec::new();
+
         // Send NewTransaction message to each peer
-        let peers = self.peers.read().await;
-        for peer_id in peer_ids {
-            if let Some(peer) = peers.get(&peer_id) {
-                let new_tx_msg = NewTransactionMessage { transaction: tx.clone() };
-                
-                // Serialize message
-                let envelope = MessageEnvelope::new(MessageType::NewTransaction, &new_tx_msg)
-                    .map_err(|e| NetworkError::Protocol(e))?;
-                let data = envelope.encode();
-                
-                // Send via channel
-                if let Err(e) = peer.send_message(data.clone()) {
-                    eprintln!("Failed to send NewTransaction to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
-                    continue;
-                }
-                
-                // Update peer stats
-                {
-                    let mut peers_guard = self.peers.write().await;
-                    if let Some(p) = peers_guard.get_mut(&peer_id) {
-                        p.on_message_sent(data.len());
+        {
+            let peers = self.peers.read().await;
+            for peer_id in peer_ids {
+                if let Some(peer) = peers.get(&peer_id) {
+                    let new_tx_msg = NewTransactionMessage { transaction: tx.clone() };
+
+                    // Serialize message
+                    let envelope = MessageEnvelope::new(MessageType::NewTransaction, &new_tx_msg)
+                        .map_err(|e| NetworkError::Protocol(e))?;
+                    let data = envelope.encode();
+
+                    // Send via channel
+                    if let Err(e) = peer.send_message(data.clone()) {
+                        eprintln!("Failed to send NewTransaction to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                        continue;
                     }
+
+                    // Track for stats update (will update after dropping read lock)
+                    sent_info.push((peer_id, data.len()));
+                }
+            }
+        } // Read lock dropped here
+
+        // Update peer stats (now we can safely get write lock)
+        if !sent_info.is_empty() {
+            let mut peers_guard = self.peers.write().await;
+            for (peer_id, data_len) in sent_info {
+                if let Some(p) = peers_guard.get_mut(&peer_id) {
+                    p.on_message_sent(data_len);
                 }
             }
         }
-        
+
         Ok(())
     }
     

@@ -5,7 +5,7 @@
 #[cfg(not(feature = "adzdb"))]
 use crate::chain::{ChainState, ChainBlockProvider};
 #[cfg(feature = "adzdb")]
-use crate::chain_adzdb::AdzdbChainState as ChainState;
+use crate::chain_adzdb::{AdzdbChainState as ChainState, ChainBlockProvider};
 use crate::config::NodeConfig;
 use crate::faucet::{Faucet, FaucetConfig};
 use crate::genesis::{create_genesis_block, GenesisConfig};
@@ -160,21 +160,35 @@ impl CoinjectNode {
         println!("   Best height: {}", best_height);
         println!();
 
-        // Initialize account state and advanced transaction states (sharing same DB)
+        // Initialize account state and advanced transaction states
         println!("💰 Initializing account state...");
         // Ensure parent directory exists for state database file
         let state_db_path = config.state_db_path();
         if let Some(parent) = state_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let state_db = Arc::new(redb::Database::create(state_db_path)?);
-        let state = Arc::new(AccountState::from_db(Arc::clone(&state_db)));
-        let timelock_state = Arc::new(TimeLockState::new(Arc::clone(&state_db))?);
-        let escrow_state = Arc::new(EscrowState::new(Arc::clone(&state_db))?);
-        let channel_state = Arc::new(ChannelState::new(Arc::clone(&state_db))?);
-        let trustline_state = Arc::new(TrustLineState::new(Arc::clone(&state_db))?);
-        let dimensional_pool_state = Arc::new(DimensionalPoolState::new(Arc::clone(&state_db))?);
-        let marketplace_state = Arc::new(MarketplaceState::from_db(Arc::clone(&state_db))?);
+
+        // Account state: uses ADZDB when feature is enabled (avoids Windows file locking)
+        #[cfg(not(feature = "adzdb"))]
+        let state = {
+            let state_db = Arc::new(redb::Database::create(&state_db_path)?);
+            Arc::new(AccountState::from_db(Arc::clone(&state_db)))
+        };
+        #[cfg(feature = "adzdb")]
+        let state = Arc::new(AccountState::new(&state_db_path)?);
+
+        // Advanced transaction states still use redb (they don't have Windows locking issues)
+        // Create a separate redb database for advanced states
+        let advanced_state_db_path = state_db_path.parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("advanced_state.db");
+        let advanced_state_db = Arc::new(redb::Database::create(&advanced_state_db_path)?);
+        let timelock_state = Arc::new(TimeLockState::new(Arc::clone(&advanced_state_db))?);
+        let escrow_state = Arc::new(EscrowState::new(Arc::clone(&advanced_state_db))?);
+        let channel_state = Arc::new(ChannelState::new(Arc::clone(&advanced_state_db))?);
+        let trustline_state = Arc::new(TrustLineState::new(Arc::clone(&advanced_state_db))?);
+        let dimensional_pool_state = Arc::new(DimensionalPoolState::new(Arc::clone(&advanced_state_db))?);
+        let marketplace_state = Arc::new(MarketplaceState::from_db(Arc::clone(&advanced_state_db))?);
 
         // Apply genesis if this is a new chain
         if best_height == 0 {

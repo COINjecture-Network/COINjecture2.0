@@ -17,6 +17,291 @@ const MAX_MINING_ATTEMPTS: usize = 5;
 const MINING_TIMEOUT: Duration = Duration::from_secs(60);
 const FAILURE_PENALTY_TIME: Duration = Duration::from_secs(60);
 
+// ============================================================================
+// STANDALONE BLOCKING FUNCTIONS
+// These run in spawn_blocking to avoid starving the tokio runtime
+// ============================================================================
+
+/// Mine header by finding nonce that meets difficulty target (blocking)
+/// This is a standalone function to run in spawn_blocking
+fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<(BlockHeader, Hash)> {
+    let target_prefix = "0".repeat(difficulty as usize);
+    let start_time = Instant::now();
+    let mut hashes = 0u64;
+
+    println!("🎯 Mining target: hash must start with '{}'", target_prefix);
+
+    for nonce in 0..u64::MAX {
+        header.nonce = nonce;
+        let hash = header.hash();
+        hashes += 1;
+
+        let hash_hex = hex::encode(hash.as_bytes());
+
+        // Debug: Print first few hash samples
+        if nonce < 5 {
+            println!("  Sample hash #{}: {}", nonce, hash_hex);
+        }
+
+        if hash_hex.starts_with(&target_prefix) {
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let hash_rate = hashes as f64 / elapsed;
+            println!("✅ Found nonce {} after {} hashes ({:.2} H/s)", nonce, hashes, hash_rate);
+            println!("   Block hash: {}", hash_hex);
+            return Some((header, hash));
+        }
+
+        // Print progress every million hashes
+        if nonce % 1_000_000 == 0 && nonce > 0 {
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let hash_rate = hashes as f64 / elapsed;
+            println!("⛏️  Mining... {} hashes ({:.2} H/s) | Latest: {}...",
+                hashes, hash_rate, &hash_hex[..16]);
+        }
+    }
+
+    None
+}
+
+/// Solve NP-hard problem (blocking) - standalone function for spawn_blocking
+fn solve_problem_blocking(problem: ProblemType) -> Option<(Solution, Duration, usize)> {
+    let start_time = Instant::now();
+    let mut memory_used = 0;
+
+    let solution = match &problem {
+        ProblemType::SubsetSum { numbers, target } => {
+            solve_subset_sum_blocking(numbers, *target, &mut memory_used)
+        }
+        ProblemType::SAT { variables, clauses } => {
+            let timeout = Duration::from_secs(30);
+            if *variables <= 32 {
+                solve_sat_brute_force_blocking(*variables, clauses, &mut memory_used, start_time, timeout)
+            } else {
+                solve_sat_with_timeout_blocking(*variables, clauses, &mut memory_used, timeout, start_time)
+            }
+        }
+        ProblemType::TSP { cities, distances } => {
+            solve_tsp_blocking(*cities, distances, &mut memory_used)
+        }
+        ProblemType::Custom { .. } => None,
+    };
+
+    let solve_time = start_time.elapsed();
+    solution.map(|s| (s, solve_time, memory_used))
+}
+
+/// Subset sum solver (blocking standalone)
+fn solve_subset_sum_blocking(numbers: &[i64], target: i64, memory: &mut usize) -> Option<Solution> {
+    let n = numbers.len();
+    let sum: i64 = numbers.iter().sum();
+
+    if target > sum || target < 0 {
+        return None;
+    }
+
+    let offset = sum.abs() as usize;
+    let range = (2 * offset + 1) as usize;
+    let mut dp = vec![vec![false; range]; n + 1];
+    *memory += dp.len() * dp[0].len();
+
+    dp[0][offset] = true;
+
+    for i in 1..=n {
+        for j in 0..range {
+            dp[i][j] = dp[i-1][j];
+            let num = numbers[i-1];
+            let prev_idx = j as i64 - num;
+            if prev_idx >= 0 && prev_idx < range as i64 {
+                dp[i][j] |= dp[i-1][prev_idx as usize];
+            }
+        }
+    }
+
+    let target_idx = (offset as i64 + target) as usize;
+    if !dp[n][target_idx] {
+        return None;
+    }
+
+    let mut indices = Vec::new();
+    let mut curr_sum = target;
+    for i in (1..=n).rev() {
+        if curr_sum == 0 {
+            break;
+        }
+        let num = numbers[i-1];
+        if curr_sum >= num {
+            let prev_idx = (offset as i64 + curr_sum - num) as usize;
+            if prev_idx < range && dp[i-1][prev_idx] {
+                indices.push(i-1);
+                curr_sum -= num;
+            }
+        }
+    }
+
+    indices.reverse();
+    Some(Solution::SubsetSum(indices))
+}
+
+/// SAT brute force solver (blocking standalone)
+fn solve_sat_brute_force_blocking(
+    variables: usize,
+    clauses: &[Clause],
+    memory: &mut usize,
+    start_time: Instant,
+    timeout: Duration,
+) -> Option<Solution> {
+    *memory += variables * std::mem::size_of::<bool>();
+
+    let max_iterations = 1u64 << variables.min(32);
+
+    for assignment_bits in 0..max_iterations {
+        if start_time.elapsed() > timeout {
+            return None;
+        }
+
+        let mut assignment = vec![false; variables];
+        for j in 0..variables.min(32) {
+            assignment[j] = (assignment_bits >> j) & 1 == 1;
+        }
+
+        // Check if this assignment satisfies all clauses
+        // Literal format: positive = variable is true, negative = variable is false
+        let satisfied = clauses.iter().all(|clause| {
+            clause.literals.iter().any(|&literal| {
+                let var_idx = (literal.abs() - 1) as usize;
+                if var_idx < assignment.len() {
+                    (literal > 0) == assignment[var_idx]
+                } else {
+                    false
+                }
+            })
+        });
+
+        if satisfied {
+            return Some(Solution::SAT(assignment));
+        }
+    }
+
+    None
+}
+
+/// SAT solver with timeout (blocking standalone) - DPLL algorithm
+fn solve_sat_with_timeout_blocking(
+    variables: usize,
+    clauses: &[Clause],
+    memory: &mut usize,
+    timeout: Duration,
+    start_time: Instant,
+) -> Option<Solution> {
+    *memory += variables * std::mem::size_of::<bool>();
+
+    let mut assignment = vec![false; variables];
+
+    fn dpll(
+        clauses: &[Clause],
+        assignment: &mut Vec<bool>,
+        var_idx: usize,
+        start_time: Instant,
+        timeout: Duration,
+    ) -> bool {
+        if start_time.elapsed() > timeout {
+            return false;
+        }
+
+        // Check if all clauses are satisfied
+        // Literal format: positive = variable is true, negative = variable is false
+        let all_satisfied = clauses.iter().all(|clause| {
+            clause.literals.iter().any(|&literal| {
+                let idx = (literal.abs() - 1) as usize;
+                if idx < assignment.len() {
+                    (literal > 0) == assignment[idx]
+                } else {
+                    false
+                }
+            })
+        });
+
+        if all_satisfied {
+            return true;
+        }
+
+        // Check if any clause is unsatisfiable with current partial assignment
+        let any_unsatisfiable = clauses.iter().any(|clause| {
+            clause.literals.iter().all(|&literal| {
+                let idx = (literal.abs() - 1) as usize;
+                if idx < var_idx {
+                    // Only check already-assigned variables
+                    (literal > 0) != assignment[idx]
+                } else {
+                    false
+                }
+            })
+        });
+
+        if any_unsatisfiable {
+            return false;
+        }
+
+        if var_idx >= assignment.len() {
+            return false;
+        }
+
+        assignment[var_idx] = true;
+        if dpll(clauses, assignment, var_idx + 1, start_time, timeout) {
+            return true;
+        }
+
+        assignment[var_idx] = false;
+        dpll(clauses, assignment, var_idx + 1, start_time, timeout)
+    }
+
+    if dpll(clauses, &mut assignment, 0, start_time, timeout) {
+        Some(Solution::SAT(assignment))
+    } else {
+        None
+    }
+}
+
+/// TSP solver (blocking standalone)
+fn solve_tsp_blocking(cities: usize, distances: &[Vec<u64>], memory: &mut usize) -> Option<Solution> {
+    if cities == 0 {
+        return None;
+    }
+
+    *memory += cities * std::mem::size_of::<usize>();
+
+    let mut tour = Vec::with_capacity(cities);
+    let mut visited = vec![false; cities];
+
+    tour.push(0);
+    visited[0] = true;
+
+    while tour.len() < cities {
+        let current = *tour.last().unwrap();
+        let mut best_next = None;
+        let mut best_dist = u64::MAX;
+
+        for next in 0..cities {
+            if !visited[next] {
+                let dist = distances[current][next];
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_next = Some(next);
+                }
+            }
+        }
+
+        if let Some(next) = best_next {
+            tour.push(next);
+            visited[next] = true;
+        } else {
+            break;
+        }
+    }
+
+    Some(Solution::TSP(tour))
+}
+
 /// Mining configuration
 pub struct MiningConfig {
     pub miner_address: Address,
@@ -607,7 +892,13 @@ impl Miner {
             println!("Generated problem: {:?}", problem);
 
             // 2. Solve the problem and measure performance
-            if let Some(result) = self.solve_problem(&problem) {
+            // Use spawn_blocking to avoid starving the tokio runtime
+            let problem_clone = problem.clone();
+            let solve_result = tokio::task::spawn_blocking(move || {
+                solve_problem_blocking(problem_clone)
+            }).await.ok().flatten();
+
+            if let Some(result) = solve_result {
                 break (problem, result);
             }
 
@@ -732,7 +1023,12 @@ impl Miner {
         };
 
         // 8. Mine the header (find nonce that meets difficulty)
-        let header_hash = self.mine_header(&mut header)?;
+        // Use spawn_blocking to avoid starving the tokio runtime
+        let difficulty = self.difficulty;
+        let (mined_header, header_hash) = tokio::task::spawn_blocking(move || {
+            mine_header_blocking(header, difficulty)
+        }).await.ok().flatten()?;
+        let header = mined_header; // Use the mined header with correct nonce
         println!("Header mined: {:?}", header_hash);
 
         // 9. Calculate block reward and create coinbase transaction

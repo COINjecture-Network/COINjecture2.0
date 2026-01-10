@@ -382,6 +382,52 @@ pub struct ChainStats {
     pub data_size: u64,
 }
 
+// BlockProvider implementation for CPP network sync
+use coinject_network::cpp::BlockProvider;
+
+/// Wrapper that implements BlockProvider for AdzdbChainState
+///
+/// This adapter bridges the node's chain storage (AdzdbChainState) with the
+/// CPP network's block provider interface, enabling the network to serve
+/// blocks to peers during sync.
+pub struct ChainBlockProvider {
+    chain: std::sync::Arc<AdzdbChainState>,
+    /// Cached best height (updated on block storage)
+    best_height: std::sync::Arc<tokio::sync::RwLock<u64>>,
+}
+
+impl ChainBlockProvider {
+    /// Create new block provider wrapping a ChainState
+    pub fn new(chain: std::sync::Arc<AdzdbChainState>) -> Self {
+        let best_height = chain.best_height_ref();
+        ChainBlockProvider {
+            chain,
+            best_height,
+        }
+    }
+}
+
+impl BlockProvider for ChainBlockProvider {
+    fn get_block_by_height(&self, height: u64) -> Option<Block> {
+        match self.chain.get_block_by_height(height) {
+            Ok(block) => block,
+            Err(e) => {
+                eprintln!("[BlockProvider] Error fetching block at height {}: {}", height, e);
+                None
+            }
+        }
+    }
+
+    fn get_best_height(&self) -> u64 {
+        // Use blocking read since BlockProvider is sync
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                *self.best_height.read().await
+            })
+        })
+    }
+}
+
 // Implement BlockchainReader trait for RPC access
 impl coinject_rpc::BlockchainReader for AdzdbChainState {
     fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, String> {

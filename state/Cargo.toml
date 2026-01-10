@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = []
+# Use ADZDB for state storage (avoids Windows file locking issues)
+adzdb = []
+
 [dependencies]
 coinject-core = { path = "../core" }
 redb.workspace = true
