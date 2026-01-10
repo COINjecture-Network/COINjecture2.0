@@ -652,32 +652,53 @@ impl CppNetwork {
         Ok(())
     }
     
-    /// Perform handshake with peer
+    /// Perform handshake with peer (incoming connection)
+    ///
+    /// IMPORTANT: This function now has timeouts matching connect_bootnode() to prevent
+    /// silent hangs when the remote peer doesn't respond. This fixes the asymmetric
+    /// timeout issue where outgoing connections had timeouts but incoming did not.
     async fn handshake(
         stream: &mut TcpStream,
         local_peer_id: PeerId,
         chain_state: &ChainState,
     ) -> Result<(PeerId, NodeType, u64, Hash), NetworkError> {
-        println!("[CPP][HANDSHAKE] Waiting for Hello message...");
-        // Receive Hello message
-        let envelope = MessageCodec::receive(stream).await?;
+        println!("[CPP][HANDSHAKE] Waiting for Hello message (timeout: {:?})...",
+            crate::cpp::config::HANDSHAKE_TIMEOUT);
+
+        // Receive Hello message WITH TIMEOUT (fixes silent hang issue)
+        let envelope = match tokio::time::timeout(
+            crate::cpp::config::HANDSHAKE_TIMEOUT,
+            MessageCodec::receive(stream)
+        ).await {
+            Ok(Ok(e)) => e,
+            Ok(Err(e)) => {
+                eprintln!("[CPP][HANDSHAKE] Hello receive failed: {}", e);
+                return Err(NetworkError::Protocol(e));
+            }
+            Err(_) => {
+                eprintln!("[CPP][HANDSHAKE] Hello receive timeout - peer did not send Hello in time");
+                return Err(NetworkError::Timeout);
+            }
+        };
         println!("[CPP][HANDSHAKE] Received Hello message");
-        
+
         let hello: HelloMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
-        
+
         // Validate genesis hash
         if hello.genesis_hash != chain_state.genesis_hash {
+            eprintln!("[CPP][HANDSHAKE] Genesis hash mismatch: expected {:?}, got {:?}",
+                chain_state.genesis_hash, hello.genesis_hash);
             return Err(NetworkError::InvalidHandshake(format!(
                 "Genesis hash mismatch: expected {:?}, got {:?}",
                 chain_state.genesis_hash, hello.genesis_hash
             )));
         }
-        
+
         // Convert node_type from u8
         let node_type = NodeType::from_u8(hello.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
-        
+
         // Send HelloAck
         let hello_ack = HelloAckMessage {
             version: crate::cpp::config::VERSION,
@@ -691,9 +712,26 @@ impl CppNetwork {
                 .unwrap()
                 .as_secs(),
         };
-        
-        println!("[CPP][HANDSHAKE] Sending HelloAck...");
-        MessageCodec::send_hello_ack(stream, &hello_ack).await?;
+
+        println!("[CPP][HANDSHAKE] Sending HelloAck (timeout: {:?})...",
+            crate::cpp::config::HANDSHAKE_TIMEOUT);
+
+        // Send HelloAck WITH TIMEOUT (fixes silent hang on write)
+        match tokio::time::timeout(
+            crate::cpp::config::HANDSHAKE_TIMEOUT,
+            MessageCodec::send_hello_ack(stream, &hello_ack)
+        ).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                eprintln!("[CPP][HANDSHAKE] HelloAck send failed: {}", e);
+                return Err(NetworkError::Protocol(e));
+            }
+            Err(_) => {
+                eprintln!("[CPP][HANDSHAKE] HelloAck send timeout - peer not accepting data");
+                return Err(NetworkError::Timeout);
+            }
+        }
+
         println!("[CPP][HANDSHAKE] HelloAck sent successfully, peer_id={}",
             hello.peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>());
 
