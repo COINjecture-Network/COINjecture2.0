@@ -1,11 +1,14 @@
 // =============================================================================
 // COINjecture WebSocket RPC - Light Client Support
 // =============================================================================
+//
+// NOTE: Some message handlers are prepared for future protocol extensions
+#![allow(dead_code)]
 
-use coinject_core::{Block, Transaction, Hash, Address, BlockHeader, ProblemType};
+use coinject_core::{Transaction, Hash, Address, ProblemType};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, RwLock, broadcast};
-use tokio_tungstenite::{accept_async, WebSocketStream, tungstenite::Message};
+use tokio_tungstenite::{accept_async, tungstenite::Message};
 use futures::{StreamExt, SinkExt};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;

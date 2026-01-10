@@ -37,9 +37,6 @@ pub fn max_viviani_bonus() -> f64 {
     delta_critical()
 }
 
-/// Golden ratio inverse for scaling
-const PHI_INV: f64 = 0.6180339887498949;
-
 // =============================================================================
 // Network-Derived Metrics
 // =============================================================================
@@ -243,8 +240,8 @@ impl StakingPortfolio {
     /// Calculate staking multiplier based on Viviani oracle
     /// multiplier = 1 + bonus, where bonus is based on diversification
     /// NO HARDCODED MAX - bonus naturally bounded by mathematics
-    pub fn calculate_multiplier(&self, metrics: &StakingMetrics) -> f64 {
-        let (eta, lambda) = self.calculate_eta_lambda();
+    pub fn calculate_multiplier(&self, _metrics: &StakingMetrics) -> f64 {
+        let (_eta, lambda) = self.calculate_eta_lambda();
         
         // No positions = no bonus
         if self.positions.is_empty() {

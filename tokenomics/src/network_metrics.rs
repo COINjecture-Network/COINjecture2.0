@@ -18,19 +18,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
-// Import ETA from core via re-export (core/src/lib.rs does `pub use dimensional::*;`)
-// This is the single source of truth for the dimensionless constant
-use coinject_core::ETA;
+// Import from core (single source of truth for dimensionless constants)
+use coinject_core::{ETA, PHI, PHI_INV};
 
 // =============================================================================
 // Mathematical Constants (from η = 1/√2, these are NOT arbitrary)
 // =============================================================================
-
-/// Golden ratio φ = (1 + √5) / 2 ≈ 1.618 (used for natural scaling)
-pub const PHI: f64 = 1.618033988749895;
-
-/// Inverse golden ratio 1/φ ≈ 0.618
-pub const PHI_INV: f64 = 0.6180339887498949;
 
 /// Viviani critical delta Δ_c ≈ 0.231 (mathematical derivation)
 pub const DELTA_CRITICAL: f64 = 0.23105857863000487;

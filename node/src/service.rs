@@ -1,5 +1,8 @@
 // Node Service
 // Main orchestrator tying all components together
+//
+// NOTE: Many protocol handlers are prepared for future protocol extensions
+#![allow(dead_code)]
 
 // Conditional ChainState: uses ADZDB when compiled with --features adzdb
 #[cfg(not(feature = "adzdb"))]

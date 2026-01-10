@@ -8,6 +8,9 @@
 //
 // INSTITUTIONAL QUALITY: This is the single integration point between
 // blockchain state and economic calculations.
+//
+// NOTE: Some trackers are prepared for future metrics integration
+#![allow(dead_code)]
 
 use coinject_core::Block;
 use coinject_tokenomics::network_metrics::{NetworkMetrics, NetworkSnapshot, FaultType};

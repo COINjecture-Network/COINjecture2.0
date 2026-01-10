@@ -4,11 +4,8 @@
 // =============================================================================
 // Dynamic pricing based on computational asymmetry
 
-use coinject_core::ETA; // Import from core (single source of truth)
+use coinject_core::{ETA, PHI}; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
-
-/// The golden ratio φ for BEST strategy premium
-pub const PHI: f64 = 1.618033988749895;
 
 /// Euler's number for STATISTICAL strategy premium
 pub const E: f64 = 2.718281828459045;

@@ -1,5 +1,8 @@
 // JSON-RPC Server for COINjecture Network B
 // Provides wallet and client API access
+//
+// NOTE: Some error codes are prepared for future RPC methods
+#![allow(dead_code)]
 
 use coinject_core::{
     Address, Balance, Block, BlockHeader, Hash, Transaction,

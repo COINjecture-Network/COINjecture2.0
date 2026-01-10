@@ -1,5 +1,8 @@
 // Hugging Face API Client
 // Handles communication with Hugging Face Dataset API
+//
+// NOTE: Some fields are for future buffer optimization features
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize, Serializer, Deserializer};
 use serde_json::Value;

@@ -100,9 +100,11 @@ impl MessageType {
 }
 
 /// Message priority based on dimensional scales
-/// 
+///
 /// Each priority level corresponds to a dimensional scale Dₙ = e^(-τₙ/√2)
+/// Names use D{n}_ prefix to match dimensional notation in whitepaper
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(non_camel_case_types)]
 pub enum MessagePriority {
     D1_Critical = 1,      // τ = 0.00, scale = 1.000 (immediate)
     D2_High = 2,          // τ = 0.20, scale = 0.867

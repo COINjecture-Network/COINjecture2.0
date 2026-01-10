@@ -6,6 +6,9 @@
 // - Dimensional message priorities
 // - RPC-integrated light client mining
 // - Simple, debuggable architecture
+//
+// NOTE: Some protocol components are prepared for future protocol extensions
+#![allow(dead_code)]
 
 pub mod config;
 pub mod message;

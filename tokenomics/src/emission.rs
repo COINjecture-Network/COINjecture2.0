@@ -16,9 +16,8 @@
 use coinject_core::ETA; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 
-// Mathematical constants (from φ = golden ratio)
+// Mathematical constant (from φ = golden ratio)
 const PHI: f64 = 1.618033988749895;
-const PHI_INV: f64 = 0.6180339887498949;
 
 // =============================================================================
 // Network-Derived Metrics

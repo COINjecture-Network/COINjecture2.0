@@ -8,6 +8,9 @@
 // - Validator: Block production, high validation speed
 // - Bounty: NP-problem solving focused
 // - Oracle: External data feeds
+//
+// NOTE: Some methods are prepared for future node type classification
+#![allow(dead_code)]
 
 use clap::{Parser, ValueEnum};
 use coinject_core::{BLOCK_VERSION_STANDARD, BLOCK_VERSION_GOLDEN};

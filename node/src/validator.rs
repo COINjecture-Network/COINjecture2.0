@@ -1,5 +1,8 @@
 // Block Validator
 // Comprehensive block and transaction validation
+//
+// NOTE: Full validation integration is prepared for future use
+#![allow(dead_code)]
 
 use coinject_core::{Block, Hash};
 use coinject_state::AccountState;

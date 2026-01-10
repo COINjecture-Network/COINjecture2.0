@@ -98,6 +98,7 @@ impl<'de> serde::Deserialize<'de> for Ed25519Signature {
 
 /// Merkle tree for transaction/solution compaction
 pub struct MerkleTree {
+    #[allow(dead_code)]
     leaves: Vec<Hash>,
     root: Hash,
 }

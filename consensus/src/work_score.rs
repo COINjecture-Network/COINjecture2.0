@@ -46,6 +46,7 @@ impl WorkScoreCalculator {
     
     /// Get base constant from network (or default)
     /// In production, this would query NetworkMetrics for median work score
+    #[allow(dead_code)]
     async fn get_base_constant(&self) -> f64 {
         // For now, use 1.0 as default
         // In full implementation, would query:
@@ -56,7 +57,7 @@ impl WorkScoreCalculator {
     
     /// Update base constant from network metrics
     pub async fn update_from_network(&mut self) {
-        if let Some(ref metrics) = self.network_metrics {
+        if let Some(ref _metrics) = self.network_metrics {
             // In production, would calculate median work score from network history
             // For now, keep base_constant = 1.0 (normalization happens in calculate_async)
             // The async version normalizes directly against network average

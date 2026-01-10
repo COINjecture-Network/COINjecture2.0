@@ -6,6 +6,9 @@
 // 2. Negative UNL equivalent (filter unreliable peers)
 // 3. Work score comparison (not just height)
 // 4. Deterministic sync decisions
+//
+// NOTE: Full peer consensus integration is prepared for future use
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

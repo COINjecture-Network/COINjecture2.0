@@ -8,6 +8,9 @@
 // 3. Protocol Handlers (how each node type responds to messages)
 // 4. Resource Management (storage, bandwidth, compute allocation)
 //
+// NOTE: Full node type orchestration is prepared for future use
+#![allow(dead_code)]
+//
 // Architecture:
 // ┌─────────────────────────────────────────────────────────────────┐
 // │                    NodeTypeManager                               │

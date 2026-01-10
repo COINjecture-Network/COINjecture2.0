@@ -410,7 +410,7 @@ impl Miner {
 
         // Calculate dimensionless time τ = block_height / τ_c
         let tau = (block_height as f64) / TAU_C;
-        let consensus_state = ConsensusState::at_tau(tau);
+        let _consensus_state = ConsensusState::at_tau(tau);
 
         // Get adaptive problem size from difficulty adjuster
         // This adjusts based on actual solve times to target network-derived optimal times
@@ -425,7 +425,7 @@ impl Miner {
                 // Subset Sum - Generate SOLVABLE problem by selecting a random subset first
                 // Use async version if network metrics available, otherwise sync version
                 let problem_size = if has_metrics {
-                    let mut adjuster = self.difficulty_adjuster.write().await;
+                    let adjuster = self.difficulty_adjuster.write().await;
                     adjuster.size_for_problem_type_async("SubsetSum").await
                 } else {
                     let adjuster = self.difficulty_adjuster.read().await;
@@ -450,7 +450,7 @@ impl Miner {
             1 => {
                 // SAT (Boolean Satisfiability) - Generate SATISFIABLE problem
                 let variables = if has_metrics {
-                    let mut adjuster = self.difficulty_adjuster.write().await;
+                    let adjuster = self.difficulty_adjuster.write().await;
                     adjuster.size_for_problem_type_async("SAT").await
                 } else {
                     let adjuster = self.difficulty_adjuster.read().await;
@@ -495,7 +495,7 @@ impl Miner {
             _ => {
                 // TSP (Traveling Salesman Problem)
                 let cities = if has_metrics {
-                    let mut adjuster = self.difficulty_adjuster.write().await;
+                    let adjuster = self.difficulty_adjuster.write().await;
                     adjuster.size_for_problem_type_async("TSP").await
                 } else {
                     let adjuster = self.difficulty_adjuster.read().await;
@@ -645,6 +645,7 @@ impl Miner {
     }
 
     /// SAT solver using random search (legacy, not used)
+    #[allow(dead_code)]
     fn solve_sat(&self, variables: usize, clauses: &[Clause], memory: &mut usize) -> Option<Solution> {
         // Simple randomized search (not full DPLL for simplicity)
         *memory += variables * 8;
@@ -1024,7 +1025,7 @@ impl Miner {
             if block_version >= 2 { "golden-enhanced" } else { "standard" },
             height);
 
-        let mut header = BlockHeader {
+        let header = BlockHeader {
             version: block_version,
             height,
             prev_hash,
@@ -1077,6 +1078,7 @@ impl Miner {
     }
 
     /// Mine header by finding nonce that meets difficulty target
+    #[allow(dead_code)]
     fn mine_header(&self, header: &mut BlockHeader) -> Option<Hash> {
         let target_prefix = "0".repeat(self.difficulty as usize);
         let start_time = Instant::now();

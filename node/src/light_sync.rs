@@ -11,6 +11,9 @@
 // https://eprint.iacr.org/2019/226.pdf
 //
 // CRITICAL: This enables verification of 1M+ block chains with tiny proofs!
+//
+// NOTE: Many methods are prepared for future light client protocol integration
+#![allow(dead_code)]
 
 use coinject_core::{golden::GoldenGenerator, BlockHeader, Hash};
 use serde::{Deserialize, Serialize};

@@ -6,8 +6,11 @@
 // - Feed C: reorg_events - Forensic log of chain reorganizations
 //
 // This module implements idempotent, crash-safe streaming with local state persistence.
+//
+// NOTE: Some fields are for future k-confirmation features
+#![allow(dead_code)]
 
-use crate::client::{HuggingFaceClient, HuggingFaceConfig, ClientError};
+use crate::client::ClientError;
 use coinject_core::{Block, Hash};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};

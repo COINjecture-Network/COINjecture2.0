@@ -3,6 +3,9 @@
 //
 // This module exports comprehensive metrics for proving that the mathematical
 // theory translates to real-world network behavior.
+//
+// NOTE: Some metrics functions are prepared for future dashboard integration
+#![allow(dead_code)]
 
 use lazy_static::lazy_static;
 use prometheus::{

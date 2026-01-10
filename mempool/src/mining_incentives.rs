@@ -39,7 +39,8 @@ pub struct MiningIncentives {
     distributor: DimensionalDistributor,
     /// D3 bounty pool accumulated from block rewards
     d3_pool: Balance,
-    /// Marketplace problem selection weights
+    /// Marketplace problem selection weights (for future weighted selection)
+    #[allow(dead_code)]
     problem_weights: HashMap<Hash, f64>,
 }
 

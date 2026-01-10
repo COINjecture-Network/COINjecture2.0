@@ -11,7 +11,7 @@
 //! - Self-referenced, dimensionless financial primitives
 
 use serde::{Deserialize, Serialize};
-use std::f64::consts::{E, SQRT_2};
+use std::f64::consts::SQRT_2;
 
 /// The Satoshi Constant: η = λ = 1/√2 (Theorem 1 from whitepaper)
 /// This is the unique critical equilibrium providing optimal stability without oscillation

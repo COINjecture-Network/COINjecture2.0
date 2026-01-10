@@ -13,8 +13,7 @@
 // - Min/Max targets: Optimal * PHI_INV / PHI (mathematical bounds)
 // - Problem size limits: Percentiles from historical solve times
 
-use coinject_tokenomics::{NetworkMetrics, ETA};
-use coinject_tokenomics::network_metrics::{PHI, PHI_INV};
+use coinject_tokenomics::{NetworkMetrics, ETA, PHI, PHI_INV};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
@@ -530,6 +529,7 @@ impl DifficultyAdjuster {
         variance.sqrt()
     }
 
+    #[allow(dead_code)]
     fn dynamic_cap(&self, base_max: usize, hardness: f64) -> usize {
         let stall_factor = 1.0 - (self.stall_counter as f64 * 0.05).min(0.5);
         let adaptive = (base_max as f64 * hardness * stall_factor).round() as usize;

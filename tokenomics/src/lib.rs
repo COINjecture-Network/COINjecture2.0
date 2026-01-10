@@ -48,6 +48,5 @@ pub use amm::*;
 pub use governance::*;
 
 // Re-export dimensionless constants from core (single source of truth)
-// Note: These are re-exported from core via `pub use dimensional::*;`
-pub use coinject_core::{ETA, LAMBDA, TAU_C};
-pub use coinject_core::golden::PHI_INV; // Canonical source
+// Note: These are re-exported from core via `pub use dimensional::*;` and `pub use golden::*;`
+pub use coinject_core::{ETA, LAMBDA, TAU_C, PHI, PHI_INV};

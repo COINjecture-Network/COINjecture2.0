@@ -18,6 +18,9 @@
 // Sync Modes:
 // 1. Full Header Sync: Download all headers (traditional SPV)
 // 2. FlyClient Sync: Probabilistic verification with O(log n) proofs (via light_sync.rs)
+//
+// NOTE: Full light client protocol integration is prepared for future release
+#![allow(dead_code)]
 
 use coinject_core::{Block, BlockHeader, Hash};
 use serde::{Deserialize, Serialize};

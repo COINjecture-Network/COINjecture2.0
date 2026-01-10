@@ -1,5 +1,8 @@
 // Keystore for managing Ed25519 keypairs
 // Stores encrypted keys in ~/.coinject/wallets/
+//
+// NOTE: Some signing methods are prepared for future transaction types
+#![allow(dead_code)]
 
 use anyhow::{anyhow, Result};
 use coinject_core::Address;

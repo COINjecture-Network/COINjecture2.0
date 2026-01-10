@@ -15,14 +15,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 // Mathematical constant η = 1/√2 (not arbitrary - from dimensional theory)
 const ETA: f64 = 0.7071067811865476;
-
-// Golden ratio inverse (mathematical, not arbitrary)
-const PHI_INV: f64 = 0.6180339887498949;
 
 // =============================================================================
 // Problem Types
