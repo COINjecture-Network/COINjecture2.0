@@ -30,8 +30,8 @@ tokio = { version = "1.41", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
 
-# Networking
-libp2p = { version = "0.54", features = ["tcp", "tokio", "noise", "yamux", "gossipsub", "mdns", "kad", "identify", "macros", "autonat", "relay", "request-response"] }
+# Networking - CPP (COINjecture P2P Protocol) uses only std lib TCP
+# libp2p removed - see network/src/cpp/ for the custom protocol
 
 # Cryptography
 sha2 = "0.10"
