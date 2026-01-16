@@ -11,6 +11,14 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
+// Import unified timeout constants from network layer
+// These are ETA-derived to maintain dimensional consistency
+use coinject_network::cpp::timeouts::{
+    consensus_stale_threshold,
+    consensus_peer_timeout,
+    MAX_MISSED_ROUNDS_CONSENSUS,
+};
+
 /// Peer reliability tracking for Negative UNL equivalent
 #[derive(Debug, Clone)]
 pub struct PeerState {
@@ -41,10 +49,11 @@ impl PeerState {
     }
     
     /// Check if peer is stale (hasn't reported recently)
-    /// Uses 300 second (5 minute) timeout to handle slow sync and connection churn
-    /// Increased from 120s to prevent false positives during sync
+    /// Uses unified timeout from network layer: NETWORK × (1 + η) ≈ 153s
+    /// This ETA-derived threshold provides a grace period beyond the network timeout
+    /// while maintaining dimensional consistency across the system
     pub fn is_stale(&self) -> bool {
-        self.last_seen.elapsed() > Duration::from_secs(300)
+        self.last_seen.elapsed() > consensus_stale_threshold()
     }
 }
 
@@ -67,16 +76,17 @@ impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
             // Minimum 1 peer to mine (allows 2-node bootstrap)
-            min_peers_for_mining: 1,        
+            min_peers_for_mining: 1,
             sync_threshold_blocks: 10,       // Within 10 blocks
             // ADAPTIVE CONSENSUS: Threshold adjusts based on peer count
             // BOOTSTRAP MODE (peers < 4): 50% - prioritizes liveness
             // SECURE MODE (peers >= 4): 80% - prioritizes safety (BFT)
             consensus_threshold: 0.80,       // Target for production
-            // peer_stale_timeout: Should be network-derived (ETA * network_median_peer_lifetime)
-            // For now, using ETA-scaled value: 300s * ETA ≈ 212s effective timeout
-            peer_stale_timeout: Duration::from_secs_f64(300.0 * coinject_core::ETA), // ETA-scaled peer timeout
-            max_missed_rounds: 5,
+            // peer_stale_timeout: Unified ETA-derived timeout from network layer
+            // NETWORK / η ≈ 127s - consensus has more patience than network layer (90s)
+            peer_stale_timeout: consensus_peer_timeout(),
+            // max_missed_rounds: Unified from network layer (scaled by √2)
+            max_missed_rounds: MAX_MISSED_ROUNDS_CONSENSUS,
         }
     }
 }
@@ -171,11 +181,13 @@ impl PeerConsensus {
     /// Mark a peer as disconnected (but keep tracking for stale timeout)
     /// This allows peers to still count if they reconnect within the timeout
     pub async fn mark_peer_disconnected(&self, peer_id: &str) {
-        // DON'T remove the peer - let them become stale naturally after 120s
+        // DON'T remove the peer - let them become stale naturally after ~153s
+        // (consensus_stale_threshold = NETWORK × (1 + η))
         // This handles connection churn where peers rapidly connect/disconnect
         let peers = self.peers.read().await;
         if peers.contains_key(peer_id) {
-            println!("📡 Peer {} disconnected (still tracking for 120s)", peer_id);
+            let threshold_secs = consensus_stale_threshold().as_secs();
+            println!("📡 Peer {} disconnected (still tracking for {}s)", peer_id, threshold_secs);
         }
         // Peer's last_seen stays the same, so they'll count until stale
     }

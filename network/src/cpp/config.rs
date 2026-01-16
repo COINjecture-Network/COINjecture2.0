@@ -53,6 +53,22 @@ pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Peer timeout (disconnect if no message for 90 seconds)
 pub const PEER_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// Message read timeout (30 seconds - matches existing external usage)
+/// Used by timeout-aware receive methods in MessageCodec
+pub const MESSAGE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Maximum consecutive read timeouts before forced disconnect
+/// After this many consecutive timeouts, the peer is considered dead
+pub const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
+
+/// Minimum healthy peer count before triggering reconnection attempts
+/// Quality-based reconnection kicks in when healthy peers < this value
+pub const MIN_HEALTHY_PEERS: usize = 2;
+
+/// Peer quality threshold below which peer is considered unhealthy (0.0-1.0)
+/// Peers with quality below this are not counted toward MIN_HEALTHY_PEERS
+pub const PEER_QUALITY_THRESHOLD: f64 = 0.3;
+
 /// Maximum number of peers
 pub const MAX_PEERS: usize = 50;
 
@@ -66,7 +82,7 @@ pub const MAX_BLOCKS_PER_RESPONSE: u64 = 16;
 /// Maximum frame bytes for sync responses (1 MB)
 pub const MAX_SYNC_FRAME_BYTES: usize = 1_000_000;
 /// Equilibrium constant: η = λ = 1/√2 ≈ 0.7071
-/// 
+///
 /// This constant governs:
 /// - Flow control window adaptation
 /// - Message routing fanout
@@ -75,9 +91,95 @@ pub const MAX_SYNC_FRAME_BYTES: usize = 1_000_000;
 pub const ETA: f64 = std::f64::consts::FRAC_1_SQRT_2; // 0.7071067811865476
 
 /// Square root of 2: √2 ≈ 1.414
-/// 
+///
 /// Used for inverse calculations and dimensional scaling
 pub const SQRT_2: f64 = std::f64::consts::SQRT_2; // 1.4142135623730951
+
+// =============================================================================
+// Unified Timeout Module - ETA-Derived Constants for Network/Consensus Alignment
+// =============================================================================
+//
+// All timeouts are derived from the base NETWORK_PEER_TIMEOUT (90s) using the
+// equilibrium constant η = 1/√2. This ensures consistent behavior across layers.
+//
+// Formulas:
+//   - CONSENSUS_PEER_TIMEOUT = NETWORK / η ≈ 127s (consensus has more patience)
+//   - CONSENSUS_STALE_THRESHOLD = NETWORK × (1 + η) ≈ 153s (for is_stale checks)
+//
+// Rationale:
+//   - Network layer detects dead peers quickly (90s) for reconnection
+//   - Consensus layer allows more time for sync/churn recovery
+//   - The ratio η maintains dimensional consistency across the system
+
+/// Unified timeout constants for network and consensus layer alignment
+pub mod timeouts {
+    use std::time::Duration;
+    use super::{PEER_TIMEOUT, ETA};
+
+    /// Base network peer timeout (90 seconds)
+    /// This is the foundation for all derived timeouts
+    pub const NETWORK_PEER_TIMEOUT: Duration = PEER_TIMEOUT;
+
+    /// Network peer timeout in seconds (for consensus layer calculations)
+    pub const NETWORK_PEER_TIMEOUT_SECS: u64 = 90;
+
+    /// Consensus peer timeout: NETWORK / η ≈ 127 seconds
+    /// The consensus layer allows more time before marking peers as stale,
+    /// accounting for sync delays and connection churn recovery
+    pub const CONSENSUS_PEER_TIMEOUT_SECS: f64 = NETWORK_PEER_TIMEOUT_SECS as f64 / ETA;
+
+    /// Get consensus peer timeout as Duration
+    pub fn consensus_peer_timeout() -> Duration {
+        Duration::from_secs_f64(CONSENSUS_PEER_TIMEOUT_SECS)
+    }
+
+    /// Consensus stale threshold: NETWORK × (1 + η) ≈ 153 seconds
+    /// Used by PeerState::is_stale() to determine when a peer is truly gone
+    /// The (1 + η) factor provides a grace period beyond the network timeout
+    pub const CONSENSUS_STALE_THRESHOLD_SECS: f64 = NETWORK_PEER_TIMEOUT_SECS as f64 * (1.0 + ETA);
+
+    /// Get consensus stale threshold as Duration
+    pub fn consensus_stale_threshold() -> Duration {
+        Duration::from_secs_f64(CONSENSUS_STALE_THRESHOLD_SECS)
+    }
+
+    /// Maximum missed rounds before filtering (scaled by √2)
+    /// Rounds = base × √2, where base = 3
+    pub const MAX_MISSED_ROUNDS_CONSENSUS: u32 = 4; // ceil(3 × 1.414) = 4
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_timeout_ratios() {
+            // Network timeout should be 90s
+            assert_eq!(NETWORK_PEER_TIMEOUT_SECS, 90);
+
+            // Consensus peer timeout should be ~127s (90 / 0.7071)
+            assert!((CONSENSUS_PEER_TIMEOUT_SECS - 127.28).abs() < 0.1);
+
+            // Consensus stale threshold should be ~153s (90 × 1.7071)
+            assert!((CONSENSUS_STALE_THRESHOLD_SECS - 153.64).abs() < 0.1);
+
+            // Consensus timeout > Network timeout (consensus is more patient)
+            assert!(CONSENSUS_PEER_TIMEOUT_SECS > NETWORK_PEER_TIMEOUT_SECS as f64);
+
+            // Stale threshold > Consensus timeout (final cutoff)
+            assert!(CONSENSUS_STALE_THRESHOLD_SECS > CONSENSUS_PEER_TIMEOUT_SECS);
+        }
+
+        #[test]
+        fn test_timeout_durations() {
+            let consensus_timeout = consensus_peer_timeout();
+            let stale_threshold = consensus_stale_threshold();
+
+            // Durations should be approximately correct
+            assert!(consensus_timeout.as_secs() >= 127);
+            assert!(stale_threshold.as_secs() >= 153);
+        }
+    }
+}
 
 /// Configuration for CPP network
 #[derive(Debug, Clone)]

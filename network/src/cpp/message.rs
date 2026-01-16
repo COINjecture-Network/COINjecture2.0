@@ -156,6 +156,10 @@ pub struct HelloMessage {
     pub node_type: u8,
     /// Timestamp (for replay protection)
     pub timestamp: u64,
+    /// Connection nonce for deterministic tie-breaking of simultaneous connections
+    /// Lower nonce wins in race condition resolution (backward compatible with default 0)
+    #[serde(default)]
+    pub connection_nonce: u64,
 }
 
 /// HelloAck message (handshake response)
@@ -175,6 +179,10 @@ pub struct HelloAckMessage {
     pub node_type: u8,
     /// Timestamp
     pub timestamp: u64,
+    /// Connection nonce for deterministic tie-breaking of simultaneous connections
+    /// Lower nonce wins in race condition resolution (backward compatible with default 0)
+    #[serde(default)]
+    pub connection_nonce: u64,
 }
 
 /// Status update message with murmuration coordination

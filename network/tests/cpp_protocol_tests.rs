@@ -110,6 +110,7 @@ async fn test_cpp_handshake_success() {
             genesis_hash,
             node_type: NodeType::Full.as_u8(),
             timestamp: 1700000000,
+            connection_nonce: 67890, // Test nonce for ack
         };
         MessageCodec::send_hello_ack(&mut stream, &hello_ack).await.unwrap();
         
@@ -130,6 +131,7 @@ async fn test_cpp_handshake_success() {
         genesis_hash,
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
+        connection_nonce: 12345, // Test nonce
     };
     MessageCodec::send_hello(&mut client_stream, &hello).await.unwrap();
     
@@ -148,6 +150,7 @@ async fn test_cpp_handshake_success() {
         best_hash: Hash::ZERO,
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
+        flock_state: None,
     };
     MessageCodec::send_status(&mut client_stream, &status).await.unwrap();
     
@@ -187,6 +190,7 @@ async fn test_cpp_handshake_genesis_mismatch() {
         genesis_hash: wrong_genesis, // Wrong genesis!
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
+        connection_nonce: 12345, // Test nonce
     };
     MessageCodec::send_hello(&mut client_stream, &hello).await.unwrap();
     
@@ -214,8 +218,9 @@ async fn test_cpp_handshake_invalid_magic() {
     
     let mut client_stream = TcpStream::connect(server_addr).await.unwrap();
     
-    // Send invalid magic bytes
-    client_stream.write_all(b"INVALID").await.unwrap();
+    // Send invalid magic bytes (must be at least 10 bytes for header read)
+    // Header format: Magic(4) + Version(1) + Type(1) + Length(4) = 10 bytes
+    client_stream.write_all(b"BADMAGIC\x01\x00").await.unwrap();
     client_stream.flush().await.unwrap();
     
     server_task.await.unwrap();
@@ -275,22 +280,31 @@ async fn test_cpp_block_broadcast_multiple_peers() {
         node_type: NodeType::Full.as_u8(),
         quality: 1.0,
         last_seen: 0,
+        flock_phase: 0,
+        flock_epoch: 0,
+        velocity: 0.0,
     });
-    
+
     router.add_peer(coinject_network::cpp::router::PeerInfo {
         id: peer2_id,
         best_height: 100,
         node_type: NodeType::Full.as_u8(),
         quality: 1.0,
         last_seen: 0,
+        flock_phase: 0,
+        flock_epoch: 0,
+        velocity: 0.0,
     });
-    
+
     router.add_peer(coinject_network::cpp::router::PeerInfo {
         id: peer3_id,
         best_height: 100,
         node_type: NodeType::Full.as_u8(),
         quality: 1.0,
         last_seen: 0,
+        flock_phase: 0,
+        flock_epoch: 0,
+        velocity: 0.0,
     });
     
     // Select peers for broadcast using equilibrium fanout

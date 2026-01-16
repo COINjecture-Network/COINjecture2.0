@@ -3,7 +3,7 @@
 // =============================================================================
 
 use crate::cpp::{
-    config::{CppConfig, NodeType, CPP_PORT, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE},
+    config::{CppConfig, NodeType, CPP_PORT, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE, MESSAGE_READ_TIMEOUT, MIN_HEALTHY_PEERS, PEER_QUALITY_THRESHOLD},
     block_provider::{BlockProvider, EmptyBlockProvider},
     message::*,
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
@@ -441,6 +441,8 @@ impl CppNetwork {
         }
         
         // Create peer instance (returns peer and read half of stream)
+        // For incoming connections: is_outbound = false, generate nonce for tie-breaking
+        let connection_nonce = rand::random::<u64>();
         let (peer, read_half) = Peer::new(
             peer_id,
             addr,
@@ -449,6 +451,8 @@ impl CppNetwork {
             best_height,
             best_hash,
             chain_state.read().await.genesis_hash,
+            connection_nonce,
+            false, // is_outbound = false for incoming connections
         );
         
         // Add peer to peer list and set state to Connected
@@ -521,19 +525,46 @@ impl CppNetwork {
                 break;
             }
             
-            // Read message with timeout
-            let envelope_result = tokio::time::timeout(
-                Duration::from_secs(30),
-                MessageCodec::receive_from_read_half(&mut read_half),
+            // Read message with timeout using institutional-grade timeout-aware receive
+            let envelope_result = MessageCodec::receive_from_read_half_with_timeout(
+                &mut read_half,
+                MESSAGE_READ_TIMEOUT,
             ).await;
-            
+
             let peer_id_short: String = peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
             let envelope = match envelope_result {
-                Ok(Ok(envelope)) => envelope,
-                Ok(Err(e)) => {
+                Ok(envelope) => {
+                    // Successful read - reset consecutive timeout counter
+                    {
+                        let mut peers_guard = peers.write().await;
+                        if let Some(p) = peers_guard.get_mut(&peer_id) {
+                            p.on_successful_read(envelope.payload.len());
+                        }
+                    }
+                    envelope
+                }
+                Err(ProtocolError::Timeout(_)) => {
+                    // Timeout - track consecutive timeouts and check if we should disconnect
+                    let should_disconnect = {
+                        let mut peers_guard = peers.write().await;
+                        if let Some(p) = peers_guard.get_mut(&peer_id) {
+                            p.on_read_timeout() // Returns true if exceeded MAX_CONSECUTIVE_TIMEOUTS
+                        } else {
+                            true // Peer gone, disconnect
+                        }
+                    };
+
+                    if should_disconnect {
+                        eprintln!("[CPP][CONN][TIMEOUT_DISCONNECT] peer={} exceeded max consecutive timeouts", peer_id_short);
+                        break;
+                    }
+                    // Not enough timeouts yet, continue reading
+                    continue;
+                }
+                Err(e) => {
                     // Detailed READ_ERR logging for M2 debugging
                     let err_type = match &e {
-                        crate::cpp::protocol::ProtocolError::Io(io_err) => {
+                        ProtocolError::Io(io_err) => {
                             // Handle EOF gracefully - peer may have closed connection
                             if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
                                 eprintln!("[CPP][CONN][READ_EOF] peer={} - peer closed connection gracefully", peer_id_short);
@@ -541,28 +572,18 @@ impl CppNetwork {
                             }
                             format!("IO({})", io_err.kind())
                         },
-                        crate::cpp::protocol::ProtocolError::InvalidMagic(_) => "InvalidMagic".to_string(),
-                        crate::cpp::protocol::ProtocolError::InvalidVersion(_) => "InvalidVersion".to_string(),
-                        crate::cpp::protocol::ProtocolError::InvalidMessageType(_) => "InvalidMsgType".to_string(),
-                        crate::cpp::protocol::ProtocolError::InvalidChecksum => "InvalidChecksum".to_string(),
-                        crate::cpp::protocol::ProtocolError::MessageTooLarge(sz) => format!("TooLarge({})", sz),
-                        crate::cpp::protocol::ProtocolError::SerializationError(_) => "SerializeErr".to_string(),
-                        crate::cpp::protocol::ProtocolError::DeserializationError(_) => "DeserializeErr".to_string(),
+                        ProtocolError::InvalidMagic(_) => "InvalidMagic".to_string(),
+                        ProtocolError::InvalidVersion(_) => "InvalidVersion".to_string(),
+                        ProtocolError::InvalidMessageType(_) => "InvalidMsgType".to_string(),
+                        ProtocolError::InvalidChecksum => "InvalidChecksum".to_string(),
+                        ProtocolError::MessageTooLarge(sz) => format!("TooLarge({})", sz),
+                        ProtocolError::SerializationError(_) => "SerializeErr".to_string(),
+                        ProtocolError::DeserializationError(_) => "DeserializeErr".to_string(),
+                        ProtocolError::Timeout(_) => "Timeout".to_string(), // Should not reach here
                     };
                     eprintln!("[CPP][CONN][READ_ERR] peer={} stage=MessageRead err_type={} err={}",
                         peer_id_short, err_type, e);
                     break;
-                }
-                Err(_) => {
-                    // Timeout - check if peer is still alive
-                    let peers_guard = peers.read().await;
-                    if let Some(p) = peers_guard.get(&peer_id) {
-                        if p.is_timed_out() {
-                            eprintln!("[CPP][CONN][READ_TIMEOUT] peer={}", peer_id_short);
-                            break;
-                        }
-                    }
-                    continue;
                 }
             };
             
@@ -674,7 +695,7 @@ impl CppNetwork {
         let node_type = NodeType::from_u8(hello.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
         
-        // Send HelloAck
+        // Send HelloAck with connection nonce for tie-breaking
         let hello_ack = HelloAckMessage {
             version: crate::cpp::config::VERSION,
             peer_id: local_peer_id,
@@ -686,6 +707,7 @@ impl CppNetwork {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            connection_nonce: rand::random::<u64>(), // Generate nonce for incoming connection
         };
         
         MessageCodec::send_hello_ack(stream, &hello_ack).await?;
@@ -730,9 +752,12 @@ impl CppNetwork {
         };
         
         println!("[CPP][BOOTNODE] TCP connection established to {}, starting handshake...", addr);
-        
+
         let state = self.chain_state.read().await;
-        
+
+        // Generate connection nonce for deterministic tie-breaking of simultaneous connections
+        let our_connection_nonce = rand::random::<u64>();
+
         // Send Hello message first (with timeout)
         let hello = HelloMessage {
             version: crate::cpp::config::VERSION,
@@ -745,6 +770,7 @@ impl CppNetwork {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            connection_nonce: our_connection_nonce,
         };
         
         println!("[CPP][BOOTNODE] Sending Hello message to {}...", addr);
@@ -805,6 +831,7 @@ impl CppNetwork {
         }
         
         // Create peer instance (returns peer and read half)
+        // For outbound connections: is_outbound = true, use our nonce for tie-breaking
         let (peer, read_half) = Peer::new(
             peer_id,
             addr,
@@ -813,6 +840,8 @@ impl CppNetwork {
             hello_ack.best_height,
             hello_ack.best_hash,
             self.chain_state.read().await.genesis_hash,
+            our_connection_nonce,
+            true, // is_outbound = true for bootnode connections
         );
         
         // Add peer to peer list and set state to Connected
@@ -1489,18 +1518,34 @@ impl CppNetwork {
     
     /// Check if we need to reconnect to bootnodes (for M2 recovery)
     async fn check_bootnode_reconnection(&mut self) {
-        // Get current peer count
-        let peer_count = {
+        // Count HEALTHY peers (not just connected) - quality-based reconnection
+        let (total_peers, healthy_peers) = {
             let peers = self.peers.read().await;
-            peers.len()
+            let total = peers.len();
+            let healthy = peers.values()
+                .filter(|p| p.is_healthy()) // Uses quality threshold and half-dead detection
+                .count();
+            (total, healthy)
         };
-        
-        // If we have enough peers, no need to reconnect
-        if peer_count >= 1 {
+
+        // Log peer health status periodically (only when there are peers)
+        if total_peers > 0 {
+            println!("[CPP][HEALTH] Peers: {} total, {} healthy (min required: {})",
+                total_peers, healthy_peers, MIN_HEALTHY_PEERS);
+        }
+
+        // If we have enough HEALTHY peers, no need to reconnect
+        if healthy_peers >= MIN_HEALTHY_PEERS {
             return;
         }
-        
-        println!("[CPP][BOOTNODE] No connected peers, checking bootnode reconnection...");
+
+        // If we have some peers but they're unhealthy, log that
+        if total_peers > 0 && healthy_peers < MIN_HEALTHY_PEERS {
+            println!("[CPP][BOOTNODE] Insufficient healthy peers ({}/{} healthy, {} required), attempting reconnection...",
+                healthy_peers, total_peers, MIN_HEALTHY_PEERS);
+        } else {
+            println!("[CPP][BOOTNODE] No connected peers, checking bootnode reconnection...");
+        }
         
         let now = Instant::now();
         let initial_backoff = Duration::from_secs(1);
