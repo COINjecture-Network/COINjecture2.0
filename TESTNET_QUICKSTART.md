@@ -1,110 +1,87 @@
-# COINjecture Network B Testnet - Quick Start
+# COINjecture CPP Testnet — Quick Start
 
-**Status**: 🟢 LIVE
-**Launch**: January 8, 2025
-**Testnet ID**: coinject-testnet-b1
+## Prerequisites
+
+- Rust 1.88+ (`rustup update`)
+- Or Docker (for containerized testnet)
 
 ---
 
-## 🚀 Launch Validator 1 (Genesis Node) NOW!
-
-### Option 1: Windows Batch Script (Easiest)
+## Option 1: Docker Testnet (Easiest)
 
 ```bash
-cd rust/network-b/testnet
-start-validator1.bat
+# Build and start 4-node testnet (1 bootnode + 3 peers)
+docker-compose up -d --build
+
+# Check health
+curl http://localhost:9090/health   # bootnode
+curl http://localhost:9091/health   # node1
+curl http://localhost:9092/health   # node2
+curl http://localhost:9093/health   # node3
+
+# View logs
+docker-compose logs -f bootnode
+docker-compose logs -f node1
+
+# Stop
+docker-compose down
 ```
 
-### Option 2: Command Line
+### Docker Port Mapping
+
+| Service  | CPP P2P | Metrics/Health | RPC  |
+|----------|---------|----------------|------|
+| bootnode | 707     | 9090           | 9933 |
+| node1    | 708     | 9091           | 9934 |
+| node2    | 709     | 9092           | 9935 |
+| node3    | 710     | 9093           | 9936 |
+
+---
+
+## Option 2: Local Binary
+
+### Build
 
 ```bash
-cd rust/network-b
-target/release/coinject.exe \
-  --data-dir testnet/validator1/data \
-  --dev \
+cargo build --release --bin coinject
+```
+
+### Start Bootnode
+
+```bash
+./target/release/coinject \
   --mine \
-  --miner-address 0000000000000000000000000000000000000000000000000000000000000001 \
-  --difficulty 2 \
-  --block-time 30 \
-  --chain-id coinject-testnet-b1 \
-  -v
+  --data-dir ./data/bootnode \
+  --cpp-p2p-addr 0.0.0.0:707 \
+  --metrics-addr 0.0.0.0:9090 \
+  --rpc-addr 0.0.0.0:9933 \
+  --difficulty 4 \
+  --block-time 60
 ```
 
----
-
-## ✅ Expected Output
-
-```
-╔═══════════════════════════════════════════════════════════════╗
-║                    COINjecture Network B                      ║
-║                    Network B - NP-Hard Consensus              ║
-╚═══════════════════════════════════════════════════════════════╝
-
-🚀 Initializing COINjecture Network B Node...
-
-📦 Loading genesis block...
-   Genesis hash: Hash(3fadfa4fa4b6d8d7)
-
-⛓️  Initializing blockchain state...
-   Best height: 0
-
-💰 Initializing account state...
-   Applying genesis block to state...
-   Genesis account funded with 21000000000000000 tokens
-
-⛏️  Initializing miner...
-   Miner address: 0000000000000000000000000000000000000000000000000000000000000001
-
-🌐 Starting P2P network...
-Network node PeerID: 12D3KooWJqWxV8RuUkJMr1MSySrwQBaVe6phJm4otG8tMDTrgxtK
-   Listening on: /ip4/0.0.0.0/tcp/30333
-
-🔌 Starting JSON-RPC server...
-   RPC listening on: 127.0.0.1:9933
-
-✅ Node is ready!
-
-⛏️  Mining block 1...
-Generated problem: TSP { cities: 11, distances: [...] }
-Solved in 4.6µs using 88 bytes
-Work score: 0.0007762
-```
-
----
-
-## 🎯 Testnet Info
-
-**You just launched the genesis validator!**
-
-- **Genesis Supply**: 21,000,000 BEANS (all credited to validator 1)
-- **Your Address**: `0x0000000000000000000000000000000000000000000000000000000000000001`
-- **RPC Endpoint**: http://localhost:9933
-- **Peer ID**: Copy from your console output above
-
----
-
-## 📡 Test the RPC API
-
-### Get Your Balance
+### Start Peer Node
 
 ```bash
-curl -X POST http://localhost:9933 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "account_getBalance",
-    "params": ["0000000000000000000000000000000000000000000000000000000000000001"],
-    "id": 1
-  }'
+./target/release/coinject \
+  --mine \
+  --data-dir ./data/node1 \
+  --cpp-p2p-addr 0.0.0.0:708 \
+  --metrics-addr 0.0.0.0:9091 \
+  --rpc-addr 0.0.0.0:9934 \
+  --bootnodes 127.0.0.1:707 \
+  --difficulty 4 \
+  --block-time 60
 ```
 
-**Expected Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": 21000000000000000
-}
+---
+
+## Verify It Works
+
+### Health Check
+
+```bash
+curl http://localhost:9090/health
+# {"status":"healthy"}
 ```
 
 ### Get Chain Info
@@ -112,109 +89,68 @@ curl -X POST http://localhost:9933 \
 ```bash
 curl -X POST http://localhost:9933 \
   -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "chain_getInfo",
-    "params": [],
-    "id": 1
-  }'
+  -d '{"jsonrpc":"2.0","method":"chain_getInfo","params":[],"id":1}'
 ```
 
----
-
-## 🌐 Add More Validators
-
-### Step 1: Copy Your Peer ID
-
-From validator 1 output, find the line:
-```
-Network node PeerId: 12D3KooWJqWxV8RuUkJMr1MSySrwQBaVe6phJm4otG8tMDTrgxtK
-```
-
-### Step 2: Update start-validator2.bat
-
-Edit `testnet/start-validator2.bat`:
-```batch
-REM Replace PEER_ID_1 with your actual peer ID:
-set BOOTNODE=/ip4/127.0.0.1/tcp/30333/p2p/12D3KooWJqWxV8RuUkJMr1MSySrwQBaVe6phJm4otG8tMDTrgxtK
-```
-
-### Step 3: Launch Validator 2
-
-Open a NEW terminal window:
-```bash
-cd rust/network-b/testnet
-start-validator2.bat
-```
-
-You should see:
-```
-🤝 Peer connected: 12D3KooW...   (Validator 1)
-```
-
----
-
-## 🎮 What's Happening?
-
-1. **Genesis Block**: Created at height 0 with 21M BEANS
-2. **Mining**: Your node is solving NP-hard problems (SAT, TSP, SubsetSum)
-3. **Blocks**: New block every ~30 seconds
-4. **P2P**: Waiting for peers to connect (bootnodes or manual)
-5. **RPC**: API server ready for wallet integration
-
----
-
-## 🔥 Next Steps
-
-1. **Let it run** for a few minutes to mine some blocks
-2. **Check the RPC** to verify it's working
-3. **Launch validator 2** to create a real network
-4. **Submit transactions** via RPC (see [testnet/README.md](testnet/README.md))
-5. **Use the marketplace** to submit bounty problems
-
----
-
-## 📊 Monitor Your Node
+### Get Balance
 
 ```bash
-# Watch block height increase
-watch -n 5 'curl -s -X POST http://localhost:9933 -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"method\":\"chain_getInfo\",\"params\":[],\"id\":1}" | jq ".result.best_height"'
+curl -X POST http://localhost:9933 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"account_getBalance","params":["0000000000000000000000000000000000000000000000000000000000000001"],"id":1}'
+```
+
+### Prometheus Metrics
+
+```bash
+curl http://localhost:9090/metrics
 ```
 
 ---
 
-## 🛑 Stop the Node
+## Run Integration Tests
 
-Press `Ctrl+C` in the terminal running the node.
+```bash
+# All network tests
+cargo test -p coinject-network -- --test-threads=1
+
+# Just the testnet integration tests
+cargo test --test testnet_integration -- --test-threads=1
+```
 
 ---
 
-## 🐛 Troubleshooting
+## Network Architecture
 
-**Node won't start:**
-- Check if port 30333 (P2P) or 9933 (RPC) is already in use
-- Delete `testnet/validator1/data` and try again
+```
+CPP Protocol (port 707)
+├── Wire: COIN magic | v1 | type | len | payload | blake3
+├── Fanout: ⌈√n × η⌉ where η = 1/√2
+├── Routing: EquilibriumRouter with murmuration (Reynolds rules)
+├── Handshake: Hello → HelloAck (genesis hash validated)
+└── 17 message types with dimensional priority
+```
+
+---
+
+## Troubleshooting
+
+**Port 707 already in use:**
+```bash
+# Check what's using it
+lsof -i :707        # Linux/Mac
+netstat -ano | findstr :707  # Windows
+```
+
+**Node won't connect to bootnode:**
+- Verify bootnode is running and listening on the correct address
+- Check firewall rules allow TCP on port 707
+- Ensure both nodes use the same `--chain-id`
 
 **No blocks being mined:**
-- This is normal! NP-hard problems can take time to solve
-- Wait up to 60 seconds for the first block
+- NP-hard problems can take time. Wait 60+ seconds
+- Lower difficulty: `--difficulty 2`
 
-**RPC not responding:**
-- Make sure the node started successfully
-- Check firewall isn't blocking port 9933
-
----
-
-## 📚 Full Documentation
-
-See [testnet/README.md](testnet/README.md) for:
-- Complete RPC API reference
-- Multi-validator setup guide
-- Transaction submission examples
-- Marketplace usage
-- Troubleshooting guide
-
----
-
-**Testnet Status**: 🟢 Active
-**Support**: https://github.com/Quigles1337/COINjecture1337-REFACTOR/issues
+**Docker build fails:**
+- Ensure Docker has enough memory (4GB+ recommended)
+- Check proxy settings: `docker info | grep -i proxy`

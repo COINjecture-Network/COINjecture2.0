@@ -4,7 +4,7 @@
 // Message routing using the equilibrium constant η = λ = 1/√2 ≈ 0.7071
 // Enhanced with GoldenSeed-inspired murmuration for swarm coordination
 
-use crate::cpp::config::{ETA, SQRT_2};
+use crate::cpp::config::ETA;
 use crate::cpp::flock::{FlockStateCompact, PHI_INV};
 use std::collections::HashMap;
 
@@ -280,7 +280,7 @@ impl EquilibriumRouter {
     }
 
     /// Calculate swarm cohesion (0.0 = fragmented, 1.0 = tight)
-    fn calculate_cohesion(&self, heights: &[u64], center: u64) -> f64 {
+    fn calculate_cohesion(&self, heights: &[u64], _center: u64) -> f64 {
         if heights.is_empty() {
             return 1.0;
         }

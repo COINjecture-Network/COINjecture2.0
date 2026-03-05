@@ -7,7 +7,6 @@ use crate::cpp::{
     config::{MAGIC, VERSION, MAX_MESSAGE_SIZE},
     message::*,
 };
-use coinject_core::{Block, Transaction, Hash, BlockHeader};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use bincode;
@@ -347,7 +346,8 @@ impl MessageCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use coinject_core::Hash;
+
     #[test]
     fn test_message_envelope_encoding() {
         let msg = HelloMessage {

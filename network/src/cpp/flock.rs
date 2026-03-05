@@ -95,7 +95,7 @@ impl FlockState {
 
         // Use first byte of hash modulo FLOCK_PHASES for uniform distribution
         // This provides cryptographically uniform distribution across phases
-        (hash.as_bytes()[0] % (FLOCK_PHASES as u8))
+        hash.as_bytes()[0] % (FLOCK_PHASES as u8)
     }
 
     /// Check if we should broadcast in current phase

@@ -3,14 +3,14 @@
 // =============================================================================
 
 use crate::cpp::{
-    config::{CppConfig, NodeType, CPP_PORT, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE, MESSAGE_READ_TIMEOUT, MIN_HEALTHY_PEERS, PEER_QUALITY_THRESHOLD},
+    config::{CppConfig, NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE, MESSAGE_READ_TIMEOUT, MIN_HEALTHY_PEERS},
     block_provider::{BlockProvider, EmptyBlockProvider},
     message::*,
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     peer::{Peer, PeerState, PeerId},
-    router::EquilibriumRouter,
+    router::{EquilibriumRouter, PeerInfo},
     node_integration::{NodeMetrics, PeerSelector},
-    flock::{FlockState, FlockStateCompact, MurmurationRules},
+    flock::{FlockState, FlockStateCompact},
 };
 use crate::reputation::ReputationManager;
 use coinject_core::{Block, Transaction, Hash, BlockHeader};
@@ -198,6 +198,9 @@ pub struct CppNetwork {
 
     /// Murmuration flock state for swarm coordination
     flock_state: Arc<RwLock<FlockState>>,
+
+    /// Seen-message deduplication cache (hash, timestamp) — max 5000 entries, 60s TTL
+    seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
 }
 
 impl CppNetwork {
@@ -255,6 +258,7 @@ impl CppNetwork {
             bootnode_backoff: Arc::new(RwLock::new(HashMap::new())),
             last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
             flock_state: Arc::new(RwLock::new(FlockState::new(&genesis_hash, initial_height, &local_peer_id))),
+            seen_messages: Arc::new(RwLock::new(std::collections::VecDeque::new())),
         };
         
         (network, command_tx, event_rx)
@@ -298,6 +302,7 @@ impl CppNetwork {
             bootnode_backoff: Arc::new(RwLock::new(HashMap::new())),
             last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
             flock_state: Arc::new(RwLock::new(FlockState::new(&genesis_hash, initial_height, &local_peer_id))),
+            seen_messages: Arc::new(RwLock::new(std::collections::VecDeque::new())),
         };
         
         (network, command_tx, event_rx)
@@ -313,7 +318,7 @@ impl CppNetwork {
         let listener = TcpListener::bind(&self.config.p2p_listen).await?;
         let local_addr = listener.local_addr()?;
         
-        println!("CPP Network listening on {}", local_addr);
+        tracing::info!("CPP Network listening on {}", local_addr);
         
         // Periodic maintenance intervals
         let mut ping_interval = interval(KEEPALIVE_INTERVAL);
@@ -323,22 +328,25 @@ impl CppNetwork {
         let mut bootnode_reconnect_interval = interval(Duration::from_secs(5)); // Status broadcast every 10s
         let mut sync_check_interval = interval(Duration::from_secs(10)); // Sync check every 10s
         
-        println!("✅ [CPP] Event loop starting with {} intervals", 5);
+        tracing::info!("[CPP] Event loop starting with {} intervals", 5);
 
         loop {
             tokio::select! {
                 // Accept incoming connections
                 Ok((stream, addr)) = listener.accept() => {
-                    println!("[CPP][ACCEPT] Incoming connection from {}", addr);
+                    tracing::info!("[CPP][ACCEPT] Incoming connection from {}", addr);
                     let peers = self.peers.clone();
                     let router = self.router.clone();
                     let reputation = self.reputation.clone();
                     let chain_state = self.chain_state.clone();
+                    let flock_state = self.flock_state.clone();
+                    let pending_requests = self.pending_requests.clone();
+                    let seen_messages = self.seen_messages.clone();
                     let event_tx = self.event_tx.clone();
                     let local_peer_id = self.local_peer_id;
                     let shutdown = self.shutdown_tx.subscribe();
                     let block_provider = self.block_provider.clone();
-                    
+
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_incoming_connection(
                             stream,
@@ -348,11 +356,14 @@ impl CppNetwork {
                             router,
                             reputation,
                             chain_state,
+                            flock_state,
+                            pending_requests,
+                            seen_messages,
                             event_tx,
                             block_provider,
                             shutdown,
                         ).await {
-                            eprintln!("Connection error from {}: {}", addr, e);
+                            tracing::error!("Connection error from {}: {}", addr, e);
                         }
                     });
                 }
@@ -360,7 +371,7 @@ impl CppNetwork {
                 // Handle commands from node service
                 Some(command) = self.command_rx.recv() => {
                     if let Err(e) = self.handle_command(command).await {
-                        eprintln!("Command handling error: {}", e);
+                        tracing::error!("Command handling error: {}", e);
                     }
                 }
                 
@@ -381,13 +392,13 @@ impl CppNetwork {
                 
                 // Periodic: Broadcast status to peers
                 _ = status_interval.tick() => {
-                    println!("⏰ [CPP] Status interval fired!");
+                    tracing::debug!("[CPP] Status interval fired!");
                     self.broadcast_status().await;
                 }
                 
                 // Periodic: Check if sync is needed
                 _ = sync_check_interval.tick() => {
-                    println!("⏰ [CPP] Sync check interval fired!");
+                    tracing::debug!("[CPP] Sync check interval fired!");
                     self.check_sync_status().await;
                 }
                 
@@ -398,7 +409,7 @@ impl CppNetwork {
                 
                 // Shutdown signal
                 _ = self.shutdown_rx.recv() => {
-                    println!("CPP Network shutting down");
+                    tracing::info!("CPP Network shutting down");
                     break;
                 }
             }
@@ -417,14 +428,17 @@ impl CppNetwork {
         addr: SocketAddr,
         local_peer_id: PeerId,
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
-        _router: Arc<RwLock<EquilibriumRouter>>,
+        router: Arc<RwLock<EquilibriumRouter>>,
         _reputation: Arc<RwLock<ReputationManager>>,
         chain_state: Arc<RwLock<ChainState>>,
+        flock_state: Arc<RwLock<FlockState>>,
+        pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
+        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
         _shutdown: broadcast::Receiver<()>,
     ) -> Result<(), NetworkError> {
-        println!("[CPP][INCOMING] Starting handshake with {}", addr);
+        tracing::debug!("[CPP][INCOMING] Starting handshake with {}", addr);
         // Perform handshake
         let state = chain_state.read().await;
         let (peer_id, node_type, best_height, best_hash) = Self::handshake(
@@ -466,7 +480,16 @@ impl CppNetwork {
                 p.state = PeerState::Connected;
             }
         }
-        
+
+        // Add peer to router for equilibrium-based broadcast selection
+        {
+            let peers_guard = peers.read().await;
+            if let Some(peer) = peers_guard.get(&peer_id) {
+                let mut router_guard = router.write().await;
+                router_guard.add_peer(PeerInfo::from(&*peer));
+            }
+        }
+
         // Send PeerConnected event
         let _ = event_tx.send(NetworkEvent::PeerConnected {
             peer_id,
@@ -478,27 +501,35 @@ impl CppNetwork {
         
         // Start message loop for this peer (using read half)
         let peers_clone = peers.clone();
+        let router_clone = router.clone();
+        let flock_clone = flock_state.clone();
+        let pending_clone = pending_requests.clone();
+        let seen_clone = seen_messages.clone();
         let chain_state_clone = chain_state.clone();
         let event_tx_clone = event_tx.clone();
-            let block_provider_clone = block_provider.clone();
+        let block_provider_clone = block_provider.clone();
         let peer_id_clone = peer_id;
-        
+
         tokio::spawn(async move {
             if let Err(e) = Self::peer_message_loop(
                 peer_id_clone,
                 read_half,
                 peers_clone,
+                router_clone,
+                flock_clone,
+                pending_clone,
+                seen_clone,
                 chain_state_clone,
                 event_tx_clone,
                 block_provider_clone,
             ).await {
-                eprintln!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                tracing::error!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
             }
         });
-        
+
         Ok(())
     }
-    
+
     /// Peer message loop - continuously read and process messages from a peer
     /// 
     /// This is the full implementation that:
@@ -510,6 +541,10 @@ impl CppNetwork {
         peer_id: PeerId,
         mut read_half: tokio::io::ReadHalf<TcpStream>,
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
+        router: Arc<RwLock<EquilibriumRouter>>,
+        flock_state: Arc<RwLock<FlockState>>,
+        pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
+        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
         chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
@@ -557,7 +592,7 @@ impl CppNetwork {
                     };
 
                     if should_disconnect {
-                        eprintln!("[CPP][CONN][TIMEOUT_DISCONNECT] peer={} exceeded max consecutive timeouts", peer_id_short);
+                        tracing::warn!("[CPP][CONN][TIMEOUT_DISCONNECT] peer={} exceeded max consecutive timeouts", peer_id_short);
                         break;
                     }
                     // Not enough timeouts yet, continue reading
@@ -569,7 +604,7 @@ impl CppNetwork {
                         ProtocolError::Io(io_err) => {
                             // Handle EOF gracefully - peer may have closed connection
                             if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
-                                eprintln!("[CPP][CONN][READ_EOF] peer={} - peer closed connection gracefully", peer_id_short);
+                                tracing::info!("[CPP][CONN][READ_EOF] peer={} - peer closed connection gracefully", peer_id_short);
                                 break;
                             }
                             format!("IO({})", io_err.kind())
@@ -583,7 +618,7 @@ impl CppNetwork {
                         ProtocolError::DeserializationError(_) => "DeserializeErr".to_string(),
                         ProtocolError::Timeout(_) => "Timeout".to_string(), // Should not reach here
                     };
-                    eprintln!("[CPP][CONN][READ_ERR] peer={} stage=MessageRead err_type={} err={}",
+                    tracing::error!("[CPP][CONN][READ_ERR] peer={} stage=MessageRead err_type={} err={}",
                         peer_id_short, err_type, e);
                     break;
                 }
@@ -591,27 +626,38 @@ impl CppNetwork {
             
             // Process message
             let peers_clone = peers.clone();
+            let router_clone = router.clone();
+            let flock_clone = flock_state.clone();
+            let pending_clone = pending_requests.clone();
+            let seen_clone = seen_messages.clone();
             let chain_state_clone = chain_state.clone();
             let event_tx_clone = event_tx.clone();
             let block_provider_clone = block_provider.clone();
             let peer_id_clone = peer_id;
-            
+
             if let Err(e) = Self::handle_peer_message(
                 peer_id_clone,
                 envelope,
                 peers_clone,
+                router_clone,
+                flock_clone,
+                pending_clone,
+                seen_clone,
                 chain_state_clone,
                 event_tx_clone,
                 block_provider_clone,
             ).await {
-                eprintln!("Error handling message from peer {}: {}", 
+                tracing::error!("Error handling message from peer {}: {}",
                     peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
             }
         }
         
-        // Remove peer on disconnect
+        // Remove peer on disconnect with proper cleanup
         let mut peers_guard = peers.write().await;
-        if peers_guard.remove(&peer_id).is_some() {
+        if let Some(mut peer) = peers_guard.remove(&peer_id) {
+            peer.shutdown(); // Signal write task to stop
+            let mut router_guard = router.write().await;
+            router_guard.remove_peer(&peer_id);
             let _ = event_tx.send(NetworkEvent::PeerDisconnected {
                 peer_id,
                 reason: "Connection closed".to_string(),
@@ -626,7 +672,11 @@ impl CppNetwork {
         peer_id: PeerId,
         envelope: MessageEnvelope,
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
-        chain_state: Arc<RwLock<ChainState>>,
+        router: Arc<RwLock<EquilibriumRouter>>,
+        flock_state: Arc<RwLock<FlockState>>,
+        pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
+        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        _chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
@@ -640,19 +690,19 @@ impl CppNetwork {
         
         match envelope.msg_type {
             MessageType::Status => {
-                Self::handle_status(peer_id, &envelope, peers, event_tx, block_provider.clone()).await?;
+                Self::handle_status(peer_id, &envelope, peers, router, flock_state, event_tx, block_provider.clone()).await?;
             }
             MessageType::GetBlocks => {
                 Self::handle_get_blocks(peer_id, &envelope, peers, block_provider).await?;
             }
             MessageType::Blocks => {
-                Self::handle_blocks(peer_id, &envelope, event_tx, block_provider.clone()).await?;
+                Self::handle_blocks(peer_id, &envelope, pending_requests, event_tx, block_provider.clone()).await?;
             }
             MessageType::NewBlock => {
-                Self::handle_new_block(peer_id, &envelope, event_tx, block_provider.clone()).await?;
+                Self::handle_new_block(peer_id, &envelope, seen_messages.clone(), event_tx, block_provider.clone()).await?;
             }
             MessageType::NewTransaction => {
-                Self::handle_new_transaction(peer_id, &envelope, event_tx, block_provider.clone()).await?;
+                Self::handle_new_transaction(peer_id, &envelope, seen_messages.clone(), event_tx, block_provider.clone()).await?;
             }
             MessageType::Ping => {
                 Self::handle_ping(peer_id, &envelope, peers).await?;
@@ -666,7 +716,7 @@ impl CppNetwork {
             }
             _ => {
                 // Unknown or unsupported message type
-                eprintln!("Unknown message type from peer {}: {:?}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), envelope.msg_type);
+                tracing::warn!("Unknown message type from peer {}: {:?}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), envelope.msg_type);
             }
         }
         
@@ -683,7 +733,7 @@ impl CppNetwork {
         local_peer_id: PeerId,
         chain_state: &ChainState,
     ) -> Result<(PeerId, NodeType, u64, Hash), NetworkError> {
-        println!("[CPP][HANDSHAKE] Waiting for Hello message (timeout: {:?})...",
+        tracing::debug!("[CPP][HANDSHAKE] Waiting for Hello message (timeout: {:?})...",
             crate::cpp::config::HANDSHAKE_TIMEOUT);
 
         // Receive Hello message WITH TIMEOUT (fixes silent hang issue)
@@ -693,22 +743,22 @@ impl CppNetwork {
         ).await {
             Ok(Ok(e)) => e,
             Ok(Err(e)) => {
-                eprintln!("[CPP][HANDSHAKE] Hello receive failed: {}", e);
+                tracing::error!("[CPP][HANDSHAKE] Hello receive failed: {}", e);
                 return Err(NetworkError::Protocol(e));
             }
             Err(_) => {
-                eprintln!("[CPP][HANDSHAKE] Hello receive timeout - peer did not send Hello in time");
+                tracing::warn!("[CPP][HANDSHAKE] Hello receive timeout - peer did not send Hello in time");
                 return Err(NetworkError::Timeout);
             }
         };
-        println!("[CPP][HANDSHAKE] Received Hello message");
+        tracing::debug!("[CPP][HANDSHAKE] Received Hello message");
 
         let hello: HelloMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
 
         // Validate genesis hash
         if hello.genesis_hash != chain_state.genesis_hash {
-            eprintln!("[CPP][HANDSHAKE] Genesis hash mismatch: expected {:?}, got {:?}",
+            tracing::error!("[CPP][HANDSHAKE] Genesis hash mismatch: expected {:?}, got {:?}",
                 chain_state.genesis_hash, hello.genesis_hash);
             return Err(NetworkError::InvalidHandshake(format!(
                 "Genesis hash mismatch: expected {:?}, got {:?}",
@@ -735,7 +785,7 @@ impl CppNetwork {
             connection_nonce: rand::random::<u64>(), // Generate nonce for incoming connection
         };
 
-        println!("[CPP][HANDSHAKE] Sending HelloAck (timeout: {:?})...",
+        tracing::debug!("[CPP][HANDSHAKE] Sending HelloAck (timeout: {:?})...",
             crate::cpp::config::HANDSHAKE_TIMEOUT);
 
         // Send HelloAck WITH TIMEOUT (fixes silent hang on write)
@@ -745,16 +795,16 @@ impl CppNetwork {
         ).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                eprintln!("[CPP][HANDSHAKE] HelloAck send failed: {}", e);
+                tracing::error!("[CPP][HANDSHAKE] HelloAck send failed: {}", e);
                 return Err(NetworkError::Protocol(e));
             }
             Err(_) => {
-                eprintln!("[CPP][HANDSHAKE] HelloAck send timeout - peer not accepting data");
+                tracing::warn!("[CPP][HANDSHAKE] HelloAck send timeout - peer not accepting data");
                 return Err(NetworkError::Timeout);
             }
         }
 
-        println!("[CPP][HANDSHAKE] HelloAck sent successfully, peer_id={}",
+        tracing::debug!("[CPP][HANDSHAKE] HelloAck sent successfully, peer_id={}",
             hello.peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>());
 
         Ok((
@@ -780,23 +830,23 @@ impl CppNetwork {
         }
         
         // Connect TCP stream with timeout
-        println!("[CPP][BOOTNODE] Connecting TCP to {}...", addr);
+        tracing::info!("[CPP][BOOTNODE] Connecting TCP to {}...", addr);
         let mut stream = match tokio::time::timeout(
             crate::cpp::config::CONNECTION_TIMEOUT,
             TcpStream::connect(addr)
         ).await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
-                eprintln!("[CPP][BOOTNODE] TCP connect failed to {}: {}", addr, e);
+                tracing::warn!("[CPP][BOOTNODE] TCP connect failed to {}: {}", addr, e);
                 return Err(NetworkError::Io(e));
             }
             Err(_) => {
-                eprintln!("[CPP][BOOTNODE] TCP connect timeout to {}", addr);
+                tracing::warn!("[CPP][BOOTNODE] TCP connect timeout to {}", addr);
                 return Err(NetworkError::Timeout);
             }
         };
         
-        println!("[CPP][BOOTNODE] TCP connection established to {}, starting handshake...", addr);
+        tracing::info!("[CPP][BOOTNODE] TCP connection established to {}, starting handshake...", addr);
 
         let state = self.chain_state.read().await;
 
@@ -818,23 +868,23 @@ impl CppNetwork {
             connection_nonce: our_connection_nonce,
         };
         
-        println!("[CPP][BOOTNODE] Sending Hello message to {}...", addr);
+        tracing::debug!("[CPP][BOOTNODE] Sending Hello message to {}...", addr);
         match tokio::time::timeout(
             crate::cpp::config::HANDSHAKE_TIMEOUT,
             MessageCodec::send_hello(&mut stream, &hello)
         ).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                eprintln!("[CPP][BOOTNODE] Hello send failed to {}: {}", addr, e);
+                tracing::warn!("[CPP][BOOTNODE] Hello send failed to {}: {}", addr, e);
                 return Err(NetworkError::Protocol(e));
             }
             Err(_) => {
-                eprintln!("[CPP][BOOTNODE] Hello send timeout to {}", addr);
+                tracing::warn!("[CPP][BOOTNODE] Hello send timeout to {}", addr);
                 return Err(NetworkError::Timeout);
             }
         }
         
-        println!("[CPP][BOOTNODE] Waiting for HelloAck from {}...", addr);
+        tracing::debug!("[CPP][BOOTNODE] Waiting for HelloAck from {}...", addr);
         // Receive HelloAck (with timeout)
         let envelope = match tokio::time::timeout(
             crate::cpp::config::HANDSHAKE_TIMEOUT,
@@ -842,16 +892,16 @@ impl CppNetwork {
         ).await {
             Ok(Ok(e)) => e,
             Ok(Err(e)) => {
-                eprintln!("[CPP][BOOTNODE] HelloAck receive failed from {}: {}", addr, e);
+                tracing::warn!("[CPP][BOOTNODE] HelloAck receive failed from {}: {}", addr, e);
                 return Err(NetworkError::Protocol(e));
             }
             Err(_) => {
-                eprintln!("[CPP][BOOTNODE] HelloAck receive timeout from {}", addr);
+                tracing::warn!("[CPP][BOOTNODE] HelloAck receive timeout from {}", addr);
                 return Err(NetworkError::Timeout);
             }
         };
         
-        println!("[CPP][BOOTNODE] Received HelloAck from {}, validating...", addr);
+        tracing::debug!("[CPP][BOOTNODE] Received HelloAck from {}, validating...", addr);
         let hello_ack: HelloAckMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
         
@@ -903,12 +953,15 @@ impl CppNetwork {
             }
         }
         
-        // Update router
+        // Add peer to router for equilibrium-based broadcast selection
         {
-            let _router = self.router.write().await;
-            // TODO: Add peer to router
+            let peers_guard = self.peers.read().await;
+            if let Some(peer) = peers_guard.get(&peer_id) {
+                let mut router = self.router.write().await;
+                router.add_peer(PeerInfo::from(&*peer));
+            }
         }
-        
+
         // Send PeerConnected event
         let _ = self.event_tx.send(NetworkEvent::PeerConnected {
             peer_id,
@@ -920,52 +973,64 @@ impl CppNetwork {
         
         // Start message loop for this peer
         let peers_clone = self.peers.clone();
+        let router_clone = self.router.clone();
+        let flock_clone = self.flock_state.clone();
+        let pending_clone = self.pending_requests.clone();
+        let seen_clone = self.seen_messages.clone();
         let chain_state_clone = self.chain_state.clone();
         let block_provider_clone = self.block_provider.clone();
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id;
-        
+
         tokio::spawn(async move {
             if let Err(e) = Self::peer_message_loop(
                 peer_id_clone,
                 read_half,
                 peers_clone,
+                router_clone,
+                flock_clone,
+                pending_clone,
+                seen_clone,
                 chain_state_clone,
                 event_tx_clone,
                 block_provider_clone,
             ).await {
-                eprintln!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                tracing::error!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
             }
         });
-        
+
         Ok(())
     }
-    
+
     /// Add peer to peer list (internal helper - now handled inline)
     #[allow(dead_code)]
     async fn add_peer(&self, peer: Peer) {
         let peer_id = peer.id;
+        let peer_info = PeerInfo::from(&peer);
         let mut peers = self.peers.write().await;
         peers.insert(peer_id, peer);
-        
-        // Update router
-        let _router = self.router.write().await;
-        // TODO: Add peer to router
+
+        // Add to router for equilibrium broadcast selection
+        let mut router = self.router.write().await;
+        router.add_peer(peer_info);
     }
     
     /// Remove peer from peer list
     async fn remove_peer(&self, peer_id: &PeerId, reason: &str) {
         let mut peers = self.peers.write().await;
-        if let Some(_peer) = peers.remove(peer_id) {
+        if let Some(mut peer) = peers.remove(peer_id) {
+            // Signal write task to stop (prevents task leak)
+            peer.shutdown();
+
+            // Remove from router
+            let mut router = self.router.write().await;
+            router.remove_peer(peer_id);
+
             // Send disconnect event
             let _ = self.event_tx.send(NetworkEvent::PeerDisconnected {
                 peer_id: *peer_id,
                 reason: reason.to_string(),
             });
-            
-            // Update router
-            let _router = self.router.write().await;
-            // TODO: Remove peer from router
         }
     }
     
@@ -1004,6 +1069,15 @@ impl CppNetwork {
                 let mut state = self.chain_state.write().await;
                 state.best_height = best_height;
                 state.best_hash = best_hash;
+                let genesis = state.genesis_hash;
+                drop(state);
+
+                // Advance flock epoch if height crosses boundary
+                let mut flock = self.flock_state.write().await;
+                let new_epoch = best_height / crate::cpp::flock::FLOCK_EPOCH_BLOCKS;
+                if new_epoch > flock.epoch {
+                    *flock = FlockState::new(&genesis, best_height, &self.local_peer_id);
+                }
             }
         }
         
@@ -1019,15 +1093,17 @@ impl CppNetwork {
         peer_id: PeerId,
         envelope: &MessageEnvelope,
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
+        router: Arc<RwLock<EquilibriumRouter>>,
+        flock_state: Arc<RwLock<FlockState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
-        block_provider: Arc<dyn BlockProvider>,
+        _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let status: StatusMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
-        
+
         let node_type = NodeType::from_u8(status.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
-        
+
         // Update peer status
         {
             let mut peers_guard = peers.write().await;
@@ -1035,7 +1111,23 @@ impl CppNetwork {
                 peer.update_status(status.best_height, status.best_hash, node_type);
             }
         }
-        
+
+        // Propagate flock state to router for murmuration coordination
+        if let Some(flock) = &status.flock_state {
+            let mut router_guard = router.write().await;
+            router_guard.update_peer_flock(&peer_id, flock, status.best_height);
+        }
+
+        // Update swarm metrics from peer heights
+        {
+            let peers_guard = peers.read().await;
+            let heights: Vec<u64> = peers_guard.values().map(|p| p.best_height).collect();
+            if !heights.is_empty() {
+                let mut flock_guard = flock_state.write().await;
+                flock_guard.update_from_peers(&heights);
+            }
+        }
+
         // Send StatusUpdate event
         let _ = event_tx.send(NetworkEvent::StatusUpdate {
             peer_id,
@@ -1043,7 +1135,7 @@ impl CppNetwork {
             best_hash: status.best_hash,
             node_type,
         });
-        
+
         Ok(())
     }
     
@@ -1063,7 +1155,7 @@ impl CppNetwork {
         let requested_count = get_blocks.to_height.saturating_sub(get_blocks.from_height) + 1;
         let clamped_to = if requested_count > MAX_BLOCKS_PER_RESPONSE {
             let clamped = get_blocks.from_height + MAX_BLOCKS_PER_RESPONSE - 1;
-            println!("[CPP][SYNC] Clamping GetBlocks: peer={} requested {}-{} ({} blocks), serving {}-{} ({} blocks)",
+            tracing::info!("[CPP][SYNC] Clamping GetBlocks: peer={} requested {}-{} ({} blocks), serving {}-{} ({} blocks)",
                 peer_id_short, get_blocks.from_height, get_blocks.to_height, requested_count,
                 get_blocks.from_height, clamped, MAX_BLOCKS_PER_RESPONSE);
             clamped
@@ -1073,7 +1165,7 @@ impl CppNetwork {
         
         // Get blocks from the canonical chain via block provider
         let blocks = block_provider.get_blocks_range(get_blocks.from_height, clamped_to);
-        println!("[CPP][SYNC] Serving {} blocks (heights {}-{}) to peer {}",
+        tracing::info!("[CPP][SYNC] Serving {} blocks (heights {}-{}) to peer {}",
             blocks.len(), get_blocks.from_height, clamped_to, peer_id_short);
         
         let blocks_msg = BlocksMessage {
@@ -1088,7 +1180,7 @@ impl CppNetwork {
                 .map_err(|e| NetworkError::Protocol(e))?;
             let data = envelope.encode();
             
-            println!("[CPP][SYNC] Sending Blocks response: peer={} frame_len={} bytes", peer_id_short, data.len());
+            tracing::info!("[CPP][SYNC] Sending Blocks response: peer={} frame_len={} bytes", peer_id_short, data.len());
             
             peer.send_message(data.clone())
                 .map_err(|e| NetworkError::InvalidHandshake(e))?;
@@ -1110,57 +1202,108 @@ impl CppNetwork {
     async fn handle_blocks(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
+        pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
-        block_provider: Arc<dyn BlockProvider>,
+        _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let blocks_msg: BlocksMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
-        
+
+        // Remove fulfilled request from pending
+        {
+            let mut pending = pending_requests.write().await;
+            pending.remove(&blocks_msg.request_id);
+        }
+
         // Send BlocksReceived event
         let _ = event_tx.send(NetworkEvent::BlocksReceived {
             blocks: blocks_msg.blocks,
             request_id: blocks_msg.request_id,
             peer_id,
         });
-        
+
         Ok(())
     }
     
+    /// Check if a message has been seen before (deduplication)
+    /// Returns true if already seen, false if new (and adds to cache)
+    async fn check_seen(
+        seen_messages: &Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        payload: &[u8],
+    ) -> bool {
+        let hash = *blake3::hash(payload).as_bytes();
+        let now = Instant::now();
+        let mut cache = seen_messages.write().await;
+
+        // Evict expired entries (older than 60s)
+        while let Some((_, ts)) = cache.front() {
+            if now.duration_since(*ts) > Duration::from_secs(60) {
+                cache.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        // Check if already seen
+        if cache.iter().any(|(h, _)| *h == hash) {
+            return true; // Duplicate
+        }
+
+        // Add to cache (cap at 5000)
+        if cache.len() >= 5000 {
+            cache.pop_front();
+        }
+        cache.push_back((hash, now));
+        false
+    }
+
     /// Handle NewBlock announcement from peer
     async fn handle_new_block(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
+        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
-        block_provider: Arc<dyn BlockProvider>,
+        _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
+        // Dedup check
+        if Self::check_seen(&seen_messages, &envelope.payload).await {
+            return Ok(()); // Already seen, drop silently
+        }
+
         let new_block: NewBlockMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
-        
+
         // Send BlockReceived event
         let _ = event_tx.send(NetworkEvent::BlockReceived {
             block: new_block.block,
             peer_id,
         });
-        
+
         Ok(())
     }
-    
+
     /// Handle NewTransaction announcement from peer
     async fn handle_new_transaction(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
+        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
-        block_provider: Arc<dyn BlockProvider>,
+        _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
+        // Dedup check
+        if Self::check_seen(&seen_messages, &envelope.payload).await {
+            return Ok(()); // Already seen, drop silently
+        }
+
         let new_tx: NewTransactionMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
-        
+
         // Send TransactionReceived event
         let _ = event_tx.send(NetworkEvent::TransactionReceived {
             transaction: new_tx.transaction,
             peer_id,
         });
-        
+
         Ok(())
     }
     
@@ -1209,9 +1352,9 @@ impl CppNetwork {
         envelope: &MessageEnvelope,
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
     ) -> Result<(), NetworkError> {
-        let pong: PongMessage = envelope.deserialize()
+        let _pong: PongMessage = envelope.deserialize()
             .map_err(|e| NetworkError::Protocol(e))?;
-        
+
         // Update RTT and flow control
         let mut peers_guard = peers.write().await;
         if let Some(peer) = peers_guard.get_mut(&peer_id) {
@@ -1229,10 +1372,20 @@ impl CppNetwork {
     // Broadcasting
     // =========================================================================
     
-    /// Broadcast block to selected peers
+    /// Broadcast block to selected peers using router + PeerSelector
     async fn broadcast_block(&self, block: Block) -> Result<(), NetworkError> {
-        // Select peers (equilibrium fanout: √n × η)
-        let peer_ids = self.select_broadcast_peers(MessageType::NewBlock).await;
+        // Select peers via equilibrium router, then filter through PeerSelector
+        let router_peers = self.select_broadcast_peers(MessageType::NewBlock).await;
+        let peers_guard = self.peers.read().await;
+        let peer_refs: Vec<&Peer> = router_peers.iter()
+            .filter_map(|id| peers_guard.get(id))
+            .collect();
+        let peer_ids = if !peer_refs.is_empty() {
+            PeerSelector::select_for_propagation(&peer_refs, router_peers.len())
+        } else {
+            router_peers
+        };
+        drop(peers_guard);
 
         // Collect sent data info first (to avoid holding read lock while getting write lock)
         let mut sent_info: Vec<(PeerId, usize)> = Vec::new();
@@ -1251,7 +1404,7 @@ impl CppNetwork {
 
                     // Send via channel
                     if let Err(e) = peer.send_message(data.clone()) {
-                        eprintln!("Failed to send NewBlock to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                        tracing::warn!("Failed to send NewBlock to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
                         continue;
                     }
 
@@ -1296,7 +1449,7 @@ impl CppNetwork {
 
                     // Send via channel
                     if let Err(e) = peer.send_message(data.clone()) {
-                        eprintln!("Failed to send NewTransaction to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                        tracing::warn!("Failed to send NewTransaction to peer {}: {}", peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
                         continue;
                     }
 
@@ -1319,25 +1472,17 @@ impl CppNetwork {
         Ok(())
     }
     
-    /// Select peers for broadcast (equilibrium fanout)
+    /// Select peers for broadcast using equilibrium router with murmuration
     async fn select_broadcast_peers(&self, _msg_type: MessageType) -> Vec<PeerId> {
-        let peers = self.peers.read().await;
-        let peer_count = peers.len();
-        
-        if peer_count == 0 {
-            return vec![];
+        let router = self.router.read().await;
+        if router.peer_count() == 0 {
+            // Fallback: if router is empty, use all connected peers
+            let peers = self.peers.read().await;
+            return peers.keys().copied().collect();
         }
-        
-        // Equilibrium fanout: √n × η
-        let fanout = ((peer_count as f64).sqrt() * crate::cpp::config::ETA).ceil() as usize;
-        let fanout = fanout.min(peer_count);
-        
-        // Use PeerSelector to select best peers
-        let _selector = PeerSelector;
-        // TODO: Implement peer selection based on reputation and metrics
-        
-        // For now, return first N peers
-        peers.keys().take(fanout).copied().collect()
+        let chain_state = self.chain_state.read().await;
+        let flock_state = self.flock_state.read().await;
+        router.select_broadcast_peers_flock(chain_state.best_height, flock_state.phase)
     }
     
     // =========================================================================
@@ -1391,19 +1536,24 @@ impl CppNetwork {
     }
     
     /// Request headers from peer (light sync)
+    ///
+    /// NOTE: Header-only sync is not yet implemented. This logs a warning
+    /// so operators know the feature is pending.
     async fn request_headers(
         &self,
         peer_id: PeerId,
-        _from_height: u64,
-        _to_height: u64,
+        from_height: u64,
+        to_height: u64,
         _request_id: u64,
     ) -> Result<(), NetworkError> {
         let peers = self.peers.read().await;
         let _peer = peers.get(&peer_id)
             .ok_or(NetworkError::PeerNotFound(peer_id))?;
-        
-        // TODO: Send GetHeaders message
-        
+
+        let peer_id_short: String = peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
+        tracing::warn!("[CPP] request_headers not yet implemented: peer={} heights={}-{}",
+            peer_id_short, from_height, to_height);
+
         Ok(())
     }
     
@@ -1431,14 +1581,14 @@ impl CppNetwork {
                 let envelope = match MessageEnvelope::new(MessageType::Ping, &ping) {
                     Ok(e) => e,
                     Err(e) => {
-                        eprintln!("Failed to create ping envelope: {}", e);
+                        tracing::error!("Failed to create ping envelope: {}", e);
                         continue;
                     }
                 };
                 let data = envelope.encode();
                 
                 if let Err(e) = peer.send_message(data.clone()) {
-                    eprintln!("Failed to send ping to peer {}: {}", peer.id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                    tracing::warn!("Failed to send ping to peer {}: {}", peer.id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
                     continue;
                 }
                 
@@ -1453,20 +1603,30 @@ impl CppNetwork {
     async fn cleanup_stale_peers(&self) {
         let now = Instant::now();
         let mut peers = self.peers.write().await;
-        
+
         let mut to_remove = vec![];
         for (peer_id, peer) in peers.iter() {
             if now.duration_since(peer.last_seen) > PEER_TIMEOUT {
                 to_remove.push(*peer_id);
             }
         }
-        
-        for peer_id in to_remove {
-            peers.remove(&peer_id);
-            let _ = self.event_tx.send(NetworkEvent::PeerDisconnected {
-                peer_id,
-                reason: "Timeout".to_string(),
-            });
+
+        if !to_remove.is_empty() {
+            let mut router = self.router.write().await;
+            for peer_id in &to_remove {
+                if let Some(mut peer) = peers.remove(peer_id) {
+                    peer.shutdown(); // Signal write task to stop
+                    router.remove_peer(peer_id);
+                    let _ = self.event_tx.send(NetworkEvent::PeerDisconnected {
+                        peer_id: *peer_id,
+                        reason: "Timeout".to_string(),
+                    });
+                }
+            }
+
+            // Clean up stale pending requests (TTL: 30s)
+            let mut pending = self.pending_requests.write().await;
+            pending.retain(|_, instant| instant.elapsed() < Duration::from_secs(30));
         }
     }
     
@@ -1484,7 +1644,7 @@ impl CppNetwork {
             return; // No peers to broadcast to
         }
         
-        println!("📡 [CPP] Broadcasting Status: height {}, hash {:?} to {} peers", 
+        tracing::info!("[CPP] Broadcasting Status: height {}, hash {:?} to {} peers",
             best_height, best_hash, peer_count);
         
         // Get flock state for murmuration coordination
@@ -1503,7 +1663,7 @@ impl CppNetwork {
         let envelope = match MessageEnvelope::new(MessageType::Status, &status) {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("Failed to create status envelope: {}", e);
+                tracing::error!("Failed to create status envelope: {}", e);
                 return;
             }
         };
@@ -1511,7 +1671,7 @@ impl CppNetwork {
         
         for peer in peers.values() {
             if let Err(e) = peer.send_message(data.clone()) {
-                eprintln!("Failed to send status to peer: {}", e);
+                tracing::warn!("Failed to send status to peer: {}", e);
             }
         }
     }
@@ -1553,7 +1713,7 @@ impl CppNetwork {
 
         // Sync if we're behind by more than 1 block (reduced from 5 for faster sync)
         if delta_h > 1 {
-            println!("🔄 [CPP] Equilibrium sync check: we're at {}, median at {} (Δh = {})",
+            tracing::info!("[CPP] Equilibrium sync check: we're at {}, median at {} (delta_h = {})",
                 our_height, median_height, delta_h);
 
             // Select best peer (highest height with good quality)
@@ -1568,13 +1728,13 @@ impl CppNetwork {
                 let from_height = our_height + 1;
                 let to_height = peer_height.min(our_height + MAX_BLOCKS_PER_RESPONSE);
 
-                println!("🚀 [CPP] Requesting sync: blocks {}-{} from peer {:?}",
+                tracing::info!("[CPP] Requesting sync: blocks {}-{} from peer {:?}",
                     from_height, to_height, peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>());
 
                 // === FIX: Actually request the blocks instead of sending placeholder event ===
                 let request_id: u64 = rand::thread_rng().gen();
                 if let Err(e) = self.request_blocks(peer_id, from_height, to_height, request_id).await {
-                    eprintln!("[CPP] Failed to request sync blocks: {}", e);
+                    tracing::error!("[CPP] Failed to request sync blocks: {}", e);
                 }
             }
         }
@@ -1595,7 +1755,7 @@ impl CppNetwork {
 
         // Log peer health status periodically (only when there are peers)
         if total_peers > 0 {
-            println!("[CPP][HEALTH] Peers: {} total, {} healthy (min required: {})",
+            tracing::debug!("[CPP][HEALTH] Peers: {} total, {} healthy (min required: {})",
                 total_peers, healthy_peers, MIN_HEALTHY_PEERS);
         }
 
@@ -1606,10 +1766,10 @@ impl CppNetwork {
 
         // If we have some peers but they're unhealthy, log that
         if total_peers > 0 && healthy_peers < MIN_HEALTHY_PEERS {
-            println!("[CPP][BOOTNODE] Insufficient healthy peers ({}/{} healthy, {} required), attempting reconnection...",
+            tracing::info!("[CPP][BOOTNODE] Insufficient healthy peers ({}/{} healthy, {} required), attempting reconnection...",
                 healthy_peers, total_peers, MIN_HEALTHY_PEERS);
         } else {
-            println!("[CPP][BOOTNODE] No connected peers, checking bootnode reconnection...");
+            tracing::info!("[CPP][BOOTNODE] No connected peers, checking bootnode reconnection...");
         }
         
         let now = Instant::now();
@@ -1621,7 +1781,7 @@ impl CppNetwork {
             let addr: SocketAddr = match bootnode_str.parse() {
                 Ok(a) => a,
                 Err(_) => {
-                    eprintln!("[CPP][BOOTNODE] Invalid bootnode address: {}", bootnode_str);
+                    tracing::warn!("[CPP][BOOTNODE] Invalid bootnode address: {}", bootnode_str);
                     continue;
                 }
             };
@@ -1643,7 +1803,7 @@ impl CppNetwork {
                 continue;
             }
             
-            println!("[CPP][BOOTNODE] Attempting reconnection to {}", addr);
+            tracing::info!("[CPP][BOOTNODE] Attempting reconnection to {}", addr);
             
             // Record this attempt
             {
@@ -1654,7 +1814,7 @@ impl CppNetwork {
             // Try to connect
             match self.connect_bootnode(addr).await {
                 Ok(()) => {
-                    println!("[CPP][BOOTNODE] Successfully reconnected to {}", addr);
+                    tracing::info!("[CPP][BOOTNODE] Successfully reconnected to {}", addr);
                     // Reset backoff on success
                     {
                         let mut backoff = self.bootnode_backoff.write().await;
@@ -1663,30 +1823,49 @@ impl CppNetwork {
                     break; // One successful connection is enough to start
                 }
                 Err(e) => {
-                    eprintln!("[CPP][BOOTNODE] Failed to reconnect to {}: {}", addr, e);
+                    tracing::warn!("[CPP][BOOTNODE] Failed to reconnect to {}: {}", addr, e);
                     // Increase backoff exponentially (double it, up to max)
                     {
                         let mut backoff = self.bootnode_backoff.write().await;
                         let current = backoff.get(&addr).copied().unwrap_or(initial_backoff);
                         let new_backoff = (current * 2).min(max_backoff);
                         backoff.insert(addr, new_backoff);
-                        println!("[CPP][BOOTNODE] Next retry for {} in {:?}", addr, new_backoff);
+                        tracing::info!("[CPP][BOOTNODE] Next retry for {} in {:?}", addr, new_backoff);
                     }
                 }
             }
         }
     }
-    /// Update node metrics
+    /// Update node metrics from peer observations
     async fn update_metrics(&self) {
-        let _metrics = self.metrics.write().await;
-        let _peers = self.peers.read().await;
-        
-        // TODO: Calculate metrics:
-        // - storage_ratio (from chain state)
-        // - validation_speed (from validator stats)
-        // - solve_rate (from miner stats)
-        // - uptime_ratio (from connection time)
-        // - avg_response_time (from peer RTT samples)
+        let peers = self.peers.read().await;
+        let peer_count = peers.len();
+
+        let (avg_quality, avg_rtt) = if peer_count > 0 {
+            let quality_sum: f64 = peers.values().map(|p| p.quality).sum();
+            let rtt_sum: Duration = peers.values().map(|p| p.average_rtt()).sum();
+            (
+                quality_sum / peer_count as f64,
+                rtt_sum / peer_count as u32,
+            )
+        } else {
+            (0.0, Duration::ZERO)
+        };
+
+        let chain_state = self.chain_state.read().await;
+        tracing::info!(
+            peer_count,
+            avg_quality = format!("{:.3}", avg_quality),
+            avg_rtt_ms = avg_rtt.as_millis(),
+            best_height = chain_state.best_height,
+            "Network metrics update"
+        );
+        drop(chain_state);
+
+        // Update local NodeMetrics
+        let mut metrics = self.metrics.write().await;
+        metrics.uptime_ratio = 1.0; // TODO: Track from start time
+        metrics.avg_response_time = avg_rtt.as_secs_f64();
     }
 }
 

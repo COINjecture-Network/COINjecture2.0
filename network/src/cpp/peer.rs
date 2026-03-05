@@ -6,12 +6,11 @@
 use crate::cpp::{
     config::{NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_CONSECUTIVE_TIMEOUTS, PEER_QUALITY_THRESHOLD},
     message::*,
-    protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     flow_control::FlowControl,
 };
 use coinject_core::Hash;
 use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Duration};
 use std::net::SocketAddr;
@@ -147,7 +146,7 @@ impl Peer {
             loop {
                 // Check for cancellation signal
                 if cancel_signal_clone.load(Ordering::Relaxed) {
-                    println!("[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully", peer_id_short);
+                    tracing::info!("[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully", peer_id_short);
                     break;
                 }
 
@@ -172,19 +171,19 @@ impl Peer {
                                 };
 
                                 if let Err(e) = write_half.write_all(&data).await {
-                                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} err={}",
+                                    tracing::error!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} err={}",
                                         peer_id_short, msg_type_name, frame_len, e);
                                     break;
                                 }
                                 if let Err(e) = write_half.flush().await {
-                                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} flush_err={}",
+                                    tracing::error!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} flush_err={}",
                                         peer_id_short, msg_type_name, frame_len, e);
                                     break;
                                 }
                             }
                             None => {
                                 // Channel closed
-                                println!("[CPP][CONN][WRITE_CLOSE] peer={} channel closed, exiting", peer_id_short);
+                                tracing::info!("[CPP][CONN][WRITE_CLOSE] peer={} channel closed, exiting", peer_id_short);
                                 break;
                             }
                         }
@@ -192,13 +191,13 @@ impl Peer {
                     // Periodic check for cancellation (every 1 second)
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {
                         if cancel_signal_clone.load(Ordering::Relaxed) {
-                            println!("[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully", peer_id_short);
+                            tracing::info!("[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully", peer_id_short);
                             break;
                         }
                     }
                 }
             }
-            println!("[CPP][CONN][WRITE_EXIT] peer={} write task exiting", peer_id_short);
+            tracing::info!("[CPP][CONN][WRITE_EXIT] peer={} write task exiting", peer_id_short);
         });
 
         let now = Instant::now();
@@ -320,12 +319,12 @@ impl Peer {
         let should_disconnect = self.consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS;
 
         if should_disconnect {
-            eprintln!(
+            tracing::warn!(
                 "[CPP][PEER][TIMEOUT_EXCEEDED] peer={} consecutive_timeouts={} max={} -> forcing disconnect",
                 peer_id_short, self.consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS
             );
         } else {
-            println!(
+            tracing::warn!(
                 "[CPP][PEER][TIMEOUT] peer={} consecutive_timeouts={}/{}",
                 peer_id_short, self.consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS
             );
@@ -372,7 +371,7 @@ impl Peer {
     /// This signals the write task to stop and prevents resource leaks
     pub fn shutdown(&mut self) {
         let peer_id_short: String = self.id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
-        println!("[CPP][PEER][SHUTDOWN] peer={} initiating shutdown", peer_id_short);
+        tracing::info!("[CPP][PEER][SHUTDOWN] peer={} initiating shutdown", peer_id_short);
 
         // Signal write task to stop
         self.write_task_cancel.store(true, Ordering::Relaxed);

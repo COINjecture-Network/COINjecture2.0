@@ -1,108 +1,141 @@
 version: '3.8'
 
+# COINjecture Custom P2P Network — Docker Testnet
+# Uses CPP protocol on port 707 (NOT libp2p)
+# Health endpoint: GET /health on metrics port (9090)
+
 services:
   # Bootnode - first node in the network
   bootnode:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.cpp
     container_name: coinject-bootnode
     ports:
-      - "30333:30333"  # P2P
+      - "707:707"      # CPP P2P
+      - "9090:9090"    # Metrics + Health
       - "9933:9933"    # RPC
     volumes:
       - bootnode-data:/data
     command: >
       --mine
       --data-dir /data
-      --p2p-addr /ip4/0.0.0.0/tcp/30333
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
     environment:
       - RUST_LOG=info
       - RUST_BACKTRACE=1
-      - ADZDB_ENABLED=false  # Disable ADZDB for local testing
-      - DATA_DIR=/data  # Debug log path
     networks:
       - coinject-network
     healthcheck:
-      test: ["CMD", "sh", "-c", "netstat -an | grep 30333 || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
 
-  # Node 1 - connects to bootnode
+  # Node 1 - connects to bootnode via CPP protocol
   node1:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.cpp
     container_name: coinject-node1
     ports:
-      - "30334:30334"  # P2P
-      - "9934:9934"    # RPC
+      - "708:707"      # CPP P2P (mapped to host 708)
+      - "9091:9090"    # Metrics + Health
+      - "9934:9933"    # RPC
     volumes:
       - node1-data:/data
     command: >
       --mine
       --data-dir /data
-      --p2p-addr /ip4/0.0.0.0/tcp/30334
-      --rpc-addr 0.0.0.0:9934
-      --bootnodes /ip4/bootnode/tcp/30333
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
     environment:
       - RUST_LOG=info
       - RUST_BACKTRACE=1
-      - ADZDB_ENABLED=false
     networks:
       - coinject-network
     depends_on:
       bootnode:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-  # Node 2 - connects to bootnode
+  # Node 2 - connects to bootnode via CPP protocol
   node2:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.cpp
     container_name: coinject-node2
     ports:
-      - "30335:30335"  # P2P
-      - "9935:9935"    # RPC
+      - "709:707"      # CPP P2P (mapped to host 709)
+      - "9092:9090"    # Metrics + Health
+      - "9935:9933"    # RPC
     volumes:
       - node2-data:/data
     command: >
       --mine
       --data-dir /data
-      --p2p-addr /ip4/0.0.0.0/tcp/30335
-      --rpc-addr 0.0.0.0:9935
-      --bootnodes /ip4/bootnode/tcp/30333
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
     environment:
       - RUST_LOG=info
       - RUST_BACKTRACE=1
-      - ADZDB_ENABLED=false
     networks:
       - coinject-network
     depends_on:
       bootnode:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-  # Node 3 - connects to bootnode
+  # Node 3 - connects to bootnode via CPP protocol
   node3:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.cpp
     container_name: coinject-node3
     ports:
-      - "30336:30336"  # P2P
-      - "9936:9936"    # RPC
+      - "710:707"      # CPP P2P (mapped to host 710)
+      - "9093:9090"    # Metrics + Health
+      - "9936:9933"    # RPC
     volumes:
       - node3-data:/data
     command: >
       --mine
       --data-dir /data
-      --p2p-addr /ip4/0.0.0.0/tcp/30336
-      --rpc-addr 0.0.0.0:9936
-      --bootnodes /ip4/bootnode/tcp/30333
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
     environment:
       - RUST_LOG=info
       - RUST_BACKTRACE=1
-      - ADZDB_ENABLED=false
     networks:
       - coinject-network
     depends_on:
       bootnode:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   bootnode-data:
