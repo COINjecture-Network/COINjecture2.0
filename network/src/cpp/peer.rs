@@ -4,7 +4,7 @@
 // Peer connection management with node classification integration
 
 use crate::cpp::{
-    config::{NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL},
+    config::{NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_CONSECUTIVE_TIMEOUTS, PEER_QUALITY_THRESHOLD},
     message::*,
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     flow_control::FlowControl,
@@ -15,6 +15,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Duration};
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Peer ID (32-byte hash of public key)
 pub type PeerId = [u8; 32];
@@ -36,65 +38,88 @@ pub enum PeerState {
 pub struct Peer {
     /// Peer ID
     pub id: PeerId,
-    
+
     /// Socket address
     pub addr: SocketAddr,
-    
+
     /// Channel for sending messages to write task
     pub send_tx: mpsc::UnboundedSender<Vec<u8>>,
-    
+
     /// Connection state
     pub state: PeerState,
-    
+
     /// Node type (from handshake)
     pub node_type: NodeType,
-    
+
     /// Best block height
     pub best_height: u64,
-    
+
     /// Best block hash
     pub best_hash: Hash,
-    
+
     /// Genesis hash (for chain validation)
     pub genesis_hash: Hash,
-    
+
     /// Flow control
     pub flow_control: FlowControl,
-    
+
     /// Connection quality (0.0-1.0, dimensionless)
     pub quality: f64,
-    
+
     /// Last message received time
     pub last_seen: Instant,
-    
+
     /// Last ping sent time
     pub last_ping: Option<Instant>,
-    
+
     /// Pending ping nonce
     pub pending_ping_nonce: Option<u64>,
-    
+
     /// Round-trip time samples (for quality calculation)
     pub rtt_samples: Vec<Duration>,
-    
+
     /// Messages sent
     pub messages_sent: u64,
-    
+
     /// Messages received
     pub messages_received: u64,
-    
+
     /// Bytes sent
     pub bytes_sent: u64,
-    
+
     /// Bytes received
     pub bytes_received: u64,
-    
+
     /// Connection established time
     pub connected_at: Instant,
+
+    // === NEW FIELDS FOR CONNECTION STABILITY ===
+
+    /// Consecutive read timeouts (resets on successful read)
+    /// Used for forced disconnect after MAX_CONSECUTIVE_TIMEOUTS
+    pub consecutive_timeouts: u32,
+
+    /// Last successful message read timestamp (distinct from last_seen)
+    /// Used for half-dead detection
+    pub last_successful_read: Instant,
+
+    /// Connection nonce for tie-breaking simultaneous connections
+    pub connection_nonce: u64,
+
+    /// Whether this connection was initiated by us (outbound) or them (inbound)
+    pub is_outbound: bool,
+
+    /// Cancellation signal for write task (set to true to stop write task)
+    write_task_cancel: Arc<AtomicBool>,
 }
 
 impl Peer {
     /// Create new peer connection
     /// Returns (Peer, read_half) - the read half must be used in a separate task
+    ///
+    /// # Parameters
+    /// - `connection_nonce`: Nonce for deterministic tie-breaking of simultaneous connections
+    /// - `is_outbound`: Whether we initiated this connection (true) or received it (false)
     pub fn new(
         id: PeerId,
         addr: SocketAddr,
@@ -103,46 +128,80 @@ impl Peer {
         best_height: u64,
         best_hash: Hash,
         genesis_hash: Hash,
+        connection_nonce: u64,
+        is_outbound: bool,
     ) -> (Self, tokio::io::ReadHalf<TcpStream>) {
         // Split stream into read and write halves
         let (read_half, mut write_half) = tokio::io::split(stream);
-        
+
         // Create channel for sending messages
         let (send_tx, mut send_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        
-        // Spawn write task with instrumented logging for M2 debugging
+
+        // Create cancellation signal for write task cleanup
+        let cancel_signal = Arc::new(AtomicBool::new(false));
+        let cancel_signal_clone = cancel_signal.clone();
+
+        // Spawn write task with instrumented logging and cancellation support
         let peer_id_short: String = id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
         tokio::spawn(async move {
-            while let Some(data) = send_rx.recv().await {
-                let frame_len = data.len();
-                let msg_type = if data.len() >= 6 { data[5] } else { 0xFF };
-                let msg_type_name = match msg_type {
-                    0x01 => "Hello",
-                    0x02 => "HelloAck",
-                    0x10 => "Status",
-                    0x11 => "GetBlocks",
-                    0x12 => "Blocks",
-                    0x20 => "NewBlock",
-                    0x21 => "NewTransaction",
-                    0xF0 => "Ping",
-                    0xF1 => "Pong",
-                    _ => "Other",
-                };
-
-                if let Err(e) = write_half.write_all(&data).await {
-                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} err={}",
-                        peer_id_short, msg_type_name, frame_len, e);
+            loop {
+                // Check for cancellation signal
+                if cancel_signal_clone.load(Ordering::Relaxed) {
+                    println!("[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully", peer_id_short);
                     break;
                 }
-                if let Err(e) = write_half.flush().await {
-                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} flush_err={}",
-                        peer_id_short, msg_type_name, frame_len, e);
-                    break;
+
+                // Use select! to handle both messages and cancellation
+                tokio::select! {
+                    msg = send_rx.recv() => {
+                        match msg {
+                            Some(data) => {
+                                let frame_len = data.len();
+                                let msg_type = if data.len() >= 6 { data[5] } else { 0xFF };
+                                let msg_type_name = match msg_type {
+                                    0x01 => "Hello",
+                                    0x02 => "HelloAck",
+                                    0x10 => "Status",
+                                    0x11 => "GetBlocks",
+                                    0x12 => "Blocks",
+                                    0x20 => "NewBlock",
+                                    0x21 => "NewTransaction",
+                                    0xF0 => "Ping",
+                                    0xF1 => "Pong",
+                                    _ => "Other",
+                                };
+
+                                if let Err(e) = write_half.write_all(&data).await {
+                                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} err={}",
+                                        peer_id_short, msg_type_name, frame_len, e);
+                                    break;
+                                }
+                                if let Err(e) = write_half.flush().await {
+                                    eprintln!("[CPP][CONN][WRITE_ERR] peer={} msg={} frame_len={} flush_err={}",
+                                        peer_id_short, msg_type_name, frame_len, e);
+                                    break;
+                                }
+                            }
+                            None => {
+                                // Channel closed
+                                println!("[CPP][CONN][WRITE_CLOSE] peer={} channel closed, exiting", peer_id_short);
+                                break;
+                            }
+                        }
+                    }
+                    // Periodic check for cancellation (every 1 second)
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        if cancel_signal_clone.load(Ordering::Relaxed) {
+                            println!("[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully", peer_id_short);
+                            break;
+                        }
+                    }
                 }
             }
-            eprintln!("[CPP][CONN][WRITE_CLOSE] peer={} write task exiting", peer_id_short);
+            println!("[CPP][CONN][WRITE_EXIT] peer={} write task exiting", peer_id_short);
         });
-        
+
+        let now = Instant::now();
         let peer = Peer {
             id,
             addr,
@@ -153,8 +212,8 @@ impl Peer {
             best_hash,
             genesis_hash,
             flow_control: FlowControl::new(),
-            quality: 1.0,  // Start with perfect quality
-            last_seen: Instant::now(),
+            quality: 1.0, // Start with perfect quality
+            last_seen: now,
             last_ping: None,
             pending_ping_nonce: None,
             rtt_samples: Vec::new(),
@@ -162,9 +221,15 @@ impl Peer {
             messages_received: 0,
             bytes_sent: 0,
             bytes_received: 0,
-            connected_at: Instant::now(),
+            connected_at: now,
+            // New fields for connection stability
+            consecutive_timeouts: 0,
+            last_successful_read: now,
+            connection_nonce,
+            is_outbound,
+            write_task_cancel: cancel_signal,
         };
-        
+
         (peer, read_half)
     }
     
@@ -237,13 +302,85 @@ impl Peer {
     /// Record timeout
     pub fn on_timeout(&mut self) {
         self.flow_control.on_timeout();
-        
+
         // Decrease quality exponentially (using η = 1/√2)
         let eta = std::f64::consts::FRAC_1_SQRT_2;
         self.quality *= 1.0 - eta;
         self.quality = self.quality.max(0.1);
     }
-    
+
+    // === NEW METHODS FOR CONNECTION STABILITY ===
+
+    /// Record a read timeout
+    /// Returns true if peer should be disconnected (exceeded max timeouts)
+    pub fn on_read_timeout(&mut self) -> bool {
+        self.consecutive_timeouts += 1;
+
+        let peer_id_short: String = self.id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
+        let should_disconnect = self.consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS;
+
+        if should_disconnect {
+            eprintln!(
+                "[CPP][PEER][TIMEOUT_EXCEEDED] peer={} consecutive_timeouts={} max={} -> forcing disconnect",
+                peer_id_short, self.consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS
+            );
+        } else {
+            println!(
+                "[CPP][PEER][TIMEOUT] peer={} consecutive_timeouts={}/{}",
+                peer_id_short, self.consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS
+            );
+        }
+
+        // Also update quality
+        self.on_timeout();
+
+        should_disconnect
+    }
+
+    /// Record successful message read (resets timeout counter)
+    pub fn on_successful_read(&mut self, bytes: usize) {
+        self.consecutive_timeouts = 0;
+        self.last_successful_read = Instant::now();
+        self.on_message_received(bytes);
+    }
+
+    /// Check if peer is in a half-dead state
+    ///
+    /// Half-dead: has timeouts but last_seen is recent (possible write-only connection)
+    /// This can happen when a peer accepts writes but doesn't send responses.
+    pub fn is_half_dead(&self) -> bool {
+        // Has had recent timeouts
+        let has_timeouts = self.consecutive_timeouts > 0;
+
+        // last_seen is recent (peer might still be accepting writes via Status messages)
+        let last_seen_recent = self.last_seen.elapsed() < PEER_TIMEOUT;
+
+        // But last successful read is old (no actual messages coming through)
+        let last_read_stale = self.last_successful_read.elapsed() > PEER_TIMEOUT / 2;
+
+        has_timeouts && last_seen_recent && last_read_stale
+    }
+
+    /// Check if peer is healthy (quality above threshold and not half-dead)
+    pub fn is_healthy(&self) -> bool {
+        self.state == PeerState::Connected
+            && self.quality >= PEER_QUALITY_THRESHOLD
+            && !self.is_half_dead()
+    }
+
+    /// Gracefully shutdown the peer connection
+    /// This signals the write task to stop and prevents resource leaks
+    pub fn shutdown(&mut self) {
+        let peer_id_short: String = self.id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
+        println!("[CPP][PEER][SHUTDOWN] peer={} initiating shutdown", peer_id_short);
+
+        // Signal write task to stop
+        self.write_task_cancel.store(true, Ordering::Relaxed);
+
+        // Update state
+        self.state = PeerState::Disconnecting;
+    }
+
     /// Get average RTT
     pub fn average_rtt(&self) -> Duration {
         if self.rtt_samples.is_empty() {

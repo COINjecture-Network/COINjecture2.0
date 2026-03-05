@@ -13,6 +13,7 @@ use tokio::net::TcpStream;
 use bincode;
 use blake3;
 use std::io;
+use std::time::Duration;
 
 /// Protocol error types
 #[derive(Debug)]
@@ -25,6 +26,8 @@ pub enum ProtocolError {
     MessageTooLarge(usize),
     SerializationError(String),
     DeserializationError(String),
+    /// Timeout during receive operation (institutional-grade timeout handling)
+    Timeout(Duration),
 }
 
 impl From<io::Error> for ProtocolError {
@@ -44,6 +47,7 @@ impl std::fmt::Display for ProtocolError {
             ProtocolError::MessageTooLarge(size) => write!(f, "Message too large: {} bytes", size),
             ProtocolError::SerializationError(e) => write!(f, "Serialization error: {}", e),
             ProtocolError::DeserializationError(e) => write!(f, "Deserialization error: {}", e),
+            ProtocolError::Timeout(duration) => write!(f, "Receive timeout after {:?}", duration),
         }
     }
 }
@@ -51,9 +55,9 @@ impl std::fmt::Display for ProtocolError {
 impl std::error::Error for ProtocolError {}
 
 /// Message envelope for wire protocol
-/// 
+///
 /// Format:
-/// ```
+/// ```text
 /// ┌────────────┬─────────┬──────────┬─────────────┬─────────┬──────────┐
 /// │ Magic (4B) │ Ver (1B)│ Type (1B)│ Length (4B) │ Payload │ Hash (32B)│
 /// └────────────┴─────────┴──────────┴─────────────┴─────────┴──────────┘
@@ -186,7 +190,21 @@ impl MessageCodec {
     pub async fn receive(stream: &mut TcpStream) -> Result<MessageEnvelope, ProtocolError> {
         MessageEnvelope::decode(stream).await
     }
-    
+
+    /// Receive a message with built-in timeout (institutional-grade)
+    ///
+    /// This method wraps the raw receive with a configurable timeout,
+    /// eliminating the need for external timeout wrappers and ensuring
+    /// consistent behavior across all call sites.
+    pub async fn receive_with_timeout(
+        stream: &mut TcpStream,
+        timeout_duration: Duration,
+    ) -> Result<MessageEnvelope, ProtocolError> {
+        tokio::time::timeout(timeout_duration, MessageEnvelope::decode(stream))
+            .await
+            .map_err(|_| ProtocolError::Timeout(timeout_duration))?
+    }
+
     /// Receive a message from read half of split stream
     pub async fn receive_from_read_half(
         read_half: &mut tokio::io::ReadHalf<TcpStream>
@@ -239,7 +257,20 @@ impl MessageCodec {
             payload,
         })
     }
-    
+
+    /// Receive a message from read half with built-in timeout (institutional-grade)
+    ///
+    /// This method wraps the raw receive with a configurable timeout,
+    /// ensuring consistent timeout behavior for the peer message loop.
+    pub async fn receive_from_read_half_with_timeout(
+        read_half: &mut tokio::io::ReadHalf<TcpStream>,
+        timeout_duration: Duration,
+    ) -> Result<MessageEnvelope, ProtocolError> {
+        tokio::time::timeout(timeout_duration, Self::receive_from_read_half(read_half))
+            .await
+            .map_err(|_| ProtocolError::Timeout(timeout_duration))?
+    }
+
     /// Send Hello message
     pub async fn send_hello(
         stream: &mut TcpStream,
@@ -327,6 +358,7 @@ mod tests {
             genesis_hash: Hash::ZERO,
             node_type: 1,
             timestamp: 1234567890,
+            connection_nonce: 0, // Test with default nonce
         };
         
         let envelope = MessageEnvelope::new(MessageType::Hello, &msg).unwrap();

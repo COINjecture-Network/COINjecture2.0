@@ -22,8 +22,9 @@ pub mod flock;
 
 // Re-export commonly used types
 pub use config::{
-    CppConfig, NodeType, CPP_PORT, WEBSOCKET_PORT, 
-    DEFAULT_P2P_LISTEN, DEFAULT_WS_LISTEN, ETA, SQRT_2
+    CppConfig, NodeType, CPP_PORT, WEBSOCKET_PORT,
+    DEFAULT_P2P_LISTEN, DEFAULT_WS_LISTEN, ETA, SQRT_2,
+    timeouts, // Unified timeout constants for network/consensus alignment
 };
 
 pub use message::{
