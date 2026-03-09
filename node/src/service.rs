@@ -1145,6 +1145,217 @@ impl CoinjectNode {
             }
         });
         
+        // ─── Mesh Network (optional parallel transport) ────────────────────
+        if self.config.enable_mesh {
+            println!("🕸️  Starting Mesh Network...");
+
+            let mesh_listen_addr: std::net::SocketAddr = self.config.mesh_listen
+                .parse()
+                .map_err(|e| format!("Invalid mesh listen address: {}", e))?;
+
+            let mut mesh_seeds: Vec<std::net::SocketAddr> = Vec::new();
+            for seed_str in &self.config.mesh_seed {
+                match seed_str.parse::<std::net::SocketAddr>() {
+                    Ok(addr) => mesh_seeds.push(addr),
+                    Err(e) => eprintln!("[Mesh] Invalid seed address '{}': {}", seed_str, e),
+                }
+            }
+
+            let mesh_data_dir = self.config.data_dir.join("mesh");
+            let mesh_config = coinject_network::MeshNetworkConfig {
+                listen_addr: mesh_listen_addr,
+                seed_nodes: mesh_seeds,
+                data_dir: mesh_data_dir,
+                ..Default::default()
+            };
+
+            match coinject_network::NetworkService::start(mesh_config).await {
+                Ok((mesh_service, mesh_event_rx)) => {
+                    let mesh_cmd_tx = mesh_service.command_sender();
+
+                    // Create bridge channels
+                    let (bridge_cmd_tx, bridge_cmd_rx) = mpsc::unbounded_channel::<coinject_network::MeshBridgeCommand>();
+                    let (bridge_event_tx, mut bridge_event_rx) = mpsc::unbounded_channel::<coinject_network::MeshBridgeEvent>();
+
+                    // Create bridge state with current chain tip
+                    let bridge_state = Arc::new(RwLock::new(coinject_network::MeshBridgeState {
+                        best_height: current_height,
+                        best_hash: current_hash,
+                        epoch: 0,
+                    }));
+
+                    // Spawn the bridge task
+                    let bridge_state_clone = Arc::clone(&bridge_state);
+                    tokio::spawn(async move {
+                        coinject_network::mesh::bridge::run_bridge(
+                            bridge_cmd_rx,
+                            bridge_event_tx,
+                            mesh_cmd_tx,
+                            mesh_event_rx,
+                            bridge_state_clone,
+                        ).await;
+                    });
+
+                    // Forward mined blocks to mesh (clone of bridge_cmd_tx for mining)
+                    let bridge_cmd_tx_for_mining = bridge_cmd_tx.clone();
+                    let bridge_cmd_tx_for_events = bridge_cmd_tx.clone();
+
+                    // Spawn mesh bridge event handler — feeds blocks/txs into the same
+                    // validation pipeline as CPP events
+                    let chain_for_mesh = Arc::clone(&self.chain);
+                    let state_for_mesh = Arc::clone(&self.state);
+                    let timelock_for_mesh = Arc::clone(&self.timelock_state);
+                    let escrow_for_mesh = Arc::clone(&self.escrow_state);
+                    let channel_for_mesh = Arc::clone(&self.channel_state);
+                    let trustline_for_mesh = Arc::clone(&self.trustline_state);
+                    let dim_pool_for_mesh = Arc::clone(&self.dimensional_pool_state);
+                    let marketplace_for_mesh = Arc::clone(&self.marketplace_state);
+                    let validator_for_mesh = Arc::clone(&self.validator);
+                    let tx_pool_for_mesh = Arc::clone(&self.tx_pool);
+                    let cpp_cmd_for_mesh = cpp_network_cmd_tx.clone();
+                    let bridge_state_for_events = Arc::clone(&bridge_state);
+
+                    tokio::spawn(async move {
+                        while let Some(event) = bridge_event_rx.recv().await {
+                            match event {
+                                coinject_network::MeshBridgeEvent::BlockReceived { block, peer_id } => {
+                                    let height = block.header.height;
+                                    tracing::info!(height, peer = %peer_id.short(), "mesh: block received");
+
+                                    let best_height = chain_for_mesh.best_block_height().await;
+                                    let best_hash = chain_for_mesh.best_block_hash().await;
+                                    let expected_height = best_height + 1;
+
+                                    if height != expected_height {
+                                        tracing::debug!(height, expected_height, "mesh: unexpected block height");
+                                        continue;
+                                    }
+
+                                    if block.header.prev_hash != best_hash {
+                                        tracing::debug!(height, "mesh: prev_hash mismatch");
+                                        continue;
+                                    }
+
+                                    match validator_for_mesh.validate_block_with_options(&block, &best_hash, expected_height, false) {
+                                        Ok(()) => {
+                                            match chain_for_mesh.store_block(&block).await {
+                                                Ok(is_new_best) => {
+                                                    if is_new_best {
+                                                        tracing::info!(height, "mesh: block stored as new best");
+                                                        let new_hash = block.header.hash();
+
+                                                        // Apply state transitions
+                                                        if let Err(e) = CoinjectNode::apply_block_transactions(
+                                                            &block,
+                                                            &state_for_mesh,
+                                                            &timelock_for_mesh,
+                                                            &escrow_for_mesh,
+                                                            &channel_for_mesh,
+                                                            &trustline_for_mesh,
+                                                            &dim_pool_for_mesh,
+                                                            &marketplace_for_mesh,
+                                                        ) {
+                                                            tracing::warn!(height, error = %e, "mesh: apply txs failed");
+                                                        } else {
+                                                            // Remove applied txs from pool
+                                                            let mut pool = tx_pool_for_mesh.write().await;
+                                                            for tx in &block.transactions {
+                                                                pool.remove(&tx.hash());
+                                                            }
+                                                        }
+
+                                                        // Update bridge state
+                                                        let mut bs = bridge_state_for_events.write().await;
+                                                        bs.best_height = height;
+                                                        bs.best_hash = new_hash;
+
+                                                        // Update CPP with new chain state
+                                                        let _ = cpp_cmd_for_mesh.send(CppNetworkCommand::UpdateChainState {
+                                                            best_height: height,
+                                                            best_hash: new_hash,
+                                                        });
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(height, error = %e, "mesh: block store failed");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(height, error = ?e, "mesh: block validation failed");
+                                        }
+                                    }
+                                }
+                                coinject_network::MeshBridgeEvent::TransactionReceived { transaction, peer_id } => {
+                                    tracing::debug!(peer = %peer_id.short(), "mesh: transaction received");
+                                    let mut pool = tx_pool_for_mesh.write().await;
+                                    let _ = pool.add(transaction);
+                                }
+                                coinject_network::MeshBridgeEvent::PeerConnected { peer_id, best_height, .. } => {
+                                    tracing::info!(peer = %peer_id.short(), best_height, "mesh: peer connected");
+                                }
+                                coinject_network::MeshBridgeEvent::PeerDisconnected { peer_id, reason } => {
+                                    tracing::info!(peer = %peer_id.short(), reason = %reason, "mesh: peer disconnected");
+                                }
+                                coinject_network::MeshBridgeEvent::StatusUpdate { peer_id, best_height, .. } => {
+                                    tracing::debug!(peer = %peer_id.short(), best_height, "mesh: status update");
+                                }
+                                coinject_network::MeshBridgeEvent::BlocksReceived { blocks, request_id, peer_id } => {
+                                    tracing::info!(
+                                        count = blocks.len(), request_id,
+                                        peer = %peer_id.short(), "mesh: sync blocks received"
+                                    );
+                                    for block in blocks {
+                                        let height = block.header.height;
+                                        let best_hash = chain_for_mesh.best_block_hash().await;
+                                        let expected = chain_for_mesh.best_block_height().await + 1;
+                                        match validator_for_mesh.validate_block_with_options(&block, &best_hash, expected, false) {
+                                            Ok(()) => {
+                                                match chain_for_mesh.store_block(&block).await {
+                                                    Ok(is_new_best) => {
+                                                        if is_new_best {
+                                                            if let Err(e) = CoinjectNode::apply_block_transactions(
+                                                                &block,
+                                                                &state_for_mesh,
+                                                                &timelock_for_mesh,
+                                                                &escrow_for_mesh,
+                                                                &channel_for_mesh,
+                                                                &trustline_for_mesh,
+                                                                &dim_pool_for_mesh,
+                                                                &marketplace_for_mesh,
+                                                            ) {
+                                                                tracing::warn!(height, error = %e, "mesh: sync apply failed");
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => tracing::warn!(height, error = %e, "mesh: sync store failed"),
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!(height, error = ?e, "mesh: sync block invalid"),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        tracing::info!("mesh bridge event handler exited");
+                    });
+
+                    // Also forward mined blocks to mesh alongside CPP
+                    // This piggybacks on the existing mining broadcast by cloning to bridge
+                    // The bridge_cmd_tx is stored for use in the mining loop
+                    println!("   Mesh Network listening on: {}", self.config.mesh_listen);
+                    if !self.config.mesh_seed.is_empty() {
+                        println!("   Mesh seeds: {:?}", self.config.mesh_seed);
+                    }
+                    println!();
+                }
+                Err(e) => {
+                    eprintln!("[Mesh] Failed to start mesh network: {}", e);
+                    eprintln!("[Mesh] Continuing with CPP-only transport");
+                }
+            }
+        }
+
         // Initialize WebSocket RPC
         println!("🔌 Starting WebSocket RPC (Phase 3)...");
         let ws_addr: std::net::SocketAddr = self.config.cpp_ws_addr

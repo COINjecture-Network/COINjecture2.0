@@ -18,3 +18,12 @@ futures.workspace = true
 rand.workspace = true
 chrono.workspace = true
 tracing.workspace = true
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+sha2.workspace = true
+lru.workspace = true
+tokio-util.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

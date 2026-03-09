@@ -208,6 +208,22 @@ pub struct NodeConfig {
     pub disable_mdns: bool,
 
     // ==========================================================================
+    // MESH NETWORK CONFIGURATION
+    // ==========================================================================
+
+    /// Enable mesh network layer (P2P gossip transport alongside CPP)
+    #[arg(long)]
+    pub enable_mesh: bool,
+
+    /// Mesh network listen address (default: 0.0.0.0:9000)
+    #[arg(long, default_value = "0.0.0.0:9000")]
+    pub mesh_listen: String,
+
+    /// Mesh network seed nodes (can be specified multiple times)
+    #[arg(long)]
+    pub mesh_seed: Vec<String>,
+
+    // ==========================================================================
     // BLOCK VERSION CONFIGURATION
     // ==========================================================================
 
@@ -470,6 +486,9 @@ mod tests {
             external_addr: None,
             allow_private_addrs: false,
             disable_mdns: false,
+            enable_mesh: false,
+            mesh_listen: "0.0.0.0:9000".to_string(),
+            mesh_seed: vec![],
             min_block_version: 1,
             produce_block_version: 2,
             strict_version: false,

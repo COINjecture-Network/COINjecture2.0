@@ -1,0 +1,62 @@
+# COINjecture Mesh Network — Docker Smoke Test
+# Spins up 3 mesh nodes and verifies they form a full mesh
+#
+# Usage:
+#   docker compose -f docker-compose.mesh.yml up --build
+#   docker compose -f docker-compose.mesh.yml down -v
+
+services:
+  # Seed node — no seeds, others connect to it
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.mesh
+    container_name: mesh-seed
+    command: ["--listen", "0.0.0.0:9000"]
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      - mesh-net
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /data/mesh/node-9000/mesh_keypair.bin"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 5s
+
+  # Node 1 — seeds to seed node
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile.mesh
+    container_name: mesh-node1
+    command: ["--listen", "0.0.0.0:9000", "--seed", "seed:9000"]
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      - mesh-net
+    depends_on:
+      seed:
+        condition: service_healthy
+
+  # Node 2 — seeds to seed node
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile.mesh
+    container_name: mesh-node2
+    command: ["--listen", "0.0.0.0:9000", "--seed", "seed:9000"]
+    environment:
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
+    networks:
+      - mesh-net
+    depends_on:
+      seed:
+        condition: service_healthy
+
+networks:
+  mesh-net:
+    driver: bridge
