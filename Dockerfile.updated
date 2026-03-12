@@ -1,7 +1,0 @@
-# Use existing image as base (has all dependencies)
-FROM coinject-node:latest
-
-# Replace the binary with the newly built one
-COPY target/release/coinject /usr/local/bin/coinject
-
-# No other changes needed - keep existing setup

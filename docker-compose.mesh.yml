@@ -1,3 +1,4 @@
+# EXPERIMENTAL: Mesh networking compose file. Use docker-compose.yml for standard testnet.
 # COINjecture Mesh Network — Docker Smoke Test
 # Spins up 3 mesh nodes and verifies they form a full mesh
 #

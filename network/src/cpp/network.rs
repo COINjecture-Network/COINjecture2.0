@@ -1777,12 +1777,24 @@ impl CppNetwork {
         let max_backoff = Duration::from_secs(60);
         
         for bootnode_str in &self.config.bootnodes.clone() {
-            // Parse bootnode address
+            // Parse bootnode address — try direct SocketAddr first, then DNS resolution for hostnames
             let addr: SocketAddr = match bootnode_str.parse() {
                 Ok(a) => a,
                 Err(_) => {
-                    tracing::warn!("[CPP][BOOTNODE] Invalid bootnode address: {}", bootnode_str);
-                    continue;
+                    // Try DNS resolution (supports Docker service names like "bootnode:707")
+                    match tokio::net::lookup_host(bootnode_str.as_str()).await {
+                        Ok(mut addrs) => match addrs.next() {
+                            Some(a) => a,
+                            None => {
+                                tracing::warn!("[CPP][BOOTNODE] No addresses resolved for: {}", bootnode_str);
+                                continue;
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!("[CPP][BOOTNODE] Failed to resolve bootnode '{}': {}", bootnode_str, e);
+                            continue;
+                        }
+                    }
                 }
             };
             

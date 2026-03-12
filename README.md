@@ -1,24 +1,26 @@
-# COINjecture Network B: WEB4 Dimensional Blockchain Protocol
+# COINjecture 2.0: WEB4 Dimensional Blockchain Protocol
 
 <div align="center">
 
 **The First Blockchain Where Computational Work Actually Matters**
 
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org/)
 [![Database](https://img.shields.io/badge/Database-redb%202.1-green)](https://crates.io/crates/redb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/Quigles1337/COINjecture1337-NETB)
+[![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/Quigles1337/COINjecture2.0)
 
 *Proof of Useful Work (PoUW) blockchain with autonomous NP-complete problem marketplace*
 
 </div>
+
+> **Security Notice**: Pre-audit testnet. Not for use with real funds.
 
 ---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [🚀 WEB4: The Proof of Useful Work Revolution](#-web4-the-proof-of-useful-work-revolution)
+- [WEB4: The Proof of Useful Work Revolution](#web4-the-proof-of-useful-work-revolution)
 - [Core Innovation: PoUW Marketplace](#core-innovation-pouw-marketplace)
 - [Dimensional Pools](#dimensional-pools)
 - [Network Architecture](#network-architecture)
@@ -33,7 +35,7 @@
 
 ## Overview
 
-COINjecture Network B is a **production-ready WEB4** Layer 1 blockchain protocol built in pure Rust, implementing:
+COINjecture 2.0 is a **testnet WEB4** Layer 1 blockchain protocol built in pure Rust, implementing:
 
 1. **Proof of Useful Work (PoUW)**: Mining solves real NP-complete problems, not wasteful hashing
 2. **Autonomous Marketplace**: On-chain bounty system for computational work with instant payouts
@@ -45,13 +47,12 @@ COINjecture Network B is a **production-ready WEB4** Layer 1 blockchain protocol
 - **WEB3**: Wasteful hash grinding with no real-world value
 - **WEB4**: Every hash solves real computational problems. Every block advances science.
 
-**Current Status**: Testnet-ready with fully operational PoUW marketplace
-**Live Features**: Autonomous bounty payouts, NP-complete problem solving, dimensional economics
-**Security**: Pre-audit; not for mainnet production with real funds
+**Current Status**: 4-node Docker testnet verified — nodes discover, mine blocks, and propagate across the network
+**Live Features**: Autonomous bounty payouts, NP-complete problem solving, dimensional economics, CPP peer discovery
 
 ---
 
-## 🚀 WEB4: The Proof of Useful Work Revolution
+## WEB4: The Proof of Useful Work Revolution
 
 ### The Problem with Traditional Blockchain
 
@@ -148,10 +149,10 @@ All marketplace state is persisted in the **redb ACID-compliant database**:
 - `marketplace_escrow`: On-chain bounty funds
 
 **Properties:**
-- ✅ ACID transactions ensure atomicity
-- ✅ Crash-resistant with durability guarantees
-- ✅ Merkle-proof verifiable state
-- ✅ Cross-platform (Windows/Linux/macOS)
+- ACID transactions ensure atomicity
+- Crash-resistant with durability guarantees
+- Merkle-proof verifiable state
+- Cross-platform (Windows/Linux/macOS)
 
 ### Marketplace API (JSON-RPC)
 
@@ -222,7 +223,7 @@ rpc_client.submit_transaction(hex::encode(bincode::serialize(&tx)?)).await?;
 
 ```rust
 // Solve the problem (indices of numbers that sum to target)
-let solution = Solution::SubsetSum(vec![0, 2, 4, 6]); // [15, 14, 32, 16] = 77? No! [15, 14, 16, 8] = 53 ✓
+let solution = Solution::SubsetSum(vec![0, 2, 4, 6]); // [15, 14, 32, 16] = 77? No! [15, 14, 16, 8] = 53
 
 // Submit solution - BOUNTY PAID AUTOMATICALLY IN THE SAME BLOCK!
 let tx = Transaction::Marketplace(
@@ -248,7 +249,7 @@ let tx = Transaction::Marketplace(
 
 ## Dimensional Pools
 
-The protocol implements a novel **dimensional pool system** where three economic dimensions (D₁, D₂, D₃) operate with exponentially decaying scales derived from the **Satoshi constant** (η = λ = 1/√2):
+The protocol implements a novel **dimensional pool system** where three economic dimensions (D1, D2, D3) operate with exponentially decaying scales derived from the **Satoshi constant** (eta = lambda = 1/sqrt2):
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'Arial'}}}%%
@@ -258,11 +259,11 @@ graph TB
         style D2 fill:#4ecdc4,stroke:#087f5b,stroke-width:3px,color:#fff
         style D3 fill:#95e1d3,stroke:#0ca678,stroke-width:3px,color:#000
 
-        D1["D₁ Genesis Pool<br/>━━━━━━━━━━━━<br/>τ=0.00 · D=1.000<br/>p=56.1%<br/>Immediate Liquidity"]
-        D2["D₂ Coupling Pool<br/>━━━━━━━━━━━━<br/>τ=0.20 · D=0.867<br/>p=48.6%<br/>Short-Term Staking"]
-        D3["D₃ First Harmonic<br/>━━━━━━━━━━━━<br/>τ=0.41 · D=0.750<br/>p=42.1%<br/>Primary Liquidity"]
+        D1["D1 Genesis Pool<br/>tau=0.00 D=1.000<br/>p=56.1%<br/>Immediate Liquidity"]
+        D2["D2 Coupling Pool<br/>tau=0.20 D=0.867<br/>p=48.6%<br/>Short-Term Staking"]
+        D3["D3 First Harmonic<br/>tau=0.41 D=0.750<br/>p=42.1%<br/>Primary Liquidity"]
 
-        CONSTRAINT["Unit Circle Constraint<br/>|μ|² = η² + λ² = 1<br/>━━━━━━━━━━━━<br/>Critical Damping"]
+        CONSTRAINT["Unit Circle Constraint<br/>|mu|^2 = eta^2 + lambda^2 = 1<br/>Critical Damping"]
 
         D1 -->|"Swap Ratio<br/>1.000/0.867"| D2
         D2 -->|"Swap Ratio<br/>0.867/0.750"| D3
@@ -276,28 +277,27 @@ graph TB
 
 ### Mathematical Parameters
 
-| Pool | Dimensionless Time (τ) | Scale Factor (D_n) | Allocation (p_n) | Economic Horizon |
+| Pool | Dimensionless Time (tau) | Scale Factor (D_n) | Allocation (p_n) | Economic Horizon |
 |------|------------------------|-------------------|------------------|------------------|
-| **D₁ Genesis** | 0.00 | 1.000 | 56.1% | Instant settlement |
-| **D₂ Coupling** | 0.20 | 0.867 | 48.6% | Short-term (days) |
-| **D₃ First Harmonic** | 0.41 | 0.750 | 42.1% | Medium-term (weeks) |
+| **D1 Genesis** | 0.00 | 1.000 | 56.1% | Instant settlement |
+| **D2 Coupling** | 0.20 | 0.867 | 48.6% | Short-term (days) |
+| **D3 First Harmonic** | 0.41 | 0.750 | 42.1% | Medium-term (weeks) |
 
-**Swap Formula**: `amount_out = amount_in × (D_from / D_to)`
+**Swap Formula**: `amount_out = amount_in * (D_from / D_to)`
 
 ---
 
 ## Network Architecture
 
-Following **Mark Lombardi's** principles of revealing complex relationships through elegant visual networks:
+COINjecture uses the **CPP (COINjecture P2P Protocol)** — a custom TCP wire protocol on port 707, designed for equilibrium-based message routing.
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'Arial'}}}%%
 graph TB
     subgraph "COINjecture WEB4: The Computational Sociograph"
         subgraph "Layer 1: Cryptographic Foundation"
-            style CRYPTO fill:#f8f9fa,stroke:#495057,stroke-width:2px
             CRYPTO["Core Crypto Module"]
-            HASH["Hash Functions<br/>SHA2 · SHA3 · BLAKE3"]
+            HASH["Hash Functions<br/>SHA2 SHA3 BLAKE3"]
             SIG["Ed25519 Signatures<br/>Address Derivation"]
             MERKLE["Merkle Trees<br/>Block Commitments"]
 
@@ -307,30 +307,22 @@ graph TB
         end
 
         subgraph "Layer 2: State Management redb ACID"
-            style STATE fill:#fff3bf,stroke:#f59f00,stroke-width:3px
-            STATE["State Manager<br/>━━━━━━━━━━━━<br/>Production Database"]
+            STATE["State Manager<br/>Production Database"]
             ACCOUNTS["Account State<br/>BALANCES_TABLE<br/>NONCES_TABLE"]
-            MARKETPLACE["Marketplace State<br/>PROBLEMS_TABLE<br/>ESCROW_TABLE<br/>PROBLEM_INDEX<br/>━━━━━━━━━━━━<br/>PoUW WEB4"]
+            MARKETPLACE["Marketplace State<br/>PROBLEMS_TABLE<br/>ESCROW_TABLE<br/>PROBLEM_INDEX<br/>PoUW WEB4"]
             POOLS["Dimensional Pools<br/>POOL_LIQUIDITY_TABLE<br/>SWAP_RECORDS_TABLE"]
-            TIMELOCK["TimeLock State<br/>TIMELOCKS_TABLE"]
-            ESCROW["Escrow State<br/>ESCROWS_TABLE"]
-            CHANNEL["Payment Channels<br/>CHANNELS_TABLE"]
-            TRUSTLINE["TrustLine State<br/>TRUSTLINES_TABLE<br/>━━━━━━━━━━━━<br/>XRPL-Inspired"]
+            TRUSTLINE["TrustLine State<br/>TRUSTLINES_TABLE<br/>XRPL-Inspired"]
 
             STATE --> ACCOUNTS
             STATE --> MARKETPLACE
             STATE --> POOLS
-            STATE --> TIMELOCK
-            STATE --> ESCROW
-            STATE --> CHANNEL
             STATE --> TRUSTLINE
         end
 
         subgraph "Layer 3: Consensus Engine PoUW"
-            style CONSENSUS fill:#d0bfff,stroke:#7950f2,stroke-width:2px
             CONSENSUS["Consensus Engine<br/>Proof of Useful Work"]
             POW["NP-Problem Solving<br/>SubsetSum SAT TSP"]
-            WORKSCORE["Work Score Calculation<br/>Quality × Time × Memory"]
+            WORKSCORE["Work Score Calculation<br/>Quality Time Memory"]
             VALIDATOR["Block Validator<br/>Solution Verification"]
 
             CONSENSUS --> POW
@@ -338,20 +330,18 @@ graph TB
             CONSENSUS --> VALIDATOR
         end
 
-        subgraph "Layer 4: Network Communication"
-            style P2P fill:#c3fae8,stroke:#087f5b,stroke-width:2px
-            P2P["libp2p Network<br/>P2P Protocol"]
-            GOSSIP["GossipSub<br/>Block Propagation"]
-            KAD["Kademlia DHT<br/>Peer Discovery"]
-            MDNS["mDNS Discovery<br/>Local Network"]
+        subgraph "Layer 4: CPP Network Protocol"
+            CPP["CPP Network<br/>Custom TCP on Port 707"]
+            ROUTER["EquilibriumRouter<br/>sqrt-n * eta Fanout"]
+            FLOCK["FlockState<br/>Reynolds Murmuration"]
+            INTEGRITY["Message Integrity<br/>blake3 Checksums"]
 
-            P2P --> GOSSIP
-            P2P --> KAD
-            P2P --> MDNS
+            CPP --> ROUTER
+            CPP --> FLOCK
+            CPP --> INTEGRITY
         end
 
         subgraph "Layer 5: Application Interface"
-            style RPC fill:#ffc9c9,stroke:#c92a2a,stroke-width:2px
             RPC["JSON-RPC Server<br/>HTTP/WebSocket"]
             WALLET["CLI Wallet<br/>Ed25519 Keystore"]
             NODE["Full Node Binary<br/>coinject"]
@@ -361,9 +351,8 @@ graph TB
         end
 
         subgraph "Layer 6: Economic Logic"
-            style TOKENOMICS fill:#b2f2bb,stroke:#2b8a3e,stroke-width:2px
             TOKENOMICS["Tokenomics Engine"]
-            DIM["Dimensional Math<br/>η = λ = 1/√2"]
+            DIM["Dimensional Math<br/>eta = lambda = 1/sqrt2"]
             DIST["Reward Distribution<br/>Exponential Allocation"]
             BOUNTY["Bounty Payouts<br/>Autonomous Escrow"]
 
@@ -372,20 +361,33 @@ graph TB
             TOKENOMICS --> BOUNTY
         end
 
-        %% Cross-layer connections Lombardi style
+        %% Cross-layer connections
         MARKETPLACE -.->|"Auto-pays"| BOUNTY
         POOLS -.->|"Queries"| DIM
         VALIDATOR -.->|"Applies"| STATE
         VALIDATOR -.->|"Verifies"| MARKETPLACE
         POW -.->|"Submits"| CONSENSUS
-        NODE -.->|"Broadcasts"| P2P
-        GOSSIP -.->|"Receives"| VALIDATOR
+        NODE -.->|"Broadcasts"| CPP
+        ROUTER -.->|"Delivers"| VALIDATOR
         DIST -.->|"Updates"| POOLS
         BOUNTY -.->|"Credits"| ACCOUNTS
         TRUSTLINE -.->|"Dimensional"| DIM
         ACCOUNTS -.->|"ACID Txns"| STATE
     end
 ```
+
+### CPP Wire Format
+
+```
+COIN magic (4B) + version (1B) + type (1B) + length (4B) + payload + blake3 hash (32B)
+```
+
+### Key Properties
+- **Equilibrium routing**: Broadcast fanout = ceil(sqrt(n) * eta) peers per hop
+- **Reynolds flocking**: Murmuration-based peer coordination
+- **blake3 integrity**: 32-byte checksums on every message
+- **Window-based flow control**: Adaptive congestion management
+- **8 dimensional priority levels**: Messages prioritized by D_n scales
 
 ---
 
@@ -395,33 +397,17 @@ graph TB
 
 **November 2025 Migration**: Replaced unmaintained Sled with **redb** - a production-grade, ACID-compliant embedded database built in pure Rust.
 
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'Arial'}}}%%
-graph LR
-    subgraph "Database Evolution"
-        style OLD fill:#ffe3e3,stroke:#c92a2a,stroke-width:2px,color:#000
-        style NEW fill:#b2f2bb,stroke:#2b8a3e,stroke-width:3px,color:#000
-
-        OLD["Sled Database<br/>━━━━━━━━━━━━<br/>⚠️ Unmaintained<br/>⚠️ Partial ACID<br/>⚠️ Implicit Transactions"]
-
-        NEW["redb Database<br/>━━━━━━━━━━━━<br/>✅ Actively Maintained<br/>✅ Full ACID Compliance<br/>✅ Explicit Transactions<br/>✅ Type-Safe Tables<br/>✅ Pure Rust No C/C++<br/>✅ Cross-Platform"]
-
-        OLD -->|"Migration<br/>Nov 2025"| NEW
-    end
-```
-
 ### Why redb? Institutional Benefits
 
 | Requirement | Previous (Sled) | **Current (redb)** |
 |-------------|----------------|-------------------|
-| **Maintenance** | ⚠️ Unmaintained since 2021 | ✅ **Active development** |
-| **ACID Compliance** | Partial | ✅ **Full guarantees** |
-| **Transaction Model** | Implicit | ✅ **Explicit boundaries** |
-| **Type Safety** | Dynamic at runtime | ✅ **Compile-time checked** |
-| **Dependencies** | Pure Rust | ✅ **Pure Rust (auditable)** |
-| **Cross-Platform** | Linux-focused | ✅ **Windows/Linux/macOS** |
-| **Data Integrity** | Best-effort | ✅ **Cryptographic verification** |
-| **Institutional Audit** | ⚠️ Concerns flagged | ✅ **Production-ready** |
+| **Maintenance** | Unmaintained since 2021 | **Active development** |
+| **ACID Compliance** | Partial | **Full guarantees** |
+| **Transaction Model** | Implicit | **Explicit boundaries** |
+| **Type Safety** | Dynamic at runtime | **Compile-time checked** |
+| **Dependencies** | Pure Rust | **Pure Rust (auditable)** |
+| **Cross-Platform** | Linux-focused | **Windows/Linux/macOS** |
+| **Data Integrity** | Best-effort | **Cryptographic verification** |
 
 ### ACID Transaction Model
 
@@ -436,43 +422,41 @@ let write_txn = db.begin_write()?;
 write_txn.commit()?;  // Atomic commit with durability
 ```
 
-**For AI Research Labs**: ACID transactions ensure Lyapunov stability properties are preserved in training datasets, guaranteeing provable consistency for multi-agent coordination data.
-
 ---
 
 ## Mathematical Foundation
 
 ### Unit Circle Constraint
 
-The **Satoshi constant** η = λ = 1/√2 emerges from the **unit circle constraint**:
+The **Satoshi constant** eta = lambda = 1/sqrt(2) emerges from the **unit circle constraint**:
 
 ```
-|μ|² = η² + λ² = 1
+|mu|^2 = eta^2 + lambda^2 = 1
 
 Where:
-- η (eta): Decay rate (damping coefficient)
-- λ (lambda): Phase evolution rate
-- μ (mu): Complex eigenvalue on unit circle
+- eta: Decay rate (damping coefficient)
+- lambda: Phase evolution rate
+- mu: Complex eigenvalue on unit circle
 ```
 
-**Critical Damping**: The choice η = λ = 1/√2 represents the **fastest possible convergence** to equilibrium without oscillation (critical complex pole).
+**Critical Damping**: The choice eta = lambda = 1/sqrt(2) represents the **fastest possible convergence** to equilibrium without oscillation (critical complex pole).
 
 ### Dimensional Scales
 
 ```
-D_n = e^(-η · τ_n)
+D_n = e^(-eta * tau_n)
 
 Where:
 - D_n: Dimensional scale factor
-- η: Satoshi constant (0.7071...)
-- τ_n: Dimensionless time for dimension n
+- eta: Satoshi constant (0.7071...)
+- tau_n: Dimensionless time for dimension n
 ```
 
-| Dimension | τ (tau) | D_n = e^(-η·τ) | Calculation |
+| Dimension | tau | D_n = e^(-eta*tau) | Calculation |
 |-----------|---------|----------------|-------------|
-| D₁ | 0.00 | 1.000 | e^(-0.7071 × 0.00) = 1.000 |
-| D₂ | 0.20 | 0.867 | e^(-0.7071 × 0.20) = 0.867 |
-| D₃ | 0.41 | 0.750 | e^(-0.7071 × 0.41) = 0.750 |
+| D1 | 0.00 | 1.000 | e^(-0.7071 * 0.00) = 1.000 |
+| D2 | 0.20 | 0.867 | e^(-0.7071 * 0.20) = 0.867 |
+| D3 | 0.41 | 0.750 | e^(-0.7071 * 0.41) = 0.750 |
 
 ---
 
@@ -480,32 +464,46 @@ Where:
 
 ### Prerequisites
 
-- Rust 1.70+ ([rustup.rs](https://rustup.rs/))
-- Git
+- Rust 1.88+ ([rustup.rs](https://rustup.rs/))
+- Docker (for containerized testnet)
 
-### Installation
+### Docker Testnet (Recommended)
 
 ```bash
 # Clone the repository
-git clone https://github.com/Quigles1337/COINjecture1337-NETB.git
-cd COINjecture1337-NETB
+git clone https://github.com/Quigles1337/COINjecture2.0.git
+cd COINjecture2.0
+
+# Build and start 4-node testnet
+docker-compose up -d --build
+
+# Check health
+curl http://localhost:9090/health   # bootnode
+curl http://localhost:9091/health   # node1
+curl http://localhost:9092/health   # node2
+curl http://localhost:9093/health   # node3
+
+# View logs
+docker-compose logs -f bootnode
+
+# Stop
+docker-compose down
+```
+
+### Native Build
+
+```bash
+git clone https://github.com/Quigles1337/COINjecture2.0.git
+cd COINjecture2.0
 
 # Build release binaries
 cargo build --release
 
-# Binaries available at:
-# - target/release/coinject (full node with PoUW marketplace)
-# - target/release/coinject-wallet (CLI wallet)
-```
+# Run node with mining
+./target/release/coinject --mine --miner-address <your_hex_address> --cpp-p2p-addr 0.0.0.0:707
 
-### Run a WEB4 Node
-
-```bash
-# Run node with mining (solves NP-hard problems)
-./target/release/coinject --mine --miner-address <your_hex_address>
-
-# Run node without mining (validator only)
-./target/release/coinject --data-dir ./node_data --rpc-port 9933
+# Run node without mining
+./target/release/coinject --data-dir ./node_data --rpc-addr 127.0.0.1:9933
 ```
 
 ### Use the Marketplace
@@ -531,13 +529,8 @@ curl -X POST http://localhost:9933 -H "Content-Type: application/json" -d '{
 ### Run Tests
 
 ```bash
-# Run all tests
 cargo test --all
-
-# Run marketplace tests specifically
 cargo test -p coinject-state marketplace
-
-# Run with output
 cargo test --all -- --nocapture
 ```
 
@@ -545,22 +538,22 @@ cargo test --all -- --nocapture
 
 ## For AI Research Labs
 
-### COINjecture Network B as Training Data Substrate
+### COINjecture as Training Data Substrate
 
 **Target Customers**: OpenAI, Anthropic, DeepMind, academic AI research labs
 
 **Product**: Cryptographically-verified multi-agent coordination training data with provable mathematical properties
 
-### Why Network B for AI Training?
+### Why COINjecture for AI Training?
 
-| Traditional Synthetic Data | **COINjecture Network B** |
-|----------------------------|---------------------------|
-| ⚠️ No real stakes → fake optimization | ✅ **Real economic agents** with real incentives |
-| ⚠️ Single timescale environments | ✅ **Multi-timescale** (D₁, D₂, D₃ pools) |
-| ⚠️ No mathematical guarantees | ✅ **Provably stable** (Lyapunov analysis) |
-| ⚠️ Unverifiable simulation data | ✅ **Cryptographically verified** (blockchain) |
-| ⚠️ Static, pre-programmed strategies | ✅ **Emergent strategies** from real coordination |
-| ⚠️ Wasteful computation | ✅ **Useful NP-complete problem solving** |
+| Traditional Synthetic Data | **COINjecture** |
+|----------------------------|-----------------|
+| No real stakes, fake optimization | **Real economic agents** with real incentives |
+| Single timescale environments | **Multi-timescale** (D1, D2, D3 pools) |
+| No mathematical guarantees | **Provably stable** (Lyapunov analysis) |
+| Unverifiable simulation data | **Cryptographically verified** (blockchain) |
+| Static, pre-programmed strategies | **Emergent strategies** from real coordination |
+| Wasteful computation | **Useful NP-complete problem solving** |
 
 ### Dataset Properties
 
@@ -570,93 +563,85 @@ cargo test --all -- --nocapture
 - Immutable audit trail
 
 **Provable Stability** (Lyapunov Guarantees):
-- Unit circle constraint: |μ|² = η² + λ² = 1
-- Critical damping: η = λ = 1/√2
+- Unit circle constraint: |mu|^2 = eta^2 + lambda^2 = 1
+- Critical damping: eta = lambda = 1/sqrt(2)
 - Exponential convergence to equilibrium
 
 **Multi-Timescale Structure**:
-- D₁: Instant decisions (sub-second)
-- D₂: Short-term strategy (days)
-- D₃: Medium-term positioning (weeks)
-
-**Emergent Behaviors**:
-- Dimensional arbitrage strategies
-- Multi-pool coordination patterns
-- Adversarial attack/defense dynamics
-- Novel economic optimization paths
-- **NP-complete problem solving strategies**
+- D1: Instant decisions (sub-second)
+- D2: Short-term strategy (days)
+- D3: Medium-term positioning (weeks)
 
 ---
 
 ## Development Status
 
-### Completed Features ✅
+### Completed Features
 
 - [x] **Core Infrastructure**
   - [x] Ed25519 cryptography (signatures, addresses)
   - [x] Blake3/SHA2/SHA3 hashing
   - [x] Merkle tree commitments
-  - [x] Transaction types (Transfer, Swap, TimeLock, Escrow, Channel, TrustLine, **Marketplace**)
+  - [x] Transaction types (Transfer, Swap, TimeLock, Escrow, Channel, TrustLine, Marketplace)
 
 - [x] **State Layer (redb)**
   - [x] ACID-compliant account state
-  - [x] **PoUW Marketplace state with database persistence**
+  - [x] PoUW Marketplace state with database persistence
   - [x] Dimensional pool state with swap execution
-  - [x] TimeLock state tracking
-  - [x] Escrow multi-party state
-  - [x] Payment channel state
-  - [x] TrustLine protocol state
+  - [x] TimeLock, Escrow, Payment channel, TrustLine state
   - [x] Institutional-grade database migration
 
 - [x] **PoUW Marketplace (WEB4)**
-  - [x] **NP-complete problem types (SubsetSum, SAT, TSP)**
-  - [x] **Polynomial-time solution verification**
-  - [x] **Work score calculation**
-  - [x] **On-chain bounty escrow**
-  - [x] **Autonomous bounty payouts**
-  - [x] **Marketplace RPC endpoints**
-  - [x] **Database-persisted problem state**
+  - [x] NP-complete problem types (SubsetSum, SAT, TSP)
+  - [x] Polynomial-time solution verification
+  - [x] Work score calculation
+  - [x] On-chain bounty escrow
+  - [x] Autonomous bounty payouts
+  - [x] Marketplace RPC endpoints
 
 - [x] **Consensus**
   - [x] Proof-of-Useful-Work (PoUW) mining
   - [x] Adaptive difficulty adjustment
-  - [x] Block validation
-  - [x] Work score calculation
+  - [x] Block validation and work score calculation
 
-- [x] **Networking (libp2p)**
-  - [x] GossipSub (block/transaction propagation)
-  - [x] Kademlia DHT (peer discovery)
-  - [x] mDNS (local network discovery)
-  - [x] Noise protocol (encrypted transport)
+- [x] **Networking (CPP)**
+  - [x] Custom TCP protocol on port 707
+  - [x] EquilibriumRouter with sqrt(n)*eta fanout
+  - [x] FlockState murmuration coordination (Reynolds rules)
+  - [x] blake3 message integrity
+  - [x] Window-based flow control
+  - [x] 8/8 integration tests passing
 
 - [x] **RPC Layer**
   - [x] JSON-RPC server (HTTP/WebSocket)
-  - [x] Account queries (balance, nonce)
-  - [x] **Marketplace queries (open problems, stats)**
-  - [x] Pool queries (liquidity, swap history)
-  - [x] TimeLock/Escrow/Channel state queries
-  - [x] Block/transaction retrieval
+  - [x] Account, marketplace, pool, block/transaction queries
 
 - [x] **Wallet**
   - [x] Ed25519 keystore
-  - [x] Transaction construction
-  - [x] Pool swap interface
-  - [x] Advanced transaction types
-  - [x] **Marketplace transaction support**
+  - [x] Transaction construction and marketplace support
 
-### Roadmap 🗺️
+### Docker Testnet Verified (2026-03-12)
 
-**Phase 1** (Current): ✅ **Testnet with PoUW marketplace + dimensional pools + redb**
-**Phase 2** (Q1 2026): Security audit + economic attack simulation
-**Phase 3** (Q2 2026): Mainnet preparation + institutional partnerships
-**Phase 4** (Q3 2026): Mainnet launch with live bounty marketplace
+4-node Docker testnet fully operational:
+- All 4 nodes healthy and connected (bootnode + 3 peers)
+- PoUW mining producing blocks at ~5s intervals with `0000` hash prefix
+- Block propagation working — bootnode mines, all nodes receive and apply
+- Chain convergence across all nodes
+- Zero errors, zero panics
+
+### Roadmap
+
+**Phase 1** (Current): Testnet with PoUW marketplace + dimensional pools + redb
+**Phase 2** (Q2 2026): Security audit + economic attack simulation
+**Phase 3** (Q3 2026): Mainnet preparation + institutional partnerships
+**Phase 4** (Q4 2026): Mainnet launch with live bounty marketplace
 
 ---
 
 ## Module Structure
 
 ```
-COINjecture Network B (WEB4)
+COINjecture 2.0 (WEB4)
 ├── core/               # Cryptography, types, transactions
 │   ├── block.rs       # Block structure with Merkle roots
 │   ├── crypto.rs      # Ed25519, hashing functions
@@ -664,21 +649,30 @@ COINjecture Network B (WEB4)
 │   ├── transaction.rs # Transaction types (including Marketplace)
 │   └── types.rs       # Common types (Address, Balance, Hash)
 │
-├── state/              # ACID-compliant state management
-│   ├── accounts.rs    # Account balances & nonces (redb)
-│   ├── marketplace.rs # PoUW marketplace state (redb) [WEB4]
-│   ├── dimensional_pools.rs  # Pool state & swaps (redb)
-│   ├── timelocks.rs   # Time-locked balances (redb)
-│   ├── escrows.rs     # Multi-party escrow (redb)
-│   ├── channels.rs    # Payment channels (redb)
-│   └── trustlines.rs  # XRPL-inspired credit (redb)
+├── state/              # ACID-compliant state management (redb)
+│   ├── accounts.rs    # Account balances & nonces
+│   ├── marketplace.rs # PoUW marketplace state [WEB4]
+│   ├── dimensional_pools.rs  # Pool state & swaps
+│   ├── timelocks.rs   # Time-locked balances
+│   ├── escrows.rs     # Multi-party escrow
+│   ├── channels.rs    # Payment channels
+│   └── trustlines.rs  # XRPL-inspired credit
 │
 ├── consensus/          # Proof-of-Useful-Work consensus
 │   ├── miner.rs       # NP-problem solving & mining logic
 │   └── work_score.rs  # Work score calculation
 │
-├── network/            # libp2p P2P networking
-│   └── protocol.rs    # GossipSub, Kademlia, mDNS
+├── network/            # CPP P2P networking
+│   └── cpp/
+│       ├── network.rs         # Main event loop, peer management
+│       ├── peer.rs            # Peer struct, TCP write task
+│       ├── protocol.rs        # Wire protocol encoding/decoding
+│       ├── router.rs          # EquilibriumRouter (sqrt-n*eta fanout)
+│       ├── flock.rs           # FlockState murmuration coordination
+│       ├── message.rs         # 17 message types with dimensional priority
+│       ├── config.rs          # Constants (ETA, ports, timeouts)
+│       ├── flow_control.rs    # Window-based congestion control
+│       └── node_integration.rs # PeerSelector, NodeMetrics
 │
 ├── mempool/            # Transaction pool
 │   ├── pool.rs        # Mempool logic
@@ -686,17 +680,17 @@ COINjecture Network B (WEB4)
 │   └── fee_market.rs  # Dynamic fee calculation
 │
 ├── rpc/                # JSON-RPC server
-│   └── server.rs      # HTTP/WebSocket endpoints (with marketplace API)
+│   └── server.rs      # HTTP/WebSocket endpoints
 │
 ├── tokenomics/         # Economic logic
-│   ├── dimensions.rs  # Dimensional math (η, λ, D_n)
+│   ├── dimensions.rs  # Dimensional math (eta, lambda, D_n)
 │   └── distributor.rs # Reward distribution
 │
 ├── node/               # Full node binary
 │   ├── main.rs        # Entry point
-│   ├── service.rs     # Node orchestration (marketplace integration)
+│   ├── service.rs     # Node orchestration
 │   ├── chain.rs       # Block storage (redb)
-│   └── validator.rs   # Block/transaction validation (marketplace support)
+│   └── validator.rs   # Block/transaction validation
 │
 └── wallet/             # CLI wallet
     ├── main.rs        # CLI interface
@@ -718,7 +712,6 @@ Contributions welcome! Please:
 
 **Code Style**: Run `cargo fmt` before committing
 **Tests**: Run `cargo test --all` to ensure passing tests
-**Documentation**: Update README for user-facing changes
 
 ---
 
@@ -726,7 +719,7 @@ Contributions welcome! Please:
 
 MIT License - see [LICENSE](LICENSE) file for details
 
-**Copyright** (c) 2025 COINjecture Network B Contributors
+**Copyright** (c) 2025-2026 COINjecture Contributors
 
 ---
 
@@ -742,18 +735,18 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## Links
 
-- **GitHub**: https://github.com/Quigles1337/COINjecture1337-NETB
-- **Documentation**: See `docs/` directory
-- **Testnet Guide**: [TESTNET_GUIDE.md](TESTNET_GUIDE.md)
-- **Transaction Guide**: [TRANSACTION_TEST_GUIDE.md](TRANSACTION_TEST_GUIDE.md)
+- **GitHub**: https://github.com/Quigles1337/COINjecture2.0
+- **Testnet Guide**: [TESTNET_QUICKSTART.md](TESTNET_QUICKSTART.md)
+- **Current Issues**: [CURRENT_ISSUES.md](CURRENT_ISSUES.md)
+- **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
 
 <div align="center">
 
-**Built with 🦀 Rust**
+**Built with Rust**
 
-*Proof of Useful Work · Autonomous marketplace · Dimensional economics · Provable stability*
+*Proof of Useful Work · Autonomous Marketplace · Dimensional Economics · Provable Stability*
 
 **THIS IS WEB4**
 

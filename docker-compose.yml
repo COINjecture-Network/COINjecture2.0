@@ -9,7 +9,7 @@ services:
   bootnode:
     build:
       context: .
-      dockerfile: Dockerfile.cpp
+      dockerfile: Dockerfile
     container_name: coinject-bootnode
     ports:
       - "707:707"      # CPP P2P
@@ -39,7 +39,7 @@ services:
   node1:
     build:
       context: .
-      dockerfile: Dockerfile.cpp
+      dockerfile: Dockerfile
     container_name: coinject-node1
     ports:
       - "708:707"      # CPP P2P (mapped to host 708)
@@ -73,7 +73,7 @@ services:
   node2:
     build:
       context: .
-      dockerfile: Dockerfile.cpp
+      dockerfile: Dockerfile
     container_name: coinject-node2
     ports:
       - "709:707"      # CPP P2P (mapped to host 709)
@@ -107,7 +107,7 @@ services:
   node3:
     build:
       context: .
-      dockerfile: Dockerfile.cpp
+      dockerfile: Dockerfile
     container_name: coinject-node3
     ports:
       - "710:707"      # CPP P2P (mapped to host 710)

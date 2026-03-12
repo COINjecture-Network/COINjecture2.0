@@ -118,7 +118,7 @@ pub struct NodeConfig {
     #[arg(long)]
     pub miner_address: Option<String>,
 
-    /// P2P listen address
+    /// [DEPRECATED: use --cpp-p2p-addr] Legacy libp2p P2P address (ignored in CPP mode)
     #[arg(long, default_value = "/ip4/0.0.0.0/tcp/30333")]
     pub p2p_addr: String,
 
@@ -138,7 +138,7 @@ pub struct NodeConfig {
     #[arg(long, default_value = "127.0.0.1:9090")]
     pub metrics_addr: String,
 
-    /// Bootstrap peers (multiaddr format)
+    /// Bootstrap peers (host:port format for CPP, e.g., 'bootnode:707')
     #[arg(long)]
     pub bootnodes: Vec<String>,
 
@@ -191,19 +191,15 @@ pub struct NodeConfig {
     // NETWORK CONNECTIVITY
     // ==========================================================================
 
-    /// External/public address to advertise to peers (multiaddr format)
-    /// Use this when running behind NAT or Docker to ensure peers dial the correct address.
-    /// Example: /ip4/143.110.139.166/tcp/30333
+    /// [DEPRECATED: libp2p only] External address to advertise. Not used in CPP mode.
     #[arg(long)]
     pub external_addr: Option<String>,
 
-    /// Allow private RFC1918 addresses (for local/LAN testing)
-    /// By default, private addresses (10.x.x.x, 172.16-31.x.x, 192.168.x.x) are rejected
+    /// [DEPRECATED: libp2p only] Allow private addresses. CPP mode handles this differently.
     #[arg(long)]
     pub allow_private_addrs: bool,
 
-    /// Disable mDNS peer discovery (for network isolation testing)
-    /// Useful for partition/fork testing where you don't want local nodes to find each other
+    /// [DEPRECATED] mDNS was removed with libp2p. This flag has no effect.
     #[arg(long)]
     pub disable_mdns: bool,
 

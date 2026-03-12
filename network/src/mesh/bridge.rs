@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, RwLock};
 use coinject_core::{Block, Hash, Transaction};
 
 use super::identity::NodeId;
-use super::protocol::Payload;
+use super::protocol::{NodeCommit, Payload};
 use super::{NetworkCommand as MeshCommand, NetworkEvent as MeshEvent};
 
 // ─── Bridge Commands (node service → mesh) ───────────────────────────────────
@@ -52,6 +52,18 @@ pub enum BridgeCommand {
 
     /// Connect to a seed/bootnode address.
     ConnectBootnode { addr: SocketAddr },
+
+    /// Broadcast a consensus salt via mesh (coordinator → mesh).
+    BroadcastConsensusSalt { epoch: u64, salt: [u8; 32] },
+
+    /// Broadcast a solution commit via mesh (coordinator → mesh).
+    BroadcastCommit {
+        epoch: u64,
+        solution_hash: [u8; 32],
+        node_id: [u8; 32],
+        work_score: f64,
+        signature: Vec<u8>,
+    },
 }
 
 // ─── Bridge Events (mesh → node service) ─────────────────────────────────────
@@ -99,6 +111,21 @@ pub enum BridgeEvent {
         request_id: u64,
         peer_id: NodeId,
     },
+
+    /// Consensus salt received from a peer (forwarded to coordinator).
+    ConsensusSaltReceived {
+        epoch: u64,
+        salt: [u8; 32],
+        from: NodeId,
+    },
+
+    /// Solution commit received from a peer (forwarded to coordinator).
+    ConsensusCommitReceived {
+        epoch: u64,
+        block_hash: [u8; 32],
+        commits: Vec<NodeCommit>,
+        from: NodeId,
+    },
 }
 
 // ─── Bridge State ────────────────────────────────────────────────────────────
@@ -120,6 +147,7 @@ pub struct BridgeState {
 /// - Deserializing received payloads back to typed objects
 /// - Mapping mesh heartbeats to status updates
 /// - Tracking pending sync requests for response correlation
+/// - Forwarding consensus payloads (salt, commits) to the node service
 pub async fn run_bridge(
     // Node service channels
     mut cmd_rx: mpsc::UnboundedReceiver<BridgeCommand>,
@@ -192,9 +220,27 @@ pub async fn run_bridge(
 
                     Some(BridgeCommand::ConnectBootnode { addr }) => {
                         tracing::info!(addr = %addr, "bridge: bootnode connect requested (handled by mesh seed config)");
-                        // The mesh layer handles seed connections at startup.
-                        // For dynamic bootnode addition, we'd need to extend the mesh API.
-                        // For now, log and skip — seeds are passed at config time.
+                    }
+
+                    Some(BridgeCommand::BroadcastConsensusSalt { epoch, salt }) => {
+                        tracing::debug!(epoch, "bridge: broadcasting consensus salt");
+                        let payload = Payload::ConsensusSalt { epoch, salt };
+                        let _ = mesh_cmd_tx.send(MeshCommand::Broadcast(payload));
+                    }
+
+                    Some(BridgeCommand::BroadcastCommit { epoch, solution_hash, node_id, work_score, signature }) => {
+                        tracing::debug!(epoch, "bridge: broadcasting solution commit");
+                        let payload = Payload::Commit {
+                            epoch,
+                            block_hash: solution_hash,
+                            commits: vec![NodeCommit {
+                                node_id: NodeId(node_id),
+                                solution_hash,
+                                work_score,
+                                signature,
+                            }],
+                        };
+                        let _ = mesh_cmd_tx.send(MeshCommand::Broadcast(payload));
                     }
 
                     None => {
@@ -315,15 +361,34 @@ pub async fn run_bridge(
                                 // For now, the CPP layer handles block serving.
                             }
 
-                            // Consensus messages pass through as-is
-                            Payload::ConsensusSalt { epoch, salt: _ } => {
-                                tracing::debug!(epoch, "received consensus salt via mesh");
-                                // TODO: Forward to consensus engine when wired
+                            // Consensus salt → forward to service/coordinator
+                            Payload::ConsensusSalt { epoch, salt } => {
+                                tracing::debug!(
+                                    epoch,
+                                    peer = %from.short(),
+                                    "bridge: forwarding consensus salt to service"
+                                );
+                                let _ = event_tx.send(BridgeEvent::ConsensusSaltReceived {
+                                    epoch,
+                                    salt,
+                                    from,
+                                });
                             }
 
-                            Payload::Commit { epoch, block_hash: _, commits: _ } => {
-                                tracing::debug!(epoch, "received commit via mesh");
-                                // TODO: Forward to consensus engine when wired
+                            // Commit → forward to service/coordinator
+                            Payload::Commit { epoch, block_hash, commits } => {
+                                tracing::debug!(
+                                    epoch,
+                                    peer = %from.short(),
+                                    commit_count = commits.len(),
+                                    "bridge: forwarding commit to service"
+                                );
+                                let _ = event_tx.send(BridgeEvent::ConsensusCommitReceived {
+                                    epoch,
+                                    block_hash,
+                                    commits,
+                                    from,
+                                });
                             }
 
                             // Peer exchange is handled internally by mesh layer

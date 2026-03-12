@@ -1,23 +1,21 @@
-# Multi-stage build for COINjecture blockchain node
-# Using Rust 1.88 to support all dependencies
-#
-# TROUBLESHOOTING: If apt-get times out, check Docker Desktop proxy settings:
-#   docker info | grep -i proxy
-# Disable proxy in Docker Desktop Settings > Resources > Proxies if builds fail.
-#
+# Dockerfile for COINjecture CPP Network (libp2p removed)
+# Multi-stage build for optimized image size
+
 FROM rust:1.88-slim AS builder
 
-# Install build dependencies (using default Debian repos)
+# Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
+RUN echo 'Types: deb\nURIs: http://mirrors.kernel.org/debian\nSuites: bookworm bookworm-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg' > /etc/apt/sources.list.d/debian.sources
+
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /build
 
-# Copy Cargo files first for better caching
+# Copy Cargo files for dependency caching
 COPY Cargo.toml Cargo.lock ./
 COPY adzdb/Cargo.toml ./adzdb/
 COPY core/Cargo.toml ./core/
@@ -51,13 +49,17 @@ COPY mobile-sdk ./mobile-sdk
 # Build release binary
 RUN cargo build --release --bin coinject
 
-# Runtime stage - use slim Debian for smaller image
+# Runtime stage
 FROM debian:bookworm-slim
+
+# Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
+RUN echo 'Types: deb\nURIs: http://mirrors.kernel.org/debian\nSuites: bookworm bookworm-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg' > /etc/apt/sources.list.d/debian.sources
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder
@@ -66,15 +68,19 @@ COPY --from=builder /build/target/release/coinject /usr/local/bin/coinject
 # Create data directory
 RUN mkdir -p /data
 
-# Expose ports
-# P2P port
-EXPOSE 30333
-# RPC port
+# Expose CPP network ports
+# CPP P2P port (default: 707)
+EXPOSE 707
+# CPP WebSocket RPC port (default: 8080)
+EXPOSE 8080
+# JSON-RPC port (default: 9933)
 EXPOSE 9933
+# Metrics port (default: 9090)
+EXPOSE 9090
 
-# Set working directory
 WORKDIR /data
 
-# Default command - can be overridden
+# Default command
 ENTRYPOINT ["/usr/local/bin/coinject"]
 CMD ["--help"]
+

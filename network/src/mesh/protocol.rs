@@ -16,6 +16,7 @@ use super::identity::NodeId;
 pub struct NodeCommit {
     pub node_id: NodeId,
     pub solution_hash: [u8; 32],
+    pub work_score: f64,
     pub signature: Vec<u8>,
 }
 
@@ -199,6 +200,7 @@ mod tests {
                 commits: vec![NodeCommit {
                     node_id: NodeId([0x11; 32]),
                     solution_hash: [0x22; 32],
+                    work_score: 150.0,
                     signature: vec![0x33; 64],
                 }],
             },

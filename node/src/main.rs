@@ -36,12 +36,8 @@ use service::CoinjectNode;
 use tokio::signal;
 use tracing_subscriber::EnvFilter;
 
-// CRITICAL FIX: Use multi-threaded runtime explicitly
-// This ensures libp2p's internal connection tasks (Noise/Yamux handshake)
-// run on worker threads and get properly polled. 
-// The previous LocalSet + spawn_local architecture caused connection
-// tasks to starve on Linux, resulting in 28-byte Noise handshake data
-// stuck in kernel buffer (Recv-Q) without being read.
+// Multi-threaded runtime for CPP protocol TCP connections
+// Worker threads handle concurrent peer I/O and mining tasks
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -71,8 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Create and start node
-    // NOTE: Removed LocalSet - using standard tokio::spawn for proper
-    // multi-threaded I/O scheduling. This is ESSENTIAL for libp2p on Linux.
     let mut node = CoinjectNode::new(config).await?;
     node.start().await?;
 

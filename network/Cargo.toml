@@ -27,3 +27,5 @@ hex.workspace = true
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+coinject-consensus = { path = "../consensus" }
+tempfile = "3"

@@ -435,9 +435,10 @@ impl CoinjectNode {
         // Create shared peer count for RPC
         let peer_count = Arc::new(RwLock::new(0));
 
-        // Generate CPP PeerId from data directory (deterministic per node)
-        let peer_id_seed = format!("{}{}", self.config.data_dir.display(), self.config.chain_id);
-        let peer_id_hash = blake3::hash(peer_id_seed.as_bytes());
+        // Generate CPP PeerId — random per instance to avoid collisions in Docker
+        // (Previous deterministic scheme used data_dir + chain_id, which collided
+        // when all containers use --data-dir /data with the same chain_id)
+        let peer_id_hash = blake3::hash(&rand::random::<[u8; 32]>());
         let local_peer_id_bytes: CppPeerId = {
             let mut bytes = [0u8; 32];
             bytes.copy_from_slice(&peer_id_hash.as_bytes()[..32]);
@@ -714,8 +715,20 @@ impl CoinjectNode {
             
             // Connect to each bootnode
             for bootnode_addr in cpp_bootnodes_for_connect {
-                if let Ok(addr) = bootnode_addr.parse::<std::net::SocketAddr>() {
-                    println!("[CPP] Connecting to bootnode: {}", addr);
+                // Try direct SocketAddr parse first, then DNS resolution for hostnames (e.g. Docker service names)
+                let resolved = if let Ok(addr) = bootnode_addr.parse::<std::net::SocketAddr>() {
+                    Some(addr)
+                } else {
+                    match tokio::net::lookup_host(&bootnode_addr).await {
+                        Ok(mut addrs) => addrs.next(),
+                        Err(e) => {
+                            eprintln!("[CPP] Failed to resolve bootnode '{}': {}", bootnode_addr, e);
+                            None
+                        }
+                    }
+                };
+                if let Some(addr) = resolved {
+                    println!("[CPP] Connecting to bootnode: {} (resolved from '{}')", addr, bootnode_addr);
                     if let Err(e) = cpp_network_cmd_tx_for_bootnodes.send(
                         coinject_network::cpp::NetworkCommand::ConnectBootnode { addr }
                     ) {
@@ -1200,6 +1213,93 @@ impl CoinjectNode {
                     let bridge_cmd_tx_for_mining = bridge_cmd_tx.clone();
                     let bridge_cmd_tx_for_events = bridge_cmd_tx.clone();
 
+                    // ── Epoch Coordinator (optional, alongside mesh) ─────
+                    // Create coordinator channels
+                    let (coord_cmd_tx, coord_cmd_rx) = mpsc::unbounded_channel::<coinject_consensus::CoordinatorCommand>();
+                    let (coord_event_tx, mut coord_event_rx) = mpsc::unbounded_channel::<coinject_consensus::CoordinatorEvent>();
+
+                    // Use mesh node identity as coordinator ID
+                    let coord_node_id: [u8; 32] = mesh_service.local_id().0;
+
+                    let coord_config = coinject_consensus::CoordinatorConfig::default();
+                    let (coordinator, _coord_shared_state) = coinject_consensus::EpochCoordinator::new(
+                        coord_node_id,
+                        coord_config,
+                        current_height,
+                        current_hash,
+                    );
+
+                    // Spawn coordinator task
+                    tokio::spawn(async move {
+                        coordinator.run(coord_cmd_rx, coord_event_tx).await;
+                    });
+                    tracing::info!("epoch coordinator started");
+
+                    // Clone coordinator command sender for the bridge event handler
+                    let coord_cmd_for_bridge = coord_cmd_tx.clone();
+
+                    // Spawn coordinator event handler — translates coordinator events
+                    // into bridge commands (outbound consensus messages)
+                    let bridge_cmd_for_coord = bridge_cmd_tx.clone();
+                    tokio::spawn(async move {
+                        while let Some(event) = coord_event_rx.recv().await {
+                            match event {
+                                coinject_consensus::CoordinatorEvent::BroadcastSalt { epoch, salt } => {
+                                    tracing::info!(epoch, "coordinator: broadcasting salt via mesh");
+                                    let _ = bridge_cmd_for_coord.send(
+                                        coinject_network::MeshBridgeCommand::BroadcastConsensusSalt { epoch, salt }
+                                    );
+                                }
+                                coinject_consensus::CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score } => {
+                                    tracing::info!(epoch, "coordinator: broadcasting commit via mesh");
+                                    let _ = bridge_cmd_for_coord.send(
+                                        coinject_network::MeshBridgeCommand::BroadcastCommit {
+                                            epoch,
+                                            solution_hash,
+                                            node_id: coord_node_id,
+                                            work_score,
+                                            signature: Vec::new(),
+                                        }
+                                    );
+                                }
+                                coinject_consensus::CoordinatorEvent::EpochStarted { epoch, leader, .. } => {
+                                    tracing::info!(epoch, leader = hex::encode(&leader[..4]), "coordinator: epoch started");
+                                }
+                                coinject_consensus::CoordinatorEvent::MinePhaseStarted { epoch, .. } => {
+                                    tracing::info!(epoch, "coordinator: mine phase started");
+                                }
+                                coinject_consensus::CoordinatorEvent::CommitPhaseStarted { epoch } => {
+                                    tracing::info!(epoch, "coordinator: commit phase started");
+                                }
+                                coinject_consensus::CoordinatorEvent::EpochSealed { epoch, winner, work_score, commit_count } => {
+                                    tracing::info!(
+                                        epoch, winner = hex::encode(&winner[..4]),
+                                        work_score, commit_count,
+                                        "coordinator: epoch sealed"
+                                    );
+                                }
+                                coinject_consensus::CoordinatorEvent::EpochStalled { epoch, phase, reason } => {
+                                    tracing::warn!(epoch, phase = %phase, reason = %reason, "coordinator: epoch stalled");
+                                }
+                                coinject_consensus::CoordinatorEvent::BlockProduced { block, epoch } => {
+                                    let block_hash = block.header.hash();
+                                    let height = block.header.height;
+                                    tracing::info!(
+                                        epoch, height,
+                                        hash = hex::encode(&block_hash.as_bytes()[..4]),
+                                        "coordinator: block produced, broadcasting via mesh"
+                                    );
+
+                                    // Broadcast the block via mesh bridge
+                                    let _ = bridge_cmd_for_coord.send(
+                                        coinject_network::mesh::bridge::BridgeCommand::BroadcastBlock { block },
+                                    );
+                                }
+                            }
+                        }
+                        tracing::info!("coordinator event handler exited");
+                    });
+
                     // Spawn mesh bridge event handler — feeds blocks/txs into the same
                     // validation pipeline as CPP events
                     let chain_for_mesh = Arc::clone(&self.chain);
@@ -1214,6 +1314,7 @@ impl CoinjectNode {
                     let tx_pool_for_mesh = Arc::clone(&self.tx_pool);
                     let cpp_cmd_for_mesh = cpp_network_cmd_tx.clone();
                     let bridge_state_for_events = Arc::clone(&bridge_state);
+                    let coord_cmd_for_events = coord_cmd_tx.clone();
 
                     tokio::spawn(async move {
                         while let Some(event) = bridge_event_rx.recv().await {
@@ -1274,6 +1375,14 @@ impl CoinjectNode {
                                                             best_height: height,
                                                             best_hash: new_hash,
                                                         });
+
+                                                        // Update coordinator chain tip
+                                                        let _ = coord_cmd_for_events.send(
+                                                            coinject_consensus::CoordinatorCommand::ChainTipUpdated {
+                                                                height,
+                                                                hash: new_hash,
+                                                            }
+                                                        );
                                                     }
                                                 }
                                                 Err(e) => {
@@ -1293,9 +1402,15 @@ impl CoinjectNode {
                                 }
                                 coinject_network::MeshBridgeEvent::PeerConnected { peer_id, best_height, .. } => {
                                     tracing::info!(peer = %peer_id.short(), best_height, "mesh: peer connected");
+                                    let _ = coord_cmd_for_events.send(
+                                        coinject_consensus::CoordinatorCommand::PeerJoined { node_id: peer_id.0 }
+                                    );
                                 }
                                 coinject_network::MeshBridgeEvent::PeerDisconnected { peer_id, reason } => {
                                     tracing::info!(peer = %peer_id.short(), reason = %reason, "mesh: peer disconnected");
+                                    let _ = coord_cmd_for_events.send(
+                                        coinject_consensus::CoordinatorCommand::PeerLeft { node_id: peer_id.0 }
+                                    );
                                 }
                                 coinject_network::MeshBridgeEvent::StatusUpdate { peer_id, best_height, .. } => {
                                     tracing::debug!(peer = %peer_id.short(), best_height, "mesh: status update");
@@ -1335,6 +1450,33 @@ impl CoinjectNode {
                                         }
                                     }
                                 }
+                                // ── Consensus payloads → Coordinator ─────────────
+                                coinject_network::MeshBridgeEvent::ConsensusSaltReceived { epoch, salt, from } => {
+                                    tracing::debug!(epoch, peer = %from.short(), "mesh: consensus salt received");
+                                    let _ = coord_cmd_for_events.send(
+                                        coinject_consensus::CoordinatorCommand::SaltReceived {
+                                            epoch,
+                                            salt,
+                                            from: from.0,
+                                        }
+                                    );
+                                }
+                                coinject_network::MeshBridgeEvent::ConsensusCommitReceived { epoch, block_hash: _, commits, from } => {
+                                    tracing::debug!(epoch, peer = %from.short(), "mesh: consensus commit received");
+                                    for commit in commits {
+                                        let _ = coord_cmd_for_events.send(
+                                            coinject_consensus::CoordinatorCommand::CommitReceived {
+                                                epoch,
+                                                commit: coinject_consensus::SolutionCommit {
+                                                    node_id: commit.node_id.0,
+                                                    solution_hash: commit.solution_hash,
+                                                    work_score: commit.work_score,
+                                                    signature: commit.signature,
+                                                },
+                                            }
+                                        );
+                                    }
+                                }
                             }
                         }
                         tracing::info!("mesh bridge event handler exited");
@@ -1344,6 +1486,7 @@ impl CoinjectNode {
                     // This piggybacks on the existing mining broadcast by cloning to bridge
                     // The bridge_cmd_tx is stored for use in the mining loop
                     println!("   Mesh Network listening on: {}", self.config.mesh_listen);
+                    println!("   Epoch Coordinator: active (Salt→Mine→Commit→Seal)");
                     if !self.config.mesh_seed.is_empty() {
                         println!("   Mesh seeds: {:?}", self.config.mesh_seed);
                     }
@@ -1445,116 +1588,6 @@ impl CoinjectNode {
                 }
             }
         });
-
-        // TEMPORARY: libp2p event handler commented out - will be removed after CPP testing
-        // The entire libp2p event processing block (~1500 lines) is temporarily disabled
-        // CPP network events are handled separately above (cpp_network_event_rx)
-        // Note: block_buffer is now created above and passed to CPP event handler
-
-        // TEMPORARY: libp2p event handler spawn disabled - CPP events handled above
-        /*
-        // Spawn network event handler
-        let chain = Arc::clone(&self.chain);
-        let state = Arc::clone(&self.state);
-        let timelock_state = Arc::clone(&self.timelock_state);
-        let escrow_state = Arc::clone(&self.escrow_state);
-        let channel_state = Arc::clone(&self.channel_state);
-        let trustline_state = Arc::clone(&self.trustline_state);
-        let dimensional_pool_state = Arc::clone(&self.dimensional_pool_state);
-        let marketplace_state = Arc::clone(&self.marketplace_state);
-        let validator = Arc::clone(&self.validator);
-        let tx_pool = Arc::clone(&self.tx_pool);
-        let network_tx_for_events = network_cmd_tx.clone();
-        let buffer_for_events = Arc::clone(&block_buffer);
-        let peer_count_for_events = Arc::clone(&peer_count);
-        let best_peer_height_for_events = Arc::clone(&best_known_peer_height);
-        let peer_consensus_for_events = Arc::clone(&peer_consensus);
-        let hf_sync_for_events = self.hf_sync.clone();
-        let node_manager_for_events = Arc::clone(&self.node_manager);
-        let capability_router_for_events = Arc::clone(&self.capability_router);
-
-        tokio::spawn(async move {
-            while let Some(event) = event_rx.recv().await {
-                // CRITICAL: Handle BlocksRequested with rr_request_id in PARALLEL
-                // These have tight timeouts (120s) and must not block other events
-                if let NetworkEvent::BlocksRequested { peer, from_height, to_height, rr_request_id: Some(request_id) } = &event {
-                    // Spawn RR block requests as separate tasks for parallel processing
-                    let chain_clone = Arc::clone(&chain);
-                    let network_tx_clone = network_tx_for_events.clone();
-                    let peer_clone = *peer;
-                    let from_h = *from_height;
-                    let to_h = *to_height;
-                    let req_id = *request_id;
-                    
-                    tokio::spawn(async move {
-                        println!(
-                            "📮 [PARALLEL] Blocks requested by {:?}: heights {}-{} (rr_id: {})",
-                            peer_clone, from_h, to_h, req_id
-                        );
-                        
-                        // Collect blocks
-                        let mut blocks = Vec::new();
-                        for height in from_h..=to_h {
-                            match chain_clone.get_block_by_height(height) {
-                                Ok(Some(block)) => {
-                                    blocks.push(block);
-                                }
-                                Ok(None) => {
-                                    // Continue to collect other blocks
-                                }
-                                Err(e) => {
-                                    eprintln!("Error fetching block {}: {}", height, e);
-                                    let _ = network_tx_clone.send(NetworkCommand::SendErrorResponse { 
-                                        request_id: req_id, 
-                                        message: format!("Error fetching block {}: {}", height, e) 
-                                    });
-                                    return;
-                                }
-                            }
-                        }
-                        
-                        // Send response
-                        if !blocks.is_empty() {
-                            println!("📤 [PARALLEL] Sending {} blocks via RR (id: {})", blocks.len(), req_id);
-                            let _ = network_tx_clone.send(NetworkCommand::SendBlocksResponse { 
-                                request_id: req_id, 
-                                blocks 
-                            });
-                        } else {
-                            let _ = network_tx_clone.send(NetworkCommand::SendErrorResponse { 
-                                request_id: req_id, 
-                                message: format!("No blocks found in range {}-{}", from_h, to_h) 
-                            });
-                        }
-                    });
-                    continue; // Skip normal handling for this event
-                }
-                
-                // Normal sequential handling for all other events
-                Self::handle_network_event(
-                    event,
-                    &chain,
-                    &state,
-                    &timelock_state,
-                    &escrow_state,
-                    &channel_state,
-                    &trustline_state,
-                    &dimensional_pool_state,
-                    &marketplace_state,
-                    &validator,
-                    &tx_pool,
-                    &network_tx_for_events,
-                    &buffer_for_events,
-                    &peer_count_for_events,
-                    &best_peer_height_for_events,
-                    &peer_consensus_for_events,
-                    &hf_sync_for_events,
-                    &node_manager_for_events,
-                    &capability_router_for_events,
-                ).await;
-            }
-        });
-        */
 
         // TEMPORARY: Periodic status broadcast disabled (was libp2p)
         // CPP network handles status updates internally
@@ -1855,1000 +1888,6 @@ impl CoinjectNode {
         }
 
         Ok(())
-    }
-
-    /// Handle network events (TEMPORARILY DISABLED - libp2p removed, using CPP)
-    #[allow(dead_code, unused_variables)]
-    async fn handle_network_event(
-        _event: (/* NetworkEvent - libp2p removed, using CPP events */),
-        chain: &Arc<ChainState>,
-        state: &Arc<AccountState>,
-        timelock_state: &Arc<TimeLockState>,
-        escrow_state: &Arc<EscrowState>,
-        channel_state: &Arc<ChannelState>,
-        trustline_state: &Arc<TrustLineState>,
-        dimensional_pool_state: &Arc<DimensionalPoolState>,
-        marketplace_state: &Arc<MarketplaceState>,
-        validator: &Arc<BlockValidator>,
-        tx_pool: &Arc<RwLock<TransactionPool>>,
-        network_tx: &mpsc::UnboundedSender<NetworkCommand>,
-        block_buffer: &Arc<RwLock<HashMap<u64, coinject_core::Block>>>,
-        peer_count: &Arc<RwLock<usize>>,
-        best_known_peer_height: &Arc<RwLock<u64>>,
-        peer_consensus: &Arc<PeerConsensus>,
-        hf_sync: &Option<Arc<HuggingFaceSync>>,
-        node_manager: &Arc<crate::node_manager::NodeTypeManager>,
-        capability_router: &Arc<crate::node_manager::CapabilityRouter>,
-    ) {
-        // TEMPORARY: libp2p event handling disabled - using CPP events
-        // This entire function body (~1000 lines) is commented out
-        return; // Early return - will be removed after CPP testing
-        /*
-        match _event {
-            NetworkEvent::BlockReceived { block, peer, is_sync_block } => {
-                println!("📥 Received block {} from {:?} (sync_block: {})", block.header.height, peer, is_sync_block);
-
-                let best_height = chain.best_block_height().await;
-                let expected_height = best_height + 1;
-
-                // During initial sync, ignore blocks that are too far ahead to prevent buffer buildup
-                // BUT: Always accept sync blocks and blocks that might be from a fork (for reorganization)
-                // Increased threshold to 500 blocks to allow storing blocks from forks for reorganization
-                let sync_threshold = 500u64;
-                if !is_sync_block && best_height < 1000 && block.header.height > expected_height + sync_threshold {
-                    println!("⏭️  Ignoring block {} (too far ahead during sync: expected {}, received {})", 
-                        block.header.height, expected_height, block.header.height);
-                    return;
-                }
-
-                // Check if block is the next sequential block we need
-                if block.header.height == expected_height {
-                    // This is the next block we need - validate and apply immediately
-                    let best_hash = chain.best_block_hash().await;
-
-                    // Skip timestamp age check during sync (when receiving historical blocks)
-                    // Check if block timestamp is older than 2 hours - if so, we're likely syncing
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs() as i64;
-                    let block_age = now - block.header.timestamp;
-                    let skip_age_check = block_age > 7200; // 2 hours
-
-                    // FORK HANDLING FIX: Check if block extends our current chain or is a fork block
-                    let extends_best_chain = block.header.prev_hash == best_hash;
-
-                    let validation_result = if extends_best_chain {
-                        // Normal case: block extends our best chain
-                        validator.validate_block_with_options(&block, &best_hash, expected_height, skip_age_check)
-                    } else {
-                        // Fork case: check if we have the parent block
-                        match chain.has_block(&block.header.prev_hash) {
-                            Ok(true) => {
-                                // We have the parent - this is a valid sidechain block
-                                println!("🔀 Fork block detected at height {}: extends {:?} (not our tip {:?})",
-                                    block.header.height,
-                                    &block.header.prev_hash.to_string()[..16],
-                                    &best_hash.to_string()[..16]);
-
-                                // Validate against its declared parent (not best_hash)
-                                // Note: We validate height as expected_height since that's what we're at
-                                // The block's prev_hash already points to a valid stored block
-                                validator.validate_block_with_options(&block, &block.header.prev_hash, expected_height, skip_age_check)
-                            }
-                            Ok(false) => {
-                                // Parent missing - this is an orphan block
-                                println!("👻 Orphan block {} received: parent {:?} not found, buffering...",
-                                    block.header.height,
-                                    &block.header.prev_hash.to_string()[..16]);
-
-                                // Buffer the orphan block
-                                let mut buffer = block_buffer.write().await;
-                                if !buffer.contains_key(&block.header.height) {
-                                    buffer.insert(block.header.height, block.clone());
-                                }
-                                drop(buffer);
-
-                                // Request the missing parent block
-                                // The parent should be at height - 1
-                                if block.header.height > 0 {
-                                    let missing_height = block.header.height - 1;
-                                    println!("📡 Requesting missing parent block at height {}", missing_height);
-                                    let _ = network_tx.send(NetworkCommand::RequestBlocks {
-                                        from_height: missing_height,
-                                        to_height: missing_height,
-                                    });
-                                }
-
-                                return; // Don't continue processing - wait for parent
-                            }
-                            Err(e) => {
-                                println!("❌ Error checking for parent block: {}", e);
-                                return;
-                            }
-                        }
-                    };
-
-                    match validation_result {
-                        Ok(()) => {
-                            // Store and apply block
-                            match chain.store_block(&block).await {
-                                Ok(is_new_best) => {
-                                    if is_new_best {
-                                        // RUNTIME INTEGRATION: Calculate and save consensus state for received blocks
-                                        use coinject_core::{TAU_C, ConsensusState};
-                                        let tau = (block.header.height as f64) / TAU_C;
-                                        let consensus_state = ConsensusState::at_tau(tau);
-
-                                        if let Err(e) = dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state) {
-                                            println!("⚠️  Warning: Failed to save consensus state: {}", e);
-                                        }
-
-                                        // Apply block transactions to state
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
-                                            Ok(applied_txs) => {
-                                                println!("✅ Block {} accepted and applied to chain (τ={:.4})", block.header.height, tau);
-
-                                                // Remove only successfully applied transactions from pool
-                                                let mut pool = tx_pool.write().await;
-                                                for tx_hash in &applied_txs {
-                                                    pool.remove(tx_hash);
-                                                }
-                                                drop(pool);
-
-                                                // Update block metrics
-                                                crate::metrics::BLOCK_HEIGHT.set(block.header.height as i64);
-                                                
-                                                // === NODE TYPE MANAGER: Track block validation ===
-                                                // This feeds the behavioral classification system
-                                                node_manager.on_block_validated(&block, 50).await; // TODO: measure actual validation time
-
-                                                // Push consensus block to Hugging Face (fire-and-forget)
-                                                if let Some(ref hf_sync) = hf_sync {
-                                                    let hf_sync_clone = Arc::clone(hf_sync);
-                                                    let block_clone = block.clone();
-                                                    tokio::spawn(async move {
-                                                        if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
-                                                            eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
-                                                        }
-                                                    });
-
-                                                    // Upload marketplace transactions from this block
-                                                    Self::upload_marketplace_transactions(&block, marketplace_state, hf_sync);
-                                                }
-
-                                                // After applying this block, try to apply buffered blocks sequentially
-                                                Self::process_buffered_blocks(
-                                                    chain,
-                                                    state,
-                                                    timelock_state,
-                                                    escrow_state,
-                                                    channel_state,
-                                                    trustline_state,
-                                                    dimensional_pool_state,
-                                                    marketplace_state,
-                                                    validator,
-                                                    tx_pool,
-                                                    block_buffer,
-                                                    hf_sync,
-                                                    Some(network_tx),
-                                                ).await;
-
-                                                // After processing buffered blocks, check if we have a longer chain available
-                                                // This handles the case where we received blocks from a fork that's longer
-                                                let _new_best_height = chain.best_block_height().await;
-                                                let new_best_hash = chain.best_block_hash().await;
-                                                
-                                                // Check for reorganization opportunities after processing blocks
-                                                // This is critical for handling forks when we receive blocks from a longer chain
-                                                // Use the existing check_and_reorganize_chain which is more efficient
-                                                println!("🔍 Triggering reorganization check after processing buffered blocks (best height: {})", _new_best_height);
-                                                Self::check_and_reorganize_chain(
-                                                    chain,
-                                                    state,
-                                                    timelock_state,
-                                                    escrow_state,
-                                                    channel_state,
-                                                    trustline_state,
-                                                    dimensional_pool_state,
-                                                    marketplace_state,
-                                                    validator,
-                                                    block_buffer,
-                                                    Some(network_tx),
-                                                ).await;
-                                            }
-                                            Err(e) => {
-                                                println!("❌ Failed to apply block transactions: {}", e);
-                                            }
-                                        }
-                                    } else {
-                                        // FORK HANDLING: Block was stored but didn't become best tip
-                                        // This means it's a sidechain block - check if we should reorganize
-                                        println!("🔀 Fork block {} stored (not best tip), checking for reorganization...",
-                                            block.header.height);
-
-                                        // Trigger reorg check - the fork chain might have more total work
-                                        Self::check_and_reorganize_chain(
-                                            chain,
-                                            state,
-                                            timelock_state,
-                                            escrow_state,
-                                            channel_state,
-                                            trustline_state,
-                                            dimensional_pool_state,
-                                            marketplace_state,
-                                            validator,
-                                            block_buffer,
-                                            Some(network_tx),
-                                        ).await;
-                                    }
-                                }
-                                Err(e) => println!("❌ Failed to store block: {}", e),
-                            }
-                        }
-                        Err(e) => {
-                            let error_str = e.to_string();
-                            println!("❌ Block validation failed: {}", error_str);
-                            
-                            // CRITICAL FIX: If validation failed due to "Invalid previous hash",
-                            // this block may be from a valid fork chain (same genesis, different branch).
-                            // Store it and trigger reorganization to compare chains.
-                            if error_str.contains("Invalid previous hash") && is_sync_block {
-                                println!("🔀 Block {} may be from a fork chain - storing for reorganization analysis", block.header.height);
-                                
-                                // Store as fork block
-                                if let Err(store_err) = chain.store_block(&block).await {
-                                    println!("   ⚠️ Could not store fork block: {}", store_err);
-                                } else {
-                                    println!("   ✅ Fork block {} stored for reorganization", block.header.height);
-                                    
-                                    // Also buffer it for later processing after reorganization
-                                    let mut buffer = block_buffer.write().await;
-                                    buffer.insert(block.header.height, block.clone());
-                                    drop(buffer);
-                                    
-                                    // Trigger reorganization check
-                                    Self::check_and_reorganize_chain(
-                                        chain,
-                                        state,
-                                        timelock_state,
-                                        escrow_state,
-                                        channel_state,
-                                        trustline_state,
-                                        dimensional_pool_state,
-                                        marketplace_state,
-                                        validator,
-                                        block_buffer,
-                                        Some(network_tx),
-                                    ).await;
-                                }
-                            }
-                        }
-                    }
-                } else if block.header.height > expected_height {
-                    // Future block - add to buffer for later processing
-                    let mut buffer = block_buffer.write().await;
-
-                    // Only buffer if we don't already have it
-                    if !buffer.contains_key(&block.header.height) {
-                        println!(
-                            "🗃️  Buffering future block {} (expected: {}, buffer size: {})",
-                            block.header.height,
-                            expected_height,
-                            buffer.len() + 1
-                        );
-                        buffer.insert(block.header.height, block);
-                        
-                        // After buffering, try to process buffered blocks in case we now have sequential blocks
-                        drop(buffer);
-                        Self::process_buffered_blocks(
-                            chain,
-                            state,
-                            timelock_state,
-                            escrow_state,
-                            channel_state,
-                            trustline_state,
-                            dimensional_pool_state,
-                            marketplace_state,
-                            validator,
-                            tx_pool,
-                            block_buffer,
-                            hf_sync,
-                            Some(network_tx),
-                        ).await;
-                    }
-                } else if block.header.height == best_height {
-                    // Block at same height but potentially different hash - fork detected
-                    let best_hash = chain.best_block_hash().await;
-                    if block.header.hash() != best_hash {
-                        println!("⚠️  Fork detected at height {}! Our hash: {:?}, Received hash: {:?}", 
-                            block.header.height, best_hash, block.header.hash());
-                        println!("   Storing fork block for potential reorganization...");
-                        
-                        // Store the fork block (it might be part of a longer chain)
-                        let _ = chain.store_block(&block).await;
-                        
-                        // Trigger reorganization check after storing fork block
-                        // This allows reorganization to find the fork block even if it's not connected yet
-                        let chain_clone = Arc::clone(chain);
-                        let state_clone = Arc::clone(state);
-                        let timelock_clone = Arc::clone(timelock_state);
-                        let escrow_clone = Arc::clone(escrow_state);
-                        let channel_clone = Arc::clone(channel_state);
-                        let trustline_clone = Arc::clone(trustline_state);
-                        let dimensional_clone = Arc::clone(dimensional_pool_state);
-                        let marketplace_clone = Arc::clone(marketplace_state);
-                        let validator_clone = Arc::clone(validator);
-                        let block_buffer_clone = Arc::clone(block_buffer);
-                        let network_tx_clone = network_tx.clone();
-                        
-                        tokio::spawn(async move {
-                            println!("🔍 Triggering reorganization check after storing fork block at height {}", block.header.height);
-                            Self::check_and_reorganize_chain(
-                                &chain_clone,
-                                &state_clone,
-                                &timelock_clone,
-                                &escrow_clone,
-                                &channel_clone,
-                                &trustline_clone,
-                                &dimensional_clone,
-                                &marketplace_clone,
-                                &validator_clone,
-                                &block_buffer_clone,
-                                Some(&network_tx_clone),
-                            ).await;
-                        });
-                        
-                        // Request full chain from this peer to check if it's longer
-                        // The status update handler will trigger this, but we can also request here
-                        // For now, just log - the status update will handle requesting the chain
-                    } else {
-                        // Same block, ignore
-                        println!("⏭️  Ignoring duplicate block {} (current height: {})", block.header.height, best_height);
-                    }
-                } else {
-                    // Old block we already have - ignore it
-                    println!("⏭️  Ignoring old block {} (current height: {})", block.header.height, best_height);
-                }
-            }
-            NetworkEvent::TransactionReceived { tx, peer } => {
-                println!("📨 Received transaction {:?} from {:?}", tx.hash(), peer);
-
-                // Validate and add to transaction pool
-                if tx.verify_signature() {
-                    let mut pool = tx_pool.write().await;
-                    match pool.add(tx) {
-                        Ok(hash) => println!("✅ Added transaction {:?} to pool", hash),
-                        Err(e) => println!("❌ Failed to add transaction to pool: {}", e),
-                    }
-                } else {
-                    println!("❌ Invalid transaction signature, rejecting");
-                }
-            }
-            NetworkEvent::PeerConnected(peer) => {
-                println!("🤝 Peer connected: {:?}", peer);
-
-                // Peer count is already updated by network layer (network/src/protocol.rs)
-                // Just update Prometheus metric with current count
-                let count_value = *peer_count.read().await;
-                crate::metrics::PEER_COUNT.set(count_value as i64);
-                
-                // === NODE TYPE MANAGER: Track peer count ===
-                node_manager.on_peer_count_change(count_value).await;
-                
-                // Register peer in capability router (default to Full until we get their status)
-                let peer_id_str = format!("{:?}", peer);
-                capability_router.register_peer(peer_id_str.clone(), crate::node_types::NodeType::Full).await;
-                
-                // === FIX: Track peer in consensus immediately on connect ===
-                // This fixes the bootstrap deadlock where mining waits for StatusUpdate
-                // but StatusUpdate can't be broadcast without peers in gossipsub mesh.
-                // We add the peer with height 0 (unknown) - their real height will be
-                // updated when we receive their StatusUpdate message.
-                peer_consensus.update_peer(peer_id_str, 0, [0u8; 32]).await;
-                println!("   📊 Peer added to consensus tracker (awaiting status update)");
-            }
-            NetworkEvent::PeerDisconnected(peer) => {
-                println!("👋 Peer disconnected: {:?}", peer);
-
-                // Peer count is already updated by network layer (network/src/protocol.rs)
-                // Just update Prometheus metric with current count
-                let count_value = *peer_count.read().await;
-                crate::metrics::PEER_COUNT.set(count_value as i64);
-                
-                // === NODE TYPE MANAGER: Track peer count ===
-                node_manager.on_peer_count_change(count_value).await;
-                
-                // Remove peer from capability router
-                let peer_id_str = format!("{:?}", peer);
-                capability_router.remove_peer(&peer_id_str).await;
-                
-                // === FIX: Mark peer as disconnected in consensus tracker ===
-                peer_consensus.mark_peer_disconnected(&peer_id_str).await;
-            }
-            NetworkEvent::StatusUpdate { peer, best_height, best_hash, genesis_hash: _, node_type } => {
-                let our_height = chain.best_block_height().await;
-                let our_hash = chain.best_block_hash().await;
-
-                // Update best known peer height for sync-before-mine logic
-                {
-                    let mut best_peer = best_known_peer_height.write().await;
-                    if best_height > *best_peer {
-                        *best_peer = best_height;
-                    }
-                }
-                
-                // Update multi-peer consensus tracker
-                let peer_id_str = format!("{:?}", peer);
-                let mut hash_bytes = [0u8; 32];
-                hash_bytes.copy_from_slice(best_hash.as_bytes());
-                peer_consensus.update_peer(peer_id_str.clone(), best_height, hash_bytes).await;
-                
-                // === CAPABILITY ROUTER: Update peer's node type ===
-                // Now we know the peer's actual node type from their status
-                let internal_node_type = match node_type {
-                    coinject_network::NetworkNodeType::Light => crate::node_types::NodeType::Light,
-                    coinject_network::NetworkNodeType::Full => crate::node_types::NodeType::Full,
-                    coinject_network::NetworkNodeType::Archive => crate::node_types::NodeType::Archive,
-                    coinject_network::NetworkNodeType::Validator => crate::node_types::NodeType::Validator,
-                    coinject_network::NetworkNodeType::Bounty => crate::node_types::NodeType::Bounty,
-                    coinject_network::NetworkNodeType::Oracle => crate::node_types::NodeType::Oracle,
-                };
-                capability_router.register_peer(peer_id_str.clone(), internal_node_type).await;
-                
-                let type_emoji = match node_type {
-                    coinject_network::NetworkNodeType::Light => "📱",
-                    coinject_network::NetworkNodeType::Full => "💻",
-                    coinject_network::NetworkNodeType::Archive => "🗄️",
-                    coinject_network::NetworkNodeType::Validator => "⚡",
-                    coinject_network::NetworkNodeType::Bounty => "🎯",
-                    coinject_network::NetworkNodeType::Oracle => "🔮",
-                };
-
-                println!(
-                    "📊 Status update from {:?}: height {} hash={:?} type={}{:?} (ours: {} hash={:?})",
-                    peer, best_height, best_hash, type_emoji, node_type, our_height, our_hash
-                );
-
-                // Check if peer has a longer or different chain
-                if best_height > our_height {
-                    // Peer is ahead - check if we're on a fork first
-                    // Check multiple indicators of a fork:
-                    // 1. If we have peer's best block, check if it connects to our chain
-                    // 2. If we're missing sequential blocks AND have blocks buffered ahead, likely a fork
-                    // 3. If peer is significantly ahead (more than 50 blocks), more likely a fork
-                    let on_fork = {
-                        let mut detected_fork = false;
-                        
-                        // Indicator 1: Check if we have peer's best block and if it connects to our chain
-                        if let Ok(Some(peer_best_block)) = chain.get_block_by_hash(&best_hash) {
-                            // We have the peer's best block - check if it's on our chain
-                            // Walk back from peer's best to see if we can reach our current best
-                            let mut current_hash = best_hash;
-                            let mut current_height = best_height;
-                            let mut found_our_chain = false;
-                            
-                            // Walk back up to our height
-                            while current_height > our_height {
-                                if let Ok(Some(block)) = chain.get_block_by_hash(&current_hash) {
-                                    current_hash = block.header.prev_hash;
-                                    current_height -= 1;
-                                } else {
-                                    break;
-                                }
-                            }
-                            
-                            // If we reached our height, check if it matches our chain
-                            if current_height == our_height {
-                                found_our_chain = (current_hash == our_hash);
-                            }
-                            
-                            detected_fork = !found_our_chain;
-                        }
-                        
-                        // Indicator 2: Check if we're missing sequential blocks AND have blocks buffered ahead
-                        // This is a strong indicator of a fork - we have blocks from the peer's chain
-                        // but can't process them because we're missing blocks in between
-                        if !detected_fork {
-                            let buffer = block_buffer.read().await;
-                            let next_height = our_height + 1;
-                            
-                            // Check if we're missing the next sequential block
-                            let missing_next = !buffer.contains_key(&next_height) && 
-                                             chain.get_block_by_height(next_height).ok().flatten().is_none();
-                            
-                            // Check if we have blocks buffered significantly ahead
-                            let max_buffered = buffer.keys().max().copied().unwrap_or(0);
-                            let has_blocks_ahead = max_buffered > our_height + 10; // At least 10 blocks ahead
-                            
-                            // Check if peer is significantly ahead
-                            let peer_significantly_ahead = (best_height - our_height) > 50;
-                            
-                            // If we're missing sequential blocks, have blocks buffered ahead, and peer is significantly ahead,
-                            // we're likely on a fork - the buffered blocks are from a different chain
-                            if missing_next && has_blocks_ahead && peer_significantly_ahead {
-                                detected_fork = true;
-                                println!("🔍 Fork indicator: Missing block {}, have blocks up to {} buffered, peer at {}", 
-                                    next_height, max_buffered, best_height);
-                            }
-                            drop(buffer);
-                        }
-                        
-                        detected_fork
-                    };
-
-                    if on_fork {
-                        println!("⚠️  Fork detected! Peer is ahead (height {}) and we're on a fork. Requesting chain for reorganization...", best_height);
-                        // Request chain from peer in chunks to avoid timeout
-                        // Use adaptive chunking: larger chunks when far behind
-                        let delta_h = best_height;
-                        let base_chunk = 50u64; // Larger base for fork sync
-                        let lambda = 1.0 / std::f64::consts::SQRT_2;
-                        let adaptive_chunk = ((base_chunk as f64) * (1.0 + (delta_h as f64 * lambda / 100.0)))
-                            .min(100.0) as u64;
-                        
-                        println!("   📦 Using adaptive chunk size: {} (total: {} blocks)", adaptive_chunk, best_height);
-                        
-                        let mut current = 0u64;
-                        while current <= best_height {
-                            let end = std::cmp::min(current + adaptive_chunk - 1, best_height);
-                            if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
-                                peer,
-                                from_height: current,
-                                to_height: end,
-                            }) {
-                                eprintln!("Failed to request chain chunk {}-{}: {}", current, end, e);
-                                break;
-                            }
-                            current = end + 1;
-                        }
-                    } else {
-                        // Normal sync - peer is ahead on same chain
-                        let sync_from = our_height + 1;
-                        let sync_to = best_height;
-
-                        // === EQUILIBRIUM-BALANCED ADAPTIVE CHUNK SIZING ===
-                        // Based on damped harmonic oscillator model: η = λ = 1/√2 ≈ 0.7071
-                        // This achieves critical damping for optimal sync convergence
-                        let delta_h = best_height - our_height;
-                        let base_chunk = 20u64;
-                        let lambda = 1.0 / std::f64::consts::SQRT_2; // ≈ 0.7071
-                        
-                        // Adaptive chunk = base * (1 + delta_h * λ / 10), capped at 100
-                        // Small gap (10 blocks): chunk ≈ 20 * 1.7 = 34
-                        // Medium gap (100 blocks): chunk ≈ 20 * 8 = 100 (capped)
-                        // Large gap (1000 blocks): chunk = 100 (capped for reliability)
-                        let adaptive_chunk = ((base_chunk as f64) * (1.0 + (delta_h as f64 * lambda / 10.0)))
-                            .min(100.0) as u64;
-
-                        println!(
-                            "🔄 Peer is ahead! Requesting blocks {}-{} via RR (Δh: {}, adaptive_chunk: {})",
-                            sync_from, sync_to, delta_h, adaptive_chunk
-                        );
-
-                        // Request missing blocks in adaptive chunks via REQUEST-RESPONSE
-                        // This provides RELIABLE, ORDERED delivery - no GossipSub dedup issues!
-                        let mut current = sync_from;
-                        while current <= sync_to {
-                            let end = std::cmp::min(current + adaptive_chunk - 1, sync_to);
-
-                            // Use request-response for reliable delivery
-                            if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
-                                peer,
-                                from_height: current,
-                                to_height: end,
-                            }) {
-                                eprintln!("Failed to send RequestBlocksRR command: {}", e);
-                                break;
-                            }
-
-                            current = end + 1;
-                        }
-                    }
-                } else if best_height == our_height && best_hash != our_hash {
-                    // Fork detected at same height - check if peer's chain is longer by requesting their chain
-                    println!("⚠️  Fork detected at height {}! Our hash: {:?}, Peer hash: {:?}", 
-                        best_height, our_hash, best_hash);
-                    println!("   Requesting peer's chain in chunks to check for longer fork...");
-                    
-                    // Request blocks in chunks to avoid timeout
-                    let chunk_size = 100u64;
-                    let mut current = 0u64;
-                    while current <= best_height {
-                        let end = std::cmp::min(current + chunk_size - 1, best_height);
-                        if let Err(e) = network_tx.send(NetworkCommand::RequestBlocksRR {
-                            peer,
-                            from_height: current,
-                            to_height: end,
-                        }) {
-                            eprintln!("Failed to request chain chunk {}-{}: {}", current, end, e);
-                            break;
-                        }
-                        current = end + 1;
-                    }
-                    
-                    // Also check if we already have the peer's best block stored
-                    // If so, we can immediately check for reorganization
-                    if let Ok(Some(_peer_best_block)) = chain.get_block_by_hash(&best_hash) {
-                        // We have the peer's best block - check if it's part of a longer chain
-                        // This will be handled after we receive more blocks, but we can check now
-                        let chain_clone = Arc::clone(chain);
-                        let state_clone = Arc::clone(state);
-                        let timelock_clone = Arc::clone(timelock_state);
-                        let escrow_clone = Arc::clone(escrow_state);
-                        let channel_clone = Arc::clone(channel_state);
-                        let trustline_clone = Arc::clone(trustline_state);
-                        let dimensional_clone = Arc::clone(dimensional_pool_state);
-                        let marketplace_clone = Arc::clone(marketplace_state);
-                        let validator_clone = Arc::clone(validator);
-                        
-                        tokio::spawn(async move {
-                            // Attempt reorganization if this forms a longer chain
-                            match Self::attempt_reorganization_if_longer_chain(
-                                best_hash,
-                                best_height,
-                                &chain_clone,
-                                &state_clone,
-                                &timelock_clone,
-                                &escrow_clone,
-                                &channel_clone,
-                                &trustline_clone,
-                                &dimensional_clone,
-                                &marketplace_clone,
-                                &validator_clone,
-                            ).await {
-                                Ok(reorganized) => {
-                                    if reorganized {
-                                        println!("✅ Successfully reorganized to longer chain ending at height {}", best_height);
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("⚠️  Failed to attempt reorganization: {}", e);
-                                }
-                            }
-                        });
-                    }
-                } else if best_height < our_height {
-                    // Peer is behind - they should sync from us (they'll request when they see our status)
-                    // But also check if their chain might be a fork that's actually longer
-                    // by checking if their best hash exists in our chain at that height
-                    if let Ok(Some(block_at_height)) = chain.get_block_by_height(best_height) {
-                        if block_at_height.header.hash() != best_hash {
-                            // Different block at same height - potential fork, but we're ahead so ignore
-                            println!("   Peer is behind and on different fork, ignoring");
-                        }
-                    }
-                }
-            }
-            NetworkEvent::BlocksRequested { peer, from_height, to_height, rr_request_id } => {
-                println!(
-                    "📮 Blocks requested by {:?}: heights {}-{} (rr_id: {:?})",
-                    peer, from_height, to_height, rr_request_id
-                );
-
-                // If this is a request-response request, collect blocks and send response
-                if let Some(request_id) = rr_request_id {
-                    // REQUEST-RESPONSE PATH: Collect blocks and send in one response
-                    // This provides RELIABLE, ORDERED delivery
-                    let mut blocks = Vec::new();
-                    for height in from_height..=to_height {
-                        match chain.get_block_by_height(height) {
-                            Ok(Some(block)) => {
-                                if height <= 20 || height % 100 == 0 {
-                                    println!("   ↳ Serving block {} via RR (hash {:?})", height, block.header.hash());
-                                }
-                                blocks.push(block);
-                            }
-                            Ok(None) => {
-                                if height <= 20 || height % 100 == 0 {
-                                    println!("   ↳ Missing block {} in range {}-{}", height, from_height, to_height);
-                                }
-                                // Continue to collect other blocks
-                            }
-                            Err(e) => {
-                                eprintln!("Error fetching block {}: {}", height, e);
-                                // Send error response
-                                if let Err(e) = network_tx.send(NetworkCommand::SendErrorResponse { 
-                                    request_id, 
-                                    message: format!("Error fetching block {}: {}", height, e) 
-                                }) {
-                                    eprintln!("Failed to send error response: {}", e);
-                                }
-                                return;
-                            }
-                        }
-                    }
-                    
-                    // Send blocks response via request-response
-                    if !blocks.is_empty() {
-                        println!("📤 [RR-SYNC] Sending {} blocks via request-response (id: {})", blocks.len(), request_id);
-                        if let Err(e) = network_tx.send(NetworkCommand::SendBlocksResponse { 
-                            request_id, 
-                            blocks 
-                        }) {
-                            eprintln!("Failed to send blocks response: {}", e);
-                        }
-                    } else {
-                        // No blocks found - send error
-                        if let Err(e) = network_tx.send(NetworkCommand::SendErrorResponse { 
-                            request_id, 
-                            message: format!("No blocks found in range {}-{}", from_height, to_height) 
-                        }) {
-                            eprintln!("Failed to send error response: {}", e);
-                        }
-                    }
-                } else {
-                    // GOSSIPSUB PATH: Legacy - send via broadcast (fallback)
-                    // INSTITUTIONAL-GRADE: Use SyncBlock with unique request_id
-                    // This is CRITICAL - using SendBlockToPeer or BroadcastBlock would be rejected
-                    // as duplicate by gossipsub. The unique request_id ensures delivery.
-                    let base_request_id = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos() as u64;
-                    
-                    let mut sent_count = 0;
-                    for height in from_height..=to_height {
-                        match chain.get_block_by_height(height) {
-                            Ok(Some(block)) => {
-                                // Generate unique request_id: base timestamp + height offset
-                                // This guarantees EVERY sync message has a unique gossipsub message ID
-                                let request_id = base_request_id.wrapping_add(height);
-                                
-                                if height <= 20 || height % 100 == 0 {
-                                    println!(
-                                        "   ↳ Serving sync block {} (hash {:?}) to {:?}",
-                                        height,
-                                        block.header.hash(),
-                                        peer
-                                    );
-                                }
-                                // Use SendSyncBlock with unique request_id - NOT SendBlockToPeer!
-                                if let Err(e) = network_tx.send(NetworkCommand::SendSyncBlock { 
-                                    block, 
-                                    request_id 
-                                }) {
-                                    eprintln!("Failed to send sync block {}: {}", height, e);
-                                    break;
-                                }
-                                sent_count += 1;
-                            }
-                            Ok(None) => {
-                                // Block doesn't exist - log and continue to next block
-                                // Don't break immediately - try to serve other blocks in the range
-                                if height <= 20 || height % 100 == 0 {
-                                    println!(
-                                        "   ↳ Missing requested block {} (first missing in range {}-{}) - continuing to serve other blocks",
-                                        height, from_height, to_height
-                                    );
-                                }
-                                // Continue to next block instead of breaking
-                                // This allows serving blocks that do exist even if some are missing
-                                continue;
-                            }
-                            Err(e) => {
-                                eprintln!("Error fetching block {}: {}", height, e);
-                                break;
-                            }
-                        }
-                    }
-
-                    if sent_count > 0 {
-                        println!("📤 Sent {} sync blocks (unique request_ids) to {:?}", sent_count, peer);
-                    }
-                }
-            }
-            // =========================================================================
-            // LIGHT SYNC PROTOCOL EVENT HANDLERS
-            // =========================================================================
-            NetworkEvent::HeadersRequested { peer, start_height, max_headers, request_id } => {
-                println!("📱 Headers requested by {:?}: from {} (max {})", peer, start_height, max_headers);
-                
-                // Collect headers from our chain
-                let mut headers = Vec::new();
-                for height in start_height..(start_height + max_headers as u64) {
-                    match chain.get_block_by_height(height) {
-                        Ok(Some(block)) => headers.push(block.header.clone()),
-                        Ok(None) => break, // No more blocks
-                        Err(_) => break,
-                    }
-                }
-                
-                if !headers.is_empty() {
-                    if let Err(e) = network_tx.send(NetworkCommand::SendHeaders { headers: headers.clone(), request_id }) {
-                        eprintln!("Failed to send headers: {}", e);
-                    } else {
-                        println!("📤 Sent {} headers to {:?}", headers.len(), peer);
-                    }
-                }
-            }
-            NetworkEvent::HeadersReceived { peer, headers, request_id } => {
-                println!("📱 Received {} headers from {:?} (request_id: {})", headers.len(), peer, request_id);
-                // Light client would process these headers here
-                // For now, just log receipt - the Light client state handles verification
-                crate::metrics::NODE_HEADERS_SYNCED.set(headers.len() as i64);
-            }
-            NetworkEvent::FlyClientProofRequested { peer, security_param, request_id } => {
-                println!("🎭 FlyClient proof requested by {:?} (security: {})", peer, security_param);
-                
-                // Check if this node can serve Light clients
-                if !node_manager.can_serve_light_clients() {
-                    println!("⚠️  Cannot serve FlyClient proofs - not a Full/Archive/Validator node");
-                    return;
-                }
-                
-                // Generate FlyClient proof using the node_manager's LightSyncServer
-                if let Some(proof_bytes) = node_manager.generate_flyclient_proof(security_param as usize).await {
-                    if let Err(e) = network_tx.send(NetworkCommand::SendFlyClientProof {
-                        proof_data: proof_bytes.clone(),
-                        request_id,
-                    }) {
-                        eprintln!("Failed to send FlyClient proof: {}", e);
-                    } else {
-                        println!("📤 Sent FlyClient proof ({} bytes) to {:?}", proof_bytes.len(), peer);
-                        node_manager.on_data_served(proof_bytes.len() as u64).await;
-                    }
-                } else {
-                    eprintln!("Failed to generate FlyClient proof for {:?}", peer);
-                }
-            }
-            NetworkEvent::FlyClientProofReceived { peer, proof_data, request_id } => {
-                println!("🎭 Received FlyClient proof from {:?} ({} bytes, request_id: {})", 
-                    peer, proof_data.len(), request_id);
-                
-                // Deserialize and verify the FlyClient proof
-                match bincode::deserialize::<crate::light_sync::FlyClientProof>(&proof_data) {
-                    Ok(proof) => {
-                        match node_manager.verify_flyclient_proof(&proof).await {
-                            Ok(()) => {
-                                println!("✅ FlyClient proof verified successfully from {:?}", peer);
-                                crate::metrics::NODE_HEADERS_SYNCED.set(proof.tip_header.height as i64);
-                            }
-                            Err(e) => {
-                                eprintln!("❌ FlyClient proof verification failed: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("❌ Failed to deserialize FlyClient proof: {}", e);
-                    }
-                }
-            }
-            NetworkEvent::MMRProofRequested { peer, block_height, request_id } => {
-                println!("🌲 MMR proof requested by {:?} for block {}", peer, block_height);
-                
-                // Check if this node can serve Light clients
-                if !node_manager.can_serve_light_clients() {
-                    println!("⚠️  Cannot serve MMR proofs - not a Full/Archive/Validator node");
-                    return;
-                }
-                
-                // Generate MMR proof using node_manager's LightSyncServer
-                if let Some((header, proof_bytes, mmr_root)) = node_manager.generate_mmr_proof(block_height).await {
-                    if let Err(e) = network_tx.send(NetworkCommand::SendMMRProof {
-                        header: header.clone(),
-                        proof_data: proof_bytes.clone(),
-                        mmr_root,
-                        request_id,
-                    }) {
-                        eprintln!("Failed to send MMR proof: {}", e);
-                    } else {
-                        println!("📤 Sent MMR proof for block {} ({} bytes) to {:?}", 
-                            block_height, proof_bytes.len(), peer);
-                        node_manager.on_data_served(proof_bytes.len() as u64).await;
-                    }
-                } else {
-                    eprintln!("Failed to generate MMR proof for block {} requested by {:?}", block_height, peer);
-                }
-            }
-            NetworkEvent::MMRProofReceived { peer, header, proof_data, mmr_root, request_id } => {
-                println!("🌲 Received MMR proof from {:?} for block {} ({} bytes, request_id: {})", 
-                    peer, header.height, proof_data.len(), request_id);
-                
-                // Deserialize and verify the MMR proof
-                match bincode::deserialize::<crate::light_sync::MMRInclusionProof>(&proof_data) {
-                    Ok(proof) => {
-                        // Verify against the provided MMR root
-                        if proof.verify(&mmr_root) {
-                            println!("✅ MMR proof verified for block {} against mmr_root {:?}", 
-                                header.height, mmr_root);
-                            
-                            // Additional: verify header hash matches proof leaf
-                            if proof.leaf_hash == header.hash() {
-                                println!("✅ Header hash matches proof leaf");
-                            } else {
-                                eprintln!("⚠️  Header hash doesn't match proof leaf");
-                            }
-                        } else {
-                            eprintln!("❌ MMR proof verification failed for block {}", header.height);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("❌ Failed to deserialize MMR proof: {}", e);
-                    }
-                }
-            }
-            NetworkEvent::TxProofRequested { peer, tx_hash, block_height, request_id } => {
-                println!("📄 Tx proof requested by {:?} for {:?} in block {}", peer, tx_hash, block_height);
-                
-                // Generate Merkle proof for transaction inclusion
-                if let Ok(Some(block)) = chain.get_block_by_height(block_height) {
-                    // Build merkle tree and generate path
-                    let merkle_path = build_merkle_proof(&block.transactions, &tx_hash);
-                    
-                    // Get MMR root and total work from node_manager
-                    let mmr_root = node_manager.get_mmr_root().await.unwrap_or(coinject_core::Hash::ZERO);
-                    let total_work = node_manager.get_total_work().await.unwrap_or(0);
-                    
-                    // Send the transaction proof
-                    // Note: We're using SendChainTip as a workaround - in production, 
-                    // there should be a dedicated SendTxProof command
-                    if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
-                        height: block_height,
-                        hash: block.header.hash(),
-                        mmr_root,
-                        total_work,
-                        request_id,
-                    }) {
-                        eprintln!("Failed to send tx proof: {}", e);
-                    } else {
-                        println!("📤 Sent tx proof for {:?} (path length: {}) to {:?}", 
-                            tx_hash, merkle_path.len(), peer);
-                        node_manager.on_data_served((merkle_path.len() * 33) as u64).await;
-                    }
-                } else {
-                    eprintln!("Block {} not found for tx proof request", block_height);
-                }
-            }
-            NetworkEvent::TxProofReceived { peer, tx_hash, merkle_path, block_height, request_id } => {
-                println!("📄 Received tx proof from {:?} for {:?} in block {} (path length: {}, request_id: {})", 
-                    peer, tx_hash, block_height, merkle_path.len(), request_id);
-                
-                // Verify the merkle proof against the block's transactions root
-                // Note: merkle_path from network is Vec<Hash>, but verify_merkle_proof expects Vec<(Hash, bool)>
-                // For now, we log receipt and skip full verification - needs protocol update
-                if let Ok(Some(block)) = chain.get_block_by_height(block_height) {
-                    println!("📋 Transaction {:?} in block {} (merkle root: {:?})", 
-                        tx_hash, block_height, block.header.transactions_root);
-                    // TODO: Fix protocol to include direction flags in merkle_path
-                }
-            }
-            NetworkEvent::ChainTipRequested { peer, request_id } => {
-                println!("📍 Chain tip requested by {:?}", peer);
-                let best_height = chain.best_block_height().await;
-                let best_hash = chain.best_block_hash().await;
-                
-                // Get MMR root and total work from node_manager
-                let mmr_root = node_manager.get_mmr_root().await.unwrap_or(coinject_core::Hash::ZERO);
-                let total_work = node_manager.get_total_work().await.unwrap_or(0);
-                
-                if let Err(e) = network_tx.send(NetworkCommand::SendChainTip {
-                    height: best_height,
-                    hash: best_hash,
-                    mmr_root,
-                    total_work,
-                    request_id,
-                }) {
-                    eprintln!("Failed to send chain tip: {}", e);
-                } else {
-                    println!("📤 Sent chain tip (height: {}, hash: {:?}, mmr_root: {:?}) to {:?}", 
-                        best_height, best_hash, mmr_root, peer);
-                }
-            }
-            NetworkEvent::ChainTipReceived { peer, height, hash, mmr_root, total_work, request_id } => {
-                println!("📍 Received chain tip from {:?}: height={}, hash={:?}, total_work={}, request_id={}", 
-                    peer, height, hash, total_work, request_id);
-                
-                // Light client uses this to determine sync target and verify chain
-                // Update best known peer height if this is higher
-                let mut best_peer = best_known_peer_height.write().await;
-                if height > *best_peer {
-                    *best_peer = height;
-                    println!("📈 Updated best known peer height to {}", height);
-                }
-            }
-        }
-        */
     }
 
     /// Process buffered blocks sequentially

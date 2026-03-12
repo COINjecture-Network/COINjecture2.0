@@ -16,3 +16,4 @@ tokio.workspace = true
 rand.workspace = true
 bincode.workspace = true
 hex.workspace = true
+tracing.workspace = true

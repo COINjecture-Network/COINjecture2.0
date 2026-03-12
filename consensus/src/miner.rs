@@ -23,8 +23,9 @@ const FAILURE_PENALTY_TIME: Duration = Duration::from_secs(60);
 // ============================================================================
 
 /// Mine header by finding nonce that meets difficulty target (blocking)
-/// This is a standalone function to run in spawn_blocking
-fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<(BlockHeader, Hash)> {
+/// This is a standalone function to run in spawn_blocking.
+/// Public so the EpochCoordinator can call it directly.
+pub fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<(BlockHeader, Hash)> {
     let target_prefix = "0".repeat(difficulty as usize);
     let start_time = Instant::now();
     let mut hashes = 0u64;
@@ -63,8 +64,9 @@ fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<(Blo
     None
 }
 
-/// Solve NP-hard problem (blocking) - standalone function for spawn_blocking
-fn solve_problem_blocking(problem: ProblemType) -> Option<(Solution, Duration, usize)> {
+/// Solve NP-hard problem (blocking) - standalone function for spawn_blocking.
+/// Public so the EpochCoordinator can call it directly.
+pub fn solve_problem_blocking(problem: ProblemType) -> Option<(Solution, Duration, usize)> {
     let start_time = Instant::now();
     let mut memory_used = 0;
 
@@ -1188,6 +1190,117 @@ impl Miner {
             println!("Difficulty decreased to {}", self.difficulty);
         }
     }
+}
+
+// =============================================================================
+// Standalone Block Builder (for EpochCoordinator)
+// =============================================================================
+//
+// Builds a valid Block from a pre-solved problem and solution.
+// Used by the coordinator when the winning node needs to produce a block
+// without going through the full Miner pipeline.
+
+/// Build a valid block from a pre-solved problem and solution.
+///
+/// This is the "light path" for coordinator-driven block production:
+/// the problem has already been solved during the Mine phase, so we skip
+/// problem generation and solving, and jump straight to block construction.
+///
+/// The block passes `validate_block_with_options` because it uses the
+/// exact same commitment, header, and nonce mining logic as `mine_block()`.
+pub fn build_block_from_solution(
+    prev_hash: Hash,
+    height: u64,
+    miner_address: Address,
+    problem: ProblemType,
+    solution: Solution,
+    solve_time: Duration,
+    work_score_value: f64,
+    difficulty: u32,
+    transactions: Vec<Transaction>,
+) -> Option<Block> {
+    // Verify solution first
+    if !solution.verify(&problem) {
+        return None;
+    }
+
+    let verify_time = Duration::from_micros(100); // Fast re-verify
+    let solve_memory = 1024 * 1024; // Approximate
+    let verify_memory = 1024;
+
+    // Create commitment (same as miner.rs line 969-972)
+    let epoch_salt = prev_hash;
+    let commitment = Commitment::create(&problem, &solution, &epoch_salt);
+
+    // PoUW metrics (same as miner.rs line 976-984)
+    let solve_time_us = solve_time.as_micros() as u64;
+    let verify_time_us = verify_time.as_micros().max(1) as u64;
+    let time_asymmetry_ratio = solve_time_us as f64 / verify_time_us as f64;
+    let solution_quality = solution.quality(&problem);
+    let complexity_weight = problem.difficulty_weight();
+    let energy_estimate_joules = 100.0 * solve_time.as_secs_f64();
+
+    // Timestamp (same logic as miner.rs line 999-1011)
+    let timestamp = if height == 1 {
+        1735689601i64
+    } else {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    };
+
+    // Merkle root
+    let transactions_root = if transactions.is_empty() {
+        Hash::ZERO
+    } else {
+        let leaves: Vec<Vec<u8>> = transactions
+            .iter()
+            .map(|tx| bincode::serialize(tx).unwrap_or_default())
+            .collect();
+        coinject_core::MerkleTree::new(leaves).root()
+    };
+    let solutions_root = Hash::new(&bincode::serialize(&solution).unwrap_or_default());
+
+    let header = BlockHeader {
+        version: 1, // Standard version for coordinator blocks
+        height,
+        prev_hash,
+        timestamp,
+        transactions_root,
+        solutions_root,
+        commitment: commitment.clone(),
+        work_score: work_score_value,
+        miner: miner_address,
+        nonce: 0,
+        solve_time_us,
+        verify_time_us,
+        time_asymmetry_ratio,
+        solution_quality,
+        complexity_weight,
+        energy_estimate_joules,
+    };
+
+    // Mine header nonce (find hash meeting difficulty target)
+    let (mined_header, _hash) = mine_header_blocking(header, difficulty)?;
+
+    // Block reward
+    let reward_calculator = coinject_tokenomics::RewardCalculator::new();
+    let reward = reward_calculator.calculate_reward(work_score_value);
+    let coinbase = CoinbaseTransaction::new(miner_address, reward, height);
+
+    let solution_reveal = SolutionReveal {
+        problem,
+        solution,
+        commitment,
+    };
+
+    Some(Block {
+        header: mined_header,
+        coinbase,
+        transactions,
+        solution_reveal,
+    })
 }
 
 #[cfg(test)]

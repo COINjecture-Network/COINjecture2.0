@@ -1,6 +1,30 @@
 # Current Issues and Status
 
-Last Updated: 2026-03-05
+Last Updated: 2026-03-12
+
+## Testnet MVP Scope
+
+The following features are in-scope for the current testnet:
+- CPP P2P networking (port 707)
+- PoUW mining with NP-complete problem solving
+- Marketplace (problem submission, solving, autonomous payouts)
+- Dimensional pools (D1, D2, D3)
+- redb ACID-compliant state
+- JSON-RPC API
+- CLI wallet
+- Docker 4-node testnet
+
+The following features are EXPERIMENTAL and not part of the testnet MVP:
+- ADZDB (alternative database backend)
+- Mesh networking
+- Mobile SDK
+- Web wallet
+- HuggingFace integration
+- Light/Oracle/Bounty specialized node types
+- Private marketplace (ZK proofs)
+- Header sync
+
+---
 
 ## Architecture
 
@@ -83,6 +107,28 @@ PeerSelector existed but was never called.
 
 ---
 
+## ✅ Resolved Issues (2026-03-12 Docker Testnet)
+
+### Bug 13: Docker apt mirror unreachable ✅
+`apt-get update` in Docker failed — Fastly CDN (`deb.debian.org`) unreachable from some Docker networks.
+**Fix**: Switched apt sources to `mirrors.kernel.org/debian` in both builder and runtime stages of `Dockerfile`.
+
+### Bug 14: Bootnode DNS hostname resolution ✅
+Docker service name `bootnode:707` failed `SocketAddr::parse()` (expects `IP:port`, not hostname).
+Nodes couldn't connect to bootnodes in Docker Compose.
+**Fix**: Added `tokio::net::lookup_host()` fallback in `node/src/service.rs` (initial connect) and `network/src/cpp/network.rs` (reconnection loop).
+
+### Bug 15: Peer ID collision in Docker ✅
+All 4 containers generated identical peer IDs — `blake3(data_dir + chain_id)` used `/data` (same mount) + same chain_id.
+Bootnode rejected peers as "Peer already connected".
+**Fix**: Changed to `blake3::hash(&rand::random::<[u8; 32]>())` for random per-instance peer IDs in `node/src/service.rs`.
+
+### Service.rs Dead Code Removal ✅
+Removed 1,104 lines of commented-out libp2p code from `node/src/service.rs` (5,557 → 4,453 lines).
+Two dead blocks: commented-out libp2p event handler spawn and dead `handle_network_event` function with `#[allow(dead_code)]`.
+
+---
+
 ## Known Limitations
 
 ### Headers Sync Not Implemented
@@ -114,9 +160,17 @@ curl http://localhost:9091/health  # Health check (node1)
 
 ---
 
-## Test Results (2026-03-05)
+## Test Results
 
-### Integration Tests (8/8 passing)
+### Docker Testnet (2026-03-12) — 4/4 nodes operational
+- All 4 nodes healthy (`/health` endpoints responding)
+- Bootnode mining blocks with PoUW difficulty (`0000` prefix)
+- Block propagation: bootnode → node1, node2, node3
+- Chain convergence across all peers
+- CPP handshake, peer discovery, and reconnection all working
+- Zero errors, zero panics in logs
+
+### Integration Tests (8/8 passing, 2026-03-05)
 - `test_two_node_connect_and_sync` — two nodes connect via TCP handshake
 - `test_block_propagation` — block broadcast from A received by B
 - `test_peer_reconnection` — disconnect + reconnect succeeds
@@ -128,3 +182,4 @@ curl http://localhost:9091/health  # Health check (node1)
 
 ### Build Status
 - `cargo build --release -p coinject-network` — 0 errors, 0 warnings
+- `docker-compose build` — 0 errors (multi-stage build with rust:1.88-slim)
