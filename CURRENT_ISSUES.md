@@ -1,6 +1,6 @@
 # Current Issues and Status
 
-Last Updated: 2026-03-12
+Last Updated: 2026-03-13
 
 ## Testnet MVP Scope
 
@@ -123,9 +123,14 @@ All 4 containers generated identical peer IDs — `blake3(data_dir + chain_id)` 
 Bootnode rejected peers as "Peer already connected".
 **Fix**: Changed to `blake3::hash(&rand::random::<[u8; 32]>())` for random per-instance peer IDs in `node/src/service.rs`.
 
-### Service.rs Dead Code Removal ✅
-Removed 1,104 lines of commented-out libp2p code from `node/src/service.rs` (5,557 → 4,453 lines).
-Two dead blocks: commented-out libp2p event handler spawn and dead `handle_network_event` function with `#[allow(dead_code)]`.
+### Service.rs Dead Code Removal & Decomposition ✅
+Removed 1,104 lines of commented-out libp2p code, then decomposed the monolithic
+`service.rs` (4,467 lines) into `node/src/service/`:
+- `mod.rs` (1,908 lines) — Node struct, lifecycle, startup orchestration
+- `block_processing.rs` (1,084 lines) — Transaction apply/unwind, buffered blocks
+- `fork.rs` (977 lines) — Chain reorganization, fork detection
+- `mining.rs` (428 lines) — PoUW mining loop, marketplace uploads
+- `merkle.rs` (97 lines) — Merkle proof build/verify utilities
 
 ---
 
