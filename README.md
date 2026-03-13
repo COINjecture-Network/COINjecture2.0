@@ -499,8 +499,8 @@ cd COINjecture2.0
 # Build release binaries
 cargo build --release
 
-# Run node with mining
-./target/release/coinject --mine --miner-address <your_hex_address> --cpp-p2p-addr 0.0.0.0:707
+# Run node with mining (replace with your actual miner address, 64 hex characters)
+./target/release/coinject --mine --miner-address 0000000000000000000000000000000000000000000000000000000000000001 --cpp-p2p-addr 0.0.0.0:707
 
 # Run node without mining
 ./target/release/coinject --data-dir ./node_data --rpc-addr 127.0.0.1:9933
@@ -624,7 +624,8 @@ cargo test --all -- --nocapture
 
 4-node Docker testnet fully operational:
 - All 4 nodes healthy and connected (bootnode + 3 peers)
-- PoUW mining producing blocks at ~5s intervals with `0000` hash prefix
+- PoUW mining with `0000` hash prefix (difficulty 4); blocks produced as fast as miners solve problems
+- Target block time is configurable via `--block-time` (default: 60s) with adaptive difficulty adjustment
 - Block propagation working — bootnode mines, all nodes receive and apply
 - Chain convergence across all nodes
 - Zero errors, zero panics
