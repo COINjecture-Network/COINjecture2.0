@@ -443,6 +443,20 @@ impl NodeConfig {
             ));
         }
 
+        // Warn about deprecated libp2p-era flags
+        if self.p2p_addr != "/ip4/0.0.0.0/tcp/30333" {
+            tracing::warn!("--p2p-addr is DEPRECATED (libp2p removed). Use --cpp-p2p-addr instead. This flag is ignored.");
+        }
+        if self.disable_mdns {
+            tracing::warn!("--disable-mdns is DEPRECATED (libp2p removed). mDNS no longer exists. This flag is ignored.");
+        }
+        if self.external_addr.is_some() {
+            tracing::warn!("--external-addr is DEPRECATED (libp2p removed). This flag is ignored in CPP mode.");
+        }
+        if self.allow_private_addrs {
+            tracing::warn!("--allow-private-addrs is DEPRECATED (libp2p removed). This flag is ignored in CPP mode.");
+        }
+
         Ok(())
     }
 }

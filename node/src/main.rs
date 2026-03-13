@@ -55,6 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Display banner with node type info
     print_banner(&config);
 
+    // Log active network mode
+    tracing::info!("Network: CPP protocol on {}", config.cpp_p2p_addr);
+
     // Initialize Prometheus metrics
     metrics::init();
 
