@@ -700,7 +700,12 @@ COINjecture 2.0 (WEB4)
 │
 ├── node/               # Full node binary
 │   ├── main.rs        # Entry point
-│   ├── service.rs     # Node orchestration
+│   ├── service/       # Node orchestration (decomposed)
+│   │   ├── mod.rs             # Node struct, lifecycle, startup
+│   │   ├── block_processing.rs # Transaction apply/unwind
+│   │   ├── fork.rs            # Chain reorganization, fork detection
+│   │   ├── mining.rs          # PoUW mining loop
+│   │   └── merkle.rs          # Merkle proof utilities
 │   ├── chain.rs       # Block storage (redb)
 │   └── validator.rs   # Block/transaction validation
 │
