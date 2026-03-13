@@ -30,7 +30,7 @@ export default function Whitepaper() {
               </Button>
               <Button size="lg" variant="outline" className="gap-2">
                 <Github className="h-4 w-4" />
-                <a href="https://github.com/beanapologist/coinjecture" target="_blank" rel="noopener noreferrer">
+                <a href="https://github.com/Quigles1337/COINjecture2.0" target="_blank" rel="noopener noreferrer">
                   View on GitHub
                 </a>
               </Button>
@@ -56,7 +56,7 @@ export default function Whitepaper() {
             <h2 className="text-2xl font-bold mb-4">Code Base</h2>
             <div className="space-y-3">
               <a 
-                href="https://github.com/beanapologist/coinjecture" 
+                href="https://github.com/Quigles1337/COINjecture2.0" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors group"
@@ -68,7 +68,7 @@ export default function Whitepaper() {
                 <ExternalLink className="h-4 w-4 text-muted-foreground" />
               </a>
               <a 
-                href="https://gitlab.com/beanapologist/coinjecture" 
+                href="https://gitlab.com/Quigles1337/COINjecture2.0" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors group"
@@ -80,7 +80,7 @@ export default function Whitepaper() {
                 <ExternalLink className="h-4 w-4 text-muted-foreground" />
               </a>
               <a 
-                href="https://codeberg.org/beanapologist/COINjecture" 
+                href="https://codeberg.org/Quigles1337/COINjecture2.0" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors group"

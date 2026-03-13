@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org/)
 [![Database](https://img.shields.io/badge/Database-redb%202.1-green)](https://crates.io/crates/redb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/Quigles1337/COINjecture2.0)
+[![Build Status](https://img.shields.io/badge/build-manual%20verification-blue.svg)](https://github.com/Quigles1337/COINjecture2.0)
 
 *Proof of Useful Work (PoUW) blockchain with autonomous NP-complete problem marketplace*
 

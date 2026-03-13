@@ -21,7 +21,7 @@ members = [
 authors = ["Quigles1337 <adz@alphx.io>"]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/beanapologist/coinjecture"
+repository = "https://github.com/Quigles1337/COINjecture2.0"
 version = "4.8.4"
 
 [workspace.dependencies]

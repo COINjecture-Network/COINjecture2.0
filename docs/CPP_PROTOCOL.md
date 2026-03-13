@@ -401,6 +401,6 @@ ws.onmessage = (event) => {
 ## Contact
 
 For questions or contributions, see:
-- **Repository**: https://github.com/beanapologist/COINjecture-NetB-Updates
-- **Branch**: `feature/cpp-protocol`
+- **Repository**: https://github.com/Quigles1337/COINjecture2.0
+- **Branch**: `remove-libp2p`
 - **Documentation**: `/docs/CPP_PROTOCOL.md`

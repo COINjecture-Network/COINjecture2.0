@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["COINjecture Team"]
 description = "Append-only Deterministic Zero-copy Database for blockchain"
 license = "MIT"
-repository = "https://github.com/beanapologist/COINjecture-NetB-Updates"
+repository = "https://github.com/Quigles1337/COINjecture2.0"
 
 [dependencies]
 # None needed - pure Rust implementation using std::fs
