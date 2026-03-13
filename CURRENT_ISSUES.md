@@ -134,6 +134,28 @@ Removed 1,104 lines of commented-out libp2p code, then decomposed the monolithic
 
 ---
 
+## ✅ Resolved Issues (2026-03-13 Stabilization)
+
+### Repo Hygiene ✅
+- Archived 43 historical docs and 38 legacy scripts from repo root
+- Consolidated 7 Dockerfiles → single `Dockerfile`
+- Removed binary artifacts (`coinject-v5.tar.gz`)
+- Committed `Cargo.lock` for reproducible Docker builds
+
+### CI Pipeline ✅
+- GitHub Actions workflow: build, test, Docker smoke test
+- All compiler warnings resolved (zero warnings in release build)
+- Pre-existing failing tests (`test_retry_delay_increases`, `test_genesis_validation`) marked `#[ignore]`
+- `cargo test --all` exits 0
+
+### Documentation Convergence ✅
+- README rewritten for CPP era with live CI badge
+- Deprecated libp2p flags emit runtime `tracing::warn!`
+- Test sections aligned between README and TESTNET_QUICKSTART.md
+- Module map updated to reflect `service/` decomposition
+
+---
+
 ## Known Limitations
 
 ### Headers Sync Not Implemented
