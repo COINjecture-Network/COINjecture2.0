@@ -1,4 +1,9 @@
-# EXPERIMENTAL: Mesh networking compose file. Use docker-compose.yml for standard testnet.
+# =============================================================================
+# EXPERIMENTAL — Mesh networking is NOT part of the testnet MVP.
+# This compose file may not work without additional setup.
+# For the standard testnet, use: docker-compose.yml
+# =============================================================================
+#
 # COINjecture Mesh Network — Docker Smoke Test
 # Spins up 3 mesh nodes and verifies they form a full mesh
 #
@@ -11,7 +16,7 @@ services:
   seed:
     build:
       context: .
-      dockerfile: Dockerfile.mesh
+      dockerfile: docker/archive/Dockerfile.mesh
     container_name: mesh-seed
     command: ["--listen", "0.0.0.0:9000"]
     environment:
@@ -30,7 +35,7 @@ services:
   node1:
     build:
       context: .
-      dockerfile: Dockerfile.mesh
+      dockerfile: docker/archive/Dockerfile.mesh
     container_name: mesh-node1
     command: ["--listen", "0.0.0.0:9000", "--seed", "seed:9000"]
     environment:
@@ -46,7 +51,7 @@ services:
   node2:
     build:
       context: .
-      dockerfile: Dockerfile.mesh
+      dockerfile: docker/archive/Dockerfile.mesh
     container_name: mesh-node2
     command: ["--listen", "0.0.0.0:9000", "--seed", "seed:9000"]
     environment:
