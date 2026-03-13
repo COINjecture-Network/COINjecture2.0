@@ -108,14 +108,20 @@ curl http://localhost:9090/metrics
 
 ---
 
-## Run Integration Tests
+## Run Tests
 
 ```bash
-# All network tests
+# All workspace tests
+cargo test --all
+
+# Network integration tests (8/8 passing)
 cargo test -p coinject-network -- --test-threads=1
 
-# Just the testnet integration tests
-cargo test --test testnet_integration -- --test-threads=1
+# Testnet integration tests specifically
+cargo test -p coinject-network --test testnet_integration -- --test-threads=1
+
+# Node config tests
+cargo test -p coinject-node
 ```
 
 ---
