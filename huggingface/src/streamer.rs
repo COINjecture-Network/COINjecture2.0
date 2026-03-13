@@ -157,7 +157,7 @@ pub struct ReorgEventRecord {
 
 /// Pending block awaiting k-confirmations
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PendingBlock {
+pub(crate) struct PendingBlock {
     block_hash: String,
     prev_hash: String,
     height: u64,
@@ -262,7 +262,7 @@ impl StreamerState {
     }
 
     /// Add pending block with ring buffer bounds and TTL
-    pub fn add_pending_block(&mut self, block: PendingBlock) {
+    pub(crate) fn add_pending_block(&mut self, block: PendingBlock) {
         // Enforce ring buffer limit
         while self.pending_blocks.len() >= MAX_PENDING_BLOCKS {
             if let Some(evicted) = self.pending_blocks.pop_front() {

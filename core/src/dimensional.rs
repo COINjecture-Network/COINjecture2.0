@@ -421,7 +421,7 @@ mod tests {
 
         // At τ=√2: |ψ(√2)| = e^(-1) ≈ 0.368
         let state_tau_c = ConsensusState::at_tau(TAU_C);
-        assert!((state_tau_c.magnitude - (1.0 / E)).abs() < 0.001);
+        assert!((state_tau_c.magnitude - (1.0 / std::f64::consts::E)).abs() < 0.001);
     }
 
     #[test]

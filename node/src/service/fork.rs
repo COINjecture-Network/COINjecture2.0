@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 
 use super::*;
-use coinject_consensus::work_score::WorkScoreCalculator;
 
 impl CoinjectNode {
     /// Check for chain reorganization opportunities
@@ -56,7 +55,7 @@ impl CoinjectNode {
                 
                 // Use find_common_ancestor to properly detect if this is a fork from earlier
                 match chain.find_common_ancestor(&highest_hash, max_buffered_height).await {
-                    Ok(Some((common_hash, common_height))) => {
+                    Ok(Some((_common_hash, common_height))) => {
                         if common_height < current_best_height {
                             // This buffered chain forks from before our current best - it's a reorganization candidate
                             println!("🔍 Reorganization check: Buffered chain (height {}) forks at common ancestor height {}", 
@@ -370,7 +369,7 @@ impl CoinjectNode {
             // Check if this chain has no common ancestor (complete fork)
             // If so, we need to validate from genesis
             match chain.find_common_ancestor(&max_stored_hash, max_stored_height).await {
-                Ok(Some((common_hash, common_height))) => {
+                Ok(Some((_common_hash, common_height))) => {
                     println!("   Found common ancestor at height {}", common_height);
                     // Normal reorganization with common ancestor
                 }
@@ -905,7 +904,7 @@ impl CoinjectNode {
         trustline_state: &Arc<TrustLineState>,
         dimensional_pool_state: &Arc<DimensionalPoolState>,
         marketplace_state: &Arc<MarketplaceState>,
-        validator: &Arc<BlockValidator>,
+        _validator: &Arc<BlockValidator>,
     ) -> Result<(), String> {
         println!("🔄 Starting complete reorganization from genesis: unwinding {} blocks, applying {} blocks",
             old_chain_blocks.len(), new_chain_blocks.len());

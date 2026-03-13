@@ -325,7 +325,7 @@ impl CoinjectNode {
         _block_height: u64,
     ) -> Result<(), String> {
         use coinject_core::{EscrowType, ChannelType};
-        use coinject_state::{EscrowStatus, ChannelStatus};
+        use coinject_state::EscrowStatus;
 
         match tx {
             coinject_core::Transaction::Transfer(transfer_tx) => {
@@ -433,7 +433,7 @@ impl CoinjectNode {
 
             coinject_core::Transaction::Channel(channel_tx) => {
                 match &channel_tx.channel_type {
-                    ChannelType::Open { participant_a, participant_b, deposit_a, deposit_b, .. } => {
+                    ChannelType::Open { participant_a, deposit_a, deposit_b, .. } => {
                         // Reverse: credit initiator, remove channel, decrement nonce
                         let initiator_deposit = if &channel_tx.from == participant_a { *deposit_a } else { *deposit_b };
                         let initiator_balance = state.get_balance(&channel_tx.from);
@@ -566,17 +566,17 @@ impl CoinjectNode {
                         // Remove problem - would need problem_id
                         println!("⚠️  Warning: Problem removal requires problem_id tracking");
                     }
-                    MarketplaceOperation::SubmitSolution { problem_id, .. } => {
+                    MarketplaceOperation::SubmitSolution { .. } => {
                         // Reverse: remove solution, potentially reverse auto-payout
                         // This is complex - we'd need to track if bounty was paid
                         println!("⚠️  Warning: Solution reversal is approximate");
                     }
-                    MarketplaceOperation::ClaimBounty { problem_id } => {
+                    MarketplaceOperation::ClaimBounty { .. } => {
                         // Reverse: debit solver, restore bounty to escrow
                         // Would need to track who received the bounty
                         println!("⚠️  Warning: Bounty claim reversal requires tracking");
                     }
-                    MarketplaceOperation::CancelProblem { problem_id } => {
+                    MarketplaceOperation::CancelProblem { .. } => {
                         // Reverse: debit refund, restore problem
                         // Would need to track refund amount
                         println!("⚠️  Warning: Problem cancellation reversal requires tracking");

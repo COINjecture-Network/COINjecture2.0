@@ -1225,8 +1225,8 @@ pub fn build_block_from_solution(
     }
 
     let verify_time = Duration::from_micros(100); // Fast re-verify
-    let solve_memory = 1024 * 1024; // Approximate
-    let verify_memory = 1024;
+    let _solve_memory = 1024 * 1024; // Approximate
+    let _verify_memory = 1024;
 
     // Create commitment (same as miner.rs line 969-972)
     let epoch_salt = prev_hash;

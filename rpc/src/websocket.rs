@@ -474,7 +474,7 @@ impl WebSocketRpc {
         });
         
         // Spawn task to send messages to client
-        let clients_clone = clients.clone();
+        let _clients_clone = clients.clone();
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 if ws_sender.send(msg).await.is_err() {
@@ -667,7 +667,7 @@ impl WebSocketRpc {
                 }))
             }
             
-            RpcMessage::SubmitTransaction { transaction } => {
+            RpcMessage::SubmitTransaction { transaction: _transaction } => {
                 // TODO: Parse and submit transaction
                 Ok(Some(RpcMessage::Error {
                     code: 400,

@@ -422,7 +422,7 @@ impl HuggingFaceClient {
             let mut total_count = 0;
             
             // Collect all records from all buffers
-            for (problem_type, buffer) in &self.buffers {
+            for (_problem_type, buffer) in &self.buffers {
                 total_count += buffer.len();
                 for record in buffer {
                     all_records.push(record.clone());

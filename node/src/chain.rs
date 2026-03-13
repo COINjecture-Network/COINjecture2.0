@@ -1,5 +1,6 @@
 // Chain State Manager
 // Block storage, best chain tracking, and chain reorganization
+#![allow(dead_code)]
 
 use coinject_core::{Block, BlockHeader, Hash};
 use redb::{Database, TableDefinition};
@@ -499,11 +500,11 @@ impl ChainState {
     /// Reorganize chain to a new best block
     /// Returns (old_chain_blocks, new_chain_blocks) for state unwinding/reapplying
     pub async fn prepare_reorganization(&self, new_best_hash: &Hash, new_best_height: u64) -> Result<(Vec<Block>, Vec<Block>), ChainError> {
-        let current_best_hash = self.best_block_hash().await;
+        let _current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
 
         // Find common ancestor
-        let (common_hash, common_height) = match self.find_common_ancestor(new_best_hash, new_best_height).await? {
+        let (_common_hash, common_height) = match self.find_common_ancestor(new_best_hash, new_best_height).await? {
             Some((hash, height)) => (hash, height),
             None => {
                 // No common ancestor found, can't reorganize

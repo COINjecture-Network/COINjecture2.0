@@ -81,6 +81,7 @@ impl ValidatorKey {
     }
 
     /// Get the signing key
+    #[allow(dead_code)]
     pub fn signing_key(&self) -> Result<SigningKey, String> {
         Ok(SigningKey::from_bytes(&self.secret_key))
     }
@@ -120,6 +121,7 @@ impl ValidatorKeystore {
     }
 
     /// Import validator key from hex private key
+    #[allow(dead_code)]
     pub fn import_key(&self, secret_key_hex: &str) -> Result<ValidatorKey, String> {
         let secret_bytes = hex::decode(secret_key_hex)
             .map_err(|e| format!("Invalid hex: {}", e))?;
@@ -155,6 +157,7 @@ impl ValidatorKeystore {
     }
 
     /// Export validator private key (hex)
+    #[allow(dead_code)]
     pub fn export_key(&self) -> Result<String, String> {
         let key = ValidatorKey::load(&self.key_file)?;
         Ok(hex::encode(key.secret_key))

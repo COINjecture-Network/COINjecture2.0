@@ -1,5 +1,6 @@
 // Testnet Faucet
 // Rate-limited token distribution for testing
+#![allow(dead_code)]
 
 use coinject_core::Address;
 use std::collections::HashMap;

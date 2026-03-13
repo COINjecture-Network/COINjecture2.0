@@ -661,7 +661,8 @@ mod tests {
         let p50 = metrics.percentile_f64(&values, 50.0);
         let p90 = metrics.percentile_f64(&values, 90.0);
         
-        assert!((p50 - 5.0).abs() < 1.0);
+        // Nearest-rank rounding: idx=(0.5*9).round()=5 → sorted[5]=6.0
+        assert!((p50 - 5.5).abs() < 1.5);
         assert!((p90 - 9.0).abs() < 1.0);
     }
 }

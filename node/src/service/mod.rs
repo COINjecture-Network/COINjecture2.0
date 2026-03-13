@@ -17,7 +17,7 @@ use crate::chain_adzdb::{AdzdbChainState as ChainState, ChainBlockProvider};
 use crate::config::NodeConfig;
 use crate::faucet::{Faucet, FaucetConfig};
 use crate::genesis::{create_genesis_block, GenesisConfig};
-use crate::peer_consensus::{PeerConsensus, ConsensusConfig};
+use crate::peer_consensus::PeerConsensus;
 use crate::validator::BlockValidator;
 use coinject_consensus::{Miner, MiningConfig};
 use coinject_core::Address;
@@ -51,7 +51,7 @@ pub fn get_debug_log_path() -> std::path::PathBuf {
 
 /// Commands that can be sent to the network task
 #[derive(Debug)]
-enum NetworkCommand {
+pub(crate) enum NetworkCommand {
     /// Broadcast newly mined block to all peers
     BroadcastBlock(coinject_core::Block),
     /// Send historical block for sync with unique request_id (bypasses gossipsub dedup)
@@ -470,7 +470,7 @@ impl CoinjectNode {
         // Create faucet handler if faucet is enabled
         let faucet_handler = self.faucet.as_ref().map(|faucet| {
             let faucet_clone = Arc::clone(faucet);
-            let state_clone = Arc::clone(&self.state);
+            let _state_clone = Arc::clone(&self.state);
             Arc::new(move |addr: &Address| -> Result<u128, String> {
                 faucet_clone.request_tokens(addr).map_err(|e| e.to_string())
             }) as coinject_rpc::FaucetHandler
@@ -786,7 +786,7 @@ impl CoinjectNode {
         tokio::spawn(async move {
             while let Some(event) = cpp_network_event_rx.recv().await {
                 match event {
-                    CppNetworkEvent::BlockReceived { block, peer_id } => {
+                    CppNetworkEvent::BlockReceived { block, peer_id: _peer_id } => {
                         // Log block with version info (P2P.F: Prove the F)
                         let version_info = config_clone.version_info(block.header.version);
                         println!("[BLOCK] Received block height={} {} hash={:?}",
@@ -1118,7 +1118,7 @@ impl CoinjectNode {
                         let peer_id_str = hex::encode(peer_id);
                         peer_consensus_clone.mark_peer_disconnected(&peer_id_str).await;
                     }
-                    CppNetworkEvent::StatusUpdate { peer_id, best_height, best_hash, node_type } => {
+                    CppNetworkEvent::StatusUpdate { peer_id, best_height, best_hash, node_type: _node_type } => {
                         println!("📡 [CPP] Status update from peer {:?}: height {}, hash {:?}",
                             hex::encode(peer_id), best_height, best_hash);
 
@@ -1215,8 +1215,8 @@ impl CoinjectNode {
                     });
 
                     // Forward mined blocks to mesh (clone of bridge_cmd_tx for mining)
-                    let bridge_cmd_tx_for_mining = bridge_cmd_tx.clone();
-                    let bridge_cmd_tx_for_events = bridge_cmd_tx.clone();
+                    let _bridge_cmd_tx_for_mining = bridge_cmd_tx.clone();
+                    let _bridge_cmd_tx_for_events = bridge_cmd_tx.clone();
 
                     // ── Epoch Coordinator (optional, alongside mesh) ─────
                     // Create coordinator channels
@@ -1241,7 +1241,7 @@ impl CoinjectNode {
                     tracing::info!("epoch coordinator started");
 
                     // Clone coordinator command sender for the bridge event handler
-                    let coord_cmd_for_bridge = coord_cmd_tx.clone();
+                    let _coord_cmd_for_bridge = coord_cmd_tx.clone();
 
                     // Spawn coordinator event handler — translates coordinator events
                     // into bridge commands (outbound consensus messages)
@@ -1638,7 +1638,7 @@ impl CoinjectNode {
 
         // Spawn periodic metrics update task
         let chain_for_metrics = Arc::clone(&self.chain);
-        let state_for_metrics = Arc::clone(&self.state);
+        let _state_for_metrics = Arc::clone(&self.state);
         let dimensional_pool_state_for_metrics = Arc::clone(&self.dimensional_pool_state);
         let tx_pool_for_metrics = Arc::clone(&self.tx_pool);
         let node_classification_for_metrics = Arc::clone(&self.node_classification);

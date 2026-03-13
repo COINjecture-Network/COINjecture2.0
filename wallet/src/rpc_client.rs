@@ -18,6 +18,7 @@ struct JsonRpcRequest {
 
 /// JSON-RPC response structure
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct JsonRpcResponse<T> {
     jsonrpc: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,6 +144,7 @@ impl RpcClient {
     }
 
     /// Get block header by height
+    #[allow(dead_code)]
     pub async fn get_block_header(&self, height: u64) -> Result<Option<BlockHeader>> {
         self.call("chain_getBlockHeader", json!([height])).await
     }

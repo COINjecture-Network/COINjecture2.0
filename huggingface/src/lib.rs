@@ -33,7 +33,7 @@ struct PendingBlock {
     block: Block,
     is_mined: bool,
     network_ctx: Option<NetworkContext>,
-    received_at_height: u64,
+    _received_at_height: u64,
 }
 
 /// Main Hugging Face sync service
@@ -206,7 +206,7 @@ impl HuggingFaceSync {
                     block: block.clone(),
                     is_mined,
                     network_ctx: network_ctx.clone(),
-                    received_at_height: block_height,
+                    _received_at_height: block_height,
                 });
                 eprintln!("📦 Hugging Face: Block {} added to pending buffer (k={} confirmations required, {} pending)",
                     block_height, k, pending.len());

@@ -442,7 +442,7 @@ impl MetricsCollector {
         let solve_time_us = block.header.solve_time_us;
         let verify_time_us = block.header.verify_time_us;
         let solve_time = Duration::from_micros(solve_time_us);
-        let verify_time = Duration::from_micros(verify_time_us);
+        let _verify_time = Duration::from_micros(verify_time_us);
         let time_asymmetry = block.header.time_asymmetry_ratio;
 
         // ═══════════════════════════════════════════════════════════════════════════

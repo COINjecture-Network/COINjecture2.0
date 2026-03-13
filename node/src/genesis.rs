@@ -1,5 +1,6 @@
 // Genesis Block Creation
 // Hard-coded initial blockchain state
+#![allow(dead_code)]
 
 use coinject_core::{
     Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, ProblemType, Solution,

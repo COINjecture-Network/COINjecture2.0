@@ -717,7 +717,7 @@ impl NodeTypeManager {
     }
 
     /// Handle status request
-    async fn handle_status_request(&self, msg: &NodeMessage) -> Option<NodeMessage> {
+    async fn handle_status_request(&self, _msg: &NodeMessage) -> Option<NodeMessage> {
         let status = self.get_status().await;
         let payload = bincode::serialize(&status).ok()?;
         
