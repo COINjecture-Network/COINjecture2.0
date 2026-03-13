@@ -529,8 +529,19 @@ curl -X POST http://localhost:9933 -H "Content-Type: application/json" -d '{
 ### Run Tests
 
 ```bash
+# Run all workspace tests
 cargo test --all
+
+# Network integration tests (CPP protocol, block propagation, peer reconnection)
+cargo test -p coinject-network
+
+# Node configuration tests
+cargo test -p coinject-node
+
+# Marketplace state tests
 cargo test -p coinject-state marketplace
+
+# Verbose output
 cargo test --all -- --nocapture
 ```
 
