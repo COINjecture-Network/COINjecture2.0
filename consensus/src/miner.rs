@@ -385,22 +385,20 @@ impl Miner {
             adjuster.set_metrics(Arc::clone(&network_metrics));
         }
 
-        // Update work calculator with network metrics
-        self.work_calculator.set_metrics(network_metrics);
+        // WorkScoreCalculator is stateless (bit-equivalent formula needs no network state)
     }
 
     /// Set problem registry for extensible problem-type parameters.
     /// The registry provides scaling exponents, size ratios, and limits
     /// so that new problem types require zero changes to consensus code.
+    /// Note: WorkScoreCalculator does not need the registry — its formula
+    /// (log₂ time asymmetry × quality) is problem-type agnostic.
     pub async fn set_registry(&mut self, registry: SharedRegistry) {
         // Update difficulty adjuster with registry
         {
             let mut adjuster = self.difficulty_adjuster.write().await;
             adjuster.set_registry(registry.clone());
         }
-
-        // Update work calculator with registry
-        self.work_calculator.set_registry(registry);
     }
 
     /// Generate a deterministic NP-hard problem for mining
@@ -966,17 +964,14 @@ impl Miner {
             return None;
         }
         let verify_time = verify_start.elapsed();
-        let verify_memory = 1024; // Approximate verification memory
+        let _verify_memory = 1024; // No longer used in work score (self-reported, not verifiable)
 
-        // 4. Calculate work score
-        let work_score = self.work_calculator.calculate(
+        // 4. Calculate work score (bit-equivalent: log₂(solve_time / verify_time) × quality)
+        let work_score = self.work_calculator.calculate_from_solution(
             &problem,
             &solution,
             solve_time,
             verify_time,
-            solve_memory,
-            verify_memory,
-            0.001, // Energy per operation
         );
         println!("Work score: {}", work_score);
 

@@ -108,8 +108,9 @@ impl DifficultyAdjuster {
             // Optimal = median_block_time * η (mathematical scaling)
             metrics.median_block_time() * ETA
         } else {
-            // Seeded target solve time ≈ TARGET_BLOCK_TIME / (√2 + 1)
-            // where TARGET_BLOCK_TIME = 10√2 ≈ 14.14s. Refined after bootstrap.
+            // Seeded target solve time ≈ block_time / 2
+            // where block_time = 10s (engineering choice). Refined after bootstrap.
+            // See docs/BOOTSTRAP.md for rationale.
             5.0
         }
     }

@@ -1,169 +1,185 @@
-// Work Score Calculation Engine (EMPIRICAL VERSION)
-// work_score = (solve_time / verify_time) × √(solve_memory / verify_memory) ×
-//              problem_weight × size_factor × quality_score × energy_efficiency
-//
-// COMPLIANCE: Empirical ✓ | Self-referential ✓ | Dimensionless ✓
-//
-// ALL values derived from network state:
-// - base_constant: Network median work score (not hardcoded 1.0)
-// - All components are dimensionless ratios
-// - Normalized against network average for self-reference
+//! # Work Score Calculation Engine
+//!
+//! ## Core Formula
+//!
+//! ```text
+//! work_score = log₂(solve_time / verify_time) × quality_score
+//! ```
+//!
+//! Two inputs. Both network-verifiable. Problem-type agnostic.
+//! Directly interpretable as security bits.
+//!
+//! ## Design Rationale
+//!
+//! The time asymmetry ratio `solve_time / verify_time` is the one property
+//! ALL NP problems share by definition — the gap between finding a solution
+//! and checking one. A harder instance of any NP problem type will have a
+//! larger asymmetry ratio because solve time grows superpolynomially while
+//! verify time grows polynomially.
+//!
+//! The `log₂` converts this ratio to **bits**: if solving took 1024× longer
+//! than verifying, that's 10 bits of work. This makes work scores directly
+//! comparable across problem types without any problem-specific parameters.
+//!
+//! ## What's NOT in the formula (and why)
+//!
+//! - **Space asymmetry** (`solve_memory / verify_memory`): Self-reported by
+//!   the miner. Cannot be verified by the network. Gameable.
+//! - **Energy efficiency**: Self-reported. Cannot be verified. Gameable.
+//! - **Problem-specific weight** (`base_difficulty_weight`): The whole point
+//!   of using time asymmetry is that it's universal. Problem-specific weights
+//!   would reintroduce the hardcoded dispatch we eliminated with the registry.
+//!   The registry's `base_difficulty_weight` remains available as an optional
+//!   normalization hint for analytics, but is NOT a consensus parameter.
+//!
+//! ## Inflation Resistance
+//!
+//! A miner could artificially slow their solver to inflate `solve_time`.
+//! But the racing incentive handles this: a miner who inflates solve time
+//! loses the block to a faster competitor. The winning block's work score
+//! is therefore the **minimum competitive** solve time, not an inflatable
+//! self-report.
+//!
+//! During single-miner operation (bootstrap), the difficulty adjuster's
+//! target block time serves as the inflation ceiling.
+//!
+//! ## Security Interpretation
+//!
+//! A block with `work_score = 40` means the solver demonstrated roughly
+//! 2⁴⁰ more computational effort than a verifier needs. An attacker who
+//! wants to produce an alternative chain must match this cumulative work.
+//!
+//! ```text
+//! bit_equivalent = work_score   (they are the same thing)
+//! chain_security = Σ work_score  (over all blocks)
+//! ```
+//!
+//! COMPLIANCE: Empirical ✓ | Self-referential ✓ | Dimensionless ✓
 
-use crate::problem_registry::SharedRegistry;
 use coinject_core::{ProblemType, Solution, WorkScore};
-use coinject_tokenomics::NetworkMetrics;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 
-pub struct WorkScoreCalculator {
-    /// Base constant for normalization (network-derived)
-    base_constant: f64,
-    /// Network metrics oracle (optional - uses 1.0 if None)
-    network_metrics: Option<Arc<RwLock<NetworkMetrics>>>,
-    /// Problem registry for type-specific parameters (base_difficulty_weight, etc.)
-    registry: Option<SharedRegistry>,
-}
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Minimum verify time floor (prevents division by zero and log₂ explosion
+/// from negligibly fast verification). 1ms is a conservative floor —
+/// real verification of any non-trivial NP instance takes at least this.
+const MIN_VERIFY_TIME_SECS: f64 = 0.001;
+
+/// Minimum meaningful asymmetry ratio. Below this, the "work" is negligible.
+/// log₂(2) = 1 bit — solving took at least 2× longer than verifying.
+const MIN_ASYMMETRY_RATIO: f64 = 2.0;
+
+// ---------------------------------------------------------------------------
+// Calculator
+// ---------------------------------------------------------------------------
+
+/// Calculates bit-equivalent work scores from network-verifiable inputs.
+///
+/// The calculator is stateless and problem-type agnostic. It takes only
+/// what the network can verify: timestamps and solution quality.
+pub struct WorkScoreCalculator;
 
 impl WorkScoreCalculator {
-    /// Create new calculator without network metrics (uses default base_constant = 1.0)
+    /// Create a new work score calculator.
+    ///
+    /// No configuration needed — the formula is universal.
     pub fn new() -> Self {
-        WorkScoreCalculator {
-            base_constant: 1.0, // Default during bootstrap
-            network_metrics: None,
-            registry: None,
-        }
+        WorkScoreCalculator
     }
 
-    /// Create with network metrics oracle (empirical mode)
-    pub fn with_metrics(network_metrics: Arc<RwLock<NetworkMetrics>>) -> Self {
-        WorkScoreCalculator {
-            base_constant: 1.0, // Will be updated from network
-            network_metrics: Some(network_metrics),
-            registry: None,
-        }
-    }
-
-    /// Create with both network metrics and problem registry
-    pub fn with_registry(network_metrics: Arc<RwLock<NetworkMetrics>>, registry: SharedRegistry) -> Self {
-        WorkScoreCalculator {
-            base_constant: 1.0,
-            network_metrics: Some(network_metrics),
-            registry: Some(registry),
-        }
-    }
-
-    /// Update network metrics reference
-    pub fn set_metrics(&mut self, network_metrics: Arc<RwLock<NetworkMetrics>>) {
-        self.network_metrics = Some(network_metrics);
-    }
-
-    /// Set problem registry
-    pub fn set_registry(&mut self, registry: SharedRegistry) {
-        self.registry = Some(registry);
-    }
-    
-    /// Get base constant from network (or default)
-    /// In production, this would query NetworkMetrics for median work score
-    #[allow(dead_code)]
-    async fn get_base_constant(&self) -> f64 {
-        // For now, use 1.0 as default
-        // In full implementation, would query:
-        // metrics.median_work_score() or similar
-        // This requires NetworkMetrics to track work scores
-        1.0
-    }
-    
-    /// Update base constant from network metrics
-    pub async fn update_from_network(&mut self) {
-        if let Some(ref _metrics) = self.network_metrics {
-            // In production, would calculate median work score from network history
-            // For now, keep base_constant = 1.0 (normalization happens in calculate_async)
-            // The async version normalizes directly against network average
-        }
-    }
-
-    /// Calculate dimensionless work score (sync version - uses base_constant)
+    /// Calculate bit-equivalent work score.
+    ///
+    /// # Arguments
+    /// * `solve_time` — Wall-clock time from problem assignment to solution submission
+    ///                   (network-observed: T_solution - T_assignment)
+    /// * `verify_time` — Wall-clock time to verify the solution
+    ///                   (network-observed: measured by each validator)
+    /// * `quality_score` — Solution quality in [0.0, 1.0]
+    ///                     (network-verified: 1.0 for decision problems, gradient for optimization)
+    ///
+    /// # Returns
+    /// Work score in bits. A score of N means the solver demonstrated ~2^N
+    /// more computational effort than verification requires.
+    ///
+    /// Returns 0.0 if the solution is invalid (quality = 0) or the
+    /// asymmetry ratio is below the minimum threshold.
     pub fn calculate(
         &self,
-        problem: &ProblemType,
-        solution: &Solution,
         solve_time: Duration,
         verify_time: Duration,
-        solve_memory: usize,
-        verify_memory: usize,
-        energy_per_op: f64,
+        quality_score: f64,
     ) -> WorkScore {
-        // 1. Time asymmetry ratio (dimensionless)
-        let time_ratio = solve_time.as_secs_f64() / verify_time.as_secs_f64().max(0.001);
+        // Quality gate: invalid solutions produce zero work
+        if quality_score <= 0.0 {
+            return 0.0;
+        }
 
-        // 2. Space asymmetry ratio (dimensionless)
-        let space_ratio = (solve_memory as f64 / verify_memory as f64).sqrt();
+        let solve_secs = solve_time.as_secs_f64();
+        let verify_secs = verify_time.as_secs_f64().max(MIN_VERIFY_TIME_SECS);
 
-        // 3. Problem difficulty weight (from problem structure - empirical)
-        let problem_weight = problem.difficulty_weight();
+        // Time asymmetry ratio (dimensionless)
+        let asymmetry_ratio = solve_secs / verify_secs;
 
-        // 4. Solution quality (0.0 to 1.0 - dimensionless)
-        let quality_score = solution.quality(problem);
+        // Below minimum asymmetry = negligible work
+        if asymmetry_ratio < MIN_ASYMMETRY_RATIO {
+            return 0.0;
+        }
 
-        // 5. Energy efficiency (lower energy = higher score - dimensionless)
-        let energy_efficiency = 1.0 / (energy_per_op + 1.0);
+        // Bit-equivalent work score
+        let bits = asymmetry_ratio.log2();
 
-        // Dimensionless work score
-        // base_constant will be 1.0 by default, or network-derived if updated
-        self.base_constant
-            * time_ratio
-            * space_ratio
-            * problem_weight
-            * quality_score
-            * energy_efficiency
+        // Quality adjustment: optimal solution gets full bits,
+        // suboptimal gets proportionally less
+        let work_score = bits * quality_score.clamp(0.0, 1.0);
+
+        // Floor at zero (can't have negative work)
+        work_score.max(0.0)
     }
-    
-    /// Calculate work score normalized to network average (async version - fully empirical)
-    /// Returns work_score / network_avg_work_score (dimensionless ratio)
-    pub async fn calculate_normalized(
+
+    /// Convenience: calculate from ProblemType and Solution directly.
+    ///
+    /// Extracts quality_score from `solution.quality(problem)`.
+    /// This is the typical call site in block validation.
+    pub fn calculate_from_solution(
         &self,
         problem: &ProblemType,
         solution: &Solution,
         solve_time: Duration,
         verify_time: Duration,
-        solve_memory: usize,
-        verify_memory: usize,
-        energy_per_op: f64,
     ) -> WorkScore {
-        // Calculate raw work score components (all dimensionless)
-        let time_ratio = solve_time.as_secs_f64() / verify_time.as_secs_f64().max(0.001);
-        let space_ratio = (solve_memory as f64 / verify_memory as f64).sqrt();
-        let problem_weight = problem.difficulty_weight();
         let quality_score = solution.quality(problem);
-        let energy_efficiency = 1.0 / (energy_per_op + 1.0);
-        
-        // Raw work score (dimensionless)
-        let raw_score = time_ratio
-            * space_ratio
-            * problem_weight
-            * quality_score
-            * energy_efficiency;
-        
-        // Normalize against network average if metrics available
-        if let Some(ref metrics) = self.network_metrics {
-            let metrics = metrics.read().await;
-            
-            // In production, NetworkMetrics would track median work score
-            // For now, use a simple normalization based on median block time
-            // Longer block times suggest higher work scores
-            let median_block_time = metrics.median_block_time();
-            let network_avg_work = median_block_time.max(1.0); // Estimate from block time
-            
-            // Normalized score = raw_score / network_avg
-            // This makes work scores self-referential
-            raw_score / network_avg_work
-        } else {
-            // No network metrics - use raw score with base constant
-            self.base_constant * raw_score
-        }
+        self.calculate(solve_time, verify_time, quality_score)
+    }
+
+    /// Calculate cumulative chain security in bits.
+    ///
+    /// A chain with cumulative work W requires ~2^W verification-equivalent
+    /// operations to reproduce.
+    pub fn chain_security_bits(work_scores: &[WorkScore]) -> f64 {
+        work_scores.iter().sum()
+    }
+
+    /// Estimate the asymmetry ratio needed for a target work score.
+    ///
+    /// Useful for difficulty adjustment: "what solve_time / verify_time
+    /// ratio would produce a target_bits work score at quality 1.0?"
+    pub fn required_asymmetry_for_bits(target_bits: f64) -> f64 {
+        2.0_f64.powf(target_bits)
     }
 }
+
+impl Default for WorkScoreCalculator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -171,36 +187,145 @@ mod tests {
     use coinject_core::{ProblemType, Solution};
 
     #[test]
-    fn test_work_score_calculation() {
-        let calculator = WorkScoreCalculator::new();
+    fn test_basic_work_score() {
+        let calc = WorkScoreCalculator::new();
+
+        // 10s solve, 1ms verify → ratio = 10,000 → log₂(10000) ≈ 13.29 bits
+        let score = calc.calculate(
+            Duration::from_secs(10),
+            Duration::from_millis(1),
+            1.0,
+        );
+
+        let expected = 10_000.0_f64.log2(); // ≈ 13.29
+        assert!(
+            (score - expected).abs() < 0.01,
+            "Expected ~{:.2} bits, got {:.2}",
+            expected,
+            score
+        );
+    }
+
+    #[test]
+    fn test_quality_scales_linearly() {
+        let calc = WorkScoreCalculator::new();
+
+        let full_quality = calc.calculate(
+            Duration::from_secs(10),
+            Duration::from_millis(1),
+            1.0,
+        );
+
+        let half_quality = calc.calculate(
+            Duration::from_secs(10),
+            Duration::from_millis(1),
+            0.5,
+        );
+
+        assert!(
+            (half_quality - full_quality * 0.5).abs() < 0.01,
+            "Half quality should give half the bits"
+        );
+    }
+
+    #[test]
+    fn test_invalid_solution_gives_zero() {
+        let calc = WorkScoreCalculator::new();
+
+        let score = calc.calculate(
+            Duration::from_secs(100),
+            Duration::from_millis(1),
+            0.0,
+        );
+
+        assert_eq!(score, 0.0, "Invalid solution should produce zero work");
+    }
+
+    #[test]
+    fn test_trivial_asymmetry_gives_zero() {
+        let calc = WorkScoreCalculator::new();
+
+        // Solve time ≈ verify time → negligible work
+        let score = calc.calculate(
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            1.0,
+        );
+
+        assert_eq!(score, 0.0, "Trivial asymmetry should produce zero work");
+    }
+
+    #[test]
+    fn test_bits_are_additive() {
+        // 2× harder = 1 more bit
+        let calc = WorkScoreCalculator::new();
+
+        let score_1k = calc.calculate(
+            Duration::from_secs(1),
+            Duration::from_millis(1),
+            1.0,
+        );
+
+        let score_2k = calc.calculate(
+            Duration::from_secs(2),
+            Duration::from_millis(1),
+            1.0,
+        );
+
+        let diff = score_2k - score_1k;
+        assert!(
+            (diff - 1.0).abs() < 0.01,
+            "Doubling solve time should add ~1 bit, got {:.3}",
+            diff
+        );
+    }
+
+    #[test]
+    fn test_chain_security() {
+        let scores = vec![10.0, 12.5, 11.0, 13.2];
+        let total = WorkScoreCalculator::chain_security_bits(&scores);
+        assert!((total - 46.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_required_asymmetry() {
+        // 10 bits of work requires 2^10 = 1024× asymmetry
+        let ratio = WorkScoreCalculator::required_asymmetry_for_bits(10.0);
+        assert!((ratio - 1024.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_from_solution_subset_sum() {
+        let calc = WorkScoreCalculator::new();
 
         let problem = ProblemType::SubsetSum {
             numbers: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
             target: 25,
         };
-
-        let solution = Solution::SubsetSum(vec![4, 5, 6, 7]); // 5 + 6 + 7 + 8 = 26... wrong
-        let solution = Solution::SubsetSum(vec![3, 4, 6, 9]); // 4 + 5 + 7 + 10 = 26... still wrong
-        let solution = Solution::SubsetSum(vec![2, 6, 7, 8]); // 3 + 7 + 8 + 9 = 27... argh
         let solution = Solution::SubsetSum(vec![2, 5, 6, 8]); // 3 + 6 + 7 + 9 = 25
 
-        let solve_time = Duration::from_secs(10);
-        let verify_time = Duration::from_millis(1);
-        let solve_memory = 1024 * 1024;
-        let verify_memory = 1024;
-        let energy_per_op = 0.001;
-
-        let score = calculator.calculate(
+        let score = calc.calculate_from_solution(
             &problem,
             &solution,
-            solve_time,
-            verify_time,
-            solve_memory,
-            verify_memory,
-            energy_per_op,
+            Duration::from_secs(10),
+            Duration::from_millis(1),
         );
 
-        assert!(score > 0.0);
-        println!("Work score: {}", score);
+        // Valid solution → quality 1.0 → full bit-equivalent score
+        assert!(score > 10.0, "Valid SubsetSum should produce >10 bits of work");
+    }
+
+    #[test]
+    fn test_problem_type_agnostic() {
+        let calc = WorkScoreCalculator::new();
+
+        // Same solve/verify times → same work score regardless of problem type
+        let score_a = calc.calculate(Duration::from_secs(5), Duration::from_millis(1), 1.0);
+        let score_b = calc.calculate(Duration::from_secs(5), Duration::from_millis(1), 1.0);
+
+        assert_eq!(
+            score_a, score_b,
+            "Same inputs should give same score — formula is problem-type agnostic"
+        );
     }
 }

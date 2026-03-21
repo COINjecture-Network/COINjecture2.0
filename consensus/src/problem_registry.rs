@@ -10,13 +10,21 @@
 //!
 //! No changes to DifficultyAdjuster, WorkScoreCalculator, or any other system code.
 //!
-//! # Mathematical Derivation of Seeded Defaults
+//! # Mathematical Framework and Seeded Defaults
 //!
-//! The constants in this module are NOT arbitrary. They derive from the μ-framework:
+//! The μ-framework operates in dimensionless time (τ). The Satoshi constant
+//! η = λ = 1/√2 governs the *shape* of system dynamics (critically damped,
+//! no oscillation). It does NOT determine wall-clock speed.
 //!
-//! - η = λ = 1/√2 (Satoshi constant, from unit circle constraint |μ|² = η² + λ² = 1)
-//! - τ_c = η⁻¹ = √2 (characteristic time)
-//! - Target block time = 10 × τ_c = 10√2 ≈ 14.14 seconds
+//! - η = λ = 1/√2 (from unit circle constraint |μ|² = η² + λ² = 1)
+//! - τ_c = η⁻¹ = √2 (dimensionless characteristic time)
+//!
+//! The block time of 10 seconds is an engineering parameter chosen for
+//! practical network operation: long enough for NP solving to be meaningful,
+//! short enough for reasonable transaction finality, and enough overhead
+//! margin for verification plus propagation. It is independent of η —
+//! changing the block time changes the clock speed at which the dimensionless
+//! dynamics manifest, but not the dynamics themselves.
 //!
 //! Scaling exponents are initial seeds refined by empirical observation:
 //! - SubsetSum (0.8): exponential family, 2^(0.8n) expected scaling

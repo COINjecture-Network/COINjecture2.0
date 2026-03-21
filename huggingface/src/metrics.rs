@@ -280,14 +280,11 @@ impl MetricsCollector {
         // Calculate solution quality and work score if we have the problem
         let (solution_quality, work_score) = if let (Some(ref problem), Some(ref solution)) = (problem.as_ref(), submission.solution.as_ref()) {
             let quality = solution.quality(problem);
-            let work_score = self.work_calculator.calculate(
+            let work_score = self.work_calculator.calculate_from_solution(
                 problem,
                 solution,
                 solve_time,
                 verify_time,
-                solve_memory,
-                verify_memory,
-                energy_per_operation,
             );
             (Some(quality), Some(work_score))
         } else {
