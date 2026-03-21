@@ -20,7 +20,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
-/// Difficulty adjustment window (last N blocks)
+/// Number of trailing blocks used for empirical difficulty measurement.
+/// During bootstrap (blocks 0–19), seeded defaults govern.
+/// After block 20, empirical data takes over.
+/// See docs/BOOTSTRAP.md for the full bootstrap → empirical transition.
 const DIFFICULTY_WINDOW: usize = 20;
 
 /// Stall and stability tuning (dimensionless ratios)
@@ -51,7 +54,7 @@ impl DifficultyAdjuster {
     pub fn new() -> Self {
         DifficultyAdjuster {
             recent_solve_times: VecDeque::with_capacity(DIFFICULTY_WINDOW),
-            current_size: 20, // Start at size 20 (current testnet default)
+            current_size: 20, // Canonical SubsetSum size unit (bootstrap default)
             recovery_target: None,
             stall_counter: 0,
             network_metrics: None,
@@ -63,7 +66,7 @@ impl DifficultyAdjuster {
     pub fn with_metrics(network_metrics: Arc<RwLock<NetworkMetrics>>) -> Self {
         DifficultyAdjuster {
             recent_solve_times: VecDeque::with_capacity(DIFFICULTY_WINDOW),
-            current_size: 20,
+            current_size: 20, // Canonical SubsetSum size unit (bootstrap default)
             recovery_target: None,
             stall_counter: 0,
             network_metrics: Some(network_metrics),
@@ -105,7 +108,8 @@ impl DifficultyAdjuster {
             // Optimal = median_block_time * η (mathematical scaling)
             metrics.median_block_time() * ETA
         } else {
-            // Default during bootstrap: 5 seconds
+            // Seeded target solve time ≈ TARGET_BLOCK_TIME / (√2 + 1)
+            // where TARGET_BLOCK_TIME = 10√2 ≈ 14.14s. Refined after bootstrap.
             5.0
         }
     }
