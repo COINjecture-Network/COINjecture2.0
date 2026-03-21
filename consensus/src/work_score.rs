@@ -9,6 +9,7 @@
 // - All components are dimensionless ratios
 // - Normalized against network average for self-reference
 
+use crate::problem_registry::SharedRegistry;
 use coinject_core::{ProblemType, Solution, WorkScore};
 use coinject_tokenomics::NetworkMetrics;
 use std::sync::Arc;
@@ -20,6 +21,8 @@ pub struct WorkScoreCalculator {
     base_constant: f64,
     /// Network metrics oracle (optional - uses 1.0 if None)
     network_metrics: Option<Arc<RwLock<NetworkMetrics>>>,
+    /// Problem registry for type-specific parameters (base_difficulty_weight, etc.)
+    registry: Option<SharedRegistry>,
 }
 
 impl WorkScoreCalculator {
@@ -28,20 +31,36 @@ impl WorkScoreCalculator {
         WorkScoreCalculator {
             base_constant: 1.0, // Default during bootstrap
             network_metrics: None,
+            registry: None,
         }
     }
-    
+
     /// Create with network metrics oracle (empirical mode)
     pub fn with_metrics(network_metrics: Arc<RwLock<NetworkMetrics>>) -> Self {
         WorkScoreCalculator {
             base_constant: 1.0, // Will be updated from network
             network_metrics: Some(network_metrics),
+            registry: None,
         }
     }
-    
+
+    /// Create with both network metrics and problem registry
+    pub fn with_registry(network_metrics: Arc<RwLock<NetworkMetrics>>, registry: SharedRegistry) -> Self {
+        WorkScoreCalculator {
+            base_constant: 1.0,
+            network_metrics: Some(network_metrics),
+            registry: Some(registry),
+        }
+    }
+
     /// Update network metrics reference
     pub fn set_metrics(&mut self, network_metrics: Arc<RwLock<NetworkMetrics>>) {
         self.network_metrics = Some(network_metrics);
+    }
+
+    /// Set problem registry
+    pub fn set_registry(&mut self, registry: SharedRegistry) {
+        self.registry = Some(registry);
     }
     
     /// Get base constant from network (or default)
