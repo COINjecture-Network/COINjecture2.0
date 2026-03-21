@@ -13,6 +13,7 @@
 // - Min/Max targets: Optimal * PHI_INV / PHI (mathematical bounds)
 // - Problem size limits: Percentiles from historical solve times
 
+use crate::problem_registry::SharedRegistry;
 use coinject_tokenomics::{NetworkMetrics, ETA, PHI, PHI_INV};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ const RECOVERY_STEP: usize = 1;
 
 /// Difficulty adjuster - tracks solve times and adjusts problem size
 /// Uses NetworkMetrics oracle for all target times and size limits
+/// Uses ProblemRegistry for problem-type-specific parameters (scaling, size ratios, limits)
 pub struct DifficultyAdjuster {
     /// Recent solve times (in seconds)
     recent_solve_times: VecDeque<f64>,
@@ -40,6 +42,8 @@ pub struct DifficultyAdjuster {
     stall_counter: usize,
     /// Network metrics oracle (optional - uses defaults if None)
     network_metrics: Option<Arc<RwLock<NetworkMetrics>>>,
+    /// Problem registry for type-specific parameters
+    registry: Option<SharedRegistry>,
 }
 
 impl DifficultyAdjuster {
@@ -51,9 +55,10 @@ impl DifficultyAdjuster {
             recovery_target: None,
             stall_counter: 0,
             network_metrics: None,
+            registry: None,
         }
     }
-    
+
     /// Create with network metrics oracle (empirical mode)
     pub fn with_metrics(network_metrics: Arc<RwLock<NetworkMetrics>>) -> Self {
         DifficultyAdjuster {
@@ -62,12 +67,30 @@ impl DifficultyAdjuster {
             recovery_target: None,
             stall_counter: 0,
             network_metrics: Some(network_metrics),
+            registry: None,
         }
     }
-    
+
+    /// Create with both network metrics and problem registry
+    pub fn with_registry(network_metrics: Arc<RwLock<NetworkMetrics>>, registry: SharedRegistry) -> Self {
+        DifficultyAdjuster {
+            recent_solve_times: VecDeque::with_capacity(DIFFICULTY_WINDOW),
+            current_size: 20,
+            recovery_target: None,
+            stall_counter: 0,
+            network_metrics: Some(network_metrics),
+            registry: Some(registry),
+        }
+    }
+
     /// Update network metrics reference
     pub fn set_metrics(&mut self, network_metrics: Arc<RwLock<NetworkMetrics>>) {
         self.network_metrics = Some(network_metrics);
+    }
+
+    /// Set problem registry
+    pub fn set_registry(&mut self, registry: SharedRegistry) {
+        self.registry = Some(registry);
     }
     
     /// Check if network metrics are available
@@ -101,68 +124,66 @@ impl DifficultyAdjuster {
         optimal * PHI
     }
     
-    /// Get problem size limits from network metrics
-    /// Uses hardness factors and median block time to estimate reasonable size ranges
+    /// Get problem size limits from network metrics and problem registry.
+    /// Uses hardness factors and median block time to estimate reasonable size ranges.
+    /// Falls back to registry defaults when network metrics are unavailable.
     async fn get_size_limits(&self, problem_type: &str) -> (usize, usize) {
+        // Extract descriptor parameters if registry is available.
+        // Read registry, extract values, drop guard before any further .await.
+        let (scaling_exp, abs_max, abs_min) = if let Some(ref registry) = self.registry {
+            let reg = registry.read().await;
+            if let Some(desc) = reg.get(problem_type) {
+                (desc.scaling_exponent(), desc.absolute_max_size(), desc.absolute_min_size())
+            } else {
+                // Unknown problem type — use conservative defaults
+                (0.8, 60, 5)
+            }
+        } else {
+            // No registry — use legacy hardcoded defaults for backward compat
+            match problem_type {
+                "TSP" => (0.5, 30, 5),
+                "SAT" => (0.7, 120, 5),
+                "SubsetSum" => (0.8, 60, 5),
+                _ => (0.8, 60, 5),
+            }
+        };
+
         if let Some(ref metrics) = self.network_metrics {
             let metrics = metrics.read().await;
-            
-            // Map problem type to category
+
+            // Map problem type to category for hardness lookup
             let category = match problem_type {
                 "SubsetSum" => 3,
                 "SAT" => 0,
                 "TSP" => 1,
                 _ => 0,
             };
-            
-            // Get hardness ratio for this category (empirical from network)
+
             let hardness = metrics.hardness_factor(category);
-            
-            // Get median block time (network-derived)
             let median_time = metrics.median_block_time();
-            
-            // Calculate optimal solve time for this category
+
             // Optimal = median_block_time * η * hardness_factor
             let optimal_time = median_time * ETA * hardness;
-            
-            // Estimate base size from optimal time
-            // For NP-hard problems: solve_time ≈ base_time * (size^complexity_factor)
-            // Using logarithmic relationship: size ≈ (solve_time / base_time)^(1/complexity)
-            // For exponential complexity (2^n), complexity ≈ 1.0
-            // For factorial (n!), complexity ≈ 0.5
-            let complexity_factor = match problem_type {
-                "TSP" => 0.5,      // Factorial - very sensitive
-                "SAT" => 0.7,      // Exponential - sensitive
-                "SubsetSum" => 0.8, // Exponential - moderate
-                _ => 0.8,
-            };
-            
-            let base_time = 1.0; // 1 second baseline
-            let estimated_size = ((optimal_time / base_time).powf(complexity_factor) * hardness) as usize;
-            
-            // Min size: allow 20% of estimated (fast solves)
-            // But ensure minimum of 5 to prevent degenerate cases
-            let min_size = (estimated_size as f64 * 0.2).max(5.0) as usize;
-            
-            // Max size: allow 200% of estimated (slow but acceptable)
-            // Cap at reasonable maximums based on problem type
-            let type_max = match problem_type {
-                "TSP" => 30,      // TSP grows factorially - keep small
-                "SAT" => 120,     // SAT can handle larger
-                "SubsetSum" => 60, // SubsetSum moderate
-                _ => 60,
-            };
-            let max_size = (estimated_size as f64 * 2.0).min(type_max as f64) as usize;
-            
+
+            // Estimate base size from optimal time using descriptor's scaling exponent
+            let base_time = 1.0;
+            let estimated_size = ((optimal_time / base_time).powf(scaling_exp) * hardness) as usize;
+
+            // Min size: 20% of estimated, floored at descriptor's absolute_min_size
+            let min_size = (estimated_size as f64 * 0.2).max(abs_min as f64) as usize;
+
+            // Max size: 200% of estimated, capped at descriptor's absolute_max_size
+            let max_size = (estimated_size as f64 * 2.0).min(abs_max as f64) as usize;
+
             (min_size, max_size)
         } else {
-            // Defaults during bootstrap (mathematical bounds)
-            match problem_type {
-                "SubsetSum" => (5, 50),
-                "SAT" => (5, 100),
-                "TSP" => (5, 25),
-                _ => (5, 50),
-            }
+            // No network metrics — bootstrap defaults derived from descriptor limits
+            (abs_min.max(5), abs_max.min(match problem_type {
+                "SubsetSum" => 50,
+                "SAT" => 100,
+                "TSP" => 25,
+                _ => 50,
+            }))
         }
     }
 
@@ -413,46 +434,52 @@ impl DifficultyAdjuster {
         reduced
     }
 
-    /// Get problem size for specific problem type (sync version - uses defaults)
+    /// Get problem size for specific problem type (sync version).
+    /// Uses registry for size_ratio and limits when available, falls back to legacy defaults.
     pub fn size_for_problem_type(&self, problem_type: &str) -> usize {
+        // Try to get size_ratio and limits from registry (blocking read not available,
+        // so we use try_read for sync path — if contended, fall back to legacy defaults)
+        if let Some(ref registry) = self.registry {
+            if let Ok(reg) = registry.try_read() {
+                if let Some(desc) = reg.get(problem_type) {
+                    let ratio = desc.size_ratio();
+                    let max = desc.absolute_max_size();
+                    let min = desc.absolute_min_size();
+                    return ((self.current_size as f64 * ratio).round() as usize)
+                        .max(min)
+                        .min(max);
+                }
+            }
+        }
+        // Legacy fallback (no registry or contended lock)
         match problem_type {
-            "SubsetSum" => {
-                self.current_size.min(50) // Default max
-            }
-            "SAT" => {
-                ((self.current_size as f64 * 0.75).round() as usize)
-                    .max(5)
-                    .min(100) // Default max
-            }
-            "TSP" => {
-                ((self.current_size as f64 * 0.35).round() as usize)
-                    .max(5)
-                    .min(25) // Default max
-            }
+            "SubsetSum" => self.current_size.min(50),
+            "SAT" => ((self.current_size as f64 * 0.75).round() as usize).max(5).min(100),
+            "TSP" => ((self.current_size as f64 * 0.35).round() as usize).max(5).min(25),
             _ => self.current_size,
         }
     }
-    
-    /// Get problem size for specific problem type (async version - uses network metrics)
+
+    /// Get problem size for specific problem type (async version - uses registry + network metrics)
     pub async fn size_for_problem_type_async(&self, problem_type: &str) -> usize {
         let (min_size, max_size) = self.get_size_limits(problem_type).await;
-        
-        match problem_type {
-            "SubsetSum" => {
-                self.current_size.min(max_size)
+
+        // Extract size_ratio from registry. Read guard dropped before return.
+        let size_ratio = if let Some(ref registry) = self.registry {
+            let reg = registry.read().await;
+            reg.get(problem_type).map(|d| d.size_ratio()).unwrap_or(1.0)
+        } else {
+            // Legacy fallback
+            match problem_type {
+                "SAT" => 0.75,
+                "TSP" => 0.35,
+                _ => 1.0, // SubsetSum and unknown
             }
-            "SAT" => {
-                ((self.current_size as f64 * 0.75).round() as usize)
-                    .max(min_size)
-                    .min(max_size)
-            }
-            "TSP" => {
-                ((self.current_size as f64 * 0.35).round() as usize)
-                    .max(min_size)
-                    .min(max_size)
-            }
-            _ => self.current_size,
-        }
+        };
+
+        ((self.current_size as f64 * size_ratio).round() as usize)
+            .max(min_size)
+            .min(max_size)
     }
 
     /// Get statistics for monitoring (sync version)
