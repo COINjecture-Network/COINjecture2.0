@@ -19,7 +19,7 @@ use crate::faucet::{Faucet, FaucetConfig};
 use crate::genesis::{create_genesis_block, GenesisConfig};
 use crate::peer_consensus::PeerConsensus;
 use crate::validator::BlockValidator;
-use coinject_consensus::{Miner, MiningConfig};
+use coinject_consensus::{Miner, MiningConfig, default_registry};
 use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 // libp2p removed - using CPP protocol only
@@ -257,7 +257,12 @@ impl CoinjectNode {
             println!("   Target block time: {}s", config.block_time);
             println!();
 
-            Some(Arc::new(RwLock::new(Miner::new(mining_config))))
+            // Create problem registry (shared across consensus components)
+            let registry = default_registry();
+
+            let mut miner = Miner::new(mining_config);
+            miner.set_registry(registry).await;
+            Some(Arc::new(RwLock::new(miner)))
         } else {
             None
         };

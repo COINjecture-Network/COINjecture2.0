@@ -7,6 +7,7 @@ use coinject_core::{
 };
 use coinject_tokenomics::{RewardCalculator, NetworkMetrics};
 use crate::{WorkScoreCalculator, DifficultyAdjuster};
+use crate::problem_registry::SharedRegistry;
 use rand::Rng;
 use rand::seq::SliceRandom;
 use std::sync::Arc;
@@ -383,9 +384,23 @@ impl Miner {
             let mut adjuster = self.difficulty_adjuster.write().await;
             adjuster.set_metrics(Arc::clone(&network_metrics));
         }
-        
+
         // Update work calculator with network metrics
         self.work_calculator.set_metrics(network_metrics);
+    }
+
+    /// Set problem registry for extensible problem-type parameters.
+    /// The registry provides scaling exponents, size ratios, and limits
+    /// so that new problem types require zero changes to consensus code.
+    pub async fn set_registry(&mut self, registry: SharedRegistry) {
+        // Update difficulty adjuster with registry
+        {
+            let mut adjuster = self.difficulty_adjuster.write().await;
+            adjuster.set_registry(registry.clone());
+        }
+
+        // Update work calculator with registry
+        self.work_calculator.set_registry(registry);
     }
 
     /// Generate a deterministic NP-hard problem for mining
