@@ -33,30 +33,103 @@ mod validator;
 
 use config::NodeConfig;
 use service::CoinjectNode;
+use std::time::Instant;
 use tokio::signal;
-use tracing_subscriber::EnvFilter;
+use tracing::{error, info};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Initialise tracing.  Returns a guard that must be held for the process lifetime
+/// (dropping it flushes the non-blocking file writer).
+///
+/// Format is controlled by the `LOG_FORMAT` environment variable:
+///   LOG_FORMAT=json   → newline-delimited JSON (production default)
+///   LOG_FORMAT=pretty → human-readable pretty-print (default)
+///
+/// Log file output is controlled by `LOG_DIR` (optional, daily rotation):
+///   LOG_DIR=/var/log/coinject
+///
+/// Log level is controlled by `RUST_LOG` (default: info).
+fn init_logging() -> Option<WorkerGuard> {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let log_format = std::env::var("LOG_FORMAT")
+        .unwrap_or_else(|_| "pretty".to_string());
+
+    let use_json = log_format == "json";
+
+    match std::env::var("LOG_DIR") {
+        Ok(log_dir) => {
+            // File + console, both in the same format
+            let file_appender = tracing_appender::rolling::daily(log_dir, "coinject.log");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            if use_json {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(fmt::layer().json())
+                    .with(fmt::layer().json().with_writer(non_blocking))
+                    .init();
+            } else {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(fmt::layer().with_target(false))
+                    .with(fmt::layer().with_writer(non_blocking))
+                    .init();
+            }
+            Some(guard)
+        }
+        Err(_) => {
+            // Console only
+            if use_json {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(fmt::layer().json())
+                    .init();
+            } else {
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(fmt::layer().with_target(false))
+                    .init();
+            }
+            None
+        }
+    }
+}
 
 // Multi-threaded runtime for CPP protocol TCP connections
 // Worker threads handle concurrent peer I/O and mining tasks
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    // Initialise logging (guard must live for the whole process)
+    let _log_guard = init_logging();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .init();
-
-    // Parse configuration first (needed for banner)
+    // Parse configuration
     let config = NodeConfig::parse_args();
 
-    // Display banner with node type info
+    // Display terminal banner (intentional stdout — not a log event)
     print_banner(&config);
 
-    // Log active network mode
-    tracing::info!("Network: CPP protocol on {}", config.cpp_p2p_addr);
+    // Startup: log sanitized config (no secrets)
+    let node_start = Instant::now();
+    info!(
+        version = env!("CARGO_PKG_VERSION"),
+        node_type = %config.node_type,
+        chain_id = %config.chain_id,
+        rpc_addr = %config.rpc_addr,
+        cpp_p2p_addr = %config.cpp_p2p_addr,
+        cpp_ws_addr = %config.cpp_ws_addr,
+        metrics_addr = %config.metrics_addr,
+        data_dir = %config.data_dir.display(),
+        mining = config.mine,
+        dev_mode = config.dev,
+        bootnode_count = config.bootnodes.len(),
+        max_peers = config.max_peers,
+        difficulty = config.difficulty,
+        block_time_s = config.block_time,
+        hf_sync = config.hf_dataset_name.is_some(),
+        "node starting"
+    );
 
     // Initialize Prometheus metrics
     metrics::init();
@@ -65,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let metrics_addr = config.metrics_socket_addr()?;
     tokio::spawn(async move {
         if let Err(e) = metrics_server::start_metrics_server(metrics_addr).await {
-            tracing::error!("Metrics server error: {}", e);
+            error!(error = %e, "metrics server failed");
         }
     });
 
@@ -73,23 +146,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut node = CoinjectNode::new(config).await?;
     node.start().await?;
 
-    // Wait for shutdown signal (Ctrl+C)
+    // Wait for shutdown signal (Ctrl+C or SIGTERM)
     match signal::ctrl_c().await {
         Ok(()) => {
-            println!();
-            println!("📡 Received shutdown signal (Ctrl+C)");
+            info!("shutdown signal received");
             node.shutdown();
         }
         Err(err) => {
-            eprintln!("Unable to listen for shutdown signal: {}", err);
+            error!(error = %err, "failed to listen for shutdown signal");
         }
     }
 
     // Wait for graceful shutdown
     node.wait_for_shutdown().await;
 
-    println!("👋 COINjecture Node stopped");
-    println!();
+    info!(
+        uptime_s = node_start.elapsed().as_secs(),
+        "node stopped"
+    );
 
     Ok(())
 }

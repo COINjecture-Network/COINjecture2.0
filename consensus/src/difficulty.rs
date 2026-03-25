@@ -19,6 +19,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::{debug, warn};
 
 /// Number of trailing blocks used for empirical difficulty measurement.
 /// During bootstrap (blocks 0–19), seeded defaults govern.
@@ -246,10 +247,10 @@ impl DifficultyAdjuster {
         let max_target = optimal * PHI;
         
         if avg_solve_time < min_target {
-            println!(
-                "⚡ Solve times {:.2}s are below minimum target ({:.1}s). Allowing controlled growth.",
-                avg_solve_time,
-                min_target
+            debug!(
+                avg_solve_time_s = %format!("{:.2}", avg_solve_time),
+                min_target_s = %format!("{:.1}", min_target),
+                "solve times below minimum target, allowing controlled growth"
             );
         }
         let std_dev = self.solve_time_std_dev(avg_solve_time);
@@ -257,9 +258,9 @@ impl DifficultyAdjuster {
         if self.recent_solve_times.len() >= DIFFICULTY_WINDOW / 2
             && std_dev > avg_solve_time * HIGH_VARIANCE_RATIO
         {
-            println!(
-                "🔁 High variance detected (σ={:.2}s). Deferring difficulty adjustment to widen window.",
-                std_dev
+            debug!(
+                std_dev_s = %format!("{:.2}", std_dev),
+                "high variance detected, deferring difficulty adjustment"
             );
             return self.current_size;
         }
@@ -298,22 +299,16 @@ impl DifficultyAdjuster {
 
         bounded_size = self.apply_recovery(bounded_size, time_ratio);
 
-        println!("📊 Difficulty Adjustment:");
-        println!(
-            "   Avg solve time: {:.3}s (target: {:.1}s) σ={:.3}s",
-            avg_solve_time, optimal, std_dev
-        );
-        println!("   Time ratio: {:.3}x", time_ratio);
-        println!("   Scale factor: {:.3}x", scale_factor);
-        println!(
-            "   Problem size: {} → {}{}",
-            self.current_size,
-            bounded_size,
-            if self.recovery_target.is_some() {
-                " (recovery mode)"
-            } else {
-                ""
-            }
+        debug!(
+            avg_solve_time_s = %format!("{:.3}", avg_solve_time),
+            target_s = %format!("{:.1}", optimal),
+            std_dev_s = %format!("{:.3}", std_dev),
+            time_ratio = %format!("{:.3}", time_ratio),
+            scale_factor = %format!("{:.3}", scale_factor),
+            old_size = self.current_size,
+            new_size = bounded_size,
+            recovery_mode = self.recovery_target.is_some(),
+            "difficulty adjustment"
         );
 
         self.current_size = bounded_size;
@@ -333,10 +328,10 @@ impl DifficultyAdjuster {
         let max_target = self.max_target_solve_time().await;
         
         if avg_solve_time < min_target {
-            println!(
-                "⚡ Solve times {:.2}s are below minimum target ({:.1}s). Allowing controlled growth.",
-                avg_solve_time,
-                min_target
+            debug!(
+                avg_solve_time_s = %format!("{:.2}", avg_solve_time),
+                min_target_s = %format!("{:.1}", min_target),
+                "solve times below minimum target, allowing controlled growth"
             );
         }
         let std_dev = self.solve_time_std_dev(avg_solve_time);
@@ -344,9 +339,9 @@ impl DifficultyAdjuster {
         if self.recent_solve_times.len() >= DIFFICULTY_WINDOW / 2
             && std_dev > avg_solve_time * HIGH_VARIANCE_RATIO
         {
-            println!(
-                "🔁 High variance detected (σ={:.2}s). Deferring difficulty adjustment to widen window.",
-                std_dev
+            debug!(
+                std_dev_s = %format!("{:.2}", std_dev),
+                "high variance detected, deferring difficulty adjustment"
             );
             return self.current_size;
         }
@@ -384,24 +379,20 @@ impl DifficultyAdjuster {
 
         bounded_size = self.apply_recovery(bounded_size, time_ratio);
 
-        println!("📊 Difficulty Adjustment (Empirical):");
-        println!(
-            "   Avg solve time: {:.3}s (target: {:.1}s, range: [{:.1}, {:.1}]) σ={:.3}s",
-            avg_solve_time, optimal, min_target, max_target, std_dev
-        );
-        println!("   Time ratio: {:.3}x", time_ratio);
-        println!("   Scale factor: {:.3}x", scale_factor);
-        println!(
-            "   Problem size: {} → {} (limits: [{}, {}]){}",
-            self.current_size,
-            bounded_size,
+        debug!(
+            avg_solve_time_s = %format!("{:.3}", avg_solve_time),
+            target_s = %format!("{:.1}", optimal),
+            min_target_s = %format!("{:.1}", min_target),
+            max_target_s = %format!("{:.1}", max_target),
+            std_dev_s = %format!("{:.3}", std_dev),
+            time_ratio = %format!("{:.3}", time_ratio),
+            scale_factor = %format!("{:.3}", scale_factor),
+            old_size = self.current_size,
+            new_size = bounded_size,
             min_size,
             max_size,
-            if self.recovery_target.is_some() {
-                " (recovery mode)"
-            } else {
-                ""
-            }
+            recovery_mode = self.recovery_target.is_some(),
+            "difficulty adjustment (empirical)"
         );
 
         self.current_size = bounded_size;
@@ -414,9 +405,10 @@ impl DifficultyAdjuster {
         let old_size = self.current_size;
         let min_size = 5; // Default minimum
         let reduced = (((self.current_size as f64) * 0.85).round() as usize).max(min_size);
-        println!(
-            "⚠️  Mining failure penalty: {} → {}",
-            old_size, reduced
+        warn!(
+            old_size,
+            new_size = reduced,
+            "mining failure penalty applied"
         );
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
@@ -429,9 +421,11 @@ impl DifficultyAdjuster {
         let old_size = self.current_size;
         let (min_size, _) = self.get_size_limits("SubsetSum").await;
         let reduced = (((self.current_size as f64) * 0.85).round() as usize).max(min_size);
-        println!(
-            "⚠️  Mining failure penalty: {} → {} (network-derived min: {})",
-            old_size, reduced, min_size
+        warn!(
+            old_size,
+            new_size = reduced,
+            network_min = min_size,
+            "mining failure penalty applied (empirical)"
         );
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
@@ -590,7 +584,12 @@ impl DifficultyAdjuster {
     fn apply_stall_penalty(&mut self, reason: &str) -> usize {
         let old_size = self.current_size;
         let reduced = (((self.current_size as f64) * 0.7).round() as usize).max(5); // Default minimum
-        println!("⚠️  Stall detected ({}). {} → {}", reason, old_size, reduced);
+        warn!(
+            reason,
+            old_size,
+            new_size = reduced,
+            "stall detected, applying penalty"
+        );
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
         self.stall_counter = (self.stall_counter + 1).min(20);

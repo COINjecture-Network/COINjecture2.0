@@ -13,6 +13,7 @@ use rand::seq::SliceRandom;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
+use tracing::{debug, info, warn, error};
 
 const MAX_MINING_ATTEMPTS: usize = 5;
 const MINING_TIMEOUT: Duration = Duration::from_secs(60);
@@ -31,7 +32,7 @@ pub fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<
     let start_time = Instant::now();
     let mut hashes = 0u64;
 
-    println!("🎯 Mining target: hash must start with '{}'", target_prefix);
+    debug!(target_prefix = %target_prefix, "mining target prefix");
 
     for nonce in 0..u64::MAX {
         header.nonce = nonce;
@@ -40,25 +41,23 @@ pub fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<
 
         let hash_hex = hex::encode(hash.as_bytes());
 
-        // Debug: Print first few hash samples
+        // Debug: log first few hash samples
         if nonce < 5 {
-            println!("  Sample hash #{}: {}", nonce, hash_hex);
+            debug!(nonce, hash = %hash_hex, "sample hash");
         }
 
         if hash_hex.starts_with(&target_prefix) {
             let elapsed = start_time.elapsed().as_secs_f64();
             let hash_rate = hashes as f64 / elapsed;
-            println!("✅ Found nonce {} after {} hashes ({:.2} H/s)", nonce, hashes, hash_rate);
-            println!("   Block hash: {}", hash_hex);
+            info!(nonce, hashes, hash_rate, hash = %hash_hex, "nonce found");
             return Some((header, hash));
         }
 
-        // Print progress every million hashes
+        // Log progress every million hashes
         if nonce % 1_000_000 == 0 && nonce > 0 {
             let elapsed = start_time.elapsed().as_secs_f64();
             let hash_rate = hashes as f64 / elapsed;
-            println!("⛏️  Mining... {} hashes ({:.2} H/s) | Latest: {}...",
-                hashes, hash_rate, &hash_hex[..16]);
+            debug!(hashes, hash_rate, hash_prefix = %&hash_hex[..16], "mining progress");
         }
     }
 
@@ -814,13 +813,16 @@ impl Miner {
             Some(Solution::SAT(solution))
         } else {
             if start_time.elapsed() > timeout {
-                println!("⏱️  SAT solver timeout after {:.2}s ({} vars, {} clauses)", 
-                    start_time.elapsed().as_secs_f64(), variables, clauses.len());
+                warn!(
+                    variables,
+                    num_clauses = clauses.len(),
+                    solve_time_s = start_time.elapsed().as_secs_f64(),
+                    "sat solver timeout"
+                );
             } else {
-                // Debug: Check if problem is actually satisfiable by trying the known solution
-                // (This is only for debugging - in production we'd remove this)
-                println!("❌ SAT solver failed to find solution ({} vars, {} clauses) - checking satisfiability...", variables, clauses.len());
-                
+                // Check if problem is actually satisfiable (debug aid for small instances)
+                warn!(variables, num_clauses = clauses.len(), "sat solver failed to find solution, checking satisfiability");
+
                 // Try brute force check on small problems
                 if variables <= 32 {
                     let mut test_assignment = vec![false; variables];
@@ -841,13 +843,12 @@ impl Miner {
                         });
                         if satisfied {
                             found = true;
-                            println!("⚠️  Problem IS satisfiable but DPLL failed! Assignment: {:?}", 
-                                test_assignment.iter().take(10).collect::<Vec<_>>());
+                            warn!(variables, "problem is satisfiable but dpll failed");
                             break;
                         }
                     }
                     if !found {
-                        println!("⚠️  Problem appears to be UNSATISFIABLE (brute force check)");
+                        warn!(variables, "problem appears to be unsatisfiable (brute force check)");
                     }
                 }
             }
@@ -907,20 +908,22 @@ impl Miner {
 
         let (problem, (solution, solve_time, solve_memory)) = loop {
             attempts += 1;
-            println!("\n=== Mining Block {} (attempt #{}) ===", height, attempts);
+            info!(block_height = height, attempt = attempts, "mining block");
 
             // 1. Generate NP-hard problem (deterministically seeded by parent hash)
             // All nodes generate the SAME problem for a given (prev_hash, height) pair
             let problem = self.generate_problem(height, prev_hash).await;
 
-            // Calculate and display dimensional state
+            // Calculate dimensional state
             let tau = (height as f64) / TAU_C;
             let consensus_state = ConsensusState::at_tau(tau);
-            println!(
-                "Dimensional state: τ={:.4}, |ψ|={:.4}, θ={:.4} rad",
-                consensus_state.tau, consensus_state.magnitude, consensus_state.phase
+            debug!(
+                tau = consensus_state.tau,
+                magnitude = consensus_state.magnitude,
+                phase = consensus_state.phase,
+                "dimensional state"
             );
-            println!("Generated problem: {:?}", problem);
+            debug!(problem = ?problem, "generated problem");
 
             // 2. Solve the problem and measure performance
             // Use spawn_blocking to avoid starving the tokio runtime
@@ -933,34 +936,31 @@ impl Miner {
                 break (problem, result);
             }
 
-            println!(
-                "❌ Mining attempt #{} failed to find a solution before timeout. Penalizing difficulty...",
-                attempts
-            );
+            warn!(attempt = attempts, "mining attempt failed to solve problem before timeout, penalizing difficulty");
             {
                 let mut adjuster = self.difficulty_adjuster.write().await;
                 adjuster.record_solve_time(FAILURE_PENALTY_TIME);
                 let new_size = adjuster.penalize_failure();
-                println!("   → New target problem size: {}", new_size);
+                debug!(new_size, "new target problem size after penalty");
             }
 
             if attempts >= MAX_MINING_ATTEMPTS || mining_start.elapsed() >= MINING_TIMEOUT {
-                println!(
-                    "⏰ Mining aborted after {} attempts ({:.1?}). Waiting for next template.",
+                warn!(
                     attempts,
-                    mining_start.elapsed()
+                    elapsed_s = mining_start.elapsed().as_secs_f64(),
+                    "mining aborted, waiting for next template"
                 );
                 return None;
             }
 
-            println!("🔁 Retrying with reduced difficulty...");
+            debug!("retrying with reduced difficulty");
         };
-        println!("Solved in {:?} using {} bytes", solve_time, solve_memory);
+        debug!(solve_time_s = solve_time.as_secs_f64(), solve_memory_bytes = solve_memory, "problem solved");
 
         // 3. Verify solution
         let verify_start = Instant::now();
         if !solution.verify(&problem) {
-            println!("Solution verification failed!");
+            error!(block_height = height, "solution verification failed");
             return None;
         }
         let verify_time = verify_start.elapsed();
@@ -973,14 +973,14 @@ impl Miner {
             solve_time,
             verify_time,
         );
-        println!("Work score: {}", work_score);
+        debug!(work_score, "work score calculated");
 
         // 5. Create commitment (prevents grinding)
         // CRITICAL: Epoch salt derived from parent block hash to prevent pre-mining
         // This ensures problems cannot be pre-computed before parent block is mined
         let epoch_salt = prev_hash; // Use parent block hash as epoch salt
         let commitment = Commitment::create(&problem, &solution, &epoch_salt);
-        println!("Commitment created: {:?} (epoch_salt from parent: {:?})", commitment.hash, prev_hash);
+        debug!(commitment_hash = ?commitment.hash, "commitment created");
 
         // 6. Calculate PoUW transparency metrics
         let solve_time_us = solve_time.as_micros() as u64;
@@ -993,13 +993,15 @@ impl Miner {
         // 100W = 100 J/s, so energy_joules = 100 * (solve_time in seconds)
         let energy_estimate_joules = 100.0 * solve_time.as_secs_f64();
 
-        println!("PoUW Metrics:");
-        println!("  Solve time: {}µs", solve_time_us);
-        println!("  Verify time: {}µs", verify_time_us);
-        println!("  Time asymmetry: {:.2}x", time_asymmetry_ratio);
-        println!("  Solution quality: {:.4}", solution_quality);
-        println!("  Complexity weight: {:.2}", complexity_weight);
-        println!("  Energy estimate: {:.2} J", energy_estimate_joules);
+        debug!(
+            solve_time_us,
+            verify_time_us,
+            time_asymmetry_ratio,
+            solution_quality,
+            complexity_weight,
+            energy_estimate_joules,
+            "pouw metrics"
+        );
 
         // 7. Build block header with commitment and PoUW metrics
         // FIX: For block 1 (height 1), use deterministic timestamp to prevent forks
@@ -1019,23 +1021,25 @@ impl Miner {
                 .unwrap()
                 .as_secs() as i64
         };
-        // M1.1 DEBUG: Log mined timestamp vs current time
+        // Log mined timestamp vs current time
         let now_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
         let delta = now_ts - timestamp;
-        println!("⏱️  [MINER] height={} mined_ts={} now_ts={} delta={}s", height, timestamp, now_ts, delta);
+        debug!(block_height = height, mined_ts = timestamp, now_ts, delta_s = delta, "miner timestamp");
 
         let transactions_root = Self::merkle_root(&transactions);
         let solutions_root = Hash::new(&bincode::serialize(&solution).unwrap_or_default());
 
         // Determine block version based on golden activation height
         let block_version = self.config.block_version_for_height(height);
-        println!("[BLOCK] Producing block version={} ({}) at height={}", 
+        debug!(
+            block_height = height,
             block_version,
-            if block_version >= 2 { "golden-enhanced" } else { "standard" },
-            height);
+            golden_enhanced = block_version >= 2,
+            "producing block"
+        );
 
         let header = BlockHeader {
             version: block_version,
@@ -1064,12 +1068,12 @@ impl Miner {
             mine_header_blocking(header, difficulty)
         }).await.ok().flatten()?;
         let header = mined_header; // Use the mined header with correct nonce
-        println!("Header mined: {:?}", header_hash);
+        info!(block_height = height, hash = ?header_hash, nonce = header.nonce, "header mined");
 
         // 9. Calculate block reward and create coinbase transaction
         let reward_amount = self.reward_calculator.calculate_reward(work_score);
         let coinbase = CoinbaseTransaction::new(self.config.miner_address, reward_amount, height);
-        println!("Block reward: {} tokens", reward_amount);
+        debug!(block_height = height, reward_amount, "block reward calculated");
 
         // 10. Create solution reveal
         let solution_reveal = SolutionReveal {
@@ -1096,7 +1100,7 @@ impl Miner {
         let start_time = Instant::now();
         let mut hashes = 0u64;
 
-        println!("🎯 Mining target: hash must start with '{}'", target_prefix);
+        debug!(target_prefix = %target_prefix, "mining target prefix");
 
         for nonce in 0..u64::MAX {
             header.nonce = nonce;
@@ -1105,25 +1109,23 @@ impl Miner {
 
             let hash_hex = hex::encode(hash.as_bytes());
 
-            // Debug: Print first few hash samples
+            // Debug: log first few hash samples
             if nonce < 5 {
-                println!("  Sample hash #{}: {}", nonce, hash_hex);
+                debug!(nonce, hash = %hash_hex, "sample hash");
             }
 
             if hash_hex.starts_with(&target_prefix) {
                 let elapsed = start_time.elapsed().as_secs_f64();
                 let hash_rate = hashes as f64 / elapsed;
-                println!("✅ Found nonce {} after {} hashes ({:.2} H/s)", nonce, hashes, hash_rate);
-                println!("   Block hash: {}", hash_hex);
+                info!(nonce, hashes, hash_rate, hash = %hash_hex, "nonce found");
                 return Some(hash);
             }
 
-            // Print progress every million hashes
+            // Log progress every million hashes
             if nonce % 1_000_000 == 0 && nonce > 0 {
                 let elapsed = start_time.elapsed().as_secs_f64();
                 let hash_rate = hashes as f64 / elapsed;
-                println!("⛏️  Mining... {} hashes ({:.2} H/s) | Latest: {}...",
-                    hashes, hash_rate, &hash_hex[..16]);
+                debug!(hashes, hash_rate, hash_prefix = %&hash_hex[..16], "mining progress");
             }
         }
 
@@ -1164,20 +1166,23 @@ impl Miner {
             (new_size, adjuster.stats())
         };
 
-        println!(
-            "📈 Difficulty stats: size={} avg={:.2}s σ={:.2}s ratio {:.2}x samples {} stall={} recovery={}",
-            diff_stats.current_size,
-            diff_stats.avg_solve_time_secs,
-            diff_stats.std_dev_secs,
-            diff_stats.time_ratio,
-            diff_stats.sample_count,
-            diff_stats.stall_counter,
-            diff_stats.in_recovery_mode
+        debug!(
+            current_size = diff_stats.current_size,
+            avg_solve_time_s = diff_stats.avg_solve_time_secs,
+            std_dev_s = diff_stats.std_dev_secs,
+            time_ratio = diff_stats.time_ratio,
+            sample_count = diff_stats.sample_count,
+            stall_counter = diff_stats.stall_counter,
+            in_recovery_mode = diff_stats.in_recovery_mode,
+            "difficulty stats"
         );
         if diff_stats.time_ratio > 2.0 {
-            println!("⚠️  Solve time ratio {:.2}x > 2.0. Network may be underpowered—consider adding miners.", diff_stats.time_ratio);
+            warn!(
+                time_ratio = diff_stats.time_ratio,
+                "solve time ratio exceeds 2.0x, network may be underpowered"
+            );
         }
-        println!("   → Next problem size target: {}", new_size);
+        debug!(next_problem_size = new_size, "next problem size target");
     }
 
     /// Get current mining stats
@@ -1193,11 +1198,11 @@ impl Miner {
         if actual < target * 0.8 {
             // Blocks too fast, increase difficulty
             self.difficulty = (self.difficulty + 1).min(self.config.max_difficulty);
-            println!("Difficulty increased to {}", self.difficulty);
+            info!(difficulty = self.difficulty, "difficulty increased");
         } else if actual > target * 1.2 {
             // Blocks too slow, decrease difficulty
             self.difficulty = (self.difficulty.saturating_sub(1)).max(self.config.min_difficulty);
-            println!("Difficulty decreased to {}", self.difficulty);
+            info!(difficulty = self.difficulty, "difficulty decreased");
         }
     }
 }
@@ -1324,7 +1329,7 @@ mod tests {
 
         let prev_hash = Hash::ZERO;
         let problem = miner.generate_problem(0, prev_hash).await;
-        println!("Generated problem: {:?}", problem);
+        debug!(problem = ?problem, "generated problem");
 
         match problem {
             ProblemType::SubsetSum { ref numbers, .. } => assert!(!numbers.is_empty()),
