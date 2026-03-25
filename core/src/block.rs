@@ -188,6 +188,22 @@ impl Block {
 
     /// Verify block validity
     pub fn verify(&self) -> bool {
+        // 0. Validate block header structural fields
+        let now = chrono::Utc::now().timestamp();
+        if crate::validation::validate_block_header_fields(
+            self.header.version,
+            self.header.timestamp,
+            self.header.work_score,
+            self.header.time_asymmetry_ratio,
+            self.header.solution_quality,
+            self.header.complexity_weight,
+            self.header.energy_estimate_joules,
+            self.transactions.len(),
+            now,
+        ).is_err() {
+            return false;
+        }
+
         // 1. Verify solution reveal matches commitment
         if !self
             .solution_reveal

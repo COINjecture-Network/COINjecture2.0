@@ -1,4 +1,8 @@
 use crate::{Address, Balance, Ed25519Signature, Hash, PublicKey};
+use crate::validation::{
+    validate_transfer_fields, validate_timelock_fields, validate_escrow_fields,
+    validate_additional_signatures_count, validate_dispute_proof, validate_data_payload,
+};
 use serde::{Deserialize, Serialize};
 
 /// Transaction types supported by Network B
@@ -422,8 +426,8 @@ impl TransferTransaction {
             return false;
         }
 
-        // 3. Amount must be non-zero
-        if self.amount == 0 {
+        // 3. Amount and fee bounds / overflow check
+        if validate_transfer_fields(self.amount, self.fee).is_err() {
             return false;
         }
 
@@ -494,8 +498,8 @@ impl TimeLockTransaction {
             return false;
         }
 
-        // 3. Amount must be non-zero
-        if self.amount == 0 {
+        // 3. Amount and fee bounds / overflow check
+        if validate_timelock_fields(self.amount, self.fee).is_err() {
             return false;
         }
 
@@ -570,6 +574,26 @@ impl EscrowTransaction {
             return false;
         }
 
+        // 3. Additional signatures count must be within limits
+        if validate_additional_signatures_count(self.additional_signatures.len()).is_err() {
+            return false;
+        }
+
+        // 4. Amount / fee bounds depending on operation type
+        match &self.escrow_type {
+            EscrowType::Create { amount, .. } => {
+                if validate_escrow_fields(*amount, self.fee).is_err() {
+                    return false;
+                }
+            }
+            EscrowType::Release | EscrowType::Refund => {
+                // Only the fee is deducted; fee must be valid
+                if crate::validation::validate_fee(self.fee).is_err() {
+                    return false;
+                }
+            }
+        }
+
         true
     }
 }
@@ -615,6 +639,35 @@ impl ChannelTransaction {
 
         // 2. Sender address must match public key
         if self.from != self.public_key.to_address() {
+            return false;
+        }
+
+        // 3. Additional signatures count must be within limits
+        if validate_additional_signatures_count(self.additional_signatures.len()).is_err() {
+            return false;
+        }
+
+        // 4. Channel-type-specific bounds checks
+        match &self.channel_type {
+            ChannelType::Open { deposit_a, deposit_b, .. } => {
+                // Both deposits must be non-zero and within bounds
+                if crate::validation::validate_amount(*deposit_a).is_err() {
+                    return false;
+                }
+                if crate::validation::validate_amount(*deposit_b).is_err() {
+                    return false;
+                }
+            }
+            ChannelType::UnilateralClose { dispute_proof, .. } => {
+                if validate_dispute_proof(dispute_proof).is_err() {
+                    return false;
+                }
+            }
+            ChannelType::Update { .. } | ChannelType::CooperativeClose { .. } => {}
+        }
+
+        // 5. Fee must be valid
+        if crate::validation::validate_fee(self.fee).is_err() {
             return false;
         }
 
@@ -1012,24 +1065,44 @@ impl MarketplaceTransaction {
             return false;
         }
 
-        // 3. Validate operation-specific constraints
+        // 3. Fee must be valid
+        if crate::validation::validate_fee(self.fee).is_err() {
+            return false;
+        }
+
+        // 4. Validate operation-specific constraints
         match &self.operation {
-            MarketplaceOperation::SubmitProblem { bounty, min_work_score, expiration_days, .. } => {
-                // Bounty must be non-zero
-                if *bounty == 0 {
+            MarketplaceOperation::SubmitProblem { bounty, min_work_score, expiration_days, problem } => {
+                // Bounty must be non-zero and within bounds
+                if crate::validation::validate_amount(*bounty).is_err() {
                     return false;
                 }
-                // Work score requirement must be positive
-                if *min_work_score <= 0.0 {
+                // fee + bounty must not overflow
+                if crate::validation::checked_add(self.fee, *bounty).is_err() {
+                    return false;
+                }
+                // Work score requirement must be positive and finite
+                if !min_work_score.is_finite() || *min_work_score <= 0.0 {
                     return false;
                 }
                 // Expiration must be reasonable (1-365 days)
                 if *expiration_days == 0 || *expiration_days > 365 {
                     return false;
                 }
+                // Problem data payload size limit
+                if let crate::ProblemType::Custom { data, .. } = problem {
+                    if validate_data_payload(data).is_err() {
+                        return false;
+                    }
+                }
             }
-            MarketplaceOperation::SubmitSolution { .. } => {
-                // Solution validation happens in marketplace state
+            MarketplaceOperation::SubmitSolution { solution, .. } => {
+                // Solution data payload size limit
+                if let crate::Solution::Custom(data) = solution {
+                    if validate_data_payload(data).is_err() {
+                        return false;
+                    }
+                }
             }
             MarketplaceOperation::ClaimBounty { .. } => {
                 // Bounty validation happens in marketplace state

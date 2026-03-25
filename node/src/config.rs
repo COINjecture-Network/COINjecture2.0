@@ -393,6 +393,8 @@ impl NodeConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        use coinject_core::validation::{validate_socket_addr_str, validate_port, validate_file_path};
+
         // Validate miner address format if provided
         if let Some(ref addr) = self.miner_address {
             if addr.len() != 64 {
@@ -412,12 +414,65 @@ impl NodeConfig {
         if self.block_time < 10 {
             return Err("Block time must be at least 10 seconds".to_string());
         }
-        
+
+        // Validate max_peers range
+        if self.max_peers == 0 {
+            return Err("max_peers must be at least 1".to_string());
+        }
+        if self.max_peers > 1000 {
+            return Err("max_peers must not exceed 1000".to_string());
+        }
+
+        // Validate RPC address
+        validate_socket_addr_str(&self.rpc_addr)
+            .map_err(|e| format!("Invalid rpc_addr '{}': {}", self.rpc_addr, e))?;
+
+        // Validate CPP P2P address
+        validate_socket_addr_str(&self.cpp_p2p_addr)
+            .map_err(|e| format!("Invalid cpp_p2p_addr '{}': {}", self.cpp_p2p_addr, e))?;
+
+        // Validate CPP WebSocket address
+        validate_socket_addr_str(&self.cpp_ws_addr)
+            .map_err(|e| format!("Invalid cpp_ws_addr '{}': {}", self.cpp_ws_addr, e))?;
+
+        // Validate metrics address
+        validate_socket_addr_str(&self.metrics_addr)
+            .map_err(|e| format!("Invalid metrics_addr '{}': {}", self.metrics_addr, e))?;
+
+        // Validate faucet_cooldown is reasonable (min 1 second, max 30 days)
+        if self.enable_faucet {
+            if self.faucet_cooldown == 0 {
+                return Err("faucet_cooldown must be at least 1 second".to_string());
+            }
+            if self.faucet_cooldown > 30 * 24 * 3600 {
+                return Err("faucet_cooldown exceeds 30 days".to_string());
+            }
+        }
+
+        // Validate data_dir path (no traversal)
+        let data_dir_str = self.data_dir.to_string_lossy();
+        validate_file_path(&data_dir_str)
+            .map_err(|e| format!("Invalid data_dir: {}", e))?;
+
         // Validate oracle sources if oracle mode enabled
         if self.is_oracle_mode() && self.oracle_sources.is_empty() {
             tracing::warn!("Oracle mode enabled but no oracle_sources specified");
         }
-        
+
+        // Validate bootnode address formats (must be host:port)
+        for bootnode in &self.bootnodes {
+            let parts: Vec<&str> = bootnode.rsplitn(2, ':').collect();
+            if parts.len() != 2 {
+                return Err(format!("Invalid bootnode address '{}': expected host:port format", bootnode));
+            }
+            let port_str = parts[0];
+            let port: u32 = port_str.parse().map_err(|_| {
+                format!("Invalid port in bootnode address '{}'", bootnode)
+            })?;
+            validate_port(port)
+                .map_err(|e| format!("Invalid port in bootnode '{}': {}", bootnode, e))?;
+        }
+
         // Warn about conflicting settings
         if self.headers_only && self.mine {
             return Err("Cannot mine in headers-only mode (Light nodes don't store full blocks)".to_string());
@@ -516,6 +571,56 @@ mod tests {
     fn test_invalid_miner_address() {
         let mut config = test_config();
         config.miner_address = Some("invalid".to_string());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_invalid_rpc_addr_port_zero() {
+        let mut config = test_config();
+        config.rpc_addr = "127.0.0.1:0".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_invalid_cpp_p2p_addr() {
+        let mut config = test_config();
+        config.cpp_p2p_addr = "not-an-address".to_string();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_max_peers_zero_rejected() {
+        let mut config = test_config();
+        config.max_peers = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_max_peers_over_limit_rejected() {
+        let mut config = test_config();
+        config.max_peers = 1001;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_invalid_bootnode_format() {
+        let mut config = test_config();
+        config.bootnodes = vec!["notahost".to_string()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_valid_bootnode() {
+        let mut config = test_config();
+        config.bootnodes = vec!["192.0.2.1:707".to_string()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_faucet_cooldown_zero_rejected() {
+        let mut config = test_config();
+        config.enable_faucet = true;
+        config.faucet_cooldown = 0;
         assert!(config.validate().is_err());
     }
     

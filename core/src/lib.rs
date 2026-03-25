@@ -10,6 +10,7 @@ pub mod commitment;
 pub mod dimensional;
 pub mod privacy;
 pub mod golden;
+pub mod validation;
 
 // Re-exports
 pub use types::*;
@@ -21,3 +22,4 @@ pub use commitment::*;
 pub use dimensional::*;
 pub use privacy::*;
 pub use golden::*;
+// validation is accessed as coinject_core::validation::<item> (not wildcard-re-exported)

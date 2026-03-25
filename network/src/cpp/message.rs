@@ -139,6 +139,15 @@ impl MessagePriority {
     }
 }
 
+// =============================================================================
+// Message-level validation
+// =============================================================================
+
+use coinject_core::validation::{
+    validate_node_type_byte, validate_reason_string,
+    validate_get_blocks_range, validate_get_headers,
+};
+
 // === MESSAGE PAYLOADS ===
 
 /// Hello message (initial handshake)
@@ -164,6 +173,19 @@ pub struct HelloMessage {
     pub connection_nonce: u64,
 }
 
+impl HelloMessage {
+    /// Validate structural constraints of a received HelloMessage.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_node_type_byte(self.node_type)
+            .map_err(|e| e.to_string())?;
+        // Peer ID must not be all-zeros (would collide with default)
+        if self.peer_id == [0u8; 32] {
+            return Err("peer_id must not be all-zeros".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// HelloAck message (handshake response)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloAckMessage {
@@ -187,6 +209,18 @@ pub struct HelloAckMessage {
     pub connection_nonce: u64,
 }
 
+impl HelloAckMessage {
+    /// Validate structural constraints of a received HelloAckMessage.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_node_type_byte(self.node_type)
+            .map_err(|e| e.to_string())?;
+        if self.peer_id == [0u8; 32] {
+            return Err("peer_id must not be all-zeros".to_string());
+        }
+        Ok(())
+    }
+}
+
 /// Status update message with murmuration coordination
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusMessage {
@@ -203,6 +237,14 @@ pub struct StatusMessage {
     pub flock_state: Option<FlockStateCompact>,
 }
 
+impl StatusMessage {
+    /// Validate structural constraints of a received StatusMessage.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_node_type_byte(self.node_type)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// GetBlocks request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetBlocksMessage {
@@ -214,6 +256,14 @@ pub struct GetBlocksMessage {
     pub request_id: u64,
 }
 
+impl GetBlocksMessage {
+    /// Validate the height range requested.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_get_blocks_range(self.from_height, self.to_height)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Blocks response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlocksMessage {
@@ -221,6 +271,21 @@ pub struct BlocksMessage {
     pub blocks: Vec<Block>,
     /// Request ID (matches GetBlocks)
     pub request_id: u64,
+}
+
+impl BlocksMessage {
+    /// Validate block count does not exceed the maximum per response.
+    pub fn validate(&self) -> Result<(), String> {
+        use coinject_core::validation::MAX_BLOCKS_PER_REQUEST;
+        if self.blocks.len() as u64 > MAX_BLOCKS_PER_REQUEST {
+            return Err(format!(
+                "Blocks response contains {} blocks, limit is {}",
+                self.blocks.len(),
+                MAX_BLOCKS_PER_REQUEST
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// GetHeaders request (light clients)
@@ -232,6 +297,14 @@ pub struct GetHeadersMessage {
     pub max_headers: u32,
     /// Request ID
     pub request_id: u64,
+}
+
+impl GetHeadersMessage {
+    /// Validate the max_headers field.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_get_headers(self.max_headers)
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Headers response
@@ -286,6 +359,14 @@ pub struct WorkRejectedMessage {
     pub reason: String,
 }
 
+impl WorkRejectedMessage {
+    /// Validate the rejection reason string length.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_reason_string(&self.reason)
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// GetWork request (light client)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetWorkMessage {
@@ -329,10 +410,99 @@ pub struct DisconnectMessage {
     pub reason: String,
 }
 
+impl DisconnectMessage {
+    /// Validate the reason string length.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_reason_string(&self.reason)
+            .map_err(|e| e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
+    // ---- message validation ----
+
+    #[test]
+    fn hello_validates_node_type() {
+        let valid = HelloMessage {
+            version: 1,
+            peer_id: [1u8; 32],
+            best_height: 0,
+            best_hash: coinject_core::Hash::ZERO,
+            genesis_hash: coinject_core::Hash::ZERO,
+            node_type: 1,
+            timestamp: 0,
+            connection_nonce: 0,
+        };
+        assert!(valid.validate().is_ok());
+
+        let invalid_type = HelloMessage { node_type: 99, ..valid.clone() };
+        assert!(invalid_type.validate().is_err());
+    }
+
+    #[test]
+    fn hello_rejects_zero_peer_id() {
+        let msg = HelloMessage {
+            version: 1,
+            peer_id: [0u8; 32],
+            best_height: 0,
+            best_hash: coinject_core::Hash::ZERO,
+            genesis_hash: coinject_core::Hash::ZERO,
+            node_type: 1,
+            timestamp: 0,
+            connection_nonce: 0,
+        };
+        assert!(msg.validate().is_err());
+    }
+
+    #[test]
+    fn get_blocks_range_validated() {
+        let valid = GetBlocksMessage { from_height: 10, to_height: 20, request_id: 1 };
+        assert!(valid.validate().is_ok());
+
+        let inverted = GetBlocksMessage { from_height: 50, to_height: 10, request_id: 1 };
+        assert!(inverted.validate().is_err());
+
+        // Exceeds limit (513 blocks)
+        let too_big = GetBlocksMessage { from_height: 0, to_height: 512, request_id: 1 };
+        assert!(too_big.validate().is_err());
+    }
+
+    #[test]
+    fn get_headers_validated() {
+        let valid = GetHeadersMessage { from_height: 0, max_headers: 100, request_id: 1 };
+        assert!(valid.validate().is_ok());
+
+        let too_many = GetHeadersMessage { from_height: 0, max_headers: 9999, request_id: 1 };
+        assert!(too_many.validate().is_err());
+    }
+
+    #[test]
+    fn disconnect_reason_length_validated() {
+        let ok = DisconnectMessage { reason: "normal".to_string() };
+        assert!(ok.validate().is_ok());
+
+        let too_long = DisconnectMessage { reason: "x".repeat(300) };
+        assert!(too_long.validate().is_err());
+    }
+
+    #[test]
+    fn work_rejected_reason_length_validated() {
+        let ok = WorkRejectedMessage {
+            block_hash: coinject_core::Hash::ZERO,
+            reason: "stale block".to_string(),
+        };
+        assert!(ok.validate().is_ok());
+
+        let too_long = WorkRejectedMessage {
+            block_hash: coinject_core::Hash::ZERO,
+            reason: "y".repeat(300),
+        };
+        assert!(too_long.validate().is_err());
+    }
+
     #[test]
     fn test_message_type_conversion() {
         let types = vec![
