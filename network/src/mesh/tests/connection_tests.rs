@@ -2,7 +2,7 @@
 // Connection & Handshake Tests
 // =============================================================================
 
-use crate::mesh::connection::{self, ConnectionEvent, ConnectionState, finalize_connection};
+use crate::mesh::connection::{self, finalize_connection, ConnectionEvent, ConnectionState};
 use crate::mesh::identity::{Keypair, NodeId};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -66,12 +66,23 @@ async fn test_finalize_connection_sends_connected_event() {
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let (peer_id, pk, listen) = connection::perform_inbound_handshake(
-            &mut stream, &kp_b_clone, addr, max_size, timeout,
+            &mut stream,
+            &kp_b_clone,
+            addr,
+            max_size,
+            timeout,
         )
         .await
         .unwrap();
         finalize_connection(
-            peer_id, listen, pk, stream, conn_tx_clone, max_size, shutdown_clone, false,
+            peer_id,
+            listen,
+            pk,
+            stream,
+            conn_tx_clone,
+            max_size,
+            shutdown_clone,
+            false,
         );
     });
 
@@ -80,7 +91,11 @@ async fn test_finalize_connection_sends_connected_event() {
     let client = tokio::spawn(async move {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         connection::perform_outbound_handshake(
-            &mut stream, &kp_a_clone, "127.0.0.1:0".parse().unwrap(), max_size, timeout,
+            &mut stream,
+            &kp_a_clone,
+            "127.0.0.1:0".parse().unwrap(),
+            max_size,
+            timeout,
         )
         .await
         .unwrap();

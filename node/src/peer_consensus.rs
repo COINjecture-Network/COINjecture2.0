@@ -17,9 +17,7 @@ use tokio::sync::RwLock;
 // Import unified timeout constants from network layer
 // These are ETA-derived to maintain dimensional consistency
 use coinject_network::cpp::timeouts::{
-    consensus_stale_threshold,
-    consensus_peer_timeout,
-    MAX_MISSED_ROUNDS_CONSENSUS,
+    consensus_peer_timeout, consensus_stale_threshold, MAX_MISSED_ROUNDS_CONSENSUS,
 };
 
 /// Peer reliability tracking for Negative UNL equivalent
@@ -50,7 +48,7 @@ impl PeerState {
             is_filtered: false,
         }
     }
-    
+
     /// Check if peer is stale (hasn't reported recently)
     /// Uses unified timeout from network layer: NETWORK × (1 + η) ≈ 153s
     /// This ETA-derived threshold provides a grace period beyond the network timeout
@@ -80,11 +78,11 @@ impl Default for ConsensusConfig {
         Self {
             // Minimum 1 peer to mine (allows 2-node bootstrap)
             min_peers_for_mining: 1,
-            sync_threshold_blocks: 10,       // Within 10 blocks
+            sync_threshold_blocks: 10, // Within 10 blocks
             // ADAPTIVE CONSENSUS: Threshold adjusts based on peer count
             // BOOTSTRAP MODE (peers < 4): 50% - prioritizes liveness
             // SECURE MODE (peers >= 4): 80% - prioritizes safety (BFT)
-            consensus_threshold: 0.80,       // Target for production
+            consensus_threshold: 0.80, // Target for production
             // peer_stale_timeout: Unified ETA-derived timeout from network layer
             // NETWORK / η ≈ 127s - consensus has more patience than network layer (90s)
             peer_stale_timeout: consensus_peer_timeout(),
@@ -100,10 +98,10 @@ impl ConsensusConfig {
     /// Large networks can enforce strict BFT thresholds for security
     pub fn get_adaptive_threshold(&self, peer_count: usize) -> (f64, &'static str) {
         match peer_count {
-            0 => (1.0, "SOLO"),           // No peers, impossible to reach consensus
-            1 => (0.50, "BOOTSTRAP-1"),   // 1 peer: need 50% (1/1 = 100% works)
-            2 => (0.50, "BOOTSTRAP-2"),   // 2 peers: 50% allows 1/2 to pass
-            3 => (0.60, "BOOTSTRAP-3"),   // 3 peers: 60% allows 2/3 to pass
+            0 => (1.0, "SOLO"),         // No peers, impossible to reach consensus
+            1 => (0.50, "BOOTSTRAP-1"), // 1 peer: need 50% (1/1 = 100% works)
+            2 => (0.50, "BOOTSTRAP-2"), // 2 peers: 50% allows 1/2 to pass
+            3 => (0.60, "BOOTSTRAP-3"), // 3 peers: 60% allows 2/3 to pass
             _ => (self.consensus_threshold, "SECURE"), // 4+ peers: full BFT threshold
         }
     }
@@ -113,15 +111,15 @@ impl ConsensusConfig {
     /// Production config with 5-peer minimum
     pub fn production() -> Self {
         Self {
-            min_peers_for_mining: 5,        // True 80% consensus requires 5 peers
+            min_peers_for_mining: 5, // True 80% consensus requires 5 peers
             ..Default::default()
         }
     }
-    
+
     /// Testnet bootstrap config with 2-peer minimum  
     pub fn testnet() -> Self {
         Self {
-            min_peers_for_mining: 2,        // Bootstrap with 2 peers
+            min_peers_for_mining: 2, // Bootstrap with 2 peers
             ..Default::default()
         }
     }
@@ -143,7 +141,7 @@ impl PeerConsensus {
             config,
         }
     }
-    
+
     pub fn with_defaults() -> Self {
         Self::new(ConsensusConfig::default())
     }
@@ -152,7 +150,7 @@ impl PeerConsensus {
     pub fn sync_threshold_blocks(&self) -> u64 {
         self.config.sync_threshold_blocks
     }
-    
+
     /// Update a peer's state when we receive a StatusUpdate
     pub async fn update_peer(&self, peer_id: String, height: u64, hash: [u8; 32]) {
         let mut peers = self.peers.write().await;
@@ -167,20 +165,32 @@ impl PeerConsensus {
 
             // Un-filter peer if they're back online
             if peer.is_filtered {
-                println!("🔄 Peer {} back online, removing from Negative UNL", peer_id);
+                println!(
+                    "🔄 Peer {} back online, removing from Negative UNL",
+                    peer_id
+                );
                 peer.is_filtered = false;
             }
 
             // Log height changes
             if height != old_height {
-                println!("📡 Peer {} height updated: {} -> {}", &peer_id[..8.min(peer_id.len())], old_height, height);
+                println!(
+                    "📡 Peer {} height updated: {} -> {}",
+                    &peer_id[..8.min(peer_id.len())],
+                    old_height,
+                    height
+                );
             }
         } else {
             peers.insert(peer_id.clone(), PeerState::new(height, hash));
-            println!("📡 New peer tracked: {} at height {}", &peer_id[..8.min(peer_id.len())], height);
+            println!(
+                "📡 New peer tracked: {} at height {}",
+                &peer_id[..8.min(peer_id.len())],
+                height
+            );
         }
     }
-    
+
     /// Mark a peer as disconnected (but keep tracking for stale timeout)
     /// This allows peers to still count if they reconnect within the timeout
     pub async fn mark_peer_disconnected(&self, peer_id: &str) {
@@ -190,36 +200,41 @@ impl PeerConsensus {
         let peers = self.peers.read().await;
         if peers.contains_key(peer_id) {
             let threshold_secs = consensus_stale_threshold().as_secs();
-            println!("📡 Peer {} disconnected (still tracking for {}s)", peer_id, threshold_secs);
+            println!(
+                "📡 Peer {} disconnected (still tracking for {}s)",
+                peer_id, threshold_secs
+            );
         }
         // Peer's last_seen stays the same, so they'll count until stale
     }
-    
+
     /// Actually remove a peer (only call for permanent removal)
     pub async fn remove_peer(&self, peer_id: &str) {
         let mut peers = self.peers.write().await;
         peers.remove(peer_id);
         println!("📡 Peer permanently removed: {}", peer_id);
     }
-    
+
     /// Get all active (non-filtered, non-stale) peers
     pub async fn active_peers(&self) -> Vec<(String, PeerState)> {
         let peers = self.peers.read().await;
-        peers.iter()
+        peers
+            .iter()
             .filter(|(_, state)| !state.is_filtered && !state.is_stale())
             .map(|(id, state)| (id.clone(), state.clone()))
             .collect()
     }
-    
+
     /// Get the number of active peers (for Negative UNL-adjusted quorum)
     pub async fn active_peer_count(&self) -> usize {
         self.active_peers().await.len()
     }
-    
+
     /// Get the best known height from any peer
     pub async fn best_peer_height(&self) -> u64 {
         let peers = self.peers.read().await;
-        peers.values()
+        peers
+            .values()
             .filter(|p| !p.is_filtered && !p.is_stale())
             .map(|p| p.best_height)
             .max()
@@ -239,32 +254,32 @@ impl PeerConsensus {
         if active.is_empty() {
             return 0;
         }
-        
+
         let mut heights: Vec<u64> = active.iter().map(|(_, s)| s.best_height).collect();
         heights.sort();
-        
+
         let mid = heights.len() / 2;
-        if heights.len() % 2 == 0 {
+        if heights.len().is_multiple_of(2) {
             (heights[mid - 1] + heights[mid]) / 2
         } else {
             heights[mid]
         }
     }
-    
+
     /// Check if we have consensus among peers about the chain tip
     /// Returns (has_consensus, consensus_height, agreement_percentage)
     /// Uses ADAPTIVE threshold based on peer count
     pub async fn check_consensus(&self) -> (bool, u64, f64) {
         let active = self.active_peers().await;
         let peer_count = active.len();
-        
+
         if peer_count < self.config.min_peers_for_mining {
             return (false, 0, 0.0);
         }
-        
+
         // Get adaptive threshold based on network size
         let (threshold, _mode) = self.config.get_adaptive_threshold(peer_count);
-        
+
         // Count how many peers agree on each height (within 1 block tolerance)
         let mut height_votes: HashMap<u64, usize> = HashMap::new();
         for (_, state) in &active {
@@ -272,19 +287,20 @@ impl PeerConsensus {
             let normalized_height = state.best_height;
             *height_votes.entry(normalized_height).or_insert(0) += 1;
         }
-        
+
         // Find the height with most agreement
-        let (consensus_height, max_votes) = height_votes.iter()
+        let (consensus_height, max_votes) = height_votes
+            .iter()
             .max_by_key(|(_, votes)| *votes)
             .map(|(h, v)| (*h, *v))
             .unwrap_or((0, 0));
-        
+
         let agreement = max_votes as f64 / peer_count as f64;
-        let has_consensus = agreement >= threshold;  // Use adaptive threshold!
-        
+        let has_consensus = agreement >= threshold; // Use adaptive threshold!
+
         (has_consensus, consensus_height, agreement)
     }
-    
+
     /// The main sync decision: Should we mine?
     /// Returns (should_mine, reason)
     pub async fn should_mine(&self, our_height: u64) -> (bool, String) {
@@ -296,68 +312,101 @@ impl PeerConsensus {
             let total = peers.len();
             let stale_count = peers.values().filter(|p| p.is_stale()).count();
             let filtered_count = peers.values().filter(|p| p.is_filtered).count();
-            println!("📊 [PeerConsensus] Total peers: {}, Active: {}, Stale: {}, Filtered: {}",
-                total, active_count, stale_count, filtered_count);
+            println!(
+                "📊 [PeerConsensus] Total peers: {}, Active: {}, Stale: {}, Filtered: {}",
+                total, active_count, stale_count, filtered_count
+            );
             for (id, state) in peers.iter() {
-                let status = if state.is_stale() { "STALE" } else if state.is_filtered { "FILTERED" } else { "ACTIVE" };
-                println!("   - {} height={} last_seen={}s ago [{}]",
-                    &id[..8.min(id.len())], state.best_height, state.last_seen.elapsed().as_secs(), status);
+                let status = if state.is_stale() {
+                    "STALE"
+                } else if state.is_filtered {
+                    "FILTERED"
+                } else {
+                    "ACTIVE"
+                };
+                println!(
+                    "   - {} height={} last_seen={}s ago [{}]",
+                    &id[..8.min(id.len())],
+                    state.best_height,
+                    state.last_seen.elapsed().as_secs(),
+                    status
+                );
             }
         }
 
         // Check 1: Do we have enough peers?
         if active_count < self.config.min_peers_for_mining {
-            return (false, format!(
-                "Insufficient peers: {} < {} required",
-                active_count, self.config.min_peers_for_mining
-            ));
+            return (
+                false,
+                format!(
+                    "Insufficient peers: {} < {} required",
+                    active_count, self.config.min_peers_for_mining
+                ),
+            );
         }
-        
+
         // Check 2: Are we synced with peer median?
         let median_height = self.median_peer_height().await;
         if our_height + self.config.sync_threshold_blocks < median_height {
             let blocks_behind = median_height - our_height;
-            return (false, format!(
-                "Behind peers: {} blocks (our: {}, median: {})",
-                blocks_behind, our_height, median_height
-            ));
+            return (
+                false,
+                format!(
+                    "Behind peers: {} blocks (our: {}, median: {})",
+                    blocks_behind, our_height, median_height
+                ),
+            );
         }
-        
+
         // Check 3: Do peers have consensus? (ADAPTIVE THRESHOLD)
         let (threshold, mode) = self.config.get_adaptive_threshold(active_count);
         let (has_consensus, consensus_height, agreement) = self.check_consensus().await;
-        
+
         if !has_consensus {
-            return (false, format!(
-                "[{}] No peer consensus: {:.1}% < {:.1}% required at height {}",
-                mode, agreement * 100.0, threshold * 100.0, consensus_height
-            ));
+            return (
+                false,
+                format!(
+                    "[{}] No peer consensus: {:.1}% < {:.1}% required at height {}",
+                    mode,
+                    agreement * 100.0,
+                    threshold * 100.0,
+                    consensus_height
+                ),
+            );
         }
-        
+
         // All checks passed!
-        (true, format!(
-            "[{}] Consensus OK: {} peers, {:.1}% agreement (threshold: {:.0}%)",
-            mode, active_count, agreement * 100.0, threshold * 100.0
-        ))
+        (
+            true,
+            format!(
+                "[{}] Consensus OK: {} peers, {:.1}% agreement (threshold: {:.0}%)",
+                mode,
+                active_count,
+                agreement * 100.0,
+                threshold * 100.0
+            ),
+        )
     }
-    
+
     /// Periodic maintenance: filter stale peers (Negative UNL)
     pub async fn maintenance_tick(&self) {
         let mut peers = self.peers.write().await;
-        
+
         for (peer_id, state) in peers.iter_mut() {
             if state.is_stale() && !state.is_filtered {
                 state.missed_rounds += 1;
-                
+
                 if state.missed_rounds >= self.config.max_missed_rounds {
-                    println!("⚠️  Filtering peer {} (Negative UNL) - {} missed rounds",
-                        peer_id, state.missed_rounds);
+                    println!(
+                        "⚠️  Filtering peer {} (Negative UNL) - {} missed rounds",
+                        peer_id, state.missed_rounds
+                    );
                     state.is_filtered = true;
                 }
             }
         }
     }
-    
+
     /// Get diagnostic information for logging
     pub async fn diagnostics(&self) -> String {
         let active = self.active_peers().await;
@@ -365,9 +414,9 @@ impl PeerConsensus {
             let peers = self.peers.read().await;
             peers.values().filter(|p| p.is_filtered).count()
         };
-        
+
         let (has_consensus, consensus_height, agreement) = self.check_consensus().await;
-        
+
         format!(
             "Peers: {} active, {} filtered | Consensus: {} at height {} ({:.1}%)",
             active.len(),
@@ -386,44 +435,40 @@ pub struct WorkScoreCalculator;
 impl WorkScoreCalculator {
     /// Calculate work score for a block
     /// work = asymmetry × space × quality × energy_eff
-    pub fn block_work_score(
-        problem_size: u64,
-        solve_time_us: u64,
-        verify_time_us: u64,
-    ) -> u64 {
+    pub fn block_work_score(problem_size: u64, solve_time_us: u64, verify_time_us: u64) -> u64 {
         // Asymmetry ratio: how much harder to solve than verify
         let asymmetry = if verify_time_us > 0 {
             solve_time_us / verify_time_us
         } else {
             solve_time_us
         };
-        
+
         // Space complexity (problem size)
         let space = problem_size;
-        
+
         // Quality: smaller solve time per unit of problem size = better
         let quality = if solve_time_us > 0 {
             (problem_size * 1_000_000) / solve_time_us
         } else {
             problem_size
         };
-        
+
         // Combined work score (simplified)
         // In production, we'd want more sophisticated weighting
         (asymmetry + space + quality) / 3
     }
-    
+
     /// Calculate cumulative work score for a chain
     pub fn chain_work_score(block_scores: &[u64]) -> u64 {
         block_scores.iter().sum()
     }
-    
+
     /// Compare two chains by work score
     /// Returns: -1 if ours is better, 0 if equal, 1 if theirs is better
     pub fn compare_chains(our_work: u64, their_work: u64) -> i32 {
         // Allow 0.5% tolerance before switching
         let tolerance = our_work / 200; // 0.5%
-        
+
         if their_work > our_work + tolerance {
             1 // Theirs is better
         } else if our_work > their_work + tolerance {
@@ -437,50 +482,62 @@ impl WorkScoreCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_peer_consensus_basic() {
         let consensus = PeerConsensus::with_defaults();
-        
+
         // Add some peers
-        consensus.update_peer("peer1".to_string(), 100, [0; 32]).await;
-        consensus.update_peer("peer2".to_string(), 100, [0; 32]).await;
-        consensus.update_peer("peer3".to_string(), 100, [0; 32]).await;
-        
+        consensus
+            .update_peer("peer1".to_string(), 100, [0; 32])
+            .await;
+        consensus
+            .update_peer("peer2".to_string(), 100, [0; 32])
+            .await;
+        consensus
+            .update_peer("peer3".to_string(), 100, [0; 32])
+            .await;
+
         // Should have 3 active peers
         assert_eq!(consensus.active_peer_count().await, 3);
-        
+
         // Should have consensus at height 100
         let (has_consensus, height, agreement) = consensus.check_consensus().await;
         assert!(has_consensus);
         assert_eq!(height, 100);
         assert_eq!(agreement, 1.0);
     }
-    
+
     #[tokio::test]
     async fn test_should_mine() {
         let consensus = PeerConsensus::with_defaults();
-        
+
         // No peers - should not mine
         let (should, reason) = consensus.should_mine(100).await;
         assert!(!should);
         assert!(reason.contains("Insufficient peers"));
-        
+
         // Add 3 peers at height 100
-        consensus.update_peer("peer1".to_string(), 100, [0; 32]).await;
-        consensus.update_peer("peer2".to_string(), 100, [0; 32]).await;
-        consensus.update_peer("peer3".to_string(), 100, [0; 32]).await;
-        
+        consensus
+            .update_peer("peer1".to_string(), 100, [0; 32])
+            .await;
+        consensus
+            .update_peer("peer2".to_string(), 100, [0; 32])
+            .await;
+        consensus
+            .update_peer("peer3".to_string(), 100, [0; 32])
+            .await;
+
         // We're at 100, peers at 100 - should mine
         let (should, _) = consensus.should_mine(100).await;
         assert!(should);
-        
+
         // We're at 50, peers at 100 - should NOT mine (50 blocks behind)
         let (should, reason) = consensus.should_mine(50).await;
         assert!(!should);
         assert!(reason.contains("Behind peers"));
     }
-    
+
     #[test]
     fn test_work_score_calculation() {
         // Higher asymmetry = higher work
@@ -489,4 +546,3 @@ mod tests {
         assert!(score1 > score2); // More asymmetric = better
     }
 }
-

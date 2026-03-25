@@ -8,17 +8,16 @@
 // Test 3.3 — Peer Reconnection
 // Test 3.4 — Router Fanout Math (η = 1/√2)
 
+use coinject_core::{
+    Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, SolutionReveal,
+};
 use coinject_network::cpp::{
-    CppNetwork, NetworkEvent, NetworkCommand, CppConfig,
     config::{NodeType, ETA},
     router::{EquilibriumRouter, PeerInfo},
+    CppConfig, CppNetwork, NetworkCommand, NetworkEvent,
 };
-use coinject_core::{
-    Hash, Block, BlockHeader, Address, CoinbaseTransaction,
-    SolutionReveal, Commitment,
-};
-use tokio::time::Duration;
 use std::net::SocketAddr;
+use tokio::time::Duration;
 
 // =============================================================================
 // Test Helpers
@@ -141,15 +140,24 @@ async fn test_two_node_connect_and_sync() {
 
     // B connects to A
     let addr_a: SocketAddr = "127.0.0.1:17071".parse().unwrap();
-    cmd_b.send(NetworkCommand::ConnectBootnode { addr: addr_a }).unwrap();
+    cmd_b
+        .send(NetworkCommand::ConnectBootnode { addr: addr_a })
+        .unwrap();
 
     // B should receive PeerConnected
     let event_b = wait_for_event(&mut events_b, 5, |e| {
         matches!(e, NetworkEvent::PeerConnected { .. })
-    }).await;
-    assert!(event_b.is_some(), "Node B did not receive PeerConnected within 5s");
+    })
+    .await;
+    assert!(
+        event_b.is_some(),
+        "Node B did not receive PeerConnected within 5s"
+    );
 
-    if let Some(NetworkEvent::PeerConnected { peer_id, node_type, .. }) = &event_b {
+    if let Some(NetworkEvent::PeerConnected {
+        peer_id, node_type, ..
+    }) = &event_b
+    {
         assert_eq!(*peer_id, peer_id_a, "B should see A's peer ID");
         assert_eq!(*node_type, NodeType::Full);
     }
@@ -157,8 +165,12 @@ async fn test_two_node_connect_and_sync() {
     // A should also receive PeerConnected (from inbound connection)
     let event_a = wait_for_event(&mut events_a, 5, |e| {
         matches!(e, NetworkEvent::PeerConnected { .. })
-    }).await;
-    assert!(event_a.is_some(), "Node A did not receive PeerConnected within 5s");
+    })
+    .await;
+    assert!(
+        event_a.is_some(),
+        "Node A did not receive PeerConnected within 5s"
+    );
 
     if let Some(NetworkEvent::PeerConnected { peer_id, .. }) = &event_a {
         assert_eq!(*peer_id, peer_id_b, "A should see B's peer ID");
@@ -192,29 +204,39 @@ async fn test_block_propagation() {
 
     // Connect B → A
     let addr_a: SocketAddr = "127.0.0.1:17073".parse().unwrap();
-    cmd_b.send(NetworkCommand::ConnectBootnode { addr: addr_a }).unwrap();
+    cmd_b
+        .send(NetworkCommand::ConnectBootnode { addr: addr_a })
+        .unwrap();
 
     // Wait for connection to establish on both sides
     let connected_b = wait_for_event(&mut events_b, 5, |e| {
         matches!(e, NetworkEvent::PeerConnected { .. })
-    }).await;
+    })
+    .await;
     assert!(connected_b.is_some(), "B did not connect to A");
 
     let connected_a = wait_for_event(&mut events_a, 5, |e| {
         matches!(e, NetworkEvent::PeerConnected { .. })
-    }).await;
+    })
+    .await;
     assert!(connected_a.is_some(), "A did not see B's connection");
 
     // A broadcasts a block
     let block = create_test_block(1, genesis);
     let block_height = block.header.height;
-    cmd_a.send(NetworkCommand::BroadcastBlock { block }).unwrap();
+    cmd_a
+        .send(NetworkCommand::BroadcastBlock { block })
+        .unwrap();
 
     // B should receive the block
     let block_event = wait_for_event(&mut events_b, 5, |e| {
         matches!(e, NetworkEvent::BlockReceived { .. })
-    }).await;
-    assert!(block_event.is_some(), "Node B did not receive broadcasted block within 5s");
+    })
+    .await;
+    assert!(
+        block_event.is_some(),
+        "Node B did not receive broadcasted block within 5s"
+    );
 
     if let Some(NetworkEvent::BlockReceived { block, peer_id }) = block_event {
         assert_eq!(block.header.height, block_height, "Block height mismatch");
@@ -249,48 +271,62 @@ async fn test_peer_reconnection() {
 
     // First connection: B → A
     let addr_a: SocketAddr = "127.0.0.1:17075".parse().unwrap();
-    cmd_b.send(NetworkCommand::ConnectBootnode { addr: addr_a }).unwrap();
+    cmd_b
+        .send(NetworkCommand::ConnectBootnode { addr: addr_a })
+        .unwrap();
 
     // Wait for connection
     let connected = wait_for_event(&mut events_b, 5, |e| {
         matches!(e, NetworkEvent::PeerConnected { .. })
-    }).await;
+    })
+    .await;
     assert!(connected.is_some(), "Initial connection failed");
 
     // Also drain A's PeerConnected
     let _ = wait_for_event(&mut events_a, 5, |e| {
         matches!(e, NetworkEvent::PeerConnected { .. })
-    }).await;
+    })
+    .await;
 
     // Disconnect from B's side (B controls the reconnect, so it must
     // clear its own peer map immediately — A-side disconnect would require
     // waiting for B's read timeout to detect the TCP close)
-    cmd_b.send(NetworkCommand::DisconnectPeer {
-        peer_id: peer_id_a,
-        reason: "test reconnection".to_string(),
-    }).unwrap();
+    cmd_b
+        .send(NetworkCommand::DisconnectPeer {
+            peer_id: peer_id_a,
+            reason: "test reconnection".to_string(),
+        })
+        .unwrap();
 
     // Wait for B's disconnect event (immediate since B initiated)
     let _disconnected_b = wait_for_event(&mut events_b, 5, |e| {
         matches!(e, NetworkEvent::PeerDisconnected { .. })
-    }).await;
+    })
+    .await;
 
     // Drain any disconnect event on A too
     let _disconnected_a = wait_for_event(&mut events_a, 3, |e| {
         matches!(e, NetworkEvent::PeerDisconnected { .. })
-    }).await;
+    })
+    .await;
 
     // Give TCP connections time to fully close
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Reconnect: B → A again
-    cmd_b.send(NetworkCommand::ConnectBootnode { addr: addr_a }).unwrap();
+    cmd_b
+        .send(NetworkCommand::ConnectBootnode { addr: addr_a })
+        .unwrap();
 
     // Should get PeerConnected again
     let reconnected = wait_for_event(&mut events_b, 10, |e| {
         matches!(e, NetworkEvent::PeerConnected { .. })
-    }).await;
-    assert!(reconnected.is_some(), "Reconnection failed — B did not receive PeerConnected");
+    })
+    .await;
+    assert!(
+        reconnected.is_some(),
+        "Reconnection failed — B did not receive PeerConnected"
+    );
 }
 
 // =============================================================================
@@ -302,8 +338,10 @@ async fn test_peer_reconnection() {
 #[test]
 fn test_router_fanout_formula() {
     // η = 1/√2 ≈ 0.7071
-    assert!((ETA - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-6,
-        "ETA should equal 1/√2");
+    assert!(
+        (ETA - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-6,
+        "ETA should equal 1/√2"
+    );
 
     // Test fanout = ⌈√n × η⌉ for various peer counts
     // Note: Due to floating-point precision, we verify against the same
@@ -317,9 +355,15 @@ fn test_router_fanout_formula() {
         let selected = router.select_broadcast_peers();
         let computed_fanout = ((n as f64).sqrt() * ETA).ceil() as usize;
 
-        assert_eq!(selected.len(), computed_fanout,
+        assert_eq!(
+            selected.len(),
+            computed_fanout,
             "n={}: fanout should be ceil(sqrt({}) * η) = {}, got {}",
-            n, n, computed_fanout, selected.len());
+            n,
+            n,
+            computed_fanout,
+            selected.len()
+        );
 
         // Sanity: fanout should always be >= 1 and <= n
         assert!(selected.len() >= 1, "n={}: fanout must be >= 1", n);
@@ -327,8 +371,11 @@ fn test_router_fanout_formula() {
 
         // Verify all selected peers are valid
         for peer_id in &selected {
-            assert!(router.get_peer(peer_id).is_some(),
-                "n={}: selected peer should exist in router", n);
+            assert!(
+                router.get_peer(peer_id).is_some(),
+                "n={}: selected peer should exist in router",
+                n
+            );
         }
     }
 }
@@ -343,14 +390,22 @@ fn test_router_quality_decay_uses_eta() {
     router.update_peer_quality(&id, false);
     let q = router.get_peer(&id).unwrap().quality;
     let expected = 1.0 * (1.0 - ETA); // ≈ 0.2929
-    assert!((q - expected).abs() < 0.001,
-        "After failure: expected quality ≈ {:.4}, got {:.4}", expected, q);
+    assert!(
+        (q - expected).abs() < 0.001,
+        "After failure: expected quality ≈ {:.4}, got {:.4}",
+        expected,
+        q
+    );
 
     // Success: quality += 0.1
     router.update_peer_quality(&id, true);
     let q2 = router.get_peer(&id).unwrap().quality;
-    assert!((q2 - (expected + 0.1)).abs() < 0.001,
-        "After success: expected quality ≈ {:.4}, got {:.4}", expected + 0.1, q2);
+    assert!(
+        (q2 - (expected + 0.1)).abs() < 0.001,
+        "After success: expected quality ≈ {:.4}, got {:.4}",
+        expected + 0.1,
+        q2
+    );
 }
 
 #[test]
@@ -365,7 +420,10 @@ fn test_router_sync_peer_selects_closest() {
 
     // Need height 120 → closest above is peer 3 at 150
     let selected = router.select_sync_peer(120).unwrap();
-    assert_eq!(selected, [3; 32], "Should select peer at height 150 (closest >= 120)");
+    assert_eq!(
+        selected, [3; 32],
+        "Should select peer at height 150 (closest >= 120)"
+    );
 
     // Need height 200 → only peer 4 qualifies
     let selected = router.select_sync_peer(200).unwrap();
@@ -384,7 +442,11 @@ fn test_router_chunk_size_adaptive() {
     // Small delta: 20 × (1 + 10 × 0.7071 / 10) = 20 × 1.7071 ≈ 34.14 → 35
     let chunk = router.calculate_chunk_size(10, 20, 100);
     let expected = (20.0 * (1.0 + 10.0 * ETA / 10.0)).ceil() as u64;
-    assert_eq!(chunk, expected, "Adaptive chunk for delta=10: expected {}, got {}", expected, chunk);
+    assert_eq!(
+        chunk, expected,
+        "Adaptive chunk for delta=10: expected {}, got {}",
+        expected, chunk
+    );
 
     // Large delta: capped at max_chunk
     let chunk = router.calculate_chunk_size(1000, 20, 100);
@@ -411,14 +473,16 @@ fn test_router_flock_broadcast_uses_reynolds_rules() {
     let selected = router.select_broadcast_peers_flock(100, 0);
 
     // Should prefer peers near our height (separation rule penalizes divergent peers)
-    let near_peers: Vec<_> = selected.iter()
+    let near_peers: Vec<_> = selected
+        .iter()
         .filter(|id| {
             let peer = router.get_peer(id).unwrap();
             peer.best_height <= 200
         })
         .collect();
 
-    let far_peers: Vec<_> = selected.iter()
+    let far_peers: Vec<_> = selected
+        .iter()
         .filter(|id| {
             let peer = router.get_peer(id).unwrap();
             peer.best_height > 200
@@ -426,7 +490,10 @@ fn test_router_flock_broadcast_uses_reynolds_rules() {
         .collect();
 
     // Near peers should dominate the selection
-    assert!(near_peers.len() >= far_peers.len(),
+    assert!(
+        near_peers.len() >= far_peers.len(),
         "Separation rule: near peers ({}) should outnumber far peers ({})",
-        near_peers.len(), far_peers.len());
+        near_peers.len(),
+        far_peers.len()
+    );
 }

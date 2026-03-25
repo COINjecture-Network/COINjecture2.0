@@ -18,8 +18,8 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
 
 use coinject_core::{
-    Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Ed25519Signature,
-    Hash, ProblemType, PublicKey, Solution, SolutionReveal,
+    Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Ed25519Signature, Hash,
+    ProblemType, PublicKey, Solution, SolutionReveal,
 };
 use coinject_network::mesh::bridge::{self, BridgeCommand, BridgeEvent, BridgeState};
 use coinject_network::mesh::config::NetworkConfig;
@@ -115,7 +115,7 @@ fn create_test_block(genesis: &Block) -> Block {
         version: 1,
         height: 1,
         prev_hash: genesis_hash,
-        timestamp: 1735689660, // 60 seconds after genesis
+        timestamp: 1735689660,         // 60 seconds after genesis
         transactions_root: Hash::ZERO, // No transactions
         solutions_root: Hash::new(&bincode::serialize(&solution).unwrap_or_default()),
         commitment: commitment.clone(),
@@ -190,9 +190,7 @@ async fn test_block_propagates_through_mesh_bridge() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new(
-                    "bridge_e2e=debug,coinject_network::mesh=info",
-                )
+                tracing_subscriber::EnvFilter::new("bridge_e2e=debug,coinject_network::mesh=info")
             }),
         )
         .try_init();
@@ -272,7 +270,10 @@ async fn test_block_propagates_through_mesh_bridge() {
     println!("  Waiting for mesh connection...");
 
     let connected = wait_for_bridge_peer(&mut bridge_event_rx_b, Duration::from_secs(10)).await;
-    assert!(connected, "FAIL: Nodes failed to discover each other within 10s");
+    assert!(
+        connected,
+        "FAIL: Nodes failed to discover each other within 10s"
+    );
 
     // Small delay to let Node A's mesh also register the inbound connection
     // (Node B connects outbound to A, but A's inbound registration is async)
@@ -287,7 +288,10 @@ async fn test_block_propagates_through_mesh_bridge() {
     let test_block_height = test_block.header.height;
 
     println!();
-    println!("  Node A: created test block height={} hash={}", test_block_height, test_block_hash);
+    println!(
+        "  Node A: created test block height={} hash={}",
+        test_block_height, test_block_hash
+    );
     println!("  Node A: broadcasting block via mesh bridge...");
 
     let broadcast_start = Instant::now();
@@ -310,8 +314,14 @@ async fn test_block_propagates_through_mesh_bridge() {
             let received_hash = received_block.header.hash();
             let received_height = received_block.header.height;
 
-            println!("  Node B: block received from mesh (peer {})", from_peer.short());
-            println!("  Node B: height={} hash={}", received_height, received_hash);
+            println!(
+                "  Node B: block received from mesh (peer {})",
+                from_peer.short()
+            );
+            println!(
+                "  Node B: height={} hash={}",
+                received_height, received_hash
+            );
 
             // Check hash match
             let hash_match = received_hash == test_block_hash;
@@ -333,13 +343,29 @@ async fn test_block_propagates_through_mesh_bridge() {
             println!();
             println!("  ─────────────────────────────────────────────────");
 
-            if hash_match && height_match && prev_hash_match && miner_match && coinbase_match && solution_valid {
+            if hash_match
+                && height_match
+                && prev_hash_match
+                && miner_match
+                && coinbase_match
+                && solution_valid
+            {
                 println!(
                     "  ✓ PASS — Block propagated A→B in {}ms",
                     propagation_time.as_millis()
                 );
-                println!("    Node A: {} → Block {} (height {})", id_a.short(), test_block_hash, test_block_height);
-                println!("    Node B: {} → Received {} (height {})", id_b.short(), received_hash, received_height);
+                println!(
+                    "    Node A: {} → Block {} (height {})",
+                    id_a.short(),
+                    test_block_hash,
+                    test_block_height
+                );
+                println!(
+                    "    Node B: {} → Received {} (height {})",
+                    id_b.short(),
+                    received_hash,
+                    received_height
+                );
                 println!("    Hashes match: ✓");
                 println!("    Solution valid: ✓");
                 println!("    Prev hash correct: ✓");
@@ -347,10 +373,16 @@ async fn test_block_propagates_through_mesh_bridge() {
             } else {
                 println!("  ✗ FAIL — Block data mismatch");
                 if !hash_match {
-                    println!("    Hash: EXPECTED {} GOT {}", test_block_hash, received_hash);
+                    println!(
+                        "    Hash: EXPECTED {} GOT {}",
+                        test_block_hash, received_hash
+                    );
                 }
                 if !height_match {
-                    println!("    Height: EXPECTED {} GOT {}", test_block_height, received_height);
+                    println!(
+                        "    Height: EXPECTED {} GOT {}",
+                        test_block_height, received_height
+                    );
                 }
                 if !prev_hash_match {
                     println!("    Prev hash mismatch");
@@ -416,9 +448,7 @@ async fn wait_for_bridge_peer(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_transaction_propagates_through_mesh_bridge() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_env_filter("info").try_init();
 
     let port_a = 19500 + (rand::random::<u16>() % 500);
     let port_b = port_a + 1;

@@ -25,10 +25,7 @@ impl Commitment {
 
         let hash = Hash::new(&commitment_data);
 
-        Commitment {
-            hash,
-            problem_hash,
-        }
+        Commitment { hash, problem_hash }
     }
 
     /// Create commitment from problem, solution, and epoch salt (using JSON serialization)
@@ -37,7 +34,7 @@ impl Commitment {
         // Hash problem using JSON serialization
         let problem_json = serde_json::to_vec(problem).unwrap_or_default();
         let problem_hash = Hash::new(&problem_json);
-        
+
         // Hash solution using JSON serialization
         let solution_json = serde_json::to_vec(solution).unwrap_or_default();
         let solution_hash = Hash::new(&solution_json);
@@ -50,10 +47,7 @@ impl Commitment {
 
         let hash = Hash::new(&commitment_data);
 
-        Commitment {
-            hash,
-            problem_hash,
-        }
+        Commitment { hash, problem_hash }
     }
 
     /// Verify that commitment matches revealed problem and solution
@@ -61,7 +55,8 @@ impl Commitment {
     pub fn verify(&self, problem: &ProblemType, solution: &Solution, epoch_salt: &Hash) -> bool {
         // Try bincode serialization first (server-side mining)
         let expected_bincode = Self::create(problem, solution, epoch_salt);
-        if self.hash == expected_bincode.hash && self.problem_hash == expected_bincode.problem_hash {
+        if self.hash == expected_bincode.hash && self.problem_hash == expected_bincode.problem_hash
+        {
             return true;
         }
 
@@ -118,10 +113,7 @@ impl Commitment {
 
         let hash = Hash::new(&commitment_data);
 
-        Commitment {
-            hash,
-            problem_hash,
-        }
+        Commitment { hash, problem_hash }
     }
 
     /// Create golden-enhanced commitment (using JSON serialization)
@@ -162,10 +154,7 @@ impl Commitment {
 
         let hash = Hash::new(&commitment_data);
 
-        Commitment {
-            hash,
-            problem_hash,
-        }
+        Commitment { hash, problem_hash }
     }
 
     /// Verify commitment with golden enhancement support
@@ -195,7 +184,8 @@ impl Commitment {
     ) -> bool {
         // 1. Try standard bincode verification
         let expected_bincode = Self::create(problem, solution, epoch_salt);
-        if self.hash == expected_bincode.hash && self.problem_hash == expected_bincode.problem_hash {
+        if self.hash == expected_bincode.hash && self.problem_hash == expected_bincode.problem_hash
+        {
             return true;
         }
 
@@ -208,18 +198,20 @@ impl Commitment {
         // 3 & 4. Try golden-enhanced verification if genesis/height provided
         if let (Some(genesis), Some(height)) = (genesis_hash, block_height) {
             // Try golden bincode
-            let expected_golden = Self::create_with_golden(
-                problem, solution, epoch_salt, genesis, height
-            );
-            if self.hash == expected_golden.hash && self.problem_hash == expected_golden.problem_hash {
+            let expected_golden =
+                Self::create_with_golden(problem, solution, epoch_salt, genesis, height);
+            if self.hash == expected_golden.hash
+                && self.problem_hash == expected_golden.problem_hash
+            {
                 return true;
             }
 
             // Try golden JSON
-            let expected_golden_json = Self::create_with_golden_json(
-                problem, solution, epoch_salt, genesis, height
-            );
-            if self.hash == expected_golden_json.hash && self.problem_hash == expected_golden_json.problem_hash {
+            let expected_golden_json =
+                Self::create_with_golden_json(problem, solution, epoch_salt, genesis, height);
+            if self.hash == expected_golden_json.hash
+                && self.problem_hash == expected_golden_json.problem_hash
+            {
                 return true;
             }
         }
@@ -248,7 +240,10 @@ impl SolutionReveal {
     /// Verify this reveal matches the commitment
     pub fn verify(&self, epoch_salt: &Hash) -> bool {
         // 1. Verify commitment matches problem + solution
-        if !self.commitment.verify(&self.problem, &self.solution, epoch_salt) {
+        if !self
+            .commitment
+            .verify(&self.problem, &self.solution, epoch_salt)
+        {
             return false;
         }
 
@@ -326,7 +321,10 @@ mod tests {
 
         // They should be different (different serialization formats)
         assert_ne!(commitment_json.hash, commitment_bincode.hash);
-        assert_ne!(commitment_json.problem_hash, commitment_bincode.problem_hash);
+        assert_ne!(
+            commitment_json.problem_hash,
+            commitment_bincode.problem_hash
+        );
 
         // But both should verify correctly
         assert!(commitment_json.verify(&problem, &solution, &epoch_salt));
@@ -350,12 +348,20 @@ mod tests {
 
         // Create golden-enhanced commitment
         let commitment = Commitment::create_with_golden(
-            &problem, &solution, &epoch_salt, &genesis_hash, block_height
+            &problem,
+            &solution,
+            &epoch_salt,
+            &genesis_hash,
+            block_height,
         );
 
         // Should verify with golden verification
         assert!(commitment.verify_with_golden(
-            &problem, &solution, &epoch_salt, Some(&genesis_hash), Some(block_height)
+            &problem,
+            &solution,
+            &epoch_salt,
+            Some(&genesis_hash),
+            Some(block_height)
         ));
 
         // Should NOT verify with standard verification (different hash)
@@ -376,7 +382,11 @@ mod tests {
         // Create both commitment types
         let standard = Commitment::create(&problem, &solution, &epoch_salt);
         let golden = Commitment::create_with_golden(
-            &problem, &solution, &epoch_salt, &genesis_hash, block_height
+            &problem,
+            &solution,
+            &epoch_salt,
+            &genesis_hash,
+            block_height,
         );
 
         // They should produce different hashes
@@ -396,10 +406,18 @@ mod tests {
 
         // Create same commitment twice
         let c1 = Commitment::create_with_golden(
-            &problem, &solution, &epoch_salt, &genesis_hash, block_height
+            &problem,
+            &solution,
+            &epoch_salt,
+            &genesis_hash,
+            block_height,
         );
         let c2 = Commitment::create_with_golden(
-            &problem, &solution, &epoch_salt, &genesis_hash, block_height
+            &problem,
+            &solution,
+            &epoch_salt,
+            &genesis_hash,
+            block_height,
         );
 
         // Should be identical (deterministic)
@@ -418,12 +436,10 @@ mod tests {
         let genesis_hash = Hash::new(b"genesis_block");
 
         // Heights 50 and 150 are in different epochs (0 and 1)
-        let c_epoch0 = Commitment::create_with_golden(
-            &problem, &solution, &epoch_salt, &genesis_hash, 50
-        );
-        let c_epoch1 = Commitment::create_with_golden(
-            &problem, &solution, &epoch_salt, &genesis_hash, 150
-        );
+        let c_epoch0 =
+            Commitment::create_with_golden(&problem, &solution, &epoch_salt, &genesis_hash, 50);
+        let c_epoch1 =
+            Commitment::create_with_golden(&problem, &solution, &epoch_salt, &genesis_hash, 150);
 
         // Different epochs should produce different hashes
         assert_ne!(c_epoch0.hash, c_epoch1.hash);
@@ -444,12 +460,14 @@ mod tests {
 
         // verify_with_golden should still verify standard commitments
         assert!(standard.verify_with_golden(
-            &problem, &solution, &epoch_salt, Some(&genesis_hash), Some(150)
+            &problem,
+            &solution,
+            &epoch_salt,
+            Some(&genesis_hash),
+            Some(150)
         ));
 
         // Also works without genesis_hash
-        assert!(standard.verify_with_golden(
-            &problem, &solution, &epoch_salt, None, None
-        ));
+        assert!(standard.verify_with_golden(&problem, &solution, &epoch_salt, None, None));
     }
 }

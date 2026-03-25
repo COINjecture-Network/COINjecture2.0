@@ -57,7 +57,7 @@ impl Default for PoolConfig {
         PoolConfig {
             max_transactions: 10_000,
             max_size_bytes: 20 * 1024 * 1024, // 20 MB
-            min_fee: 1000,                      // 1000 units minimum fee
+            min_fee: 1000,                    // 1000 units minimum fee
         }
     }
 }
@@ -205,11 +205,7 @@ impl TransactionPool {
     pub fn get_top_n(&self, n: usize) -> Vec<Transaction> {
         let mut sorted: Vec<_> = self.queue.iter().cloned().collect();
         sorted.sort_by(|a, b| b.cmp(a)); // Descending order
-        sorted
-            .into_iter()
-            .take(n)
-            .map(|p| p.tx)
-            .collect()
+        sorted.into_iter().take(n).map(|p| p.tx).collect()
     }
 
     /// Get transaction by hash
@@ -228,11 +224,7 @@ impl TransactionPool {
             self.seen.remove(hash);
 
             // Rebuild heap without the removed transaction
-            let remaining: Vec<_> = self
-                .queue
-                .drain()
-                .filter(|p| &p.tx_hash != hash)
-                .collect();
+            let remaining: Vec<_> = self.queue.drain().filter(|p| &p.tx_hash != hash).collect();
 
             self.queue = BinaryHeap::from(remaining);
 

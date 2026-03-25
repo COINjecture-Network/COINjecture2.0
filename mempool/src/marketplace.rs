@@ -2,7 +2,7 @@
 // Users submit NP-hard problems with escrowed bounties
 // Supports both public and private (commitment-based) submissions
 
-use coinject_core::{Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
+use coinject_core::{Address, Balance, Hash, ProblemReveal, Solution, SubmissionMode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -69,6 +69,12 @@ pub struct ProblemMarketplace {
     submitter_index: HashMap<Address, Vec<Hash>>,
     /// Escrowed balances (problem_id -> bounty amount)
     escrow: HashMap<Hash, Balance>,
+}
+
+impl Default for ProblemMarketplace {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ProblemMarketplace {
@@ -143,9 +149,9 @@ impl ProblemMarketplace {
                     .map_err(|_| MarketplaceError::SerializationError)?;
                 Hash::new(&problem_data)
             }
-            SubmissionMode::Private { problem_commitment, .. } => {
-                *problem_commitment
-            }
+            SubmissionMode::Private {
+                problem_commitment, ..
+            } => *problem_commitment,
         };
 
         // Check for duplicates
@@ -183,7 +189,7 @@ impl ProblemMarketplace {
         // Index by submitter
         self.submitter_index
             .entry(submitter)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(problem_id);
 
         println!(
@@ -254,7 +260,10 @@ impl ProblemMarketplace {
         problem.solver = Some(solver);
         problem.status = ProblemStatus::Solved;
 
-        println!("Solution accepted for problem {:?} by {:?}", problem_id, solver);
+        println!(
+            "Solution accepted for problem {:?} by {:?}",
+            problem_id, solver
+        );
 
         Ok(())
     }
@@ -295,7 +304,10 @@ impl ProblemMarketplace {
     }
 
     /// Claim bounty after solution verification
-    pub fn claim_bounty(&mut self, problem_id: Hash) -> Result<(Address, Balance), MarketplaceError> {
+    pub fn claim_bounty(
+        &mut self,
+        problem_id: Hash,
+    ) -> Result<(Address, Balance), MarketplaceError> {
         let problem = self
             .problems
             .get(&problem_id)
@@ -318,7 +330,11 @@ impl ProblemMarketplace {
     }
 
     /// Cancel problem and refund bounty
-    pub fn cancel_problem(&mut self, problem_id: Hash, requester: Address) -> Result<Balance, MarketplaceError> {
+    pub fn cancel_problem(
+        &mut self,
+        problem_id: Hash,
+        requester: Address,
+    ) -> Result<Balance, MarketplaceError> {
         let problem = self
             .problems
             .get_mut(&problem_id)
@@ -342,7 +358,10 @@ impl ProblemMarketplace {
 
         problem.status = ProblemStatus::Cancelled;
 
-        println!("Problem cancelled: {:?}, refunding {} tokens", problem_id, bounty);
+        println!(
+            "Problem cancelled: {:?}, refunding {} tokens",
+            problem_id, bounty
+        );
 
         Ok(bounty)
     }
@@ -364,11 +383,7 @@ impl ProblemMarketplace {
     pub fn get_problems_by_submitter(&self, submitter: &Address) -> Vec<&ProblemSubmission> {
         self.submitter_index
             .get(submitter)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.problems.get(id))
-                    .collect()
-            })
+            .map(|ids| ids.iter().filter_map(|id| self.problems.get(id)).collect())
             .unwrap_or_default()
     }
 
@@ -386,7 +401,10 @@ impl ProblemMarketplace {
                 if let Some(bounty) = self.escrow.remove(problem_id) {
                     refunds.push((problem.submitter, bounty));
                     problem.status = ProblemStatus::Expired;
-                    println!("Problem expired: {:?}, refunding {} tokens", problem_id, bounty);
+                    println!(
+                        "Problem expired: {:?}, refunding {} tokens",
+                        problem_id, bounty
+                    );
                 }
             }
         }
@@ -408,7 +426,9 @@ impl ProblemMarketplace {
         for problem in self.problems.values() {
             match problem.status {
                 ProblemStatus::Open => stats.open_problems += 1,
-                ProblemStatus::Solved | ProblemStatus::PendingVerification => stats.solved_problems += 1,
+                ProblemStatus::Solved | ProblemStatus::PendingVerification => {
+                    stats.solved_problems += 1
+                }
                 ProblemStatus::Expired => stats.expired_problems += 1,
                 ProblemStatus::Cancelled => stats.cancelled_problems += 1,
             }
@@ -542,7 +562,9 @@ mod tests {
         let solver = Address::from_bytes([2u8; 32]);
         let solution = Solution::SubsetSum(vec![1, 2, 3]);
 
-        marketplace.submit_solution(problem_id, solver, solution).unwrap();
+        marketplace
+            .submit_solution(problem_id, solver, solution)
+            .unwrap();
 
         let (claimed_solver, bounty) = marketplace.claim_bounty(problem_id).unwrap();
         assert_eq!(claimed_solver, solver);
@@ -585,8 +607,12 @@ mod tests {
         };
 
         let submitter = Address::from_bytes([1u8; 32]);
-        marketplace.submit_public_problem(problem1, submitter, 1000, 10.0, 7).unwrap();
-        marketplace.submit_public_problem(problem2, submitter, 2000, 10.0, 7).unwrap();
+        marketplace
+            .submit_public_problem(problem1, submitter, 1000, 10.0, 7)
+            .unwrap();
+        marketplace
+            .submit_public_problem(problem2, submitter, 2000, 10.0, 7)
+            .unwrap();
 
         let stats = marketplace.get_stats();
         assert_eq!(stats.total_problems, 2);

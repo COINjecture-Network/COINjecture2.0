@@ -44,8 +44,8 @@ impl ValidatorKey {
 
     /// Load validator key from file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let data = fs::read(path.as_ref())
-            .map_err(|e| format!("Failed to read validator key: {}", e))?;
+        let data =
+            fs::read(path.as_ref()).map_err(|e| format!("Failed to read validator key: {}", e))?;
 
         bincode::deserialize(&data)
             .map_err(|e| format!("Failed to deserialize validator key: {}", e))
@@ -108,13 +108,19 @@ impl ValidatorKeystore {
     /// If key exists, loads it. Otherwise generates and saves a new one.
     pub fn get_or_create_key(&self) -> Result<ValidatorKey, String> {
         if self.key_file.exists() {
-            println!("= Loading existing validator key from: {}", self.key_file.display());
+            println!(
+                "= Loading existing validator key from: {}",
+                self.key_file.display()
+            );
             ValidatorKey::load(&self.key_file)
         } else {
             println!("= Generating new validator key...");
             let key = ValidatorKey::generate();
             key.save(&self.key_file)?;
-            println!("   Validator address: {}", hex::encode(key.address.as_bytes()));
+            println!(
+                "   Validator address: {}",
+                hex::encode(key.address.as_bytes())
+            );
             println!("   Key saved to: {}", self.key_file.display());
             Ok(key)
         }
@@ -123,11 +129,14 @@ impl ValidatorKeystore {
     /// Import validator key from hex private key
     #[allow(dead_code)]
     pub fn import_key(&self, secret_key_hex: &str) -> Result<ValidatorKey, String> {
-        let secret_bytes = hex::decode(secret_key_hex)
-            .map_err(|e| format!("Invalid hex: {}", e))?;
+        let secret_bytes =
+            hex::decode(secret_key_hex).map_err(|e| format!("Invalid hex: {}", e))?;
 
         if secret_bytes.len() != 32 {
-            return Err(format!("Secret key must be 32 bytes, got {}", secret_bytes.len()));
+            return Err(format!(
+                "Secret key must be 32 bytes, got {}",
+                secret_bytes.len()
+            ));
         }
 
         let mut secret_key = [0u8; 32];

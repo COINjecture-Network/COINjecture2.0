@@ -191,11 +191,7 @@ mod tests {
         let calc = WorkScoreCalculator::new();
 
         // 10s solve, 1ms verify → ratio = 10,000 → log₂(10000) ≈ 13.29 bits
-        let score = calc.calculate(
-            Duration::from_secs(10),
-            Duration::from_millis(1),
-            1.0,
-        );
+        let score = calc.calculate(Duration::from_secs(10), Duration::from_millis(1), 1.0);
 
         let expected = 10_000.0_f64.log2(); // ≈ 13.29
         assert!(
@@ -210,17 +206,9 @@ mod tests {
     fn test_quality_scales_linearly() {
         let calc = WorkScoreCalculator::new();
 
-        let full_quality = calc.calculate(
-            Duration::from_secs(10),
-            Duration::from_millis(1),
-            1.0,
-        );
+        let full_quality = calc.calculate(Duration::from_secs(10), Duration::from_millis(1), 1.0);
 
-        let half_quality = calc.calculate(
-            Duration::from_secs(10),
-            Duration::from_millis(1),
-            0.5,
-        );
+        let half_quality = calc.calculate(Duration::from_secs(10), Duration::from_millis(1), 0.5);
 
         assert!(
             (half_quality - full_quality * 0.5).abs() < 0.01,
@@ -232,11 +220,7 @@ mod tests {
     fn test_invalid_solution_gives_zero() {
         let calc = WorkScoreCalculator::new();
 
-        let score = calc.calculate(
-            Duration::from_secs(100),
-            Duration::from_millis(1),
-            0.0,
-        );
+        let score = calc.calculate(Duration::from_secs(100), Duration::from_millis(1), 0.0);
 
         assert_eq!(score, 0.0, "Invalid solution should produce zero work");
     }
@@ -246,11 +230,7 @@ mod tests {
         let calc = WorkScoreCalculator::new();
 
         // Solve time ≈ verify time → negligible work
-        let score = calc.calculate(
-            Duration::from_millis(1),
-            Duration::from_millis(1),
-            1.0,
-        );
+        let score = calc.calculate(Duration::from_millis(1), Duration::from_millis(1), 1.0);
 
         assert_eq!(score, 0.0, "Trivial asymmetry should produce zero work");
     }
@@ -260,17 +240,9 @@ mod tests {
         // 2× harder = 1 more bit
         let calc = WorkScoreCalculator::new();
 
-        let score_1k = calc.calculate(
-            Duration::from_secs(1),
-            Duration::from_millis(1),
-            1.0,
-        );
+        let score_1k = calc.calculate(Duration::from_secs(1), Duration::from_millis(1), 1.0);
 
-        let score_2k = calc.calculate(
-            Duration::from_secs(2),
-            Duration::from_millis(1),
-            1.0,
-        );
+        let score_2k = calc.calculate(Duration::from_secs(2), Duration::from_millis(1), 1.0);
 
         let diff = score_2k - score_1k;
         assert!(
@@ -312,7 +284,10 @@ mod tests {
         );
 
         // Valid solution → quality 1.0 → full bit-equivalent score
-        assert!(score > 10.0, "Valid SubsetSum should produce >10 bits of work");
+        assert!(
+            score > 10.0,
+            "Valid SubsetSum should produce >10 bits of work"
+        );
     }
 
     #[test]

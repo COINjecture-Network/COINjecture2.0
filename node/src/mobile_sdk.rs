@@ -78,8 +78,8 @@ pub struct MobileBlockHeader {
 impl MobileBlockHeader {
     /// Calculate header hash using SHA256(SHA256(header))
     pub fn hash(&self) -> MobileHash {
-        use sha2::{Sha256, Digest};
-        
+        use sha2::{Digest, Sha256};
+
         let mut data = Vec::with_capacity(80);
         data.extend_from_slice(&self.version.to_le_bytes());
         data.extend_from_slice(&self.height.to_le_bytes());
@@ -91,14 +91,14 @@ impl MobileBlockHeader {
 
         // Double SHA256 (Bitcoin-style)
         let first = Sha256::digest(&data);
-        let second = Sha256::digest(&first);
-        
+        let second = Sha256::digest(first);
+
         MobileHash::from_bytes(second.into())
     }
 
-    /// Serialize to bytes (80 bytes)
-    pub fn to_bytes(&self) -> [u8; 80] {
-        let mut bytes = [0u8; 80];
+    /// Serialize to bytes (84 bytes: 4+8+8+32+32)
+    pub fn to_bytes(&self) -> [u8; 84] {
+        let mut bytes = [0u8; 84];
         bytes[0..4].copy_from_slice(&self.version.to_le_bytes());
         bytes[4..12].copy_from_slice(&self.height.to_le_bytes());
         bytes[12..20].copy_from_slice(&self.timestamp.to_le_bytes());
@@ -147,7 +147,7 @@ pub struct MobileMMRProof {
 impl MobileMMRProof {
     /// Verify proof against expected MMR root
     pub fn verify(&self, expected_root: &MobileHash) -> bool {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         // Reconstruct from leaf to peak
         let mut current = self.leaf_hash;
@@ -156,7 +156,7 @@ impl MobileMMRProof {
             let mut hasher = Sha256::new();
             hasher.update(b"MMR_NODE");
             hasher.update((i as u32).to_le_bytes());
-            
+
             if *is_right {
                 hasher.update(current.as_bytes());
                 hasher.update(sibling.as_bytes());
@@ -164,7 +164,7 @@ impl MobileMMRProof {
                 hasher.update(sibling.as_bytes());
                 hasher.update(current.as_bytes());
             }
-            
+
             current = MobileHash::from_bytes(hasher.finalize().into());
         }
 
@@ -183,7 +183,7 @@ impl MobileMMRProof {
 
     /// Bag peaks to compute root
     fn bag_peaks(&self) -> MobileHash {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         if self.peaks.is_empty() {
             return MobileHash::default();
@@ -233,7 +233,7 @@ pub struct MobileTxProof {
 impl MobileTxProof {
     /// Verify transaction is in block
     pub fn verify(&self) -> bool {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
 
         let mut current = self.tx_hash;
 
@@ -292,7 +292,11 @@ impl MobileLightClient {
     }
 
     /// Verify and update with new tip
-    pub fn verify_tip(&mut self, header: &MobileBlockHeader, mmr_root: &MobileHash) -> VerifyResult {
+    pub fn verify_tip(
+        &mut self,
+        header: &MobileBlockHeader,
+        mmr_root: &MobileHash,
+    ) -> VerifyResult {
         // Basic validation
         if header.height == 0 {
             return VerifyResult::InvalidHeight;
@@ -330,7 +334,11 @@ impl MobileLightClient {
     }
 
     /// Verify a transaction is in a block
-    pub fn verify_transaction(&self, tx_proof: &MobileTxProof, block_proof: &MobileMMRProof) -> VerifyResult {
+    pub fn verify_transaction(
+        &self,
+        tx_proof: &MobileTxProof,
+        block_proof: &MobileMMRProof,
+    ) -> VerifyResult {
         // First verify block is in chain
         if !matches!(self.verify_block(block_proof), VerifyResult::Valid) {
             return VerifyResult::InvalidProof;
@@ -369,7 +377,10 @@ impl MobileLightClient {
         let genesis_hash = MobileHash::from_hex(&state.genesis_hash)?;
         let mut client = Self::new(genesis_hash);
         client.verified_height = state.verified_height;
-        client.verified_mmr_root = state.mmr_root.as_ref().and_then(|h| MobileHash::from_hex(h));
+        client.verified_mmr_root = state
+            .mmr_root
+            .as_ref()
+            .and_then(|h| MobileHash::from_hex(h));
         Some(client)
     }
 }
@@ -418,7 +429,9 @@ pub type MobileLightClientHandle = *mut MobileLightClient;
 /// Returns null on failure
 /// Caller must call `mobile_light_client_free` when done
 #[no_mangle]
-pub extern "C" fn mobile_light_client_new(genesis_hash_hex: *const std::ffi::c_char) -> MobileLightClientHandle {
+pub extern "C" fn mobile_light_client_new(
+    genesis_hash_hex: *const std::ffi::c_char,
+) -> MobileLightClientHandle {
     if genesis_hash_hex.is_null() {
         return std::ptr::null_mut();
     }
@@ -488,14 +501,16 @@ pub extern "C" fn mobile_verify_mmr_proof(
 /// Export state to JSON (FFI)
 /// Returns null-terminated JSON string, caller must free with `mobile_free_string`
 #[no_mangle]
-pub extern "C" fn mobile_light_client_export(handle: MobileLightClientHandle) -> *mut std::ffi::c_char {
+pub extern "C" fn mobile_light_client_export(
+    handle: MobileLightClientHandle,
+) -> *mut std::ffi::c_char {
     if handle.is_null() {
         return std::ptr::null_mut();
     }
 
     let client = unsafe { &*handle };
     let json = client.to_json();
-    
+
     match std::ffi::CString::new(json) {
         Ok(cstr) => cstr.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -531,8 +546,7 @@ mod wasm {
         /// Create new light client
         #[wasm_bindgen(constructor)]
         pub fn new(genesis_hash_hex: &str) -> Option<WasmLightClient> {
-            MobileLightClient::new_from_hex(genesis_hash_hex)
-                .map(|inner| WasmLightClient { inner })
+            MobileLightClient::new_from_hex(genesis_hash_hex).map(|inner| WasmLightClient { inner })
         }
 
         /// Get verified height
@@ -589,7 +603,7 @@ mod tests {
 
         let hash = header.hash();
         assert_ne!(hash, MobileHash::default());
-        
+
         // Hash should be deterministic
         let hash2 = header.hash();
         assert_eq!(hash, hash2);
@@ -640,7 +654,7 @@ mod tests {
         // Export and import
         let json = client.to_json();
         let recovered = MobileLightClient::from_json(&json).unwrap();
-        
+
         assert_eq!(client.genesis_hash, recovered.genesis_hash);
         assert_eq!(client.verified_height, recovered.verified_height);
     }
@@ -666,6 +680,3 @@ mod tests {
         assert!(!VerifyResult::NoVerifiedState.is_valid());
     }
 }
-
-
-

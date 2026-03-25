@@ -4,15 +4,17 @@
 // =============================================================================
 // Rewards long-term holders across multiple dimensions
 
-use coinject_core::ETA; // Import from core (single source of truth)
 use crate::pools::PoolType;
 use crate::staking::delta_critical;
 use coinject_core::Address;
+use coinject_core::ETA; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Proposal threshold: total_supply × Δ_critical = 23.1%
-pub fn proposal_threshold_pct() -> f64 { delta_critical() }
+pub fn proposal_threshold_pct() -> f64 {
+    delta_critical()
+}
 
 /// Quorum required for proposal to pass: 50%
 pub const QUORUM_THRESHOLD: f64 = 0.50;
@@ -64,11 +66,11 @@ impl ProposalType {
     /// Get timelock period in blocks
     pub fn timelock_blocks(&self) -> u64 {
         match self {
-            ProposalType::Parameter => 10_000,     // ~1 day
-            ProposalType::Treasury => 20_000,      // ~2 days
-            ProposalType::Upgrade => 50_000,       // ~5 days
+            ProposalType::Parameter => 10_000,       // ~1 day
+            ProposalType::Treasury => 20_000,        // ~2 days
+            ProposalType::Upgrade => 50_000,         // ~5 days
             ProposalType::Constitutional => 100_000, // ~10 days
-            ProposalType::Emergency => 0,          // Immediate
+            ProposalType::Emergency => 0,            // Immediate
         }
     }
 }
@@ -94,22 +96,28 @@ impl VoterPosition {
     /// Calculate total voting power
     /// voting_power = Σ(balance_n × D_n × unlock_n(τ))
     pub fn calculate_voting_power(&self, current_block: u64) -> u128 {
-        let power: f64 = self.balances.iter()
+        let power: f64 = self
+            .balances
+            .iter()
             .map(|(pool_type, balance)| {
                 let d_n = pool_type.scale();
                 let unlock = self.unlock_factor(*pool_type, current_block);
                 (*balance as f64) * d_n * unlock
             })
             .sum();
-        
+
         power as u128
     }
 
     /// Calculate unlock factor based on time staked
     fn unlock_factor(&self, pool_type: PoolType, current_block: u64) -> f64 {
-        let start = self.stake_starts.get(&pool_type).copied().unwrap_or(current_block);
+        let start = self
+            .stake_starts
+            .get(&pool_type)
+            .copied()
+            .unwrap_or(current_block);
         let blocks_staked = current_block.saturating_sub(start);
-        
+
         // Unlock follows same exponential curve
         // unlock = 1 - e^(-η × τ) where τ is time in years (scaled to blocks)
         let tau = (blocks_staked as f64) / 100_000.0; // ~1 year = 100k blocks
@@ -189,7 +197,7 @@ impl Proposal {
         let voting_starts = current_block + 1000; // Start after 1000 blocks
         let voting_ends = voting_starts + VOTING_PERIOD_BLOCKS;
         let execution_at = voting_ends + proposal_type.timelock_blocks();
-        
+
         Proposal {
             id,
             proposal_type,
@@ -228,20 +236,23 @@ impl Proposal {
         if self.votes.contains_key(&voter) {
             return Err(GovernanceError::AlreadyVoted);
         }
-        
+
         match option {
             VoteOption::For => self.votes_for += power,
             VoteOption::Against => self.votes_against += power,
             VoteOption::Abstain => self.votes_abstain += power,
         }
-        
-        self.votes.insert(voter, Vote {
+
+        self.votes.insert(
             voter,
-            option,
-            power,
-            cast_at: current_block,
-        });
-        
+            Vote {
+                voter,
+                option,
+                power,
+                cast_at: current_block,
+            },
+        );
+
         Ok(())
     }
 
@@ -251,7 +262,7 @@ impl Proposal {
         if self.status == ProposalStatus::Pending && current_block >= self.voting_starts {
             self.status = ProposalStatus::Active;
         }
-        
+
         // Check voting ended
         if self.status == ProposalStatus::Active && current_block > self.voting_ends {
             let total_votes = self.votes_for + self.votes_against + self.votes_abstain;
@@ -261,10 +272,10 @@ impl Proposal {
             } else {
                 0.0
             };
-            
+
             let passed = participation >= self.proposal_type.participation_threshold()
                 && approval >= self.proposal_type.approval_threshold();
-            
+
             self.status = if passed {
                 ProposalStatus::Passed
             } else {
@@ -282,7 +293,7 @@ impl Proposal {
         } else {
             0.0
         };
-        
+
         ProposalSummary {
             id: self.id,
             title: self.title.clone(),
@@ -368,10 +379,10 @@ impl GovernanceManager {
         if proposer_power < self.proposal_threshold() {
             return Err(GovernanceError::InsufficientPower);
         }
-        
+
         let id = self.next_id;
         self.next_id += 1;
-        
+
         let proposal = Proposal::new(
             id,
             proposal_type,
@@ -380,7 +391,7 @@ impl GovernanceManager {
             proposer,
             current_block,
         );
-        
+
         self.proposals.insert(id, proposal);
         Ok(id)
     }
@@ -405,10 +416,12 @@ impl GovernanceManager {
         if power == 0 {
             return Err(GovernanceError::InsufficientPower);
         }
-        
-        let proposal = self.proposals.get_mut(&proposal_id)
+
+        let proposal = self
+            .proposals
+            .get_mut(&proposal_id)
             .ok_or(GovernanceError::ProposalNotFound)?;
-        
+
         proposal.cast_vote(voter, option, power, current_block)
     }
 
@@ -421,7 +434,8 @@ impl GovernanceManager {
 
     /// Get active proposals
     pub fn active_proposals(&self) -> Vec<&Proposal> {
-        self.proposals.values()
+        self.proposals
+            .values()
             .filter(|p| p.status == ProposalStatus::Active)
             .collect()
     }
@@ -443,17 +457,17 @@ mod tests {
             balances: HashMap::new(),
             stake_starts: HashMap::new(),
         };
-        
+
         // Add stake to D1 (Genesis)
         position.balances.insert(PoolType::Genesis, 1_000_000);
         position.stake_starts.insert(PoolType::Genesis, 0);
-        
+
         // At block 0, unlock is minimal
         let power_0 = position.calculate_voting_power(0);
-        
+
         // After 100k blocks (~1 year), unlock increases
         let power_100k = position.calculate_voting_power(100_000);
-        
+
         assert!(power_100k > power_0);
     }
 
@@ -468,7 +482,7 @@ mod tests {
     fn test_vote_casting() {
         let proposer = Address::from_bytes([0; 32]);
         let voter = Address::from_bytes([1; 32]);
-        
+
         let mut proposal = Proposal::new(
             1,
             ProposalType::Parameter,
@@ -477,19 +491,18 @@ mod tests {
             proposer,
             0,
         );
-        
+
         proposal.status = ProposalStatus::Active;
         proposal.voting_starts = 0;
         proposal.voting_ends = 100_000;
-        
+
         // Cast vote
         let result = proposal.cast_vote(voter, VoteOption::For, 1000, 50);
         assert!(result.is_ok());
         assert_eq!(proposal.votes_for, 1000);
-        
+
         // Can't vote twice
         let result2 = proposal.cast_vote(voter, VoteOption::Against, 500, 60);
         assert_eq!(result2, Err(GovernanceError::AlreadyVoted));
     }
 }
-

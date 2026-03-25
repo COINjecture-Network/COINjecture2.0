@@ -49,6 +49,12 @@ pub struct DifficultyAdjuster {
     registry: Option<SharedRegistry>,
 }
 
+impl Default for DifficultyAdjuster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DifficultyAdjuster {
     /// Create new difficulty adjuster without network metrics (uses defaults)
     pub fn new() -> Self {
@@ -75,7 +81,10 @@ impl DifficultyAdjuster {
     }
 
     /// Create with both network metrics and problem registry
-    pub fn with_registry(network_metrics: Arc<RwLock<NetworkMetrics>>, registry: SharedRegistry) -> Self {
+    pub fn with_registry(
+        network_metrics: Arc<RwLock<NetworkMetrics>>,
+        registry: SharedRegistry,
+    ) -> Self {
         DifficultyAdjuster {
             recent_solve_times: VecDeque::with_capacity(DIFFICULTY_WINDOW),
             current_size: 20,
@@ -95,12 +104,12 @@ impl DifficultyAdjuster {
     pub fn set_registry(&mut self, registry: SharedRegistry) {
         self.registry = Some(registry);
     }
-    
+
     /// Check if network metrics are available
     pub fn has_metrics(&self) -> bool {
         self.network_metrics.is_some()
     }
-    
+
     /// Get optimal solve time from network (or default)
     async fn optimal_solve_time(&self) -> f64 {
         if let Some(ref metrics) = self.network_metrics {
@@ -114,21 +123,21 @@ impl DifficultyAdjuster {
             5.0
         }
     }
-    
+
     /// Get min target solve time (mathematical bound)
     async fn min_target_solve_time(&self) -> f64 {
         let optimal = self.optimal_solve_time().await;
         // MIN = Optimal * PHI_INV (mathematical bound, not arbitrary)
         optimal * PHI_INV
     }
-    
+
     /// Get max target solve time (mathematical bound)
     async fn max_target_solve_time(&self) -> f64 {
         let optimal = self.optimal_solve_time().await;
         // MAX = Optimal * PHI (mathematical bound, not arbitrary)
         optimal * PHI
     }
-    
+
     /// Get problem size limits from network metrics and problem registry.
     /// Uses hardness factors and median block time to estimate reasonable size ranges.
     /// Falls back to registry defaults when network metrics are unavailable.
@@ -138,7 +147,11 @@ impl DifficultyAdjuster {
         let (scaling_exp, abs_max, abs_min) = if let Some(ref registry) = self.registry {
             let reg = registry.read().await;
             if let Some(desc) = reg.get(problem_type) {
-                (desc.scaling_exponent(), desc.absolute_max_size(), desc.absolute_min_size())
+                (
+                    desc.scaling_exponent(),
+                    desc.absolute_max_size(),
+                    desc.absolute_min_size(),
+                )
             } else {
                 // Unknown problem type — use conservative defaults
                 (0.8, 60, 5)
@@ -183,12 +196,15 @@ impl DifficultyAdjuster {
             (min_size, max_size)
         } else {
             // No network metrics — bootstrap defaults derived from descriptor limits
-            (abs_min.max(5), abs_max.min(match problem_type {
-                "SubsetSum" => 50,
-                "SAT" => 100,
-                "TSP" => 25,
-                _ => 50,
-            }))
+            (
+                abs_min.max(5),
+                abs_max.min(match problem_type {
+                    "SubsetSum" => 50,
+                    "SAT" => 100,
+                    "TSP" => 25,
+                    _ => 50,
+                }),
+            )
         }
     }
 
@@ -220,7 +236,7 @@ impl DifficultyAdjuster {
         let sum: f64 = self.recent_solve_times.iter().sum();
         sum / self.recent_solve_times.len() as f64
     }
-    
+
     /// Calculate moving average (async version with network metrics)
     async fn moving_average_solve_time_async(&self) -> f64 {
         if self.recent_solve_times.is_empty() {
@@ -244,7 +260,7 @@ impl DifficultyAdjuster {
         let optimal = 5.0; // Default if no network metrics
         let min_target = optimal * PHI_INV;
         let max_target = optimal * PHI;
-        
+
         if avg_solve_time < min_target {
             println!(
                 "⚡ Solve times {:.2}s are below minimum target ({:.1}s). Allowing controlled growth.",
@@ -319,7 +335,7 @@ impl DifficultyAdjuster {
         self.current_size = bounded_size;
         bounded_size
     }
-    
+
     /// Adjust difficulty with network metrics (async version - fully empirical)
     pub async fn adjust_difficulty_async(&mut self) -> usize {
         // Need at least half a window of data before adjusting
@@ -331,7 +347,7 @@ impl DifficultyAdjuster {
         let optimal = self.optimal_solve_time().await;
         let min_target = self.min_target_solve_time().await;
         let max_target = self.max_target_solve_time().await;
-        
+
         if avg_solve_time < min_target {
             println!(
                 "⚡ Solve times {:.2}s are below minimum target ({:.1}s). Allowing controlled growth.",
@@ -414,16 +430,13 @@ impl DifficultyAdjuster {
         let old_size = self.current_size;
         let min_size = 5; // Default minimum
         let reduced = (((self.current_size as f64) * 0.85).round() as usize).max(min_size);
-        println!(
-            "⚠️  Mining failure penalty: {} → {}",
-            old_size, reduced
-        );
+        println!("⚠️  Mining failure penalty: {} → {}", old_size, reduced);
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
         self.stall_counter = (self.stall_counter + 1).min(20);
         reduced
     }
-    
+
     /// Penalize failure with network metrics (async version)
     pub async fn penalize_failure_async(&mut self) -> usize {
         let old_size = self.current_size;
@@ -459,8 +472,8 @@ impl DifficultyAdjuster {
         // Legacy fallback (no registry or contended lock)
         match problem_type {
             "SubsetSum" => self.current_size.min(50),
-            "SAT" => ((self.current_size as f64 * 0.75).round() as usize).max(5).min(100),
-            "TSP" => ((self.current_size as f64 * 0.35).round() as usize).max(5).min(25),
+            "SAT" => ((self.current_size as f64 * 0.75).round() as usize).clamp(5, 100),
+            "TSP" => ((self.current_size as f64 * 0.35).round() as usize).clamp(5, 25),
             _ => self.current_size,
         }
     }
@@ -497,11 +510,7 @@ impl DifficultyAdjuster {
             .iter()
             .copied()
             .fold(f64::INFINITY, f64::min);
-        let max_time = self
-            .recent_solve_times
-            .iter()
-            .copied()
-            .fold(0.0, f64::max);
+        let max_time = self.recent_solve_times.iter().copied().fold(0.0, f64::max);
 
         DifficultyStats {
             current_size: self.current_size,
@@ -515,7 +524,7 @@ impl DifficultyAdjuster {
             in_recovery_mode: self.recovery_target.is_some(),
         }
     }
-    
+
     /// Get statistics for monitoring (async version with network metrics)
     pub async fn stats_async(&self) -> DifficultyStats {
         let avg_time = self.moving_average_solve_time_async().await;
@@ -526,11 +535,7 @@ impl DifficultyAdjuster {
             .iter()
             .copied()
             .fold(f64::INFINITY, f64::min);
-        let max_time = self
-            .recent_solve_times
-            .iter()
-            .copied()
-            .fold(0.0, f64::max);
+        let max_time = self.recent_solve_times.iter().copied().fold(0.0, f64::max);
 
         DifficultyStats {
             current_size: self.current_size,
@@ -590,7 +595,10 @@ impl DifficultyAdjuster {
     fn apply_stall_penalty(&mut self, reason: &str) -> usize {
         let old_size = self.current_size;
         let reduced = (((self.current_size as f64) * 0.7).round() as usize).max(5); // Default minimum
-        println!("⚠️  Stall detected ({}). {} → {}", reason, old_size, reduced);
+        println!(
+            "⚠️  Stall detected ({}). {} → {}",
+            reason, old_size, reduced
+        );
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
         self.stall_counter = (self.stall_counter + 1).min(20);
@@ -629,7 +637,10 @@ mod tests {
         let new_size = adjuster.adjust_difficulty();
 
         // Should increase size because we're solving too fast
-        assert!(new_size > original_size, "Size should increase when solving too fast");
+        assert!(
+            new_size > original_size,
+            "Size should increase when solving too fast"
+        );
     }
 
     #[test]
@@ -645,7 +656,10 @@ mod tests {
         let new_size = adjuster.adjust_difficulty();
 
         // Should decrease size because we're solving too slow
-        assert!(new_size < original_size, "Size should decrease when solving too slow");
+        assert!(
+            new_size < original_size,
+            "Size should decrease when solving too slow"
+        );
     }
 
     #[test]
@@ -662,7 +676,10 @@ mod tests {
 
         // Should stay roughly the same (within 20%)
         let ratio = new_size as f64 / original_size as f64;
-        assert!(ratio > 0.8 && ratio < 1.2, "Size should be stable at target time");
+        assert!(
+            ratio > 0.8 && ratio < 1.2,
+            "Size should be stable at target time"
+        );
     }
 
     #[test]

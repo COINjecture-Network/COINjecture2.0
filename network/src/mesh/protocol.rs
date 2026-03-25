@@ -97,24 +97,40 @@ impl fmt::Display for Payload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Payload::ConsensusSalt { epoch, .. } => write!(f, "ConsensusSalt(epoch={})", epoch),
-            Payload::Solution { epoch, problem_id, .. } => {
+            Payload::Solution {
+                epoch, problem_id, ..
+            } => {
                 write!(f, "Solution(epoch={}, problem={})", epoch, problem_id)
             }
             Payload::Commit { epoch, .. } => write!(f, "Commit(epoch={})", epoch),
             Payload::BountySubmit { bounty_id, .. } => {
                 write!(f, "BountySubmit(id={})", bounty_id)
             }
-            Payload::Heartbeat { epoch, peer_count, .. } => {
+            Payload::Heartbeat {
+                epoch, peer_count, ..
+            } => {
                 write!(f, "Heartbeat(epoch={}, peers={})", epoch, peer_count)
             }
-            Payload::BountyResult { bounty_id, accepted, .. } => {
+            Payload::BountyResult {
+                bounty_id,
+                accepted,
+                ..
+            } => {
                 write!(f, "BountyResult(id={}, ok={})", bounty_id, accepted)
             }
-            Payload::ChainSyncRequest { from_block, to_block } => {
+            Payload::ChainSyncRequest {
+                from_block,
+                to_block,
+            } => {
                 write!(f, "ChainSyncReq(from={}, to={:?})", from_block, to_block)
             }
             Payload::ChainSyncResponse { blocks, has_more } => {
-                write!(f, "ChainSyncResp(blocks={}, more={})", blocks.len(), has_more)
+                write!(
+                    f,
+                    "ChainSyncResp(blocks={}, more={})",
+                    blocks.len(),
+                    has_more
+                )
             }
             Payload::PeerExchange { known_peers } => {
                 write!(f, "PeerExchange(peers={})", known_peers.len())
@@ -165,9 +181,7 @@ pub enum HandshakeMessage {
         listen_addr: SocketAddr,
     },
     /// Step 3: Initiator signs the responder's challenge, completing mutual auth.
-    ChallengeResponse {
-        challenge_response: Vec<u8>,
-    },
+    ChallengeResponse { challenge_response: Vec<u8> },
 }
 
 /// Top-level wire message: either a handshake or an authenticated envelope.
@@ -229,10 +243,7 @@ mod tests {
                 has_more: false,
             },
             Payload::PeerExchange {
-                known_peers: vec![(
-                    NodeId([0xAA; 32]),
-                    "127.0.0.1:9000".parse().unwrap(),
-                )],
+                known_peers: vec![(NodeId([0xAA; 32]), "127.0.0.1:9000".parse().unwrap())],
             },
         ];
 
@@ -296,9 +307,6 @@ mod tests {
             RoutingMode::Direct { target },
             RoutingMode::Direct { target }
         );
-        assert_ne!(
-            RoutingMode::Broadcast,
-            RoutingMode::Direct { target }
-        );
+        assert_ne!(RoutingMode::Broadcast, RoutingMode::Direct { target });
     }
 }

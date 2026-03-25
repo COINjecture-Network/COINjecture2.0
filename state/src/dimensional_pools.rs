@@ -11,20 +11,29 @@
 // Reference: COINjecture White Paper v2.3, Mathematical Proof
 
 use coinject_core::{
-    Address, Balance, DimensionalPool, Hash,
-    ConsensusState, DimensionalScales, DimensionalEconomics, VivianiOracle,
-    ETA, LAMBDA, // Import dimensionless constants from core (re-exported via `pub use dimensional::*;`)
+    Address,
+    Balance,
+    ConsensusState,
+    DimensionalEconomics,
+    DimensionalPool,
+    DimensionalScales,
+    Hash,
+    VivianiOracle,
+    ETA,
+    LAMBDA, // Import dimensionless constants from core (re-exported via `pub use dimensional::*;`)
 };
+use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
-use redb::{Database, TableDefinition, ReadableTable};
 use std::sync::Arc;
 
 // Table definitions for redb
 const POOL_LIQUIDITY_TABLE: TableDefinition<u8, &[u8]> = TableDefinition::new("pool_liquidity");
 const SWAP_RECORDS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("swap_records");
 const CONSENSUS_STATE_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("consensus_state");
-const WORK_SCORE_HISTORY_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("work_score_history");
-const CONSENSUS_METRICS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("consensus_metrics");
+const WORK_SCORE_HISTORY_TABLE: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("work_score_history");
+const CONSENSUS_METRICS_TABLE: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("consensus_metrics");
 
 // Use dimensionless constants from core (no duplicates)
 // ETA and LAMBDA are imported from coinject_core::dimensional
@@ -32,14 +41,14 @@ const CONSENSUS_METRICS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::ne
 /// All 8 dimensional economic scales (dimensionless time points τn)
 /// From white paper Section 6.2: D_n = e^(-η·τ_n)
 pub const DIMENSIONAL_SCALES: [(DimensionalPool, f64, f64, &str); 8] = [
-    (DimensionalPool::D1, 0.00, 1.000, "Genesis"),         // τ₁=0.00, D₁=1.000
-    (DimensionalPool::D2, 0.20, 0.867, "Coupling"),        // τ₂=0.20, D₂=0.867
-    (DimensionalPool::D3, 0.41, 0.750, "First Harmonic"),  // τ₃=0.41, D₃=0.750
-    (DimensionalPool::D4, 0.68, 0.618, "Golden Ratio"),    // τ₄=0.68, D₄=φ⁻¹
-    (DimensionalPool::D5, 0.98, 0.500, "Half-scale"),      // τ₅=0.98, D₅=2⁻¹
-    (DimensionalPool::D6, 1.36, 0.382, "Second Golden"),   // τ₆=1.36, D₆=φ⁻²
-    (DimensionalPool::D7, 1.96, 0.250, "Quarter-scale"),   // τ₇=1.96, D₇=2⁻²
-    (DimensionalPool::D8, 2.72, 0.146, "Euler"),           // τ₈=2.72, D₈=e⁻ᵉ/√²
+    (DimensionalPool::D1, 0.00, 1.000, "Genesis"), // τ₁=0.00, D₁=1.000
+    (DimensionalPool::D2, 0.20, 0.867, "Coupling"), // τ₂=0.20, D₂=0.867
+    (DimensionalPool::D3, 0.41, 0.750, "First Harmonic"), // τ₃=0.41, D₃=0.750
+    (DimensionalPool::D4, 0.68, 0.618, "Golden Ratio"), // τ₄=0.68, D₄=φ⁻¹
+    (DimensionalPool::D5, 0.98, 0.500, "Half-scale"), // τ₅=0.98, D₅=2⁻¹
+    (DimensionalPool::D6, 1.36, 0.382, "Second Golden"), // τ₆=1.36, D₆=φ⁻²
+    (DimensionalPool::D7, 1.96, 0.250, "Quarter-scale"), // τ₇=1.96, D₇=2⁻²
+    (DimensionalPool::D8, 2.72, 0.146, "Euler"),   // τ₈=2.72, D₈=e⁻ᵉ/√²
 ];
 
 /// Normalized allocation ratios for all 8 pools
@@ -147,10 +156,10 @@ pub struct ConsensusMetrics {
 impl Default for ConsensusMetrics {
     fn default() -> Self {
         Self {
-            measured_eta: ETA,       // Start at theoretical value
-            measured_lambda: LAMBDA,  // Start at theoretical value
-            measured_oracle_delta: 0.231,     // Theoretical Δ at critical equilibrium
-            convergence_confidence: 0.0,      // No data yet
+            measured_eta: ETA,            // Start at theoretical value
+            measured_lambda: LAMBDA,      // Start at theoretical value
+            measured_oracle_delta: 0.231, // Theoretical Δ at critical equilibrium
+            convergence_confidence: 0.0,  // No data yet
             sample_size: 0,
             last_update_height: 0,
         }
@@ -180,7 +189,11 @@ impl DimensionalPoolState {
     }
 
     /// Initialize pools with genesis liquidity
-    pub fn initialize_pools(&self, total_supply: Balance, genesis_height: u64) -> Result<(), String> {
+    pub fn initialize_pools(
+        &self,
+        total_supply: Balance,
+        genesis_height: u64,
+    ) -> Result<(), String> {
         for (pool, tau, d_n, name) in DIMENSIONAL_SCALES.iter() {
             // Calculate initial liquidity based on allocation ratio
             let allocation = self.get_allocation_ratio(*pool);
@@ -202,8 +215,10 @@ impl DimensionalPoolState {
 
             self.save_pool_liquidity(&pool_liquidity)?;
 
-            println!("✅ Initialized pool {:?} ({}) with {} tokens (D_n={:.3}, p_n={:.3})",
-                pool, name, initial_liquidity, d_n, allocation);
+            println!(
+                "✅ Initialized pool {:?} ({}) with {} tokens (D_n={:.3}, p_n={:.3})",
+                pool, name, initial_liquidity, d_n, allocation
+            );
         }
 
         Ok(())
@@ -222,18 +237,23 @@ impl DimensionalPoolState {
     /// Save pool liquidity
     fn save_pool_liquidity(&self, pool: &PoolLiquidity) -> Result<(), String> {
         let pool_key = pool.pool as u8;
-        let value = bincode::serialize(pool)
-            .map_err(|e| format!("Failed to serialize pool: {}", e))?;
+        let value =
+            bincode::serialize(pool).map_err(|e| format!("Failed to serialize pool: {}", e))?;
 
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| format!("Failed to begin write: {}", e))?;
         {
-            let mut table = write_txn.open_table(POOL_LIQUIDITY_TABLE)
+            let mut table = write_txn
+                .open_table(POOL_LIQUIDITY_TABLE)
                 .map_err(|e| format!("Failed to open table: {}", e))?;
-            table.insert(pool_key, value.as_slice())
+            table
+                .insert(pool_key, value.as_slice())
                 .map_err(|e| format!("Failed to insert pool: {}", e))?;
         }
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| format!("Failed to commit: {}", e))?;
 
         Ok(())
@@ -250,15 +270,19 @@ impl DimensionalPoolState {
         block_height: u64,
     ) -> Result<Balance, String> {
         // Get pool liquidities
-        let mut liquidity_from = self.get_pool_liquidity(&pool_from)
+        let mut liquidity_from = self
+            .get_pool_liquidity(&pool_from)
             .ok_or("Source pool not found")?;
-        let mut liquidity_to = self.get_pool_liquidity(&pool_to)
+        let mut liquidity_to = self
+            .get_pool_liquidity(&pool_to)
             .ok_or("Destination pool not found")?;
 
         // Check source pool has enough liquidity
         if liquidity_from.liquidity < amount_in {
-            return Err(format!("Insufficient liquidity in source pool: has {}, needs {}",
-                liquidity_from.liquidity, amount_in));
+            return Err(format!(
+                "Insufficient liquidity in source pool: has {}, needs {}",
+                liquidity_from.liquidity, amount_in
+            ));
         }
 
         // Calculate swap ratio using dimensional factors
@@ -268,14 +292,18 @@ impl DimensionalPoolState {
 
         // Check slippage protection
         if amount_out < min_amount_out {
-            return Err(format!("Slippage exceeded: got {}, minimum {}",
-                amount_out, min_amount_out));
+            return Err(format!(
+                "Slippage exceeded: got {}, minimum {}",
+                amount_out, min_amount_out
+            ));
         }
 
         // Check destination pool has enough liquidity
         if liquidity_to.liquidity < amount_out {
-            return Err(format!("Insufficient liquidity in destination pool: has {}, needs {}",
-                liquidity_to.liquidity, amount_out));
+            return Err(format!(
+                "Insufficient liquidity in destination pool: has {}, needs {}",
+                liquidity_to.liquidity, amount_out
+            ));
         }
 
         // Update pool liquidities
@@ -304,7 +332,8 @@ impl DimensionalPoolState {
 
     /// Get normalized allocation ratio for pool
     pub fn get_allocation_ratio(&self, pool: DimensionalPool) -> f64 {
-        ALLOCATION_RATIOS.iter()
+        ALLOCATION_RATIOS
+            .iter()
             .find(|(p, _)| p == &pool)
             .map(|(_, ratio)| *ratio)
             .unwrap_or(0.0)
@@ -312,7 +341,8 @@ impl DimensionalPoolState {
 
     /// Get dimensional factor for pool
     pub fn get_dimensional_factor(&self, pool: DimensionalPool) -> f64 {
-        DIMENSIONAL_SCALES.iter()
+        DIMENSIONAL_SCALES
+            .iter()
             .find(|(p, _, _, _)| p == &pool)
             .map(|(_, _, d_n, _)| *d_n)
             .unwrap_or(1.0)
@@ -320,7 +350,8 @@ impl DimensionalPoolState {
 
     /// Get dimensionless time τ for pool
     pub fn get_tau(&self, pool: DimensionalPool) -> f64 {
-        DIMENSIONAL_SCALES.iter()
+        DIMENSIONAL_SCALES
+            .iter()
             .find(|(p, _, _, _)| p == &pool)
             .map(|(_, tau, _, _)| *tau)
             .unwrap_or(0.0)
@@ -354,15 +385,20 @@ impl DimensionalPoolState {
         let value = bincode::serialize(&swap_record)
             .map_err(|e| format!("Failed to serialize swap: {}", e))?;
 
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| format!("Failed to begin write: {}", e))?;
         {
-            let mut table = write_txn.open_table(SWAP_RECORDS_TABLE)
+            let mut table = write_txn
+                .open_table(SWAP_RECORDS_TABLE)
                 .map_err(|e| format!("Failed to open table: {}", e))?;
-            table.insert(key, value.as_slice())
+            table
+                .insert(key, value.as_slice())
                 .map_err(|e| format!("Failed to insert swap: {}", e))?;
         }
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| format!("Failed to commit: {}", e))?;
 
         Ok(())
@@ -390,26 +426,32 @@ impl DimensionalPoolState {
 
     /// Calculate total liquidity across all pools
     pub fn total_liquidity(&self) -> Balance {
-        self.get_all_pools()
-            .iter()
-            .map(|p| p.liquidity)
-            .sum()
+        self.get_all_pools().iter().map(|p| p.liquidity).sum()
     }
 
     /// Save consensus state for a given block height
-    pub fn save_consensus_state(&self, block_height: u64, state: &ConsensusState) -> Result<(), String> {
+    pub fn save_consensus_state(
+        &self,
+        block_height: u64,
+        state: &ConsensusState,
+    ) -> Result<(), String> {
         let value = bincode::serialize(state)
             .map_err(|e| format!("Failed to serialize consensus state: {}", e))?;
 
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| format!("Failed to begin write: {}", e))?;
         {
-            let mut table = write_txn.open_table(CONSENSUS_STATE_TABLE)
+            let mut table = write_txn
+                .open_table(CONSENSUS_STATE_TABLE)
                 .map_err(|e| format!("Failed to open table: {}", e))?;
-            table.insert(block_height, value.as_slice())
+            table
+                .insert(block_height, value.as_slice())
                 .map_err(|e| format!("Failed to insert consensus state: {}", e))?;
         }
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| format!("Failed to commit: {}", e))?;
 
         Ok(())
@@ -489,7 +531,8 @@ impl DimensionalPoolState {
 
     /// Get complete dimensional economics state
     pub fn get_economics_state(&self) -> DimensionalEconomics {
-        let consensus = self.get_current_consensus_state()
+        let consensus = self
+            .get_current_consensus_state()
             .unwrap_or_else(|| ConsensusState::at_tau(0.0));
         let scales = consensus.dimensional_scales();
         let oracle = self.get_oracle_metric();
@@ -503,23 +546,39 @@ impl DimensionalPoolState {
 
     /// RUNTIME INTEGRATION: Distribute block reward across pools based on live τ
     /// Uses dynamic allocation ratios p_n(τ) = D̃_n(τ) / Σ D̃_k(τ) instead of static constants
-    pub fn distribute_block_reward(&self, total_reward: Balance, block_height: u64) -> Result<(), String> {
+    pub fn distribute_block_reward(
+        &self,
+        total_reward: Balance,
+        block_height: u64,
+    ) -> Result<(), String> {
         // Get current consensus state to calculate dynamic allocations
-        let consensus_state = self.get_current_consensus_state()
+        let consensus_state = self
+            .get_current_consensus_state()
             .ok_or("No consensus state found")?;
 
         let scales = consensus_state.dimensional_scales();
         let normalized = scales.normalized();
         let allocation_ratios = normalized.allocation_ratios();
 
-        println!("💰 Distributing {} token reward across 8 dimensional pools (τ={:.4}):",
-            total_reward, consensus_state.tau);
+        println!(
+            "💰 Distributing {} token reward across 8 dimensional pools (τ={:.4}):",
+            total_reward, consensus_state.tau
+        );
 
         // Distribute to each pool according to current dimensional ratios
         for (i, pool) in [
-            DimensionalPool::D1, DimensionalPool::D2, DimensionalPool::D3, DimensionalPool::D4,
-            DimensionalPool::D5, DimensionalPool::D6, DimensionalPool::D7, DimensionalPool::D8
-        ].iter().enumerate() {
+            DimensionalPool::D1,
+            DimensionalPool::D2,
+            DimensionalPool::D3,
+            DimensionalPool::D4,
+            DimensionalPool::D5,
+            DimensionalPool::D6,
+            DimensionalPool::D7,
+            DimensionalPool::D8,
+        ]
+        .iter()
+        .enumerate()
+        {
             let ratio = allocation_ratios[i];
             let pool_reward = (total_reward as f64 * ratio) as Balance;
 
@@ -531,8 +590,14 @@ impl DimensionalPoolState {
                 liquidity.last_update_height = block_height;
                 self.save_pool_liquidity(&liquidity)?;
 
-                println!("   {:?}: +{} tokens ({:.1}% of reward, locked: {}, unlocked: {})",
-                    pool, pool_reward, ratio * 100.0, liquidity.locked_liquidity, liquidity.unlocked_liquidity);
+                println!(
+                    "   {:?}: +{} tokens ({:.1}% of reward, locked: {}, unlocked: {})",
+                    pool,
+                    pool_reward,
+                    ratio * 100.0,
+                    liquidity.locked_liquidity,
+                    liquidity.unlocked_liquidity
+                );
             }
         }
 
@@ -542,26 +607,41 @@ impl DimensionalPoolState {
     /// RUNTIME INTEGRATION: Execute unlock schedules for all pools
     /// ACTUALLY MOVES TOKENS from locked → unlocked based on U_n(τ) thresholds
     pub fn execute_unlock_schedules(&self, block_height: u64) -> Result<u128, String> {
-        let consensus_state = self.get_current_consensus_state()
+        let consensus_state = self
+            .get_current_consensus_state()
             .ok_or("No consensus state found")?;
 
         let mut total_unlocked: u128 = 0;
 
-        println!("🔓 Executing unlock schedules at τ={:.4}:", consensus_state.tau);
+        println!(
+            "🔓 Executing unlock schedules at τ={:.4}:",
+            consensus_state.tau
+        );
 
         for (i, pool) in [
-            DimensionalPool::D1, DimensionalPool::D2, DimensionalPool::D3, DimensionalPool::D4,
-            DimensionalPool::D5, DimensionalPool::D6, DimensionalPool::D7, DimensionalPool::D8
-        ].iter().enumerate() {
+            DimensionalPool::D1,
+            DimensionalPool::D2,
+            DimensionalPool::D3,
+            DimensionalPool::D4,
+            DimensionalPool::D5,
+            DimensionalPool::D6,
+            DimensionalPool::D7,
+            DimensionalPool::D8,
+        ]
+        .iter()
+        .enumerate()
+        {
             let current_unlock_fraction = consensus_state.unlock_fraction(i);
 
             if let Some(mut liquidity) = self.get_pool_liquidity(pool) {
                 // Calculate how much has unlocked since last checkpoint
                 let new_unlock_fraction = current_unlock_fraction - liquidity.last_unlock_fraction;
 
-                if new_unlock_fraction > 0.001 {  // Only unlock if > 0.1% change
+                if new_unlock_fraction > 0.001 {
+                    // Only unlock if > 0.1% change
                     // Calculate tokens to unlock from total pool liquidity
-                    let tokens_to_unlock = (liquidity.liquidity as f64 * new_unlock_fraction) as Balance;
+                    let tokens_to_unlock =
+                        (liquidity.liquidity as f64 * new_unlock_fraction) as Balance;
 
                     // Don't unlock more than what's locked
                     let actually_unlocked = tokens_to_unlock.min(liquidity.locked_liquidity);
@@ -602,20 +682,31 @@ impl DimensionalPoolState {
     /// Yields are calculated as: yield = unlocked_liquidity × r_n(τ) × Δt
     /// where Δt is the time since last yield distribution
     pub fn distribute_yields(&self, block_height: u64) -> Result<u128, String> {
-        let consensus_state = self.get_current_consensus_state()
+        let consensus_state = self
+            .get_current_consensus_state()
             .ok_or("No consensus state found")?;
 
         let mut total_yield: u128 = 0;
 
-        let yield_rates = self.get_yield_rates()
+        let yield_rates = self
+            .get_yield_rates()
             .ok_or("Failed to calculate yield rates")?;
 
         println!("📈 Distributing yields at τ={:.4}:", consensus_state.tau);
 
         for (i, pool) in [
-            DimensionalPool::D1, DimensionalPool::D2, DimensionalPool::D3, DimensionalPool::D4,
-            DimensionalPool::D5, DimensionalPool::D6, DimensionalPool::D7, DimensionalPool::D8
-        ].iter().enumerate() {
+            DimensionalPool::D1,
+            DimensionalPool::D2,
+            DimensionalPool::D3,
+            DimensionalPool::D4,
+            DimensionalPool::D5,
+            DimensionalPool::D6,
+            DimensionalPool::D7,
+            DimensionalPool::D8,
+        ]
+        .iter()
+        .enumerate()
+        {
             if let Some(mut liquidity) = self.get_pool_liquidity(pool) {
                 let rate = yield_rates[i];
 
@@ -624,7 +715,8 @@ impl DimensionalPoolState {
                     // Calculate yield: unlocked_balance × yield_rate × time_factor
                     // Using a conservative time factor of 0.001 per block (0.1% max yield per distribution)
                     let time_factor = 0.001;
-                    let yield_amount = (liquidity.unlocked_liquidity as f64 * rate * time_factor) as Balance;
+                    let yield_amount =
+                        (liquidity.unlocked_liquidity as f64 * rate * time_factor) as Balance;
 
                     if yield_amount > 0 {
                         // ACTUALLY GENERATE YIELD: Add to pool's unlocked liquidity
@@ -638,15 +730,20 @@ impl DimensionalPoolState {
 
                         total_yield += yield_amount;
 
-                        println!("   {:?}: GENERATED {} tokens yield (r_n={:.4}, unlocked: {})",
-                            pool, yield_amount, rate, liquidity.unlocked_liquidity);
+                        println!(
+                            "   {:?}: GENERATED {} tokens yield (r_n={:.4}, unlocked: {})",
+                            pool, yield_amount, rate, liquidity.unlocked_liquidity
+                        );
                     }
                 }
             }
         }
 
         if total_yield > 0 {
-            println!("✅ Total yield generated this round: {} tokens", total_yield);
+            println!(
+                "✅ Total yield generated this round: {} tokens",
+                total_yield
+            );
         }
 
         Ok(total_yield)
@@ -658,7 +755,13 @@ impl DimensionalPoolState {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// Record work score for empirical analysis
-    pub fn record_work_score(&self, block_height: u64, tau: f64, work_score: f64, block_time: f64) -> Result<(), String> {
+    pub fn record_work_score(
+        &self,
+        block_height: u64,
+        tau: f64,
+        work_score: f64,
+        block_time: f64,
+    ) -> Result<(), String> {
         let entry = WorkScoreEntry {
             block_height,
             tau,
@@ -666,18 +769,23 @@ impl DimensionalPoolState {
             block_time,
         };
 
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| format!("Failed to begin write transaction: {}", e))?;
         {
-            let mut table = write_txn.open_table(WORK_SCORE_HISTORY_TABLE)
+            let mut table = write_txn
+                .open_table(WORK_SCORE_HISTORY_TABLE)
                 .map_err(|e| format!("Failed to open work score history table: {}", e))?;
 
             let serialized = bincode::serialize(&entry)
                 .map_err(|e| format!("Failed to serialize work score entry: {}", e))?;
-            table.insert(block_height, serialized.as_slice())
+            table
+                .insert(block_height, serialized.as_slice())
                 .map_err(|e| format!("Failed to insert work score: {}", e))?;
         }
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| format!("Failed to commit work score: {}", e))?;
 
         Ok(())
@@ -686,15 +794,19 @@ impl DimensionalPoolState {
     /// Measure η empirically from work score decay
     /// Fit exponential: log(work_score) ≈ -η·τ + c
     pub fn measure_eta_from_work_scores(&self, window_size: usize) -> Result<(f64, f64), String> {
-        let read_txn = self.db.begin_read()
+        let read_txn = self
+            .db
+            .begin_read()
             .map_err(|e| format!("Failed to begin read transaction: {}", e))?;
 
-        let table = read_txn.open_table(WORK_SCORE_HISTORY_TABLE)
+        let table = read_txn
+            .open_table(WORK_SCORE_HISTORY_TABLE)
             .map_err(|e| format!("Failed to open work score history table: {}", e))?;
 
         // Collect recent work scores
         let mut entries: Vec<WorkScoreEntry> = Vec::new();
-        let iter = table.iter()
+        let iter = table
+            .iter()
             .map_err(|e| format!("Failed to iterate work scores: {}", e))?;
 
         for item in iter {
@@ -767,16 +879,24 @@ impl DimensionalPoolState {
 
     /// Measure λ from timing coherence
     /// High coherence (stable block times) → strong coupling (high λ)
-    pub fn measure_lambda_from_timing(&self, measured_eta: f64, window_size: usize) -> Result<f64, String> {
-        let read_txn = self.db.begin_read()
+    pub fn measure_lambda_from_timing(
+        &self,
+        measured_eta: f64,
+        window_size: usize,
+    ) -> Result<f64, String> {
+        let read_txn = self
+            .db
+            .begin_read()
             .map_err(|e| format!("Failed to begin read transaction: {}", e))?;
 
-        let table = read_txn.open_table(WORK_SCORE_HISTORY_TABLE)
+        let table = read_txn
+            .open_table(WORK_SCORE_HISTORY_TABLE)
             .map_err(|e| format!("Failed to open work score history table: {}", e))?;
 
         // Collect recent block times
         let mut entries: Vec<WorkScoreEntry> = Vec::new();
-        let iter = table.iter()
+        let iter = table
+            .iter()
             .map_err(|e| format!("Failed to iterate work scores: {}", e))?;
 
         for item in iter {
@@ -798,11 +918,17 @@ impl DimensionalPoolState {
         // Low CV → high coherence → high λ
         let n = window.len() as f64;
         let mean_time: f64 = window.iter().map(|e| e.block_time).sum::<f64>() / n;
-        let variance: f64 = window.iter()
+        let variance: f64 = window
+            .iter()
             .map(|e| (e.block_time - mean_time).powi(2))
-            .sum::<f64>() / n;
+            .sum::<f64>()
+            / n;
         let std_dev = variance.sqrt();
-        let cv = if mean_time > 0.0 { std_dev / mean_time } else { 1.0 };
+        let cv = if mean_time > 0.0 {
+            std_dev / mean_time
+        } else {
+            1.0
+        };
 
         // Timing coherence: 1.0 = perfect coherence, 0.0 = no coherence
         // CV = 0 → coherence = 1.0
@@ -815,11 +941,15 @@ impl DimensionalPoolState {
         // Empirical λ scales with coherence
         let measured_lambda = coherence * theoretical_lambda;
 
-        Ok(measured_lambda.max(0.0).min(1.0))
+        Ok(measured_lambda.clamp(0.0, 1.0))
     }
 
     /// Update consensus metrics (call periodically, e.g., every 100 blocks)
-    pub fn update_consensus_metrics(&self, block_height: u64, window_size: usize) -> Result<ConsensusMetrics, String> {
+    pub fn update_consensus_metrics(
+        &self,
+        block_height: u64,
+        window_size: usize,
+    ) -> Result<ConsensusMetrics, String> {
         // Measure η from work score exponential decay
         let (measured_eta, r_squared) = self.measure_eta_from_work_scores(window_size)?;
 
@@ -839,18 +969,23 @@ impl DimensionalPoolState {
         };
 
         // Persist metrics
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| format!("Failed to begin write transaction: {}", e))?;
         {
-            let mut table = write_txn.open_table(CONSENSUS_METRICS_TABLE)
+            let mut table = write_txn
+                .open_table(CONSENSUS_METRICS_TABLE)
                 .map_err(|e| format!("Failed to open consensus metrics table: {}", e))?;
 
             let serialized = bincode::serialize(&metrics)
                 .map_err(|e| format!("Failed to serialize metrics: {}", e))?;
-            table.insert(block_height, serialized.as_slice())
+            table
+                .insert(block_height, serialized.as_slice())
                 .map_err(|e| format!("Failed to insert metrics: {}", e))?;
         }
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| format!("Failed to commit metrics: {}", e))?;
 
         Ok(metrics)
@@ -885,9 +1020,9 @@ impl DimensionalPoolState {
         let delta_error = (metrics.measured_oracle_delta - 0.231).abs();
 
         Some(ConjectureStatus {
-            eta_convergence: eta_error < 0.05,       // Within 5% of theoretical
+            eta_convergence: eta_error < 0.05, // Within 5% of theoretical
             lambda_convergence: lambda_error < 0.05,
-            oracle_alignment: delta_error < 0.05,    // Within 5% of 0.231
+            oracle_alignment: delta_error < 0.05, // Within 5% of 0.231
             confidence: metrics.convergence_confidence,
             sample_size: metrics.sample_size,
         })
@@ -918,8 +1053,13 @@ mod tests {
         // Verify D_n = e^(-η·τ_n)
         for (_, tau, expected_d, _) in DIMENSIONAL_SCALES.iter() {
             let calculated_d = (-ETA * tau).exp();
-            assert!((calculated_d - expected_d).abs() < 0.01,
-                "D_n mismatch for τ={}: expected {}, got {}", tau, expected_d, calculated_d);
+            assert!(
+                (calculated_d - expected_d).abs() < 0.01,
+                "D_n mismatch for τ={}: expected {}, got {}",
+                tau,
+                expected_d,
+                calculated_d
+            );
         }
     }
 

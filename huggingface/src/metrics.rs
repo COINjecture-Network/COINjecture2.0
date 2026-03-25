@@ -4,12 +4,12 @@
 
 use crate::client::DatasetRecord;
 use crate::energy::{EnergyConfig, EnergyMeasurer};
-use crate::serialize::{serialize_problem, serialize_solution, extract_problem_from_submission};
-use coinject_state::ProblemSubmission;
-use coinject_consensus::WorkScoreCalculator;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::serialize::{extract_problem_from_submission, serialize_problem, serialize_solution};
 use crate::SyncConfig;
-use sysinfo::{System, RefreshKind, CpuRefreshKind, MemoryRefreshKind};
+use coinject_consensus::WorkScoreCalculator;
+use coinject_state::ProblemSubmission;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 /// Network context for institutional-grade metrics
 #[derive(Debug, Clone, Default)]
@@ -35,16 +35,20 @@ impl HardwareContext {
         let mut sys = System::new_with_specifics(
             RefreshKind::new()
                 .with_cpu(CpuRefreshKind::everything())
-                .with_memory(MemoryRefreshKind::everything())
+                .with_memory(MemoryRefreshKind::everything()),
         );
         sys.refresh_all();
-        
+
         let cpu_model = sys.cpus().first().map(|c| c.brand().to_string());
         let cpu_cores = sys.physical_core_count().unwrap_or(0) as u32;
         let cpu_threads = sys.cpus().len() as u32;
         let ram_total_bytes = sys.total_memory();
-        let os_info = Some(format!("{} {}", System::name().unwrap_or_default(), System::os_version().unwrap_or_default()));
-        
+        let os_info = Some(format!(
+            "{} {}",
+            System::name().unwrap_or_default(),
+            System::os_version().unwrap_or_default()
+        ));
+
         HardwareContext {
             cpu_model,
             cpu_cores,
@@ -68,12 +72,13 @@ impl MetricsCollector {
     /// Create new metrics collector with hardware detection
     pub fn new(energy_config: EnergyConfig) -> Self {
         let hardware_context = HardwareContext::detect();
-        tracing::info!("📊 Hardware detected: {} cores, {} threads, {:.1} GB RAM",
+        tracing::info!(
+            "📊 Hardware detected: {} cores, {} threads, {:.1} GB RAM",
             hardware_context.cpu_cores,
             hardware_context.cpu_threads,
             hardware_context.ram_total_bytes as f64 / 1_073_741_824.0
         );
-        
+
         MetricsCollector {
             energy_measurer: EnergyMeasurer::new(energy_config),
             work_calculator: WorkScoreCalculator::new(),
@@ -82,7 +87,7 @@ impl MetricsCollector {
             node_id: None,
         }
     }
-    
+
     /// Set the node's PeerId for attribution
     pub fn set_node_id(&mut self, peer_id: String) {
         self.node_id = Some(peer_id);
@@ -94,8 +99,13 @@ impl MetricsCollector {
         solve_time: Duration,
         verify_time: Duration,
     ) -> Result<(f64, f64), MetricsError> {
-        let measurement = self.energy_measurer.measure_solve_verify_energy(solve_time, verify_time)?;
-        Ok((measurement.solve_energy_joules, measurement.verify_energy_joules))
+        let measurement = self
+            .energy_measurer
+            .measure_solve_verify_energy(solve_time, verify_time)?;
+        Ok((
+            measurement.solve_energy_joules,
+            measurement.verify_energy_joules,
+        ))
     }
 
     /// Collect problem record (when problem is submitted)
@@ -117,9 +127,11 @@ impl MetricsCollector {
         };
 
         let problem_type = match &submission.submission_mode {
-            coinject_core::SubmissionMode::Public { problem } => {
-                format!("{:?}", problem).split('{').next().unwrap_or("Unknown").to_string()
-            }
+            coinject_core::SubmissionMode::Public { problem } => format!("{:?}", problem)
+                .split('{')
+                .next()
+                .unwrap_or("Unknown")
+                .to_string(),
             coinject_core::SubmissionMode::Private { .. } => "Private".to_string(),
         };
 
@@ -246,15 +258,19 @@ impl MetricsCollector {
         };
 
         let problem_type = match &submission.submission_mode {
-            coinject_core::SubmissionMode::Public { problem } => {
-                format!("{:?}", problem).split('{').next().unwrap_or("Unknown").to_string()
-            }
+            coinject_core::SubmissionMode::Public { problem } => format!("{:?}", problem)
+                .split('{')
+                .next()
+                .unwrap_or("Unknown")
+                .to_string(),
             coinject_core::SubmissionMode::Private { .. } => "Private".to_string(),
         };
 
         // Serialize solution
-        let solution_data = submission.solution.as_ref()
-            .map(|s| serialize_solution(s))
+        let solution_data = submission
+            .solution
+            .as_ref()
+            .map(serialize_solution)
             .transpose()?;
 
         // Calculate metrics
@@ -278,7 +294,9 @@ impl MetricsCollector {
         let energy_efficiency = 1.0 / (energy_per_operation + 1.0);
 
         // Calculate solution quality and work score if we have the problem
-        let (solution_quality, work_score) = if let (Some(ref problem), Some(ref solution)) = (problem.as_ref(), submission.solution.as_ref()) {
+        let (solution_quality, work_score) = if let (Some(problem), Some(solution)) =
+            (problem.as_ref(), submission.solution.as_ref())
+        {
             let quality = solution.quality(problem);
             let work_score = self.work_calculator.calculate_from_solution(
                 problem,
@@ -322,7 +340,10 @@ impl MetricsCollector {
             // Performance metrics
             work_score,
             solution_quality,
-            problem_complexity: problem.as_ref().map(|p| p.difficulty_weight()).unwrap_or(submission.min_work_score),
+            problem_complexity: problem
+                .as_ref()
+                .map(|p| p.difficulty_weight())
+                .unwrap_or(submission.min_work_score),
             bounty: submission.bounty,
 
             // Timing metrics
@@ -401,7 +422,7 @@ impl MetricsCollector {
     ) -> Result<DatasetRecord, MetricsError> {
         self.collect_consensus_block_record_with_context(block, is_mined, None)
     }
-    
+
     /// Collect consensus block record with network context
     /// INSTITUTIONAL GRADE v3.0 - comprehensive metrics collection
     pub fn collect_consensus_block_record_with_context(
@@ -425,7 +446,11 @@ impl MetricsCollector {
         let solution_data = serialize_solution(solution)?;
 
         // Determine problem type
-        let problem_type = format!("{:?}", problem).split('{').next().unwrap_or("Unknown").to_string();
+        let problem_type = format!("{:?}", problem)
+            .split('{')
+            .next()
+            .unwrap_or("Unknown")
+            .to_string();
 
         // ═══════════════════════════════════════════════════════════════════════════
         // BLOCK IDENTITY METRICS
@@ -456,7 +481,7 @@ impl MetricsCollector {
         // ENERGY METRICS (from block header)
         // ═══════════════════════════════════════════════════════════════════════════
         let total_energy = block.header.energy_estimate_joules;
-        
+
         // Energy split based on time asymmetry
         let solve_energy = total_energy * (time_asymmetry / (time_asymmetry + 1.0));
         let verify_energy = total_energy - solve_energy;
@@ -501,7 +526,11 @@ impl MetricsCollector {
         // NETWORK METRICS (from context if provided)
         // ═══════════════════════════════════════════════════════════════════════════
         let (peer_count, sync_lag_blocks, propagation_time_ms) = match network_ctx {
-            Some(ctx) => (Some(ctx.peer_count), Some(ctx.sync_lag_blocks), ctx.propagation_time_ms),
+            Some(ctx) => (
+                Some(ctx.peer_count),
+                Some(ctx.sync_lag_blocks),
+                ctx.propagation_time_ms,
+            ),
             None => (None, None, None),
         };
 
@@ -523,7 +552,11 @@ impl MetricsCollector {
             block_hash,
             prev_block_hash,
             submitter: Some(hex::encode(block.header.miner.as_bytes())),
-            solver: if is_mined { Some(hex::encode(block.header.miner.as_bytes())) } else { None },
+            solver: if is_mined {
+                Some(hex::encode(block.header.miner.as_bytes()))
+            } else {
+                None
+            },
 
             // Performance metrics
             work_score: Some(work_score),
@@ -582,7 +615,11 @@ impl MetricsCollector {
             os_info: hw.os_info.clone(),
 
             // Metadata
-            status: if is_mined { "Mined".to_string() } else { "Validated".to_string() },
+            status: if is_mined {
+                "Mined".to_string()
+            } else {
+                "Validated".to_string()
+            },
             submission_mode: "mining".to_string(),
             energy_measurement_method: format!("{:?}", self.energy_measurer.config.method),
 
@@ -606,4 +643,3 @@ pub enum MetricsError {
     #[error("Problem extraction error: {0}")]
     ProblemExtraction(String),
 }
-

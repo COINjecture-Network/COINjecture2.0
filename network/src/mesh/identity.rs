@@ -97,7 +97,11 @@ impl Keypair {
 
         if key_path.exists() {
             let bytes = std::fs::read(&key_path).map_err(|e| {
-                NetworkError::Crypto(format!("failed to read keypair from {}: {}", key_path.display(), e))
+                NetworkError::Crypto(format!(
+                    "failed to read keypair from {}: {}",
+                    key_path.display(),
+                    e
+                ))
             })?;
             if bytes.len() != 32 {
                 return Err(NetworkError::Crypto(format!(
@@ -118,10 +122,18 @@ impl Keypair {
         } else {
             let keypair = Self::generate();
             std::fs::create_dir_all(data_dir).map_err(|e| {
-                NetworkError::Crypto(format!("failed to create data dir {}: {}", data_dir.display(), e))
+                NetworkError::Crypto(format!(
+                    "failed to create data dir {}: {}",
+                    data_dir.display(),
+                    e
+                ))
             })?;
             std::fs::write(&key_path, keypair.signing_key.to_bytes()).map_err(|e| {
-                NetworkError::Crypto(format!("failed to write keypair to {}: {}", key_path.display(), e))
+                NetworkError::Crypto(format!(
+                    "failed to write keypair to {}: {}",
+                    key_path.display(),
+                    e
+                ))
             })?;
             Ok(keypair)
         }
@@ -269,22 +281,12 @@ mod tests {
         let sig = kp.sign(data);
 
         // Should succeed with correct node ID
-        let result = verify_signature_for_node(
-            kp.node_id(),
-            &kp.public_key_bytes(),
-            data,
-            &sig,
-        );
+        let result = verify_signature_for_node(kp.node_id(), &kp.public_key_bytes(), data, &sig);
         assert!(result.is_ok());
 
         // Should fail with wrong node ID
         let wrong_id = NodeId([0xFF; 32]);
-        let result = verify_signature_for_node(
-            &wrong_id,
-            &kp.public_key_bytes(),
-            data,
-            &sig,
-        );
+        let result = verify_signature_for_node(&wrong_id, &kp.public_key_bytes(), data, &sig);
         assert!(result.is_err());
     }
 

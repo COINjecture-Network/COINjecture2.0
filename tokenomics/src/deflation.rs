@@ -51,34 +51,31 @@ impl DeflationEngine {
         if self.burn_rate_history.is_empty() {
             return self.current_burn_rate();
         }
-        
+
         // Use last 100 rates for smoothing
-        let recent: Vec<_> = self.burn_rate_history.iter()
-            .rev()
-            .take(100)
-            .collect();
-        
+        let recent: Vec<_> = self.burn_rate_history.iter().rev().take(100).collect();
+
         recent.iter().copied().sum::<f64>() / (recent.len() as f64)
     }
 
     /// Record work and calculate burn amount
     pub fn record_work(&mut self, work_score: f64) -> BurnResult {
         self.cumulative_work += work_score;
-        
+
         let burn_rate = self.current_burn_rate();
         self.burn_rate_history.push(burn_rate);
-        
+
         // Keep history bounded
         if self.burn_rate_history.len() > 1000 {
             self.burn_rate_history.remove(0);
         }
-        
+
         // Calculate burn amount for this work
         // burn = work_score × burn_rate × scaling_factor
         let scaling = 1e-6; // Prevent excessive burning
-        let burn_amount = ((work_score * burn_rate * scaling) as u128)
-            .min(self.circulating_supply / 1000); // Never burn more than 0.1% at once
-        
+        let burn_amount =
+            ((work_score * burn_rate * scaling) as u128).min(self.circulating_supply / 1000); // Never burn more than 0.1% at once
+
         BurnResult {
             burn_rate,
             burn_amount,
@@ -174,7 +171,8 @@ impl FeeCalculator {
     /// Update average complexity (called per block)
     pub fn update_avg_complexity(&mut self, block_complexity: f64) {
         // Exponential moving average with decay
-        self.avg_block_complexity = self.avg_block_complexity * (1.0 - ETA) + block_complexity * ETA;
+        self.avg_block_complexity =
+            self.avg_block_complexity * (1.0 - ETA) + block_complexity * ETA;
     }
 }
 
@@ -194,11 +192,11 @@ mod tests {
     #[test]
     fn test_burn_rate_increases_with_work() {
         let mut engine = DeflationEngine::new(1_000_000_000_000);
-        
+
         let rate1 = engine.current_burn_rate();
         engine.record_work(1000.0);
         let rate2 = engine.current_burn_rate();
-        
+
         assert!(rate2 > rate1);
     }
 
@@ -206,9 +204,9 @@ mod tests {
     fn test_burn_amount_bounded() {
         let mut engine = DeflationEngine::new(1_000_000);
         engine.cumulative_work = 1e12; // Very high work
-        
+
         let result = engine.record_work(1e6);
-        
+
         // Burn should never exceed 0.1% of supply
         assert!(result.burn_amount <= engine.circulating_supply / 1000);
     }
@@ -216,15 +214,15 @@ mod tests {
     #[test]
     fn test_fee_calculation() {
         let calculator = FeeCalculator::new(1000);
-        
+
         // Average complexity transaction
         let fee1 = calculator.calculate_fee(1.0);
         assert_eq!(fee1.total_fee, 1000);
-        
+
         // Double complexity transaction
         let fee2 = calculator.calculate_fee(2.0);
         assert_eq!(fee2.total_fee, 2000);
-        
+
         // Half complexity transaction
         let fee3 = calculator.calculate_fee(0.5);
         assert_eq!(fee3.total_fee, 500);
@@ -234,11 +232,10 @@ mod tests {
     fn test_fee_burn_split() {
         let calculator = FeeCalculator::new(1000);
         let fee = calculator.calculate_fee(1.0);
-        
+
         // 50% should be burned
         assert_eq!(fee.burn_amount, 500);
         assert_eq!(fee.validator_reward, 500);
         assert_eq!(fee.total_fee, fee.burn_amount + fee.validator_reward);
     }
 }
-

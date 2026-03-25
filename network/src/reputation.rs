@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // Mathematical constants (from η = 1/√2, NOT arbitrary)
-const ETA: f64 = 0.7071067811865476;
+const ETA: f64 = std::f64::consts::FRAC_1_SQRT_2;
 const PHI: f64 = 1.618033988749895;
 const PHI_INV: f64 = 0.6180339887498949;
 
@@ -71,16 +71,16 @@ impl ReputationMetrics {
     pub fn bootstrap() -> Self {
         // During bootstrap, use η-scaled defaults
         let mut fault_impacts = HashMap::new();
-        fault_impacts.insert(FaultType::Equivocation, ETA);           // ~0.71 (most severe)
-        fault_impacts.insert(FaultType::InvalidBlock, ETA.powi(2));   // ~0.50
+        fault_impacts.insert(FaultType::Equivocation, ETA); // ~0.71 (most severe)
+        fault_impacts.insert(FaultType::InvalidBlock, ETA.powi(2)); // ~0.50
         fault_impacts.insert(FaultType::InvalidSolution, ETA.powi(3)); // ~0.35
-        fault_impacts.insert(FaultType::Spam, ETA.powi(4));           // ~0.25
-        fault_impacts.insert(FaultType::SyncTimeout, ETA.powi(5));    // ~0.18
-        fault_impacts.insert(FaultType::FalsePeerInfo, ETA.powi(3));  // ~0.35
+        fault_impacts.insert(FaultType::Spam, ETA.powi(4)); // ~0.25
+        fault_impacts.insert(FaultType::SyncTimeout, ETA.powi(5)); // ~0.18
+        fault_impacts.insert(FaultType::FalsePeerInfo, ETA.powi(3)); // ~0.35
         fault_impacts.insert(FaultType::UnexpectedDisconnect, ETA.powi(6)); // ~0.13
-        
+
         let total: f64 = fault_impacts.values().sum();
-        
+
         ReputationMetrics {
             median_stake: 0,
             median_age_blocks: 0,
@@ -90,18 +90,22 @@ impl ReputationMetrics {
             score_distribution: Vec::new(),
         }
     }
-    
+
     /// Get fault severity as normalized ratio [0, 1]
     /// Derived from actual network impact, not hardcoded
     pub fn fault_severity(&self, fault_type: FaultType) -> f64 {
-        let impact = self.fault_impacts.get(&fault_type).copied().unwrap_or(ETA.powi(3));
+        let impact = self
+            .fault_impacts
+            .get(&fault_type)
+            .copied()
+            .unwrap_or(ETA.powi(3));
         if self.total_fault_impact > 0.0 {
             impact / self.total_fault_impact
         } else {
             impact
         }
     }
-    
+
     /// Get fault decay rate based on severity
     /// More severe faults decay slower (longer memory)
     pub fn fault_decay_rate(&self, fault_type: FaultType) -> f64 {
@@ -110,7 +114,7 @@ impl ReputationMetrics {
         // decay = η^3 * (1 - severity)
         ETA.powi(3) * (1.0 - severity * PHI_INV)
     }
-    
+
     /// Update from network observations
     pub fn update_from_network(
         &mut self,
@@ -124,26 +128,34 @@ impl ReputationMetrics {
         self.median_age_blocks = median_age;
         self.current_block = current_block;
         self.score_distribution = all_scores;
-        
+
         // Update fault impacts from observations
         for (fault_type, impact) in fault_observations {
             // EMA update: new = η * observation + (1-η) * old
-            let old = self.fault_impacts.get(fault_type).copied().unwrap_or(*impact);
+            let old = self
+                .fault_impacts
+                .get(fault_type)
+                .copied()
+                .unwrap_or(*impact);
             let new = ETA * impact + (1.0 - ETA) * old;
             self.fault_impacts.insert(*fault_type, new);
         }
-        
+
         self.total_fault_impact = self.fault_impacts.values().sum();
     }
-    
+
     /// Calculate percentile of a score within the network
     /// Returns 0-100 (dimensionless ranking)
     pub fn calculate_percentile(&self, score: f64) -> f64 {
         if self.score_distribution.is_empty() {
             return 50.0; // Default to median during bootstrap
         }
-        
-        let below = self.score_distribution.iter().filter(|&&s| s < score).count();
+
+        let below = self
+            .score_distribution
+            .iter()
+            .filter(|&&s| s < score)
+            .count();
         (below as f64 / self.score_distribution.len() as f64) * 100.0
     }
 }
@@ -178,13 +190,13 @@ pub struct FaultEvent {
 pub struct PeerReputation {
     /// Peer identifier
     pub peer_id: String,
-    
+
     // === Stake Component ===
     /// Current staked amount
     pub staked_amount: u128,
     /// Block height when stake was made
     pub stake_start_block: u64,
-    
+
     // === Age Component ===
     /// First seen block height
     pub first_seen_block: u64,
@@ -192,11 +204,11 @@ pub struct PeerReputation {
     pub active_blocks: u64,
     /// Last activity block
     pub last_active_block: u64,
-    
+
     // === Fault Component ===
     /// Fault history
     pub faults: Vec<FaultEvent>,
-    
+
     // === Positive Actions ===
     /// Successful block propagations
     pub blocks_propagated: u64,
@@ -204,7 +216,7 @@ pub struct PeerReputation {
     pub valid_solutions: u64,
     /// Successful sync responses
     pub sync_responses: u64,
-    
+
     // === Computed Scores (all dimensionless ratios) ===
     /// Current reputation score
     pub reputation_score: f64,
@@ -244,14 +256,14 @@ impl PeerReputation {
 
     /// Record a fault with network-derived severity
     pub fn record_fault(
-        &mut self, 
-        fault_type: FaultType, 
-        block_height: u64, 
+        &mut self,
+        fault_type: FaultType,
+        block_height: u64,
         metrics: &ReputationMetrics,
-        details: Option<String>
+        details: Option<String>,
     ) {
         let severity = metrics.fault_severity(fault_type);
-        
+
         self.faults.push(FaultEvent {
             fault_type,
             block_height,
@@ -285,16 +297,16 @@ impl PeerReputation {
     fn calculate_effective_faults(&self, metrics: &ReputationMetrics) -> f64 {
         let current_block = metrics.current_block;
         let mut effective_faults = 0.0;
-        
+
         for fault in &self.faults {
             let blocks_since = current_block.saturating_sub(fault.block_height);
             let decay_rate = metrics.fault_decay_rate(fault.fault_type);
             let decay = (-decay_rate * blocks_since as f64).exp();
-            
+
             // Use recorded severity (was network-derived at time of fault)
             effective_faults += fault.recorded_severity * decay;
         }
-        
+
         effective_faults
     }
 
@@ -304,7 +316,7 @@ impl PeerReputation {
             // During bootstrap, any stake gives full credit
             return if self.staked_amount > 0 { 1.0 } else { 0.0 };
         }
-        
+
         // Ratio with logarithmic dampening to prevent whale domination
         // S_ratio = log2(1 + stake/median) / log2(PHI^2)
         let stake_ratio = self.staked_amount as f64 / metrics.median_stake as f64;
@@ -318,17 +330,17 @@ impl PeerReputation {
         } else {
             metrics.current_block.saturating_sub(self.first_seen_block)
         };
-        
+
         // Handle zero-age gracefully (minimum age of 1 block for bootstrap)
         let effective_age = age.max(1);
-        
+
         if metrics.median_age_blocks == 0 {
             // During bootstrap, use asymptotic growth
             // T_ratio = 1 - e^(-η * age / 1000)
             // Use effective_age to prevent zero-age from causing zero reputation
             return 1.0 - (-ETA * effective_age as f64 / 1000.0).exp();
         }
-        
+
         // Ratio with asymptotic saturation
         // T_ratio = 1 - e^(-η * age / median_age)
         let normalized_age = effective_age as f64 / metrics.median_age_blocks as f64;
@@ -339,14 +351,14 @@ impl PeerReputation {
     fn calculate_positive_bonus(&self, _metrics: &ReputationMetrics) -> f64 {
         // Use percentile-based scaling if we have network data
         // Maximum 20% bonus (0.2), scaled by η
-        
+
         // Each action type contributes proportionally
         let propagation_factor = (self.blocks_propagated as f64).ln().max(0.0) / 10.0;
         let solution_factor = (self.valid_solutions as f64).ln().max(0.0) / 5.0;
         let sync_factor = (self.sync_responses as f64).ln().max(0.0) / 8.0;
-        
+
         let raw_bonus = propagation_factor + solution_factor + sync_factor;
-        
+
         // Cap at η * PHI_INV ≈ 0.437 * 0.618 ≈ 0.27 (mathematical, not arbitrary)
         (raw_bonus * ETA).min(ETA * PHI_INV)
     }
@@ -358,17 +370,17 @@ impl PeerReputation {
         let t_ratio = self.calculate_age_ratio(metrics);
         let e_weighted = self.calculate_effective_faults(metrics);
         let bonus = self.calculate_positive_bonus(metrics);
-        
+
         // Core formula with all dimensionless components
         let numerator = s_ratio * t_ratio * (1.0 + bonus);
         let denominator = 1.0 + e_weighted;
-        
+
         self.reputation_score = numerator / denominator;
         self.last_update_block = metrics.current_block;
-        
+
         // Update percentile if we have network data
         self.percentile = metrics.calculate_percentile(self.reputation_score);
-        
+
         self.reputation_score
     }
 
@@ -437,7 +449,7 @@ impl ReputationManager {
     pub fn update_metrics(&mut self, metrics: ReputationMetrics) {
         self.metrics = metrics;
     }
-    
+
     /// Set current block height
     pub fn set_block(&mut self, block: u64) {
         self.metrics.current_block = block;
@@ -466,10 +478,12 @@ impl ReputationManager {
         let peer = self.get_or_create(peer_id);
         peer.record_fault(fault_type, metrics.current_block, &metrics, details);
         peer.calculate_reputation(&metrics);
-        
+
         let severity = metrics.fault_severity(fault_type);
-        println!("⚠️  Fault recorded for {}: {:?} (severity: {:.3}, score: {:.3})", 
-            peer_id, fault_type, severity, peer.reputation_score);
+        println!(
+            "⚠️  Fault recorded for {}: {:?} (severity: {:.3}, score: {:.3})",
+            peer_id, fault_type, severity, peer.reputation_score
+        );
     }
 
     /// Record positive action for a peer
@@ -504,22 +518,22 @@ impl ReputationManager {
         for peer in self.peers.values_mut() {
             peer.calculate_reputation(&metrics);
         }
-        
+
         // Collect score distribution
-        let scores: Vec<f64> = self.peers.values()
-            .map(|p| p.reputation_score)
-            .collect();
-        
+        let scores: Vec<f64> = self.peers.values().map(|p| p.reputation_score).collect();
+
         // Update metrics with new distribution
         self.metrics.score_distribution = scores.clone();
-        
+
         // Second pass: update percentiles with new distribution
         for peer in self.peers.values_mut() {
             peer.percentile = self.metrics.calculate_percentile(peer.reputation_score);
         }
-        
+
         // Update median stake from peers
-        let stakes: Vec<u128> = self.peers.values()
+        let stakes: Vec<u128> = self
+            .peers
+            .values()
             .filter(|p| p.staked_amount > 0)
             .map(|p| p.staked_amount)
             .collect();
@@ -528,10 +542,16 @@ impl ReputationManager {
             sorted.sort();
             self.metrics.median_stake = sorted[sorted.len() / 2];
         }
-        
+
         // Update median age
-        let ages: Vec<u64> = self.peers.values()
-            .map(|p| self.metrics.current_block.saturating_sub(p.first_seen_block))
+        let ages: Vec<u64> = self
+            .peers
+            .values()
+            .map(|p| {
+                self.metrics
+                    .current_block
+                    .saturating_sub(p.first_seen_block)
+            })
             .collect();
         if !ages.is_empty() {
             let mut sorted = ages.clone();
@@ -543,7 +563,8 @@ impl ReputationManager {
     /// Get peers by percentile threshold (replaces hardcoded thresholds)
     /// Example: get_peers_above_percentile(75.0) returns top 25%
     pub fn get_peers_above_percentile(&self, percentile: f64) -> Vec<(&String, &PeerReputation)> {
-        self.peers.iter()
+        self.peers
+            .iter()
             .filter(|(_, p)| p.percentile >= percentile)
             .collect()
     }
@@ -560,7 +581,8 @@ impl ReputationManager {
 
     /// Get problematic peers (bottom 10%)
     pub fn problematic_peers(&self) -> Vec<&String> {
-        self.peers.iter()
+        self.peers
+            .iter()
             .filter(|(_, p)| p.percentile < 10.0)
             .map(|(id, _)| id)
             .collect()
@@ -570,28 +592,30 @@ impl ReputationManager {
     /// Higher reputation = higher probability (proportional to score)
     pub fn select_for_bounty(&self, exclude: &[&str]) -> Option<String> {
         use rand::Rng;
-        
-        let eligible: Vec<_> = self.bounty_eligible_peers()
+
+        let eligible: Vec<_> = self
+            .bounty_eligible_peers()
             .into_iter()
             .filter(|(id, _)| !exclude.contains(&id.as_str()))
             .collect();
-        
+
         if eligible.is_empty() {
             return None;
         }
-        
+
         // Weight by reputation score (all scores are positive ratios)
-        let total_weight: f64 = eligible.iter()
+        let total_weight: f64 = eligible
+            .iter()
             .map(|(_, p)| p.reputation_score.max(0.001)) // Ensure positive
             .sum();
-        
+
         if total_weight <= 0.0 {
             return None;
         }
-        
+
         let mut rng = rand::thread_rng();
         let target = rng.gen_range(0.0..total_weight);
-        
+
         let mut cumulative = 0.0;
         for (id, peer) in eligible {
             cumulative += peer.reputation_score.max(0.001);
@@ -599,30 +623,26 @@ impl ReputationManager {
                 return Some(id.clone());
             }
         }
-        
+
         None
     }
 
     /// Get reputation statistics (all dimensionless)
     pub fn stats(&self) -> ReputationStats {
-        let scores: Vec<f64> = self.peers.values()
-            .map(|p| p.reputation_score)
-            .collect();
-        
+        let scores: Vec<f64> = self.peers.values().map(|p| p.reputation_score).collect();
+
         let total_peers = scores.len();
         let avg_score = if total_peers > 0 {
             scores.iter().sum::<f64>() / total_peers as f64
         } else {
             0.0
         };
-        
+
         let max_score = scores.iter().cloned().fold(0.0, f64::max);
         let min_score = scores.iter().cloned().fold(f64::MAX, f64::min);
-        
-        let total_faults: usize = self.peers.values()
-            .map(|p| p.faults.len())
-            .sum();
-        
+
+        let total_faults: usize = self.peers.values().map(|p| p.faults.len()).sum();
+
         ReputationStats {
             total_peers,
             avg_reputation: avg_score,
@@ -670,26 +690,34 @@ mod tests {
     #[test]
     fn test_bootstrap_fault_severities() {
         let metrics = ReputationMetrics::bootstrap();
-        
+
         // Equivocation should be most severe
         let equivocation = metrics.fault_severity(FaultType::Equivocation);
         let invalid_block = metrics.fault_severity(FaultType::InvalidBlock);
         let disconnect = metrics.fault_severity(FaultType::UnexpectedDisconnect);
-        
-        assert!(equivocation > invalid_block, 
-            "Equivocation ({}) should be > InvalidBlock ({})", equivocation, invalid_block);
-        assert!(invalid_block > disconnect,
-            "InvalidBlock ({}) should be > Disconnect ({})", invalid_block, disconnect);
+
+        assert!(
+            equivocation > invalid_block,
+            "Equivocation ({}) should be > InvalidBlock ({})",
+            equivocation,
+            invalid_block
+        );
+        assert!(
+            invalid_block > disconnect,
+            "InvalidBlock ({}) should be > Disconnect ({})",
+            invalid_block,
+            disconnect
+        );
     }
 
     #[test]
     fn test_dimensionless_ratios() {
         let mut peer = PeerReputation::new("test-peer".to_string(), 0);
         let metrics = ReputationMetrics::bootstrap();
-        
+
         peer.update_stake(1000, 0);
         let stake_ratio = peer.calculate_stake_ratio(&metrics);
-        
+
         // Ratio should be between 0 and reasonable bound
         assert!(stake_ratio >= 0.0, "Stake ratio should be non-negative");
         assert!(stake_ratio <= 10.0, "Stake ratio should be bounded");
@@ -698,7 +726,7 @@ mod tests {
     #[test]
     fn test_percentile_based_selection() {
         let mut manager = ReputationManager::new();
-        
+
         // Create peers at different blocks to ensure different ages
         // This creates score differentiation through both stake and age
         for i in 0..10 {
@@ -708,17 +736,21 @@ mod tests {
             // Stakes range from 1000 to 10000 (10x difference)
             manager.update_stake(&peer_id, (i as u128 + 1) * 1000);
         }
-        
+
         // Advance to final block (1000) so peers have different ages
         manager.set_block(1000);
-        
+
         manager.recalculate_all();
-        
+
         // Top percentile peers should be those with highest stakes and/or oldest age
         // Use 70.0 instead of 80.0 to account for potential clustering with similar scores
         let top_peers = manager.get_peers_above_percentile(70.0);
-        assert!(!top_peers.is_empty(), "Should have top percentile peers (found {} peers above 70th percentile)", top_peers.len());
-        
+        assert!(
+            !top_peers.is_empty(),
+            "Should have top percentile peers (found {} peers above 70th percentile)",
+            top_peers.len()
+        );
+
         // Priority peers (top 25%) should be subset
         let priority = manager.priority_peers();
         assert!(priority.len() <= top_peers.len() + 3); // Allow some overlap
@@ -729,32 +761,35 @@ mod tests {
         let mut manager = ReputationManager::new();
         // Set initial block to allow peers to accumulate age
         manager.set_block(50);
-        
+
         // Create peers at block 50
         manager.update_stake("good-peer", 10000);
         manager.update_stake("bad-peer", 10000);
-        
+
         // Advance block to allow age accumulation
         manager.set_block(100);
-        
+
         // Record fault for bad peer
         manager.record_fault("bad-peer", FaultType::InvalidBlock, None);
-        
+
         manager.recalculate_all();
-        
+
         let good = manager.get("good-peer").unwrap();
         let bad = manager.get("bad-peer").unwrap();
-        
-        assert!(good.reputation_score > bad.reputation_score,
+
+        assert!(
+            good.reputation_score > bad.reputation_score,
             "Good peer ({}) should have higher score than bad peer ({})",
-            good.reputation_score, bad.reputation_score);
+            good.reputation_score,
+            bad.reputation_score
+        );
     }
 
     #[test]
     fn test_no_hardcoded_thresholds() {
         let manager = ReputationManager::new();
         let stats = manager.stats();
-        
+
         // All thresholds should be percentile-based (0-100)
         // No magic numbers like 1_000_000 or arbitrary minimums
         assert!(stats.avg_reputation >= 0.0);
@@ -765,31 +800,38 @@ mod tests {
     #[test]
     fn test_decay_rates_follow_severity() {
         let metrics = ReputationMetrics::bootstrap();
-        
+
         let severe_decay = metrics.fault_decay_rate(FaultType::Equivocation);
         let mild_decay = metrics.fault_decay_rate(FaultType::UnexpectedDisconnect);
-        
+
         // More severe faults should decay slower (lower decay rate)
-        assert!(severe_decay < mild_decay,
-            "Severe fault should decay slower: {} < {}", severe_decay, mild_decay);
+        assert!(
+            severe_decay < mild_decay,
+            "Severe fault should decay slower: {} < {}",
+            severe_decay,
+            mild_decay
+        );
     }
 
     #[test]
     fn test_network_derived_medians() {
         let mut manager = ReputationManager::new();
         manager.set_block(1000);
-        
+
         // Add peers with stakes
         manager.update_stake("peer-1", 1000);
         manager.update_stake("peer-2", 2000);
         manager.update_stake("peer-3", 3000);
-        
+
         manager.recalculate_all();
-        
+
         let stats = manager.stats();
-        
+
         // Median stake should be derived from actual network
-        assert!(stats.median_stake > 0, "Median stake should be derived from peers");
+        assert!(
+            stats.median_stake > 0,
+            "Median stake should be derived from peers"
+        );
         assert_eq!(stats.median_stake, 2000, "Median should be middle value");
     }
 }

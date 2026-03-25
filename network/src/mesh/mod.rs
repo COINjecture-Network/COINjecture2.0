@@ -7,6 +7,7 @@
 // into a single NetworkService that the consensus engine interacts with
 // through NetworkCommand / NetworkEvent channels.
 
+pub mod bridge;
 pub mod config;
 pub mod connection;
 pub mod error;
@@ -16,7 +17,6 @@ pub mod peer_manager;
 pub mod protocol;
 pub mod router;
 pub mod transport;
-pub mod bridge;
 
 #[cfg(test)]
 mod tests;
@@ -541,7 +541,7 @@ async fn event_loop(
                     );
                     gossip.check_and_mark(&envelope.msg_id);
                     let wire = WireMessage::Envelope(envelope);
-                    for (_, tx) in &peer_writers {
+                    for tx in peer_writers.values() {
                         let _ = tx.send(wire.clone());
                     }
                 }
@@ -572,7 +572,7 @@ async fn event_loop(
                     );
                     gossip.check_and_mark(&envelope.msg_id);
                     let wire = WireMessage::Envelope(envelope);
-                    for (_, tx) in &peer_writers {
+                    for tx in peer_writers.values() {
                         let _ = tx.send(wire.clone());
                     }
                 }

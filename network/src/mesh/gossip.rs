@@ -27,9 +27,7 @@ impl GossipEngine {
     /// Create a new gossip engine with the given dedup cache capacity and TTL.
     pub fn new(capacity: usize, ttl: Duration) -> Self {
         Self {
-            seen: LruCache::new(
-                NonZeroUsize::new(capacity).expect("capacity must be > 0"),
-            ),
+            seen: LruCache::new(NonZeroUsize::new(capacity).expect("capacity must be > 0")),
             ttl,
         }
     }

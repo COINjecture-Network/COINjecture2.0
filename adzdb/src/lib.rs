@@ -20,10 +20,10 @@
 //! └── adzdb.meta    # Metadata (chain state)
 //! ```
 
-use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom, BufReader};
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 /// Magic bytes for ADZDB files
 pub const MAGIC: &[u8; 4] = b"ADZB";
@@ -107,9 +107,15 @@ impl std::fmt::Display for Error {
             Error::AlreadyExists => write!(f, "Database already exists"),
             Error::InvalidConfig(msg) => write!(f, "Invalid config: {}", msg),
             Error::HashMismatch { expected, actual } => {
-                write!(f, "Hash mismatch: expected {:?}, got {:?}", expected, actual)
+                write!(
+                    f,
+                    "Hash mismatch: expected {:?}, got {:?}",
+                    expected, actual
+                )
             }
-            Error::HeightTooLarge(h) => write!(f, "Height {} exceeds maximum {}", h, MAX_REASONABLE_HEIGHT),
+            Error::HeightTooLarge(h) => {
+                write!(f, "Height {} exceeds maximum {}", h, MAX_REASONABLE_HEIGHT)
+            }
         }
     }
 }
@@ -136,7 +142,7 @@ pub struct IndexEntry {
 
 impl IndexEntry {
     pub const SIZE: usize = 56;
-    
+
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
         let mut buf = [0u8; Self::SIZE];
         buf[0..32].copy_from_slice(&self.key);
@@ -146,7 +152,7 @@ impl IndexEntry {
         buf[52..56].copy_from_slice(&self.flags.to_le_bytes());
         buf
     }
-    
+
     pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
         Self {
             key: bytes[0..32].try_into().unwrap(),
@@ -170,14 +176,14 @@ pub struct HeightEntry {
 
 impl HeightEntry {
     pub const SIZE: usize = 40;
-    
+
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
         let mut buf = [0u8; Self::SIZE];
         buf[0..8].copy_from_slice(&self.height.to_le_bytes());
         buf[8..40].copy_from_slice(&self.hash);
         buf
     }
-    
+
     pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Self {
         Self {
             height: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
@@ -221,7 +227,7 @@ impl Default for Metadata {
 
 impl Metadata {
     pub const SIZE: usize = 96;
-    
+
     pub fn to_bytes(&self) -> [u8; Self::SIZE] {
         let mut buf = [0u8; Self::SIZE];
         buf[0..4].copy_from_slice(&self.magic);
@@ -233,13 +239,13 @@ impl Metadata {
         buf[64..96].copy_from_slice(&self.genesis_hash);
         buf
     }
-    
+
     pub fn from_bytes(bytes: &[u8; Self::SIZE]) -> Result<Self> {
         let magic: [u8; 4] = bytes[0..4].try_into().unwrap();
         if &magic != MAGIC {
             return Err(Error::Corruption("Invalid magic bytes".to_string()));
         }
-        
+
         let meta = Self {
             magic,
             version: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
@@ -249,12 +255,12 @@ impl Metadata {
             latest_hash: bytes[32..64].try_into().unwrap(),
             genesis_hash: bytes[64..96].try_into().unwrap(),
         };
-        
+
         // Corruption detection
         if meta.latest_height > MAX_REASONABLE_HEIGHT {
             return Err(Error::HeightTooLarge(meta.latest_height));
         }
-        
+
         Ok(meta)
     }
 }
@@ -285,86 +291,90 @@ impl Database {
         if config.path.exists() {
             let metadata = std::fs::metadata(&config.path)?;
             if metadata.is_file() {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Path exists but is a file, not a directory: {:?}", config.path)
-                )));
+                return Err(Error::Io(io::Error::other(format!(
+                    "Path exists but is a file, not a directory: {:?}",
+                    config.path
+                ))));
             }
         }
-        
+
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&config.path).map_err(|e| {
-            Error::Io(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to create ADZDB directory {:?}: {}", config.path, e)
-            ))
+            Error::Io(io::Error::other(format!(
+                "Failed to create ADZDB directory {:?}: {}",
+                config.path, e
+            )))
         })?;
-        
+
         // Verify the directory was created and is actually a directory
         let metadata = std::fs::metadata(&config.path).map_err(|e| {
-            Error::Io(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to verify ADZDB directory {:?}: {}", config.path, e)
-            ))
+            Error::Io(io::Error::other(format!(
+                "Failed to verify ADZDB directory {:?}: {}",
+                config.path, e
+            )))
         })?;
-        
+
         if !metadata.is_dir() {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::Other,
-                format!("ADZDB path is not a directory after creation: {:?}", config.path)
-            )));
+            return Err(Error::Io(io::Error::other(format!(
+                "ADZDB path is not a directory after creation: {:?}",
+                config.path
+            ))));
         }
-        
+
         let index_path = config.path.join("adzdb.idx");
         let data_path = config.path.join("adzdb.dat");
         let height_path = config.path.join("adzdb.hgt");
         let meta_path = config.path.join("adzdb.meta");
-        
+
         // Check if already exists
         if index_path.exists() || data_path.exists() {
             return Err(Error::AlreadyExists);
         }
-        
+
         // Create files with better error messages
         let index_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&index_path)
             .map_err(|e| {
-                Error::Io(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to create index file {:?}: {} (parent dir exists: {})", 
-                        index_path, e, config.path.exists())
-                ))
+                Error::Io(io::Error::other(format!(
+                    "Failed to create index file {:?}: {} (parent dir exists: {})",
+                    index_path,
+                    e,
+                    config.path.exists()
+                )))
             })?;
-            
+
         let data_file = OpenOptions::new()
             .read(true)
-            .write(true)
             .create(true)
+            .truncate(false)
             .append(true)
             .open(&data_path)?;
-            
+
         let height_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&height_path)?;
-            
+
         let mut meta_file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&meta_path)?;
-        
+
         // Write initial metadata
         let metadata = Metadata::default();
         meta_file.write_all(&metadata.to_bytes())?;
         meta_file.sync_all()?;
-        
+
         println!("🗄️  ADZDB created at {:?}", config.path);
-        
+
         Ok(Self {
             config,
             index_file,
@@ -376,64 +386,62 @@ impl Database {
             metadata,
         })
     }
-    
+
     /// Open an existing database
     pub fn open(config: Config) -> Result<Self> {
         // Verify path is a directory
         if !config.path.exists() {
             return Err(Error::Io(io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("ADZDB path does not exist: {:?}", config.path)
+                format!("ADZDB path does not exist: {:?}", config.path),
             )));
         }
-        
+
         let metadata = std::fs::metadata(&config.path)?;
         if !metadata.is_dir() {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::Other,
-                format!("ADZDB path is not a directory: {:?}", config.path)
-            )));
+            return Err(Error::Io(io::Error::other(format!(
+                "ADZDB path is not a directory: {:?}",
+                config.path
+            ))));
         }
-        
+
         let index_path = config.path.join("adzdb.idx");
         let data_path = config.path.join("adzdb.dat");
         let height_path = config.path.join("adzdb.hgt");
         let meta_path = config.path.join("adzdb.meta");
-        
+
         // Open files
         let index_file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&index_path)?;
-            
+
         let data_file = OpenOptions::new()
             .read(true)
-            .write(true)
             .append(true)
             .open(&data_path)?;
-            
+
         let height_file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&height_path)?;
-            
-        let meta_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&meta_path)?;
-        
+
+        let meta_file = OpenOptions::new().read(true).write(true).open(&meta_path)?;
+
         // Load metadata
         let metadata = Self::load_metadata(&meta_file)?;
-        
+
         // Load hash index into memory
         let hash_index = Self::load_hash_index(&index_file)?;
-        
+
         // Load height index into memory
         let height_index = Self::load_height_index(&height_file)?;
-        
-        println!("🗄️  ADZDB opened: {} entries, height {}", 
-            metadata.entry_count, metadata.latest_height);
-        
+
+        println!(
+            "🗄️  ADZDB opened: {} entries, height {}",
+            metadata.entry_count, metadata.latest_height
+        );
+
         Ok(Self {
             config,
             index_file,
@@ -445,7 +453,7 @@ impl Database {
             metadata,
         })
     }
-    
+
     /// Create or open database
     pub fn open_or_create(config: Config) -> Result<Self> {
         let meta_path = config.path.join("adzdb.meta");
@@ -455,11 +463,11 @@ impl Database {
             Self::create(config)
         }
     }
-    
+
     fn load_metadata(file: &File) -> Result<Metadata> {
         let mut reader = BufReader::new(file);
         let mut buf = [0u8; Metadata::SIZE];
-        
+
         reader.read_exact(&mut buf).map_err(|e| {
             if e.kind() == io::ErrorKind::UnexpectedEof {
                 Error::Corruption("Metadata file too small".to_string())
@@ -467,15 +475,15 @@ impl Database {
                 Error::Io(e)
             }
         })?;
-        
+
         Metadata::from_bytes(&buf)
     }
-    
+
     fn load_hash_index(file: &File) -> Result<HashMap<Hash, IndexEntry>> {
         let mut index = HashMap::new();
         let mut reader = BufReader::new(file);
         let mut buf = [0u8; IndexEntry::SIZE];
-        
+
         loop {
             match reader.read_exact(&mut buf) {
                 Ok(()) => {
@@ -488,15 +496,15 @@ impl Database {
                 Err(e) => return Err(Error::Io(e)),
             }
         }
-        
+
         Ok(index)
     }
-    
+
     fn load_height_index(file: &File) -> Result<HashMap<u64, Hash>> {
         let mut index = HashMap::new();
         let mut reader = BufReader::new(file);
         let mut buf = [0u8; HeightEntry::SIZE];
-        
+
         loop {
             match reader.read_exact(&mut buf) {
                 Ok(()) => {
@@ -509,28 +517,28 @@ impl Database {
                 Err(e) => return Err(Error::Io(e)),
             }
         }
-        
+
         Ok(index)
     }
-    
+
     /// Store a value by hash (content-addressable)
     pub fn put(&mut self, hash: &Hash, height: u64, data: &[u8]) -> Result<()> {
         // Corruption detection
         if height > MAX_REASONABLE_HEIGHT {
             return Err(Error::HeightTooLarge(height));
         }
-        
+
         // Check if already exists (deduplication)
         if self.hash_index.contains_key(hash) {
             return Ok(());
         }
-        
+
         // Get current data file position
         let offset = self.data_file.seek(SeekFrom::End(0))?;
-        
+
         // Write data
         self.data_file.write_all(data)?;
-        
+
         // Create index entry
         let entry = IndexEntry {
             key: *hash,
@@ -539,11 +547,11 @@ impl Database {
             height,
             flags: 0,
         };
-        
+
         // Write to index file
         self.index_file.seek(SeekFrom::End(0))?;
         self.index_file.write_all(&entry.to_bytes())?;
-        
+
         // Write to height index file
         let height_entry = HeightEntry {
             height,
@@ -551,102 +559,105 @@ impl Database {
         };
         self.height_file.seek(SeekFrom::End(0))?;
         self.height_file.write_all(&height_entry.to_bytes())?;
-        
+
         // Update in-memory indices
         self.hash_index.insert(*hash, entry);
         self.height_index.insert(height, *hash);
-        
+
         // Update metadata
         self.metadata.entry_count += 1;
         self.metadata.data_size += data.len() as u64;
-        
+
         if height > self.metadata.latest_height {
             self.metadata.latest_height = height;
             self.metadata.latest_hash = *hash;
         }
-        
+
         if height == 0 {
             self.metadata.genesis_hash = *hash;
         }
-        
+
         // Sync if configured
         if self.config.sync_on_write {
             self.sync()?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Get value by hash (O(1) lookup)
     pub fn get(&self, hash: &Hash) -> Result<Vec<u8>> {
         let entry = self.hash_index.get(hash).ok_or(Error::NotFound)?;
-        
+
         let file = &self.data_file;
         let mut reader = BufReader::new(file);
         reader.seek(SeekFrom::Start(entry.offset))?;
-        
+
         let mut data = vec![0u8; entry.size as usize];
         reader.read_exact(&mut data)?;
-        
+
         Ok(data)
     }
-    
+
     /// Get value by height (O(1) with height index)
     pub fn get_by_height(&self, height: u64) -> Result<Vec<u8>> {
         let hash = self.height_index.get(&height).ok_or(Error::NotFound)?;
         self.get(hash)
     }
-    
+
     /// Get hash by height
     pub fn get_hash_by_height(&self, height: u64) -> Result<Hash> {
-        self.height_index.get(&height).copied().ok_or(Error::NotFound)
+        self.height_index
+            .get(&height)
+            .copied()
+            .ok_or(Error::NotFound)
     }
-    
+
     /// Check if hash exists
     pub fn contains(&self, hash: &Hash) -> bool {
         self.hash_index.contains_key(hash)
     }
-    
+
     /// Check if height exists
     pub fn contains_height(&self, height: u64) -> bool {
         self.height_index.contains_key(&height)
     }
-    
+
     /// Get latest height
     pub fn latest_height(&self) -> u64 {
         self.metadata.latest_height
     }
-    
+
     /// Get latest hash
     pub fn latest_hash(&self) -> Hash {
         self.metadata.latest_hash
     }
-    
+
     /// Get genesis hash
     pub fn genesis_hash(&self) -> Hash {
         self.metadata.genesis_hash
     }
-    
+
     /// Get entry count
     pub fn entry_count(&self) -> u64 {
         self.metadata.entry_count
     }
-    
+
     /// Sync all files to disk
     pub fn sync(&mut self) -> Result<()> {
         // Update metadata file
         self.meta_file.seek(SeekFrom::Start(0))?;
         self.meta_file.write_all(&self.metadata.to_bytes())?;
-        
+
         // Sync all files
         self.data_file.sync_all()?;
         self.index_file.sync_all()?;
         self.height_file.sync_all()?;
         self.meta_file.sync_all()?;
-        
+
         Ok(())
     }
-    
+
     /// Get database statistics
     pub fn stats(&self) -> DatabaseStats {
         DatabaseStats {
@@ -673,7 +684,7 @@ pub struct DatabaseStats {
 mod tests {
     use super::*;
     use std::fs;
-    
+
     #[test]
     fn test_index_entry_roundtrip() {
         let entry = IndexEntry {
@@ -683,16 +694,16 @@ mod tests {
             height: 42,
             flags: 0,
         };
-        
+
         let bytes = entry.to_bytes();
         let recovered = IndexEntry::from_bytes(&bytes);
-        
+
         assert_eq!(entry.key, recovered.key);
         assert_eq!(entry.offset, recovered.offset);
         assert_eq!(entry.size, recovered.size);
         assert_eq!(entry.height, recovered.height);
     }
-    
+
     #[test]
     fn test_metadata_roundtrip() {
         let meta = Metadata {
@@ -704,90 +715,90 @@ mod tests {
             latest_hash: [1u8; 32],
             genesis_hash: [2u8; 32],
         };
-        
+
         let bytes = meta.to_bytes();
         let recovered = Metadata::from_bytes(&bytes).unwrap();
-        
+
         assert_eq!(meta.entry_count, recovered.entry_count);
         assert_eq!(meta.latest_height, recovered.latest_height);
     }
-    
+
     #[test]
     fn test_database_create_and_put() {
         let temp_dir = std::env::temp_dir().join("adzdb-test-create");
         let _ = fs::remove_dir_all(&temp_dir);
-        
+
         let config = Config::new(&temp_dir);
         let mut db = Database::create(config).unwrap();
-        
+
         let hash = [42u8; 32];
         let data = b"test block data";
-        
+
         db.put(&hash, 0, data).unwrap();
-        
+
         assert!(db.contains(&hash));
         assert_eq!(db.entry_count(), 1);
-        
+
         let retrieved = db.get(&hash).unwrap();
         assert_eq!(retrieved, data);
-        
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
-    
+
     #[test]
     fn test_database_height_index() {
         let temp_dir = std::env::temp_dir().join("adzdb-test-height");
         let _ = fs::remove_dir_all(&temp_dir);
-        
+
         let config = Config::new(&temp_dir);
         let mut db = Database::create(config).unwrap();
-        
+
         // Add blocks at different heights
         let hash0 = [0u8; 32];
         let hash1 = [1u8; 32];
         let hash2 = [2u8; 32];
-        
+
         db.put(&hash0, 0, b"genesis").unwrap();
         db.put(&hash1, 1, b"block 1").unwrap();
         db.put(&hash2, 2, b"block 2").unwrap();
-        
+
         // Retrieve by height
         assert_eq!(db.get_by_height(0).unwrap(), b"genesis");
         assert_eq!(db.get_by_height(1).unwrap(), b"block 1");
         assert_eq!(db.get_by_height(2).unwrap(), b"block 2");
-        
+
         // Get hash by height
         assert_eq!(db.get_hash_by_height(0).unwrap(), hash0);
         assert_eq!(db.get_hash_by_height(1).unwrap(), hash1);
         assert_eq!(db.get_hash_by_height(2).unwrap(), hash2);
-        
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
-    
+
     #[test]
     fn test_corruption_detection() {
         let temp_dir = std::env::temp_dir().join("adzdb-test-corrupt");
         let _ = fs::remove_dir_all(&temp_dir);
-        
+
         let config = Config::new(&temp_dir);
         let mut db = Database::create(config).unwrap();
-        
+
         let hash = [42u8; 32];
-        
+
         // Try to insert with impossibly high height
         let result = db.put(&hash, MAX_REASONABLE_HEIGHT + 1, b"corrupt");
         assert!(matches!(result, Err(Error::HeightTooLarge(_))));
-        
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
-    
+
     #[test]
     fn test_database_reopen() {
         let temp_dir = std::env::temp_dir().join("adzdb-test-reopen");
         let _ = fs::remove_dir_all(&temp_dir);
-        
+
         let config = Config::new(&temp_dir);
-        
+
         // Create and populate
         {
             let mut db = Database::create(config.clone()).unwrap();
@@ -795,7 +806,7 @@ mod tests {
             db.put(&[2u8; 32], 1, b"block 1").unwrap();
             db.sync().unwrap();
         }
-        
+
         // Reopen and verify
         {
             let db = Database::open(config).unwrap();
@@ -804,7 +815,7 @@ mod tests {
             assert_eq!(db.get_by_height(0).unwrap(), b"genesis");
             assert_eq!(db.get_by_height(1).unwrap(), b"block 1");
         }
-        
+
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }

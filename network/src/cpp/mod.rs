@@ -11,49 +11,51 @@
 #![allow(dead_code)]
 
 pub mod config;
-pub mod message;
-pub mod flow_control;
-pub mod router;
-pub mod protocol;
-pub mod peer;
-pub mod node_integration;
-pub mod network;
 pub mod flock;
+pub mod flow_control;
+pub mod message;
+pub mod network;
+pub mod node_integration;
+pub mod peer;
+pub mod protocol;
+pub mod router;
 
 // Re-export commonly used types
 pub use config::{
-    CppConfig, NodeType, CPP_PORT, WEBSOCKET_PORT,
-    DEFAULT_P2P_LISTEN, DEFAULT_WS_LISTEN, ETA, SQRT_2,
     timeouts, // Unified timeout constants for network/consensus alignment
+    CppConfig,
+    NodeType,
+    CPP_PORT,
+    DEFAULT_P2P_LISTEN,
+    DEFAULT_WS_LISTEN,
+    ETA,
+    SQRT_2,
+    WEBSOCKET_PORT,
 };
 
 pub use message::{
-    MessageType, MessagePriority,
-    HelloMessage, HelloAckMessage, StatusMessage,
-    GetBlocksMessage, BlocksMessage,
-    GetHeadersMessage, HeadersMessage,
-    NewBlockMessage, NewTransactionMessage,
-    SubmitWorkMessage, WorkAcceptedMessage, WorkRejectedMessage,
-    GetWorkMessage, WorkMessage,
-    PingMessage, PongMessage, DisconnectMessage,
+    BlocksMessage, DisconnectMessage, GetBlocksMessage, GetHeadersMessage, GetWorkMessage,
+    HeadersMessage, HelloAckMessage, HelloMessage, MessagePriority, MessageType, NewBlockMessage,
+    NewTransactionMessage, PingMessage, PongMessage, StatusMessage, SubmitWorkMessage,
+    WorkAcceptedMessage, WorkMessage, WorkRejectedMessage,
 };
 
 pub use flow_control::{FlowControl, FlowControlStats};
 
-pub use router::{EquilibriumRouter, PeerInfo, PeerId};
+pub use router::{EquilibriumRouter, PeerId, PeerInfo};
 
-pub use protocol::{MessageEnvelope, MessageCodec, ProtocolError};
+pub use protocol::{MessageCodec, MessageEnvelope, ProtocolError};
 
 pub use peer::{Peer, PeerState, PeerStats};
 
-pub use node_integration::{NodeMetrics, PeerSelector, thresholds};
+pub use node_integration::{thresholds, NodeMetrics, PeerSelector};
 
-pub use network::{CppNetwork, NetworkEvent, NetworkCommand};
+pub use network::{CppNetwork, NetworkCommand, NetworkEvent};
 pub mod block_provider;
 
 pub use block_provider::{BlockProvider, EmptyBlockProvider, MAX_BLOCKS_PER_REQUEST};
 
 pub use flock::{
-    GoldenGenerator, FlockState, FlockStateCompact, MurmurationRules,
-    PHI, PHI_INV, GOLDEN_SEED, FLOCK_EPOCH_BLOCKS, FLOCK_PHASES,
+    FlockState, FlockStateCompact, GoldenGenerator, MurmurationRules, FLOCK_EPOCH_BLOCKS,
+    FLOCK_PHASES, GOLDEN_SEED, PHI, PHI_INV,
 };

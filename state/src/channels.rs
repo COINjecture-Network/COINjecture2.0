@@ -247,11 +247,7 @@ impl ChannelState {
     }
 
     /// Finalize disputed channel after timeout
-    pub fn finalize_dispute(
-        &self,
-        channel_id: &Hash,
-        block_height: u64,
-    ) -> Result<(), String> {
+    pub fn finalize_dispute(&self, channel_id: &Hash, block_height: u64) -> Result<(), String> {
         let mut channel = self
             .get_channel(channel_id)
             .ok_or("Channel not found".to_string())?;

@@ -15,9 +15,7 @@ use sha2::{Digest, Sha256};
 pub enum SubmissionMode {
     /// Public mode: Problem instance is fully visible on-chain
     /// Use case: Open problems, competitions, public bounties
-    Public {
-        problem: ProblemType,
-    },
+    Public { problem: ProblemType },
 
     /// Private mode: Only commitment to problem is visible
     /// Use case: Proprietary problems, sensitive optimization, private bounties
@@ -105,7 +103,8 @@ impl WellformednessProof {
             vk_hash: Self::get_verification_key_hash(),
             public_inputs: vec![
                 commitment.as_bytes().to_vec(),
-                bincode::serialize(&public_params).map_err(|_| PrivacyError::SerializationFailed)?,
+                bincode::serialize(&public_params)
+                    .map_err(|_| PrivacyError::SerializationFailed)?,
             ],
         };
 
@@ -180,8 +179,8 @@ impl WellformednessProof {
         // SECURITY WARNING: This is NOT a real ZK proof
         // For testnet demonstration only
 
-        let problem_bytes = bincode::serialize(problem)
-            .map_err(|_| PrivacyError::SerializationFailed)?;
+        let problem_bytes =
+            bincode::serialize(problem).map_err(|_| PrivacyError::SerializationFailed)?;
 
         // Placeholder: Store H(problem || salt || "PLACEHOLDER")
         let mut hasher = Sha256::new();
@@ -277,7 +276,9 @@ impl SubmissionMode {
     pub fn commitment(&self) -> Option<&Hash> {
         match self {
             SubmissionMode::Public { .. } => None,
-            SubmissionMode::Private { problem_commitment, .. } => Some(problem_commitment),
+            SubmissionMode::Private {
+                problem_commitment, ..
+            } => Some(problem_commitment),
         }
     }
 

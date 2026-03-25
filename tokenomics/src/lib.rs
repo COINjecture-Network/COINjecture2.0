@@ -1,10 +1,10 @@
 // =============================================================================
 // COINjecture Tokenomics - EMPIRICAL VERSION
-// η = λ = 1/√2 Exponential Dimensional Distribution  
+// η = λ = 1/√2 Exponential Dimensional Distribution
 // =============================================================================
 //
 // DESIGN PRINCIPLES (Sarah's Compliance Requirements):
-// 
+//
 // 1. EMPIRICAL: All values derived from actual network data, not hardcoded
 // 2. SELF-REFERENTIAL: System references its own state, not external constants
 // 3. DIMENSIONLESS: Pure ratios without absolute units
@@ -21,32 +21,32 @@
 // - Market forces naturally converge to critical equilibrium
 
 pub mod dimensions;
-pub mod network_metrics;  // NEW: Central oracle for network-derived values
-pub mod rewards;
 pub mod distributor;
+pub mod network_metrics; // NEW: Central oracle for network-derived values
+pub mod rewards;
 
 // Advanced tokenomics modules
-pub mod pools;
-pub mod emission;
-pub mod staking;
+pub mod amm;
 pub mod bounty_pricing;
 pub mod deflation;
-pub mod amm;
+pub mod emission;
 pub mod governance;
+pub mod pools;
+pub mod staking;
 
 // Re-exports
-pub use dimensions::*;
-pub use network_metrics::*;  // Export NetworkMetrics oracle
-pub use rewards::*;
-pub use distributor::*;
-pub use pools::*;
-pub use emission::*;
-pub use staking::*;
+pub use amm::*;
 pub use bounty_pricing::*;
 pub use deflation::*;
-pub use amm::*;
+pub use dimensions::*;
+pub use distributor::*;
+pub use emission::*;
 pub use governance::*;
+pub use network_metrics::*; // Export NetworkMetrics oracle
+pub use pools::*;
+pub use rewards::*;
+pub use staking::*;
 
 // Re-export dimensionless constants from core (single source of truth)
 // Note: These are re-exported from core via `pub use dimensional::*;` and `pub use golden::*;`
-pub use coinject_core::{ETA, LAMBDA, TAU_C, PHI, PHI_INV};
+pub use coinject_core::{ETA, LAMBDA, PHI, PHI_INV, TAU_C};

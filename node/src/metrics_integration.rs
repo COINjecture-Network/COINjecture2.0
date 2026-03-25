@@ -13,7 +13,7 @@
 #![allow(dead_code)]
 
 use coinject_core::Block;
-use coinject_tokenomics::network_metrics::{NetworkMetrics, NetworkSnapshot, FaultType};
+use coinject_tokenomics::network_metrics::{FaultType, NetworkMetrics, NetworkSnapshot};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,28 +27,28 @@ use tokio::sync::RwLock;
 pub struct MetricsCollector {
     /// The underlying tokenomics oracle
     oracle: Arc<RwLock<NetworkMetrics>>,
-    
+
     /// Block timing tracker (block_height -> receive_time)
     block_times: RwLock<HashMap<u64, Instant>>,
-    
+
     /// Problem solve times (block_height -> solve_duration_ms)
     solve_times: RwLock<HashMap<u64, u64>>,
-    
+
     /// Current peer count
     peer_count: RwLock<u32>,
-    
+
     /// Consensus agreement ratio
     consensus_agreement: RwLock<f64>,
-    
+
     /// Last snapshot block height
     last_snapshot_height: RwLock<u64>,
-    
+
     /// Hash rate estimator
     hash_rate_estimator: RwLock<HashRateEstimator>,
-    
+
     /// Fault tracker
     fault_tracker: RwLock<FaultTracker>,
-    
+
     /// Staking tracker
     staking_tracker: RwLock<StakingTracker>,
 }
@@ -82,7 +82,7 @@ impl MetricsCollector {
     pub async fn on_block_added(&self, block: &Block, validation_time_ms: u64) {
         let height = block.header.height;
         let now = Instant::now();
-        
+
         // Calculate block time
         let block_time = {
             let times = self.block_times.read().await;
@@ -96,31 +96,35 @@ impl MetricsCollector {
                 8.64
             }
         };
-        
+
         // Store this block's time
         {
             let mut times = self.block_times.write().await;
             times.insert(height, now);
-            
+
             // Keep only last 1000 blocks
             if times.len() > 1000 {
                 let oldest = height.saturating_sub(1000);
                 times.retain(|&h, _| h > oldest);
             }
         }
-        
+
         // Update hash rate estimator
         {
             let mut estimator = self.hash_rate_estimator.write().await;
             estimator.record_block(block.header.work_score, block_time);
         }
-        
+
         // Get solve time if tracked
         let solve_time = {
             let solve_times = self.solve_times.read().await;
-            solve_times.get(&height).copied().unwrap_or(validation_time_ms) as f64 / 1000.0
+            solve_times
+                .get(&height)
+                .copied()
+                .unwrap_or(validation_time_ms) as f64
+                / 1000.0
         };
-        
+
         // Build snapshot
         let snapshot = NetworkSnapshot {
             block_height: height,
@@ -141,16 +145,16 @@ impl MetricsCollector {
             invalid_blocks: self.fault_tracker.read().await.recent_invalid_blocks,
             disconnections: self.fault_tracker.read().await.recent_disconnections,
         };
-        
+
         // Record to oracle
         self.oracle.write().await.record_snapshot(snapshot);
-        
+
         // Update last snapshot height
         *self.last_snapshot_height.write().await = height;
-        
+
         // Reset fault tracker counters
         self.fault_tracker.write().await.reset_recent();
-        
+
         tracing::debug!(
             "📊 Recorded metrics snapshot for block {}: hash_rate={:.2}, block_time={:.2}s",
             height,
@@ -173,7 +177,7 @@ impl MetricsCollector {
     pub async fn on_problem_solved(&self, block_height: u64, solve_time_ms: u64) {
         let mut times = self.solve_times.write().await;
         times.insert(block_height, solve_time_ms);
-        
+
         // Keep only last 1000
         if times.len() > 1000 {
             let oldest = block_height.saturating_sub(1000);
@@ -212,20 +216,18 @@ impl MetricsCollector {
     }
 
     fn calculate_total_fees(&self, block: &Block) -> u128 {
-        block.transactions.iter()
-            .map(|tx| tx.fee())
-            .sum()
+        block.transactions.iter().map(|tx| tx.fee()).sum()
     }
 
     fn calculate_avg_tx_size(&self, block: &Block) -> u64 {
         if block.transactions.is_empty() {
             return 250; // Default estimate
         }
-        
+
         // Estimate transaction size (header + signature)
         // Transaction type determines base size - estimate ~200-300 bytes average
         let total_size: u64 = block.transactions.len() as u64 * 250;
-        
+
         total_size / block.transactions.len() as u64
     }
 
@@ -310,23 +312,21 @@ impl HashRateEstimator {
 
     fn record_block(&mut self, work_score: f64, block_time: f64) {
         self.recent_blocks.push((work_score, block_time));
-        
+
         // Maintain window
         if self.recent_blocks.len() > self.window {
             self.recent_blocks.remove(0);
         }
-        
+
         // Recalculate estimate
         // hash_rate ≈ work_score / avg_block_time
         if !self.recent_blocks.is_empty() {
-            let avg_work_score: f64 = self.recent_blocks.iter()
-                .map(|(w, _)| *w)
-                .sum::<f64>() / self.recent_blocks.len() as f64;
-            
-            let avg_time: f64 = self.recent_blocks.iter()
-                .map(|(_, t)| *t)
-                .sum::<f64>() / self.recent_blocks.len() as f64;
-            
+            let avg_work_score: f64 = self.recent_blocks.iter().map(|(w, _)| *w).sum::<f64>()
+                / self.recent_blocks.len() as f64;
+
+            let avg_time: f64 = self.recent_blocks.iter().map(|(_, t)| *t).sum::<f64>()
+                / self.recent_blocks.len() as f64;
+
             if avg_time > 0.0 {
                 // Work score represents useful computation done
                 self.estimate = avg_work_score * 1000.0 / avg_time;
@@ -367,7 +367,7 @@ impl FaultTracker {
 
     fn record_fault(&mut self, fault_type: FaultType, _severity: u64) {
         *self.fault_counts.entry(fault_type).or_insert(0) += 1;
-        
+
         match fault_type {
             FaultType::InvalidBlock => self.recent_invalid_blocks += 1,
             FaultType::UnexpectedDisconnect => self.recent_disconnections += 1,
@@ -408,14 +408,16 @@ impl StakingTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coinject_core::{BlockHeader, Address, Commitment, CoinbaseTransaction, SolutionReveal, Hash};
+    use coinject_core::{
+        Address, BlockHeader, CoinbaseTransaction, Commitment, Hash, SolutionReveal,
+    };
 
     fn create_test_block(height: u64) -> Block {
         let commitment = Commitment {
             hash: Hash::ZERO,
             problem_hash: Hash::ZERO,
         };
-        
+
         Block {
             header: BlockHeader {
                 version: 1,
@@ -460,13 +462,13 @@ mod tests {
     #[tokio::test]
     async fn test_block_recording() {
         let collector = MetricsCollector::new();
-        
+
         // Record several blocks
         for i in 0..20 {
             let block = create_test_block(i);
             collector.on_block_added(&block, 50).await;
         }
-        
+
         // Should be bootstrapped now
         assert!(collector.is_bootstrapped().await);
     }
@@ -474,10 +476,10 @@ mod tests {
     #[tokio::test]
     async fn test_peer_count_tracking() {
         let collector = MetricsCollector::new();
-        
+
         collector.on_peer_count_change(10).await;
         assert_eq!(*collector.peer_count.read().await, 10);
-        
+
         collector.on_peer_count_change(25).await;
         assert_eq!(*collector.peer_count.read().await, 25);
     }
@@ -485,7 +487,7 @@ mod tests {
     #[tokio::test]
     async fn test_consensus_tracking() {
         let collector = MetricsCollector::new();
-        
+
         collector.on_consensus_update(0.95).await;
         assert!((*collector.consensus_agreement.read().await - 0.95).abs() < 0.001);
     }
@@ -493,10 +495,10 @@ mod tests {
     #[tokio::test]
     async fn test_fault_recording() {
         let collector = MetricsCollector::new();
-        
+
         collector.on_fault(FaultType::InvalidBlock, 1).await;
         collector.on_fault(FaultType::InvalidBlock, 1).await;
-        
+
         let tracker = collector.fault_tracker.read().await;
         assert_eq!(tracker.recent_invalid_blocks, 2);
     }

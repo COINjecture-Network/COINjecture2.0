@@ -83,11 +83,7 @@ impl RpcClient {
             .map_err(|e| anyhow!("Failed to parse RPC response: {}", e))?;
 
         if let Some(error) = response.error {
-            return Err(anyhow!(
-                "RPC error {}: {}",
-                error.code,
-                error.message
-            ));
+            return Err(anyhow!("RPC error {}: {}", error.code, error.message));
         }
 
         response
@@ -125,8 +121,7 @@ impl RpcClient {
 
     /// Get transaction status
     pub async fn get_transaction_status(&self, tx_hash: &str) -> Result<TransactionStatus> {
-        self.call("transaction_getStatus", json!([tx_hash]))
-            .await
+        self.call("transaction_getStatus", json!([tx_hash])).await
     }
 
     // ========================================

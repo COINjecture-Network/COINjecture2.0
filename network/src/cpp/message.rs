@@ -3,9 +3,9 @@
 // =============================================================================
 // Message definitions for the CPP protocol
 
-use coinject_core::{Block, Transaction, Hash, BlockHeader};
-use serde::{Deserialize, Serialize};
 use crate::cpp::flock::FlockStateCompact;
+use coinject_core::{Block, BlockHeader, Hash, Transaction};
+use serde::{Deserialize, Serialize};
 
 /// Message type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub enum MessageType {
     Hello = 0x01,
     /// Handshake acknowledgment
     HelloAck = 0x02,
-    
+
     // === SYNC ===
     /// Peer status update (height, hash, node type)
     Status = 0x10,
@@ -28,13 +28,13 @@ pub enum MessageType {
     GetHeaders = 0x13,
     /// Header response
     Headers = 0x14,
-    
+
     // === PROPAGATION ===
     /// Newly mined block announcement
     NewBlock = 0x20,
     /// New transaction announcement
     NewTransaction = 0x21,
-    
+
     // === LIGHT CLIENT MINING ===
     /// Light client submits proof-of-work
     SubmitWork = 0x30,
@@ -46,7 +46,7 @@ pub enum MessageType {
     GetWork = 0x33,
     /// Mining work template response
     Work = 0x34,
-    
+
     // === CONTROL ===
     /// Keep-alive ping
     Ping = 0xF0,
@@ -79,7 +79,7 @@ impl MessageType {
             _ => Err(format!("Unknown message type: 0x{:02X}", value)),
         }
     }
-    
+
     /// Get message priority based on dimensional scale
     pub fn priority(&self) -> MessagePriority {
         match self {
@@ -91,7 +91,9 @@ impl MessageType {
             MessageType::Blocks => MessagePriority::D5_Background,
             MessageType::GetHeaders => MessagePriority::D6_Bulk,
             MessageType::Headers => MessagePriority::D7_Archive,
-            MessageType::SubmitWork | MessageType::WorkAccepted | MessageType::WorkRejected => MessagePriority::D2_High,
+            MessageType::SubmitWork | MessageType::WorkAccepted | MessageType::WorkRejected => {
+                MessagePriority::D2_High
+            }
             MessageType::GetWork | MessageType::Work => MessagePriority::D3_Normal,
             MessageType::Ping | MessageType::Pong => MessagePriority::D8_Historical,
             MessageType::Disconnect => MessagePriority::D1_Critical,
@@ -106,14 +108,14 @@ impl MessageType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(non_camel_case_types)]
 pub enum MessagePriority {
-    D1_Critical = 1,      // τ = 0.00, scale = 1.000 (immediate)
-    D2_High = 2,          // τ = 0.20, scale = 0.867
-    D3_Normal = 3,        // τ = 0.41, scale = 0.750
-    D4_Low = 4,           // τ = 0.68, scale = 0.618 (φ⁻¹)
-    D5_Background = 5,    // τ = 0.98, scale = 0.500 (2⁻¹)
-    D6_Bulk = 6,          // τ = 1.36, scale = 0.382 (φ⁻²)
-    D7_Archive = 7,       // τ = 1.96, scale = 0.250 (2⁻²)
-    D8_Historical = 8,    // τ = 2.72, scale = 0.146 (e⁻¹)
+    D1_Critical = 1,   // τ = 0.00, scale = 1.000 (immediate)
+    D2_High = 2,       // τ = 0.20, scale = 0.867
+    D3_Normal = 3,     // τ = 0.41, scale = 0.750
+    D4_Low = 4,        // τ = 0.68, scale = 0.618 (φ⁻¹)
+    D5_Background = 5, // τ = 0.98, scale = 0.500 (2⁻¹)
+    D6_Bulk = 6,       // τ = 1.36, scale = 0.382 (φ⁻²)
+    D7_Archive = 7,    // τ = 1.96, scale = 0.250 (2⁻²)
+    D8_Historical = 8, // τ = 2.72, scale = 0.146 (e⁻¹)
 }
 
 impl MessagePriority {
@@ -123,7 +125,7 @@ impl MessagePriority {
         let eta = std::f64::consts::FRAC_1_SQRT_2;
         (-eta * tau).exp()
     }
-    
+
     /// Get the tau value for this priority
     pub fn tau(&self) -> f64 {
         match self {
@@ -332,7 +334,7 @@ pub struct DisconnectMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_message_type_conversion() {
         let types = vec![
@@ -347,35 +349,38 @@ mod tests {
             MessageType::Pong,
             MessageType::Disconnect,
         ];
-        
+
         for msg_type in types {
             let byte = msg_type as u8;
             let recovered = MessageType::from_u8(byte).unwrap();
             assert_eq!(msg_type, recovered);
         }
     }
-    
+
     #[test]
     fn test_message_priorities() {
         // NewBlock should have highest priority
-        assert_eq!(MessageType::NewBlock.priority(), MessagePriority::D1_Critical);
-        
+        assert_eq!(
+            MessageType::NewBlock.priority(),
+            MessagePriority::D1_Critical
+        );
+
         // Ping should have lowest priority
         assert_eq!(MessageType::Ping.priority(), MessagePriority::D8_Historical);
-        
+
         // Verify priority ordering
         assert!(MessagePriority::D1_Critical < MessagePriority::D8_Historical);
     }
-    
+
     #[test]
     fn test_dimensional_scales() {
         // D1 should be 1.0 (e^0)
         assert!((MessagePriority::D1_Critical.scale() - 1.0).abs() < 0.01);
-        
+
         // D4 should be ~0.618 (golden ratio)
         let d4_scale = MessagePriority::D4_Low.scale();
         assert!(d4_scale > 0.6 && d4_scale < 0.65);
-        
+
         // D5 should be ~0.5 (2^-1)
         let d5_scale = MessagePriority::D5_Background.scale();
         assert!(d5_scale > 0.48 && d5_scale < 0.52);

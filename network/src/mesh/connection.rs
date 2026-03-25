@@ -65,34 +65,33 @@ pub enum ConnectionEvent {
         message: WireMessage,
     },
     /// The connection was closed or errored out.
-    Disconnected {
-        peer_id: NodeId,
-        reason: String,
-    },
+    Disconnected { peer_id: NodeId, reason: String },
 }
 
 // ConnectionEvent can't derive Debug because write_tx doesn't implement Debug
 impl std::fmt::Debug for ConnectionEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConnectionEvent::Connected { peer_id, listen_addr, outbound, .. } => {
-                f.debug_struct("Connected")
-                    .field("peer_id", peer_id)
-                    .field("listen_addr", listen_addr)
-                    .field("outbound", outbound)
-                    .finish()
-            }
-            ConnectionEvent::MessageReceived { peer_id, .. } => {
-                f.debug_struct("MessageReceived")
-                    .field("peer_id", peer_id)
-                    .finish()
-            }
-            ConnectionEvent::Disconnected { peer_id, reason } => {
-                f.debug_struct("Disconnected")
-                    .field("peer_id", peer_id)
-                    .field("reason", reason)
-                    .finish()
-            }
+            ConnectionEvent::Connected {
+                peer_id,
+                listen_addr,
+                outbound,
+                ..
+            } => f
+                .debug_struct("Connected")
+                .field("peer_id", peer_id)
+                .field("listen_addr", listen_addr)
+                .field("outbound", outbound)
+                .finish(),
+            ConnectionEvent::MessageReceived { peer_id, .. } => f
+                .debug_struct("MessageReceived")
+                .field("peer_id", peer_id)
+                .finish(),
+            ConnectionEvent::Disconnected { peer_id, reason } => f
+                .debug_struct("Disconnected")
+                .field("peer_id", peer_id)
+                .field("reason", reason)
+                .finish(),
         }
     }
 }
@@ -164,10 +163,9 @@ pub async fn perform_outbound_handshake(
 
         // Step 3: Sign their challenge and send
         let our_response = keypair.sign(&their_challenge);
-        let challenge_msg =
-            WireMessage::Handshake(HandshakeMessage::ChallengeResponse {
-                challenge_response: our_response,
-            });
+        let challenge_msg = WireMessage::Handshake(HandshakeMessage::ChallengeResponse {
+            challenge_response: our_response,
+        });
         transport::write_message(stream, &challenge_msg, max_msg_size).await?;
 
         Ok((peer_id, peer_pk, peer_listen_addr))
@@ -266,15 +264,8 @@ pub async fn perform_inbound_handshake(
             })?;
 
         match response {
-            WireMessage::Handshake(HandshakeMessage::ChallengeResponse {
-                challenge_response,
-            }) => {
-                verify_signature_for_node(
-                    &peer_id,
-                    &peer_pk,
-                    &our_challenge,
-                    &challenge_response,
-                )?;
+            WireMessage::Handshake(HandshakeMessage::ChallengeResponse { challenge_response }) => {
+                verify_signature_for_node(&peer_id, &peer_pk, &our_challenge, &challenge_response)?;
             }
             _ => {
                 return Err(NetworkError::HandshakeFailed {
@@ -446,14 +437,7 @@ mod tests {
         let kp_b_clone = kp_b.clone();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            perform_inbound_handshake(
-                &mut stream,
-                &kp_b_clone,
-                addr,
-                max_size,
-                timeout,
-            )
-            .await
+            perform_inbound_handshake(&mut stream, &kp_b_clone, addr, max_size, timeout).await
         });
 
         let kp_a_clone = kp_a.clone();

@@ -111,13 +111,9 @@ impl ChainState {
         let (mut best_height, mut best_hash) = {
             let table = read_txn.open_table(METADATA_TABLE)?;
 
-            let height_bytes = table
-                .get("best_height")?
-                .map(|v| v.value().to_vec());
+            let height_bytes = table.get("best_height")?.map(|v| v.value().to_vec());
 
-            let hash_bytes = table
-                .get("best_hash")?
-                .map(|v| v.value().to_vec());
+            let hash_bytes = table.get("best_hash")?.map(|v| v.value().to_vec());
 
             let height = height_bytes
                 .as_ref()
@@ -144,11 +140,11 @@ impl ChainState {
             );
             eprintln!("   This likely indicates corrupted database bytes being interpreted as u64 values.");
             eprintln!("   Auto-fixing: Resetting to genesis (height 0)...");
-            
+
             // Reset to genesis
             best_height = 0;
             best_hash = genesis_hash;
-            
+
             // Update database with corrected values
             let write_txn = db.begin_write()?;
             {
@@ -157,7 +153,7 @@ impl ChainState {
                 table.insert("best_hash", best_hash.as_bytes() as &[u8])?;
             }
             write_txn.commit()?;
-            
+
             eprintln!("   ✅ Database auto-fixed: Reset to genesis block (height 0)");
             eprintln!("   The node will re-sync from peers.");
         }
@@ -218,7 +214,7 @@ impl ChainState {
                 // Block doesn't extend current chain - don't update best chain
                 return Ok(false);
             }
-            
+
             // New best block
             *self.best_height.write().await = block_height;
             *self.best_hash.write().await = block_hash;
@@ -231,7 +227,10 @@ impl ChainState {
             }
             write_txn.commit()?;
 
-            println!("New best block: height={} hash={:?}", block_height, block_hash);
+            println!(
+                "New best block: height={} hash={:?}",
+                block_height, block_hash
+            );
             return Ok(true);
         }
 
@@ -321,7 +320,11 @@ impl ChainState {
 
     /// Find common ancestor between current best chain and a target block
     /// Returns (common_ancestor_hash, common_ancestor_height)
-    pub async fn find_common_ancestor(&self, target_hash: &Hash, target_height: u64) -> Result<Option<(Hash, u64)>, ChainError> {
+    pub async fn find_common_ancestor(
+        &self,
+        target_hash: &Hash,
+        target_height: u64,
+    ) -> Result<Option<(Hash, u64)>, ChainError> {
         let current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
 
@@ -367,7 +370,9 @@ impl ChainState {
                 // Check if this block's prev_hash matches our chain at the previous height
                 // This allows finding common ancestors even when intermediate blocks are missing
                 if their_height > 0 {
-                    if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height - 1) {
+                    if let Ok(Some(our_block_at_height)) =
+                        self.get_block_by_height(their_height - 1)
+                    {
                         if block.header.prev_hash == our_block_at_height.header.hash() {
                             // Found common ancestor!
                             return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
@@ -412,7 +417,9 @@ impl ChainState {
             if let Some(their_block) = self.get_block_by_hash(&their_hash)? {
                 // Check if their block's prev_hash matches our block at the previous height
                 if their_height > 0 {
-                    if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height - 1) {
+                    if let Ok(Some(our_block_at_height)) =
+                        self.get_block_by_height(their_height - 1)
+                    {
                         if their_block.header.prev_hash == our_block_at_height.header.hash() {
                             // Found common ancestor!
                             return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
@@ -445,7 +452,13 @@ impl ChainState {
 
     /// Get chain path from start_hash to end_hash (inclusive)
     /// Returns blocks in order from start to end
-    pub fn get_chain_path(&self, start_hash: &Hash, start_height: u64, end_hash: &Hash, end_height: u64) -> Result<Vec<Block>, ChainError> {
+    pub fn get_chain_path(
+        &self,
+        start_hash: &Hash,
+        start_height: u64,
+        end_hash: &Hash,
+        end_height: u64,
+    ) -> Result<Vec<Block>, ChainError> {
         if start_height > end_height {
             return Ok(Vec::new());
         }
@@ -466,7 +479,7 @@ impl ChainState {
         while current_height <= end_height {
             if let Some(block) = self.get_block_by_hash(&current_hash)? {
                 path.push(block.clone());
-                
+
                 if current_hash == *end_hash {
                     break;
                 }
@@ -499,12 +512,19 @@ impl ChainState {
 
     /// Reorganize chain to a new best block
     /// Returns (old_chain_blocks, new_chain_blocks) for state unwinding/reapplying
-    pub async fn prepare_reorganization(&self, new_best_hash: &Hash, new_best_height: u64) -> Result<(Vec<Block>, Vec<Block>), ChainError> {
+    pub async fn prepare_reorganization(
+        &self,
+        new_best_hash: &Hash,
+        new_best_height: u64,
+    ) -> Result<(Vec<Block>, Vec<Block>), ChainError> {
         let _current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
 
         // Find common ancestor
-        let (_common_hash, common_height) = match self.find_common_ancestor(new_best_hash, new_best_height).await? {
+        let (_common_hash, common_height) = match self
+            .find_common_ancestor(new_best_hash, new_best_height)
+            .await?
+        {
             Some((hash, height)) => (hash, height),
             None => {
                 // No common ancestor found, can't reorganize
@@ -536,7 +556,11 @@ impl ChainState {
     }
 
     /// Update best chain to new block (after reorganization validation)
-    pub async fn update_best_chain(&self, new_best_hash: Hash, new_best_height: u64) -> Result<(), ChainError> {
+    pub async fn update_best_chain(
+        &self,
+        new_best_hash: Hash,
+        new_best_height: u64,
+    ) -> Result<(), ChainError> {
         *self.best_height.write().await = new_best_height;
         *self.best_hash.write().await = new_best_hash;
 
@@ -548,7 +572,10 @@ impl ChainState {
         }
         write_txn.commit()?;
 
-        println!("🔄 Chain reorganized: new best block height={} hash={:?}", new_best_height, new_best_hash);
+        println!(
+            "🔄 Chain reorganized: new best block height={} hash={:?}",
+            new_best_height, new_best_hash
+        );
         Ok(())
     }
 }
@@ -620,11 +647,11 @@ impl coinject_rpc::BlockchainReader for ChainState {
 use coinject_network::cpp::BlockProvider;
 
 /// Wrapper that implements BlockProvider for ChainState
-/// 
+///
 /// This adapter bridges the node's chain storage (ChainState) with the
 /// CPP network's block provider interface, enabling the network to serve
 /// blocks to peers during sync.
-/// 
+///
 /// CRITICAL: All block queries go through the canonical height index,
 /// ensuring only best-chain blocks are served.
 pub struct ChainBlockProvider {
@@ -637,10 +664,7 @@ impl ChainBlockProvider {
     /// Create new block provider wrapping a ChainState
     pub fn new(chain: std::sync::Arc<ChainState>) -> Self {
         let best_height = chain.best_height_ref();
-        ChainBlockProvider {
-            chain,
-            best_height,
-        }
+        ChainBlockProvider { chain, best_height }
     }
 }
 
@@ -649,7 +673,10 @@ impl BlockProvider for ChainBlockProvider {
         match self.chain.get_block_by_height(height) {
             Ok(block) => block,
             Err(e) => {
-                eprintln!("[BlockProvider] Error fetching block at height {}: {}", height, e);
+                eprintln!(
+                    "[BlockProvider] Error fetching block at height {}: {}",
+                    height, e
+                );
                 None
             }
         }
@@ -659,9 +686,7 @@ impl BlockProvider for ChainBlockProvider {
         // Use blocking read since BlockProvider is sync
         // In production, consider caching this value
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                *self.best_height.read().await
-            })
+            tokio::runtime::Handle::current().block_on(async { *self.best_height.read().await })
         })
     }
 }

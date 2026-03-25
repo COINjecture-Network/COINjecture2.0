@@ -199,8 +199,10 @@ impl StreamerState {
         if let Ok(data) = fs::read_to_string(&state_file) {
             if let Ok(mut state) = serde_json::from_str::<StreamerState>(&data) {
                 state.state_file = Some(state_file);
-                eprintln!("📊 HF Streamer: Loaded state from disk (last confirmed height: {})",
-                    state.last_confirmed_height);
+                eprintln!(
+                    "📊 HF Streamer: Loaded state from disk (last confirmed height: {})",
+                    state.last_confirmed_height
+                );
                 return state;
             }
         }
@@ -223,8 +225,7 @@ impl StreamerState {
         if let Some(ref path) = self.state_file {
             let data = serde_json::to_string_pretty(self)
                 .map_err(|e| StreamerError::Serialization(e.to_string()))?;
-            fs::write(path, data)
-                .map_err(|e| StreamerError::Io(e.to_string()))?;
+            fs::write(path, data).map_err(|e| StreamerError::Io(e.to_string()))?;
         }
         Ok(())
     }
@@ -241,24 +242,33 @@ impl StreamerState {
         // Keep map bounded with FIFO eviction
         if self.published_records.len() > MAX_PUBLISHED_RECORDS {
             // Remove oldest entries in batch
-            let keys: Vec<_> = self.published_records.keys()
+            let keys: Vec<_> = self
+                .published_records
+                .keys()
                 .take(PUBLISHED_EVICTION_BATCH)
                 .cloned()
                 .collect();
             for key in keys {
                 self.published_records.remove(&key);
             }
-            eprintln!("📊 HF Streamer: Evicted {} old record IDs (bounded at {})",
-                PUBLISHED_EVICTION_BATCH, MAX_PUBLISHED_RECORDS);
+            eprintln!(
+                "📊 HF Streamer: Evicted {} old record IDs (bounded at {})",
+                PUBLISHED_EVICTION_BATCH, MAX_PUBLISHED_RECORDS
+            );
         }
     }
 
     /// Generate unique event ID
     pub fn next_event_id(&mut self) -> String {
         self.event_counter += 1;
-        format!("reorg_{}_{}",
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-            self.event_counter)
+        format!(
+            "reorg_{}_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            self.event_counter
+        )
     }
 
     /// Add pending block with ring buffer bounds and TTL
@@ -266,8 +276,10 @@ impl StreamerState {
         // Enforce ring buffer limit
         while self.pending_blocks.len() >= MAX_PENDING_BLOCKS {
             if let Some(evicted) = self.pending_blocks.pop_front() {
-                eprintln!("📊 HF Streamer: Evicted old pending block {} (ring buffer full)",
-                    evicted.height);
+                eprintln!(
+                    "📊 HF Streamer: Evicted old pending block {} (ring buffer full)",
+                    evicted.height
+                );
             }
         }
         self.pending_blocks.push_back(block);
@@ -281,14 +293,15 @@ impl StreamerState {
             .as_secs() as i64;
 
         let before_count = self.pending_blocks.len();
-        self.pending_blocks.retain(|pb| {
-            now - pb.received_at < PENDING_BLOCK_TTL_SECS
-        });
+        self.pending_blocks
+            .retain(|pb| now - pb.received_at < PENDING_BLOCK_TTL_SECS);
 
         let expired = before_count - self.pending_blocks.len();
         if expired > 0 {
-            eprintln!("📊 HF Streamer: Expired {} stale pending blocks (TTL={}s)",
-                expired, PENDING_BLOCK_TTL_SECS);
+            eprintln!(
+                "📊 HF Streamer: Expired {} stale pending blocks (TTL={}s)",
+                expired, PENDING_BLOCK_TTL_SECS
+            );
         }
     }
 }
@@ -348,8 +361,10 @@ impl DualFeedStreamer {
     pub fn new(config: StreamerConfig) -> Self {
         let state = StreamerState::new(config.data_dir.clone());
 
-        eprintln!("📊 HF DualFeed: Initialized with k={} confirmations, batch_size={}",
-            config.min_confirmations, config.batch_size);
+        eprintln!(
+            "📊 HF DualFeed: Initialized with k={} confirmations, batch_size={}",
+            config.min_confirmations, config.batch_size
+        );
 
         DualFeedStreamer {
             config,
@@ -387,7 +402,10 @@ impl DualFeedStreamer {
     pub async fn set_node_id(&self, node_id: String) {
         // Update config (we can't mutate config directly, so we'd need to restructure)
         // For now, just log it - the node_id is passed per-call
-        eprintln!("📊 HF DualFeed: Node ID set to {}", &node_id[..16.min(node_id.len())]);
+        eprintln!(
+            "📊 HF DualFeed: Node ID set to {}",
+            &node_id[..16.min(node_id.len())]
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -471,8 +489,11 @@ impl DualFeedStreamer {
         {
             let mut buffer = self.unconfirmed_buffer.lock().await;
             buffer.push(record);
-            eprintln!("📊 HF Feed A: Buffered unconfirmed block {} (hash: {}...)",
-                block.header.height, &block_hash[..12]);
+            eprintln!(
+                "📊 HF Feed A: Buffered unconfirmed block {} (hash: {}...)",
+                block.header.height,
+                &block_hash[..12]
+            );
         }
 
         // Check if we should flush
@@ -556,8 +577,10 @@ impl DualFeedStreamer {
             {
                 let mut buffer = self.confirmed_buffer.lock().await;
                 buffer.push(record);
-                eprintln!("📊 HF Feed B: Block {} confirmed with {} confirmations",
-                    pb.height, confirmations);
+                eprintln!(
+                    "📊 HF Feed B: Block {} confirmed with {} confirmations",
+                    pb.height, confirmations
+                );
             }
         }
 
@@ -604,19 +627,35 @@ impl DualFeedStreamer {
         // Build bounded orphan/new block lists (cap at MAX_ORPHAN_HASHES_INLINE)
         let orphaned_count = orphaned_blocks.len();
         let new_count = new_blocks.len();
-        let lists_truncated = orphaned_count > MAX_ORPHAN_HASHES_INLINE || new_count > MAX_ORPHAN_HASHES_INLINE;
+        let lists_truncated =
+            orphaned_count > MAX_ORPHAN_HASHES_INLINE || new_count > MAX_ORPHAN_HASHES_INLINE;
 
         // For small reorgs, include full lists; for large ones, use first/last summary
-        let (orphaned_hashes, orphaned_first, orphaned_last) = if orphaned_count <= MAX_ORPHAN_HASHES_INLINE {
-            (orphaned_blocks.iter().map(|h| hex::encode(h.as_bytes())).collect(), None, None)
-        } else {
-            let first = orphaned_blocks.first().map(|h| hex::encode(h.as_bytes()));
-            let last = orphaned_blocks.last().map(|h| hex::encode(h.as_bytes()));
-            (Vec::new(), first, last)
-        };
+        let (orphaned_hashes, orphaned_first, orphaned_last) =
+            if orphaned_count <= MAX_ORPHAN_HASHES_INLINE {
+                (
+                    orphaned_blocks
+                        .iter()
+                        .map(|h| hex::encode(h.as_bytes()))
+                        .collect(),
+                    None,
+                    None,
+                )
+            } else {
+                let first = orphaned_blocks.first().map(|h| hex::encode(h.as_bytes()));
+                let last = orphaned_blocks.last().map(|h| hex::encode(h.as_bytes()));
+                (Vec::new(), first, last)
+            };
 
         let (new_hashes, new_first, new_last) = if new_count <= MAX_ORPHAN_HASHES_INLINE {
-            (new_blocks.iter().map(|h| hex::encode(h.as_bytes())).collect(), None, None)
+            (
+                new_blocks
+                    .iter()
+                    .map(|h| hex::encode(h.as_bytes()))
+                    .collect(),
+                None,
+                None,
+            )
         } else {
             let first = new_blocks.first().map(|h| hex::encode(h.as_bytes()));
             let last = new_blocks.last().map(|h| hex::encode(h.as_bytes()));
@@ -648,22 +687,30 @@ impl DualFeedStreamer {
             data_version: "v3.2".to_string(), // Bump version for new format
         };
 
-        eprintln!("⚠️  HF Feed C: Reorg detected! Depth={}, old_height={} -> new_height={}",
-            reorg_depth, old_height, new_height);
+        eprintln!(
+            "⚠️  HF Feed C: Reorg detected! Depth={}, old_height={} -> new_height={}",
+            reorg_depth, old_height, new_height
+        );
 
         // Clear pending blocks that were orphaned
         {
             let mut state = self.state.lock().await;
-            let orphan_set: std::collections::HashSet<_> = orphaned_blocks.iter()
+            let orphan_set: std::collections::HashSet<_> = orphaned_blocks
+                .iter()
                 .map(|h| hex::encode(h.as_bytes()))
                 .collect();
 
             let before_count = state.pending_blocks.len();
-            state.pending_blocks.retain(|pb| !orphan_set.contains(&pb.block_hash));
+            state
+                .pending_blocks
+                .retain(|pb| !orphan_set.contains(&pb.block_hash));
             let removed = before_count - state.pending_blocks.len();
 
             if removed > 0 {
-                eprintln!("⚠️  HF DualFeed: Removed {} orphaned blocks from pending queue", removed);
+                eprintln!(
+                    "⚠️  HF DualFeed: Removed {} orphaned blocks from pending queue",
+                    removed
+                );
             }
 
             // Update current tip
@@ -738,8 +785,13 @@ impl DualFeedStreamer {
             return Ok(());
         }
 
-        eprintln!("📤 HF DualFeed: Flushing {} records (A:{}, B:{}, C:{})",
-            total, unconfirmed.len(), confirmed.len(), reorgs.len());
+        eprintln!(
+            "📤 HF DualFeed: Flushing {} records (A:{}, B:{}, C:{})",
+            total,
+            unconfirmed.len(),
+            confirmed.len(),
+            reorgs.len()
+        );
 
         // Convert to JSON values for unified upload
         let mut all_records: Vec<serde_json::Value> = Vec::new();
@@ -770,7 +822,10 @@ impl DualFeedStreamer {
 
         // TODO: Actually push to HuggingFace API
         // For now, just log success (will integrate with HuggingFaceClient)
-        eprintln!("✅ HF DualFeed: Successfully flushed {} records", all_records.len());
+        eprintln!(
+            "✅ HF DualFeed: Successfully flushed {} records",
+            all_records.len()
+        );
 
         Ok(())
     }

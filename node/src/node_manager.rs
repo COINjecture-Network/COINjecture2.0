@@ -26,17 +26,16 @@
 // │  └──────────────┘  └─────────────────┘  └───────────────────┘  │
 // └─────────────────────────────────────────────────────────────────┘
 
-use crate::light_sync::{LightSyncServer, LightClientVerifier, LightSyncMessage, FlyClientProof};
+use crate::light_sync::{FlyClientProof, LightClientVerifier, LightSyncMessage, LightSyncServer};
 use crate::node_types::{
-    NodeType, NodeClassificationManager, 
-    ClassificationResult, NodeTypeStatus,
+    ClassificationResult, NodeClassificationManager, NodeType, NodeTypeStatus,
 };
 use coinject_core::{Block, BlockHeader, Hash, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{mpsc, RwLock, broadcast};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 // =============================================================================
 // Network Capabilities
@@ -54,7 +53,7 @@ pub struct NetworkCapabilities {
     pub can_serve_blocks: bool,
     /// Can serve block headers to light clients
     pub can_serve_headers: bool,
-    
+
     // === Storage Capabilities ===
     /// Stores full block history
     pub stores_full_history: bool,
@@ -64,7 +63,7 @@ pub struct NetworkCapabilities {
     pub stores_headers_only: bool,
     /// Maximum blocks to store (0 = unlimited)
     pub max_blocks_stored: u64,
-    
+
     // === Sync Capabilities ===
     /// Can perform full block sync
     pub can_full_sync: bool,
@@ -74,7 +73,7 @@ pub struct NetworkCapabilities {
     pub can_serve_flyclient: bool,
     /// Can verify FlyClient proofs
     pub can_verify_flyclient: bool,
-    
+
     // === Transaction Capabilities ===
     /// Can relay transactions
     pub can_relay_transactions: bool,
@@ -82,19 +81,19 @@ pub struct NetworkCapabilities {
     pub can_validate_transactions: bool,
     /// Maintains transaction mempool
     pub maintains_mempool: bool,
-    
+
     // === Problem Solving (Bounty) ===
     /// Can solve NP-problems
     pub can_solve_problems: bool,
     /// Priority for problem distribution
     pub problem_priority: u8,
-    
+
     // === Oracle Capabilities ===
     /// Can provide oracle data feeds
     pub can_provide_oracle_data: bool,
     /// Oracle data types supported
     pub oracle_data_types: Vec<String>,
-    
+
     // === Network Role ===
     /// Maximum outbound connections
     pub max_outbound_peers: usize,
@@ -126,32 +125,32 @@ impl NetworkCapabilities {
             can_validate_blocks: false, // Only validates headers
             can_serve_blocks: false,
             can_serve_headers: false,
-            
+
             // Storage - headers only
             stores_full_history: false,
             stores_pruned: false,
             stores_headers_only: true,
             max_blocks_stored: 0, // Only headers
-            
+
             // Sync - header/FlyClient only
             can_full_sync: false,
             can_header_sync: true,
             can_serve_flyclient: false,
             can_verify_flyclient: true,
-            
+
             // Transactions - relay only
             can_relay_transactions: true,
             can_validate_transactions: false,
             maintains_mempool: false,
-            
+
             // No problem solving
             can_solve_problems: false,
             problem_priority: 0,
-            
+
             // No oracle
             can_provide_oracle_data: false,
             oracle_data_types: vec![],
-            
+
             // Minimal network role
             max_outbound_peers: 8,
             max_inbound_peers: 0, // Light nodes don't serve others
@@ -167,32 +166,32 @@ impl NetworkCapabilities {
             can_validate_blocks: true,
             can_serve_blocks: true,
             can_serve_headers: true,
-            
+
             // Recent history storage
             stores_full_history: false,
             stores_pruned: true,
             stores_headers_only: false,
             max_blocks_stored: 100_000, // ~6 months
-            
+
             // Full sync capabilities
             can_full_sync: true,
             can_header_sync: true,
             can_serve_flyclient: true,
             can_verify_flyclient: true,
-            
+
             // Full transaction support
             can_relay_transactions: true,
             can_validate_transactions: true,
             maintains_mempool: true,
-            
+
             // No problem solving (use Bounty for that)
             can_solve_problems: false,
             problem_priority: 0,
-            
+
             // No oracle
             can_provide_oracle_data: false,
             oracle_data_types: vec![],
-            
+
             // Standard network role
             max_outbound_peers: 25,
             max_inbound_peers: 25,
@@ -208,36 +207,36 @@ impl NetworkCapabilities {
             can_validate_blocks: true,
             can_serve_blocks: true,
             can_serve_headers: true,
-            
+
             // FULL history storage
             stores_full_history: true,
             stores_pruned: false,
             stores_headers_only: false,
             max_blocks_stored: 0, // Unlimited
-            
+
             // All sync capabilities
             can_full_sync: true,
             can_header_sync: true,
             can_serve_flyclient: true,
             can_verify_flyclient: true,
-            
+
             // Full transaction support
             can_relay_transactions: true,
             can_validate_transactions: true,
             maintains_mempool: true,
-            
+
             // No problem solving
             can_solve_problems: false,
             problem_priority: 0,
-            
+
             // No oracle
             can_provide_oracle_data: false,
             oracle_data_types: vec![],
-            
+
             // Heavy network role - serve everyone
             max_outbound_peers: 50,
-            max_inbound_peers: 100, // Serve many peers
-            can_be_bootstrap: true, // Can be bootstrap
+            max_inbound_peers: 100,    // Serve many peers
+            can_be_bootstrap: true,    // Can be bootstrap
             gossip_participation: 100, // Full participation
         }
     }
@@ -249,32 +248,32 @@ impl NetworkCapabilities {
             can_validate_blocks: true,
             can_serve_blocks: true,
             can_serve_headers: true,
-            
+
             // Recent history (pruned)
             stores_full_history: false,
             stores_pruned: true,
             stores_headers_only: false,
             max_blocks_stored: 50_000, // ~3 months
-            
+
             // All sync capabilities
             can_full_sync: true,
             can_header_sync: true,
             can_serve_flyclient: true,
             can_verify_flyclient: true,
-            
+
             // Full transaction support
             can_relay_transactions: true,
             can_validate_transactions: true,
             maintains_mempool: true,
-            
+
             // No problem solving (focus on validation)
             can_solve_problems: false,
             problem_priority: 0,
-            
+
             // No oracle
             can_provide_oracle_data: false,
             oracle_data_types: vec![],
-            
+
             // Well-connected for block propagation
             max_outbound_peers: 50,
             max_inbound_peers: 50,
@@ -290,32 +289,32 @@ impl NetworkCapabilities {
             can_validate_blocks: true,
             can_serve_blocks: false, // Focus on solving
             can_serve_headers: false,
-            
+
             // Minimal storage
             stores_full_history: false,
             stores_pruned: true,
             stores_headers_only: false,
             max_blocks_stored: 10_000, // Just recent
-            
+
             // Basic sync
             can_full_sync: true,
             can_header_sync: true,
             can_serve_flyclient: false,
             can_verify_flyclient: true,
-            
+
             // Transaction relay
             can_relay_transactions: true,
             can_validate_transactions: true,
             maintains_mempool: false, // Focus on problems
-            
+
             // PROBLEM SOLVING FOCUS
             can_solve_problems: true,
             problem_priority: 100, // Highest priority
-            
+
             // No oracle
             can_provide_oracle_data: false,
             oracle_data_types: vec![],
-            
+
             // Minimal connections (focus compute on solving)
             max_outbound_peers: 10,
             max_inbound_peers: 5,
@@ -331,28 +330,28 @@ impl NetworkCapabilities {
             can_validate_blocks: true,
             can_serve_blocks: true,
             can_serve_headers: true,
-            
+
             // Moderate storage
             stores_full_history: false,
             stores_pruned: true,
             stores_headers_only: false,
             max_blocks_stored: 50_000,
-            
+
             // Sync capabilities
             can_full_sync: true,
             can_header_sync: true,
             can_serve_flyclient: true,
             can_verify_flyclient: true,
-            
+
             // Full transaction support
             can_relay_transactions: true,
             can_validate_transactions: true,
             maintains_mempool: true,
-            
+
             // No problem solving
             can_solve_problems: false,
             problem_priority: 0,
-            
+
             // ORACLE FOCUS
             can_provide_oracle_data: true,
             oracle_data_types: vec![
@@ -361,7 +360,7 @@ impl NetworkCapabilities {
                 "random".to_string(),
                 "cross_chain".to_string(),
             ],
-            
+
             // Well-connected for data distribution
             max_outbound_peers: 30,
             max_inbound_peers: 50,
@@ -406,10 +405,10 @@ pub enum RequestType {
 pub trait ProtocolHandler: Send + Sync {
     /// Handle an incoming message
     fn handle_message(&self, msg: &NodeMessage) -> Option<NodeMessage>;
-    
+
     /// Get supported message types
     fn supported_messages(&self) -> Vec<MessageType>;
-    
+
     /// Priority for handling (higher = first)
     fn priority(&self) -> u8;
 }
@@ -421,33 +420,33 @@ pub enum MessageType {
     BlockAnnounce,
     BlockRequest,
     BlockResponse,
-    
+
     // Header-related (Light sync)
     HeaderRequest,
     HeaderResponse,
-    
+
     // FlyClient
     FlyClientProofRequest,
     FlyClientProofResponse,
-    
+
     // Transactions
     TransactionAnnounce,
     TransactionRequest,
     TransactionResponse,
-    
+
     // Problem marketplace
     ProblemAnnounce,
     SolutionSubmit,
     SolutionVerify,
-    
+
     // Oracle
     OracleDataRequest,
     OracleDataResponse,
-    
+
     // Status
     StatusRequest,
     StatusResponse,
-    
+
     // Peer discovery
     PeerRequest,
     PeerResponse,
@@ -497,13 +496,13 @@ pub struct NodeTypeManager {
     capabilities: Arc<RwLock<NetworkCapabilities>>,
     /// Target node type (operator preference)
     target_type: NodeType,
-    
+
     // === Protocol Components ===
     /// Light sync server (for serving Light clients)
     light_sync_server: Option<Arc<RwLock<LightSyncServer>>>,
     /// FlyClient verifier (for Light nodes)
     flyclient_verifier: Option<Arc<RwLock<LightClientVerifier>>>,
-    
+
     // === State ===
     /// Start time for uptime tracking
     start_time: Instant,
@@ -511,13 +510,13 @@ pub struct NodeTypeManager {
     last_capability_update: Arc<RwLock<Instant>>,
     /// Pending requests by type
     pending_requests: Arc<RwLock<HashMap<u64, PendingRequest>>>,
-    
+
     // === Channels ===
     /// Outbound message channel
     outbound_tx: mpsc::UnboundedSender<NodeMessage>,
     /// Classification change broadcast
     classification_broadcast: broadcast::Sender<ClassificationResult>,
-    
+
     // === Metrics ===
     /// Messages handled by type
     messages_handled: Arc<RwLock<HashMap<MessageType, u64>>>,
@@ -541,41 +540,43 @@ impl NodeTypeManager {
         initial_height: u64,
         target_type: NodeType,
         genesis_header: Option<BlockHeader>,
-    ) -> (Self, mpsc::UnboundedReceiver<NodeMessage>, broadcast::Receiver<ClassificationResult>) {
+    ) -> (
+        Self,
+        mpsc::UnboundedReceiver<NodeMessage>,
+        broadcast::Receiver<ClassificationResult>,
+    ) {
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
         let (classification_broadcast, classification_rx) = broadcast::channel(16);
-        
+
         // Initialize classification manager
         let mut classification_manager = NodeClassificationManager::new(initial_height);
         classification_manager.set_target_type(target_type);
-        
+
         // Set headers-only if Light mode
         if matches!(target_type, NodeType::Light) {
             classification_manager.set_headers_only(true);
         }
-        
+
         // Initialize capabilities for target type
         let capabilities = NetworkCapabilities::for_node_type(target_type);
-        
+
         // Initialize LightSync components based on type
         let (light_sync_server, flyclient_verifier) = match target_type {
             NodeType::Light => {
                 // Light nodes need FlyClient verifier
-                let verifier = genesis_header.as_ref().map(|h| {
-                    LightClientVerifier::new(h.hash())
-                });
+                let verifier = genesis_header
+                    .as_ref()
+                    .map(|h| LightClientVerifier::new(h.hash()));
                 (None, verifier.map(|v| Arc::new(RwLock::new(v))))
             }
             NodeType::Full | NodeType::Archive | NodeType::Validator => {
                 // Full+ nodes can serve Light clients
-                let server = genesis_header.map(|h| {
-                    LightSyncServer::new(h)
-                });
+                let server = genesis_header.map(LightSyncServer::new);
                 (server.map(|s| Arc::new(RwLock::new(s))), None)
             }
             _ => (None, None),
         };
-        
+
         let manager = NodeTypeManager {
             classification: Arc::new(RwLock::new(classification_manager)),
             capabilities: Arc::new(RwLock::new(capabilities)),
@@ -591,7 +592,7 @@ impl NodeTypeManager {
             requests_served: Arc::new(RwLock::new(0)),
             requests_rejected: Arc::new(RwLock::new(0)),
         };
-        
+
         (manager, outbound_rx, classification_rx)
     }
 
@@ -665,14 +666,19 @@ impl NodeTypeManager {
     /// Handle header request (for Light clients)
     async fn handle_header_request(&self, msg: &NodeMessage) -> Option<NodeMessage> {
         let server = self.light_sync_server.as_ref()?;
-        
+
         // Deserialize request
         let request: LightSyncMessage = bincode::deserialize(&msg.payload).ok()?;
-        
+
         let response = match request {
-            LightSyncMessage::GetHeaders { start_height, max_headers, request_id } => {
-                server.read().await.handle_get_headers(start_height, max_headers, request_id)
-            }
+            LightSyncMessage::GetHeaders {
+                start_height,
+                max_headers,
+                request_id,
+            } => server
+                .read()
+                .await
+                .handle_get_headers(start_height, max_headers, request_id),
             LightSyncMessage::GetChainTip { request_id } => {
                 // handle_get_chain_tip returns Option<LightSyncMessage>, unwrap or return None
                 server.read().await.handle_get_chain_tip(request_id)?
@@ -682,7 +688,7 @@ impl NodeTypeManager {
 
         let payload = bincode::serialize(&response).ok()?;
         *self.requests_served.write().await += 1;
-        
+
         Some(NodeMessage::new(
             MessageType::HeaderResponse,
             self.current_type().await,
@@ -693,22 +699,30 @@ impl NodeTypeManager {
     /// Handle FlyClient proof request
     async fn handle_flyclient_request(&self, msg: &NodeMessage) -> Option<NodeMessage> {
         let server = self.light_sync_server.as_ref()?;
-        
+
         let request: LightSyncMessage = bincode::deserialize(&msg.payload).ok()?;
-        
+
         let response = match request {
-            LightSyncMessage::GetFlyClientProof { security_param, request_id } => {
-                server.read().await.handle_get_flyclient_proof(security_param, request_id)
-            }
-            LightSyncMessage::GetMMRProof { block_height, request_id } => {
-                server.read().await.handle_get_mmr_proof(block_height, request_id)
-            }
+            LightSyncMessage::GetFlyClientProof {
+                security_param,
+                request_id,
+            } => server
+                .read()
+                .await
+                .handle_get_flyclient_proof(security_param, request_id),
+            LightSyncMessage::GetMMRProof {
+                block_height,
+                request_id,
+            } => server
+                .read()
+                .await
+                .handle_get_mmr_proof(block_height, request_id),
             _ => return None,
         };
 
         let payload = bincode::serialize(&response).ok()?;
         *self.requests_served.write().await += 1;
-        
+
         Some(NodeMessage::new(
             MessageType::FlyClientProofResponse,
             self.current_type().await,
@@ -720,7 +734,7 @@ impl NodeTypeManager {
     async fn handle_status_request(&self, _msg: &NodeMessage) -> Option<NodeMessage> {
         let status = self.get_status().await;
         let payload = bincode::serialize(&status).ok()?;
-        
+
         Some(NodeMessage::new(
             MessageType::StatusResponse,
             self.current_type().await,
@@ -731,27 +745,27 @@ impl NodeTypeManager {
     /// Update classification with new block
     pub async fn on_block_validated(&self, block: &Block, validation_time_ms: u64) {
         let mut classification = self.classification.write().await;
-        
+
         // Record validation
         classification.record_block_validated(validation_time_ms);
         classification.record_block_stored();
         classification.update_chain_height(block.header.height);
-        
+
         // Update LightSync server if we have one
         if let Some(ref server) = self.light_sync_server {
             server.write().await.add_header(block.header.clone());
         }
-        
+
         // Check for reclassification
         if let Some(result) = classification.maybe_reclassify(block.header.height) {
             // Update capabilities for new type
             let new_caps = NetworkCapabilities::for_node_type(result.node_type);
             *self.capabilities.write().await = new_caps;
             *self.last_capability_update.write().await = Instant::now();
-            
+
             // Broadcast classification change
             let _ = self.classification_broadcast.send(result.clone());
-            
+
             tracing::info!(
                 "🔄 Node reclassified: {} -> {} (confidence: {:.1}%)",
                 self.target_type,
@@ -775,12 +789,18 @@ impl NodeTypeManager {
 
     /// Update with solution submitted
     pub async fn on_solution_submitted(&self, accepted: bool) {
-        self.classification.write().await.record_solution_submitted(accepted);
+        self.classification
+            .write()
+            .await
+            .record_solution_submitted(accepted);
     }
 
     /// Update with oracle feed
     pub async fn on_oracle_feed(&self, accurate: bool) {
-        self.classification.write().await.record_oracle_feed(accurate);
+        self.classification
+            .write()
+            .await
+            .record_oracle_feed(accurate);
         crate::metrics::record_oracle_feed();
     }
 
@@ -791,12 +811,17 @@ impl NodeTypeManager {
 
     /// Verify FlyClient proof (for Light nodes)
     pub async fn verify_flyclient_proof(&self, proof: &FlyClientProof) -> Result<(), String> {
-        let verifier = self.flyclient_verifier.as_ref()
+        let verifier = self
+            .flyclient_verifier
+            .as_ref()
             .ok_or("Not a Light node - FlyClient verification not available")?;
-        
-        let result = verifier.write().await.verify_and_update(proof)
+
+        let result = verifier
+            .write()
+            .await
+            .verify_and_update(proof)
             .map_err(|e| e.to_string())?;
-        
+
         if result.valid {
             tracing::info!(
                 "✅ FlyClient proof verified: height={}, samples={}",
@@ -823,14 +848,17 @@ impl NodeTypeManager {
 
     /// Generate an MMR inclusion proof for a specific block height
     /// Returns (header, proof_bytes, mmr_root)
-    pub async fn generate_mmr_proof(&self, block_height: u64) -> Option<(BlockHeader, Vec<u8>, Hash)> {
+    pub async fn generate_mmr_proof(
+        &self,
+        block_height: u64,
+    ) -> Option<(BlockHeader, Vec<u8>, Hash)> {
         let server = self.light_sync_server.as_ref()?;
         let server_guard = server.read().await;
-        
+
         let proof = server_guard.generate_mmr_proof(block_height)?;
         let header = server_guard.get_header(block_height)?;
         let mmr_root = server_guard.mmr_root();
-        
+
         let proof_bytes = bincode::serialize(&proof).ok()?;
         Some((header, proof_bytes, mmr_root))
     }
@@ -841,10 +869,10 @@ impl NodeTypeManager {
             Some(s) => s,
             None => return Vec::new(),
         };
-        
+
         let server_guard = server.read().await;
         let end_height = start_height + max_headers;
-        
+
         (start_height..end_height)
             .filter_map(|h| server_guard.get_header(h))
             .collect()
@@ -878,7 +906,7 @@ impl NodeTypeManager {
         let classification = self.classification.read().await;
         let capabilities = self.capabilities.read().await.clone();
         let uptime = self.start_time.elapsed();
-        
+
         NodeManagerStatus {
             current_type: classification.current_type(),
             target_type: self.target_type,
@@ -900,7 +928,8 @@ impl NodeTypeManager {
 
     /// Send outbound message
     pub fn send_message(&self, msg: NodeMessage) -> Result<(), String> {
-        self.outbound_tx.send(msg)
+        self.outbound_tx
+            .send(msg)
             .map_err(|e| format!("Failed to send message: {}", e))
     }
 
@@ -945,7 +974,10 @@ impl CapabilityRouter {
     /// Register a peer's capabilities
     pub async fn register_peer(&self, peer_id: String, node_type: NodeType) {
         let caps = NetworkCapabilities::for_node_type(node_type);
-        self.peer_capabilities.write().await.insert(peer_id, (node_type, caps));
+        self.peer_capabilities
+            .write()
+            .await
+            .insert(peer_id, (node_type, caps));
     }
 
     /// Remove a peer
@@ -955,7 +987,9 @@ impl CapabilityRouter {
 
     /// Find peers that can handle a request type
     pub async fn find_capable_peers(&self, request_type: &RequestType) -> Vec<String> {
-        self.peer_capabilities.read().await
+        self.peer_capabilities
+            .read()
+            .await
             .iter()
             .filter(|(_, (_, caps))| caps.can_handle(request_type))
             .map(|(id, _)| id.clone())
@@ -972,7 +1006,9 @@ impl CapabilityRouter {
 
     /// Get peers by type
     pub async fn get_peers_by_type(&self, node_type: NodeType) -> Vec<String> {
-        self.peer_capabilities.read().await
+        self.peer_capabilities
+            .read()
+            .await
             .iter()
             .filter(|(_, (t, _))| *t == node_type)
             .map(|(id, _)| id.clone())
@@ -1037,7 +1073,7 @@ mod tests {
     #[test]
     fn test_light_capabilities() {
         let caps = NetworkCapabilities::for_node_type(NodeType::Light);
-        
+
         assert!(!caps.can_produce_blocks);
         assert!(!caps.can_validate_blocks);
         assert!(caps.stores_headers_only);
@@ -1049,7 +1085,7 @@ mod tests {
     #[test]
     fn test_full_capabilities() {
         let caps = NetworkCapabilities::for_node_type(NodeType::Full);
-        
+
         assert!(!caps.can_produce_blocks);
         assert!(caps.can_validate_blocks);
         assert!(caps.can_serve_blocks);
@@ -1060,7 +1096,7 @@ mod tests {
     #[test]
     fn test_archive_capabilities() {
         let caps = NetworkCapabilities::for_node_type(NodeType::Archive);
-        
+
         assert!(caps.stores_full_history);
         assert!(caps.can_be_bootstrap);
         assert_eq!(caps.max_blocks_stored, 0); // Unlimited
@@ -1070,7 +1106,7 @@ mod tests {
     #[test]
     fn test_validator_capabilities() {
         let caps = NetworkCapabilities::for_node_type(NodeType::Validator);
-        
+
         assert!(caps.can_produce_blocks);
         assert!(caps.can_validate_blocks);
         assert!(caps.maintains_mempool);
@@ -1080,7 +1116,7 @@ mod tests {
     #[test]
     fn test_bounty_capabilities() {
         let caps = NetworkCapabilities::for_node_type(NodeType::Bounty);
-        
+
         assert!(caps.can_solve_problems);
         assert_eq!(caps.problem_priority, 100);
         assert!(!caps.can_serve_blocks);
@@ -1089,7 +1125,7 @@ mod tests {
     #[test]
     fn test_oracle_capabilities() {
         let caps = NetworkCapabilities::for_node_type(NodeType::Oracle);
-        
+
         assert!(caps.can_provide_oracle_data);
         assert!(!caps.oracle_data_types.is_empty());
     }
@@ -1104,7 +1140,7 @@ mod tests {
 
         assert!(full_caps.can_handle(&block_request));
         assert!(!light_caps.can_handle(&block_request));
-        
+
         // Both can handle header requests (Full serves, Light requests)
         assert!(full_caps.can_handle(&header_request));
         assert!(!light_caps.can_handle(&header_request)); // Light can't SERVE
@@ -1113,14 +1149,20 @@ mod tests {
     #[tokio::test]
     async fn test_capability_router() {
         let router = CapabilityRouter::new();
-        
-        router.register_peer("peer1".to_string(), NodeType::Full).await;
-        router.register_peer("peer2".to_string(), NodeType::Archive).await;
-        router.register_peer("peer3".to_string(), NodeType::Light).await;
+
+        router
+            .register_peer("peer1".to_string(), NodeType::Full)
+            .await;
+        router
+            .register_peer("peer2".to_string(), NodeType::Archive)
+            .await;
+        router
+            .register_peer("peer3".to_string(), NodeType::Light)
+            .await;
 
         let block_request = RequestType::GetBlocks { from: 0, to: 100 };
         let capable = router.find_capable_peers(&block_request).await;
-        
+
         // Full and Archive can serve blocks, Light cannot
         assert!(capable.contains(&"peer1".to_string()));
         assert!(capable.contains(&"peer2".to_string()));
@@ -1130,11 +1172,7 @@ mod tests {
     #[tokio::test]
     async fn test_node_manager_creation() {
         let header = test_header(0);
-        let (manager, _rx, _broadcast_rx) = NodeTypeManager::new(
-            0,
-            NodeType::Full,
-            Some(header),
-        );
+        let (manager, _rx, _broadcast_rx) = NodeTypeManager::new(0, NodeType::Full, Some(header));
 
         assert_eq!(manager.current_type().await, NodeType::Full);
         assert!(manager.light_sync_server.is_some());
@@ -1144,19 +1182,20 @@ mod tests {
     #[tokio::test]
     async fn test_light_node_manager() {
         let header = test_header(0);
-        let (manager, _rx, _broadcast_rx) = NodeTypeManager::new(
-            0,
-            NodeType::Light,
-            Some(header),
-        );
+        let (manager, _rx, _broadcast_rx) = NodeTypeManager::new(0, NodeType::Light, Some(header));
 
         // For Light nodes, current_type() defaults to Full until classification runs
         // But we can verify the target type and that headers_only is set
         assert_eq!(manager.target_type, NodeType::Light);
-        assert!(manager.classification.read().await.local_metrics.headers_only);
+        assert!(
+            manager
+                .classification
+                .read()
+                .await
+                .local_metrics
+                .headers_only
+        );
         assert!(manager.light_sync_server.is_none());
         assert!(manager.flyclient_verifier.is_some());
     }
 }
-
-

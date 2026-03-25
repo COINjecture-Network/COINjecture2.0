@@ -1,6 +1,9 @@
 // COINjecture Network B Wallet CLI
 // Interactive command-line wallet for managing accounts, transactions, and marketplace interactions
 
+// Signing-message builders are public APIs that must accept each field individually.
+#![allow(clippy::too_many_arguments)]
+
 use clap::{Parser, Subcommand};
 use colored::*;
 
@@ -383,9 +386,12 @@ async fn handle_transaction_command(
         TransactionCommands::Send { from, to, amount } => {
             transaction::send_tokens(&from, &to, amount, client).await?
         }
-        TransactionCommands::Timelock { from, to, amount, unlock_in } => {
-            transaction::create_timelock(&from, &to, amount, unlock_in, client).await?
-        }
+        TransactionCommands::Timelock {
+            from,
+            to,
+            amount,
+            unlock_in,
+        } => transaction::create_timelock(&from, &to, amount, unlock_in, client).await?,
         TransactionCommands::Status { tx_hash } => {
             transaction::get_transaction_status(&tx_hash, client).await?
         }
@@ -420,9 +426,7 @@ async fn handle_transaction_command(
             deposit_a,
             deposit_b,
             timeout,
-        } => {
-            transaction::open_channel(&from, &to, deposit_a, deposit_b, timeout, client).await?
-        }
+        } => transaction::open_channel(&from, &to, deposit_a, deposit_b, timeout, client).await?,
         TransactionCommands::ChannelUpdate {
             from,
             channel_id,
@@ -430,15 +434,8 @@ async fn handle_transaction_command(
             balance_a,
             balance_b,
         } => {
-            transaction::update_channel(
-                &from,
-                &channel_id,
-                sequence,
-                balance_a,
-                balance_b,
-                client,
-            )
-            .await?
+            transaction::update_channel(&from, &channel_id, sequence, balance_a, balance_b, client)
+                .await?
         }
         TransactionCommands::ChannelClose {
             from,
@@ -446,14 +443,8 @@ async fn handle_transaction_command(
             final_balance_a,
             final_balance_b,
         } => {
-            transaction::close_channel(
-                &from,
-                &channel_id,
-                final_balance_a,
-                final_balance_b,
-                client,
-            )
-            .await?
+            transaction::close_channel(&from, &channel_id, final_balance_a, final_balance_b, client)
+                .await?
         }
         TransactionCommands::TrustlineCreate {
             from,
@@ -462,8 +453,14 @@ async fn handle_transaction_command(
             limit_b_to_a,
             dimensional_scale,
         } => {
-            println!("{}", "⚠️  TrustLine transactions are not yet fully implemented".yellow());
-            println!("{}", "This feature will be available in a future update.".dimmed());
+            println!(
+                "{}",
+                "⚠️  TrustLine transactions are not yet fully implemented".yellow()
+            );
+            println!(
+                "{}",
+                "This feature will be available in a future update.".dimmed()
+            );
             println!();
             println!("Parameters would be:");
             println!("  From: {}", from);
@@ -479,8 +476,14 @@ async fn handle_transaction_command(
             amount_in,
             min_amount_out,
         } => {
-            println!("{}", "⚠️  Pool Swap transactions are not yet fully implemented".yellow());
-            println!("{}", "This feature will be available in a future update.".dimmed());
+            println!(
+                "{}",
+                "⚠️  Pool Swap transactions are not yet fully implemented".yellow()
+            );
+            println!(
+                "{}",
+                "This feature will be available in a future update.".dimmed()
+            );
             println!();
             println!("Parameters would be:");
             println!("  From: {}", from);
@@ -527,7 +530,10 @@ async fn handle_chain_command(cmd: ChainCommands, client: &RpcClient) -> anyhow:
             if let Some(block) = client.get_block(height).await? {
                 println!("{}", format!("Block #{}", height).green().bold());
                 println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                println!("Hash:       {}", hex::encode(block.header.hash().as_bytes()));
+                println!(
+                    "Hash:       {}",
+                    hex::encode(block.header.hash().as_bytes())
+                );
                 println!(
                     "Parent:     {}",
                     hex::encode(block.header.prev_hash.as_bytes())
@@ -549,7 +555,10 @@ async fn handle_chain_command(cmd: ChainCommands, client: &RpcClient) -> anyhow:
                 let height = block.header.height;
                 println!("{}", format!("Latest Block #{}", height).green().bold());
                 println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                println!("Hash:       {}", hex::encode(block.header.hash().as_bytes()));
+                println!(
+                    "Hash:       {}",
+                    hex::encode(block.header.hash().as_bytes())
+                );
                 println!("Miner:      {}", hex::encode(block.header.miner.as_bytes()));
                 println!("Timestamp:  {}", block.header.timestamp);
                 println!("Work Score: {:.4}", block.header.work_score);
@@ -585,7 +594,10 @@ async fn handle_faucet_command(cmd: FaucetCommands, client: &RpcClient) -> anyho
                         println!("{}", "✅ Faucet Request Successful".green().bold());
                         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
                         println!("Amount credited: {} tokens", response.amount.unwrap_or(0));
-                        println!("New balance:     {} tokens", response.new_balance.unwrap_or(0));
+                        println!(
+                            "New balance:     {} tokens",
+                            response.new_balance.unwrap_or(0)
+                        );
                         println!();
                         println!("{}", response.message.green());
                     } else {
@@ -610,18 +622,63 @@ async fn handle_faucet_command(cmd: FaucetCommands, client: &RpcClient) -> anyho
 }
 
 fn print_banner() {
-    println!("{}", "╔═══════════════════════════════════════════════════════════════╗".cyan());
-    println!("{}", "║                                                               ║".cyan());
-    println!("{}", "║   ██████╗ ██████╗ ██╗███╗   ██╗     ██╗███████╗ ██████╗████████╗███████╗██████╗   ║".cyan());
-    println!("{}", "║  ██╔════╝██╔═══██╗██║████╗  ██║     ██║██╔════╝██╔════╝╚══██╔══╝██╔════╝██╔══██╗  ║".cyan());
-    println!("{}", "║  ██║     ██║   ██║██║██╔██╗ ██║     ██║█████╗  ██║        ██║   █████╗  ██████╔╝  ║".cyan());
-    println!("{}", "║  ██║     ██║   ██║██║██║╚██╗██║██   ██║██╔══╝  ██║        ██║   ██╔══╝  ██╔══██╗  ║".cyan());
-    println!("{}", "║  ╚██████╗╚██████╔╝██║██║ ╚████║╚█████╔╝███████╗╚██████╗   ██║   ███████╗██║  ██║  ║".cyan());
-    println!("{}", "║   ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝ ╚════╝ ╚══════╝ ╚═════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝  ║".cyan());
-    println!("{}", "║                                                               ║".cyan());
-    println!("{}", "║                    Network B Wallet CLI v0.1.0                ║".cyan());
-    println!("{}", "║                    NP-Hard Consensus • η=1/√2                 ║".cyan());
-    println!("{}", "║                                                               ║".cyan());
-    println!("{}", "╚═══════════════════════════════════════════════════════════════╝".cyan());
+    println!(
+        "{}",
+        "╔═══════════════════════════════════════════════════════════════╗".cyan()
+    );
+    println!(
+        "{}",
+        "║                                                               ║".cyan()
+    );
+    println!(
+        "{}",
+        "║   ██████╗ ██████╗ ██╗███╗   ██╗     ██╗███████╗ ██████╗████████╗███████╗██████╗   ║"
+            .cyan()
+    );
+    println!(
+        "{}",
+        "║  ██╔════╝██╔═══██╗██║████╗  ██║     ██║██╔════╝██╔════╝╚══██╔══╝██╔════╝██╔══██╗  ║"
+            .cyan()
+    );
+    println!(
+        "{}",
+        "║  ██║     ██║   ██║██║██╔██╗ ██║     ██║█████╗  ██║        ██║   █████╗  ██████╔╝  ║"
+            .cyan()
+    );
+    println!(
+        "{}",
+        "║  ██║     ██║   ██║██║██║╚██╗██║██   ██║██╔══╝  ██║        ██║   ██╔══╝  ██╔══██╗  ║"
+            .cyan()
+    );
+    println!(
+        "{}",
+        "║  ╚██████╗╚██████╔╝██║██║ ╚████║╚█████╔╝███████╗╚██████╗   ██║   ███████╗██║  ██║  ║"
+            .cyan()
+    );
+    println!(
+        "{}",
+        "║   ╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝ ╚════╝ ╚══════╝ ╚═════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝  ║"
+            .cyan()
+    );
+    println!(
+        "{}",
+        "║                                                               ║".cyan()
+    );
+    println!(
+        "{}",
+        "║                    Network B Wallet CLI v0.1.0                ║".cyan()
+    );
+    println!(
+        "{}",
+        "║                    NP-Hard Consensus • η=1/√2                 ║".cyan()
+    );
+    println!(
+        "{}",
+        "║                                                               ║".cyan()
+    );
+    println!(
+        "{}",
+        "╚═══════════════════════════════════════════════════════════════╝".cyan()
+    );
     println!();
 }

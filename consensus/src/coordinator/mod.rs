@@ -15,15 +15,15 @@
 //   - CoordinatorEvent: events emitted to the node service
 //   - CoordinatorCommand: commands received from the node service / bridge
 
-pub mod config;
-pub mod leader;
-pub mod epoch;
 pub mod commit;
+pub mod config;
+pub mod epoch;
+pub mod leader;
 
-pub use config::CoordinatorConfig;
-pub use leader::NodeId;
-pub use epoch::{EpochPhase, EpochState};
 pub use commit::{CommitCollector, SolutionCommit};
+pub use config::CoordinatorConfig;
+pub use epoch::{EpochPhase, EpochState};
+pub use leader::NodeId;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -44,15 +44,10 @@ pub enum CoordinatorEvent {
     },
 
     /// The Mine phase has begun. The node should start solving.
-    MinePhaseStarted {
-        epoch: u64,
-        salt: [u8; 32],
-    },
+    MinePhaseStarted { epoch: u64, salt: [u8; 32] },
 
     /// The Commit phase has begun. The node should broadcast its commitment.
-    CommitPhaseStarted {
-        epoch: u64,
-    },
+    CommitPhaseStarted { epoch: u64 },
 
     /// A winner has been selected for this epoch.
     EpochSealed {
@@ -70,10 +65,7 @@ pub enum CoordinatorEvent {
     },
 
     /// Broadcast a salt message to mesh peers (leader duty).
-    BroadcastSalt {
-        epoch: u64,
-        salt: [u8; 32],
-    },
+    BroadcastSalt { epoch: u64, salt: [u8; 32] },
 
     /// Broadcast our solution commitment to mesh peers.
     BroadcastCommit {
@@ -83,10 +75,7 @@ pub enum CoordinatorEvent {
     },
 
     /// A block was produced by this node (we won the epoch).
-    BlockProduced {
-        block: Block,
-        epoch: u64,
-    },
+    BlockProduced { block: Block, epoch: u64 },
 }
 
 // ─── Commands (node service / bridge → coordinator) ──────────────────────────
@@ -112,26 +101,16 @@ pub enum CoordinatorCommand {
     },
 
     /// A peer's solution commitment was received from the mesh.
-    CommitReceived {
-        epoch: u64,
-        commit: SolutionCommit,
-    },
+    CommitReceived { epoch: u64, commit: SolutionCommit },
 
     /// A new peer joined the mesh (update peer set).
-    PeerJoined {
-        node_id: NodeId,
-    },
+    PeerJoined { node_id: NodeId },
 
     /// A peer left the mesh.
-    PeerLeft {
-        node_id: NodeId,
-    },
+    PeerLeft { node_id: NodeId },
 
     /// Update the chain tip (for salt derivation).
-    ChainTipUpdated {
-        height: u64,
-        hash: Hash,
-    },
+    ChainTipUpdated { height: u64, hash: Hash },
 }
 
 // ─── Coordinator Shared State ────────────────────────────────────────────────
@@ -191,7 +170,13 @@ impl EpochCoordinator {
         chain_height: u64,
         chain_hash: Hash,
     ) -> (Self, Arc<RwLock<CoordinatorState>>) {
-        Self::with_miner_address(our_id, config, chain_height, chain_hash, Address::from_bytes(our_id))
+        Self::with_miner_address(
+            our_id,
+            config,
+            chain_height,
+            chain_hash,
+            Address::from_bytes(our_id),
+        )
     }
 
     /// Create a new coordinator with an explicit miner address for block production.
@@ -322,10 +307,7 @@ impl EpochCoordinator {
     }
 
     /// Handle phase timer expiry.
-    async fn handle_phase_expiry(
-        &mut self,
-        event_tx: &mpsc::UnboundedSender<CoordinatorEvent>,
-    ) {
+    async fn handle_phase_expiry(&mut self, event_tx: &mpsc::UnboundedSender<CoordinatorEvent>) {
         let current_phase = self.epoch_state.phase;
         let epoch = self.epoch_state.epoch;
 
@@ -348,10 +330,8 @@ impl EpochCoordinator {
                 match new_phase {
                     EpochPhase::Mine => {
                         if let Some(salt) = self.epoch_state.salt {
-                            let _ = event_tx.send(CoordinatorEvent::MinePhaseStarted {
-                                epoch,
-                                salt,
-                            });
+                            let _ =
+                                event_tx.send(CoordinatorEvent::MinePhaseStarted { epoch, salt });
                         }
                     }
                     EpochPhase::Commit => {
@@ -373,14 +353,14 @@ impl EpochCoordinator {
     }
 
     /// Handle the Seal phase: select winner, build block if we won, emit events.
-    async fn handle_seal(
-        &mut self,
-        event_tx: &mpsc::UnboundedSender<CoordinatorEvent>,
-    ) {
+    async fn handle_seal(&mut self, event_tx: &mpsc::UnboundedSender<CoordinatorEvent>) {
         let epoch = self.epoch_state.epoch;
         let peer_count = self.peers.len();
 
-        if self.collector.has_quorum(peer_count, self.config.quorum_threshold) {
+        if self
+            .collector
+            .has_quorum(peer_count, self.config.quorum_threshold)
+        {
             if let Some(winner) = self.collector.select_winner() {
                 tracing::info!(
                     epoch,
@@ -432,10 +412,7 @@ impl EpochCoordinator {
                             self.chain_height = height;
                             self.chain_hash = block_hash;
 
-                            let _ = event_tx.send(CoordinatorEvent::BlockProduced {
-                                block,
-                                epoch,
-                            });
+                            let _ = event_tx.send(CoordinatorEvent::BlockProduced { block, epoch });
                         } else {
                             tracing::error!(epoch, "failed to build block from solution");
                         }
@@ -456,10 +433,7 @@ impl EpochCoordinator {
     }
 
     /// Handle a stalled epoch.
-    async fn handle_stall(
-        &mut self,
-        event_tx: &mpsc::UnboundedSender<CoordinatorEvent>,
-    ) {
+    async fn handle_stall(&mut self, event_tx: &mpsc::UnboundedSender<CoordinatorEvent>) {
         let epoch = self.epoch_state.epoch;
         let phase = self.epoch_state.phase;
         self.consecutive_stalls += 1;
@@ -510,7 +484,9 @@ impl EpochCoordinator {
                 }
 
                 // Verify it came from the expected leader
-                if let Some(expected_leader) = leader::elect_leader(epoch, &self.chain_hash, &self.peers) {
+                if let Some(expected_leader) =
+                    leader::elect_leader(epoch, &self.chain_hash, &self.peers)
+                {
                     if from != expected_leader {
                         tracing::warn!(
                             from = hex::encode(&from[..4]),
@@ -526,7 +502,12 @@ impl EpochCoordinator {
             }
 
             CoordinatorCommand::LocalSolutionReady {
-                epoch, solution_hash, work_score, problem, solution, solve_time,
+                epoch,
+                solution_hash,
+                work_score,
+                problem,
+                solution,
+                solve_time,
             } => {
                 if epoch != self.epoch_state.epoch {
                     return;
@@ -617,11 +598,7 @@ impl EpochCoordinator {
 
     /// Update the shared state for external queries.
     async fn update_shared_state(&self) {
-        let leader = leader::elect_leader(
-            self.epoch_state.epoch,
-            &self.chain_hash,
-            &self.peers,
-        );
+        let leader = leader::elect_leader(self.epoch_state.epoch, &self.chain_hash, &self.peers);
 
         let mut state = self.shared_state.write().await;
         state.epoch = self.epoch_state.epoch;
@@ -655,12 +632,8 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, _state) = EpochCoordinator::new(
-            our_id,
-            config,
-            0,
-            Hash::from_bytes([0; 32]),
-        );
+        let (coordinator, _state) =
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -699,12 +672,8 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, state) = EpochCoordinator::new(
-            our_id,
-            config,
-            0,
-            Hash::from_bytes([0; 32]),
-        );
+        let (coordinator, state) =
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -725,8 +694,12 @@ mod tests {
         }
 
         // Verify we got phase transition events
-        let has_mine = events.iter().any(|e| matches!(e, CoordinatorEvent::MinePhaseStarted { .. }));
-        let has_commit = events.iter().any(|e| matches!(e, CoordinatorEvent::CommitPhaseStarted { .. }));
+        let has_mine = events
+            .iter()
+            .any(|e| matches!(e, CoordinatorEvent::MinePhaseStarted { .. }));
+        let has_commit = events
+            .iter()
+            .any(|e| matches!(e, CoordinatorEvent::CommitPhaseStarted { .. }));
 
         assert!(has_mine, "should have received MinePhaseStarted");
         assert!(has_commit, "should have received CommitPhaseStarted");
@@ -742,12 +715,8 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, state) = EpochCoordinator::new(
-            our_id,
-            config,
-            0,
-            Hash::from_bytes([0; 32]),
-        );
+        let (coordinator, state) =
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
@@ -757,8 +726,16 @@ mod tests {
         });
 
         // Add peers
-        cmd_tx.send(CoordinatorCommand::PeerJoined { node_id: test_node_id(2) }).unwrap();
-        cmd_tx.send(CoordinatorCommand::PeerJoined { node_id: test_node_id(3) }).unwrap();
+        cmd_tx
+            .send(CoordinatorCommand::PeerJoined {
+                node_id: test_node_id(2),
+            })
+            .unwrap();
+        cmd_tx
+            .send(CoordinatorCommand::PeerJoined {
+                node_id: test_node_id(3),
+            })
+            .unwrap();
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -768,7 +745,11 @@ mod tests {
         drop(s);
 
         // Remove a peer
-        cmd_tx.send(CoordinatorCommand::PeerLeft { node_id: test_node_id(3) }).unwrap();
+        cmd_tx
+            .send(CoordinatorCommand::PeerLeft {
+                node_id: test_node_id(3),
+            })
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let s = state.read().await;
@@ -790,18 +771,18 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, state) = EpochCoordinator::new(
-            our_id,
-            config,
-            0,
-            Hash::from_bytes([0; 32]),
-        );
+        let (coordinator, state) =
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
         // Add a peer so quorum math works (2 peers, need 1 commit for 50%)
-        cmd_tx.send(CoordinatorCommand::PeerJoined { node_id: test_node_id(2) }).unwrap();
+        cmd_tx
+            .send(CoordinatorCommand::PeerJoined {
+                node_id: test_node_id(2),
+            })
+            .unwrap();
 
         tokio::spawn(async move {
             coordinator.run(cmd_rx, event_tx).await;
@@ -811,25 +792,32 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Submit our solution (with dummy problem/solution for the new fields)
-        cmd_tx.send(CoordinatorCommand::LocalSolutionReady {
-            epoch: 1,
-            solution_hash: [0xAA; 32],
-            work_score: 150.0,
-            problem: ProblemType::SubsetSum { numbers: vec![1, 2, 3, 4, 5], target: 9 },
-            solution: Solution::SubsetSum(vec![3, 4]),  // 4+5=9
-            solve_time: Duration::from_millis(100),
-        }).unwrap();
+        cmd_tx
+            .send(CoordinatorCommand::LocalSolutionReady {
+                epoch: 1,
+                solution_hash: [0xAA; 32],
+                work_score: 150.0,
+                problem: ProblemType::SubsetSum {
+                    numbers: vec![1, 2, 3, 4, 5],
+                    target: 9,
+                },
+                solution: Solution::SubsetSum(vec![3, 4]), // 4+5=9
+                solve_time: Duration::from_millis(100),
+            })
+            .unwrap();
 
         // Submit peer's commit
-        cmd_tx.send(CoordinatorCommand::CommitReceived {
-            epoch: 1,
-            commit: SolutionCommit {
-                node_id: test_node_id(2),
-                solution_hash: [0xBB; 32],
-                work_score: 100.0,
-                signature: vec![],
-            },
-        }).unwrap();
+        cmd_tx
+            .send(CoordinatorCommand::CommitReceived {
+                epoch: 1,
+                commit: SolutionCommit {
+                    node_id: test_node_id(2),
+                    solution_hash: [0xBB; 32],
+                    work_score: 100.0,
+                    signature: vec![],
+                },
+            })
+            .unwrap();
 
         tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -852,12 +840,8 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, state) = EpochCoordinator::new(
-            our_id,
-            config,
-            0,
-            Hash::from_bytes([0; 32]),
-        );
+        let (coordinator, state) =
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -881,7 +865,11 @@ mod tests {
         }
 
         // Should have progressed through multiple epochs
-        assert!(epoch_starts.len() >= 2, "should have started at least 2 epochs, got {}", epoch_starts.len());
+        assert!(
+            epoch_starts.len() >= 2,
+            "should have started at least 2 epochs, got {}",
+            epoch_starts.len()
+        );
         assert!(epoch_starts.contains(&1), "should have started epoch 1");
 
         drop(cmd_tx);

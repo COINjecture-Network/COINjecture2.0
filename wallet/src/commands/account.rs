@@ -16,7 +16,10 @@ pub async fn new_account(name: Option<String>) -> Result<()> {
     println!("Address:     {}", account.address);
     println!("Public Key:  {}", account.public_key.dimmed());
     println!();
-    println!("{}", "⚠️  IMPORTANT: Keep your private key safe!".yellow().bold());
+    println!(
+        "{}",
+        "⚠️  IMPORTANT: Keep your private key safe!".yellow().bold()
+    );
     println!("Private Key: {}", account.private_key.red());
     println!();
     println!("Account saved to keystore at: ~/.coinject/wallets/");
@@ -35,7 +38,12 @@ pub async fn list_accounts() -> Result<()> {
         return Ok(());
     }
 
-    println!("{}", format!("Found {} account(s)", accounts.len()).green().bold());
+    println!(
+        "{}",
+        format!("Found {} account(s)", accounts.len())
+            .green()
+            .bold()
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
@@ -121,7 +129,10 @@ pub async fn export_account(name_or_address: &str) -> Result<()> {
             println!("{}", "🔐 Private Key (keep this secret!):".yellow().bold());
             println!("{}", account.private_key.red());
             println!();
-            println!("{}", "⚠️  Never share this key with anyone!".yellow().bold());
+            println!(
+                "{}",
+                "⚠️  Never share this key with anyone!".yellow().bold()
+            );
         }
         Err(e) => {
             println!("{}", format!("❌ Account not found: {}", e).red());
@@ -160,8 +171,7 @@ pub async fn import_account(private_key: &str, name: Option<String>) -> Result<(
 
 fn format_timestamp(timestamp: i64) -> String {
     use chrono::{DateTime, Utc};
-    let dt = DateTime::<Utc>::from_timestamp(timestamp, 0)
-        .unwrap_or_else(|| Utc::now());
+    let dt = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
@@ -169,14 +179,12 @@ fn format_balance(balance: u128) -> String {
     // Format with thousand separators
     let balance_str = balance.to_string();
     let mut result = String::new();
-    let mut count = 0;
 
-    for c in balance_str.chars().rev() {
+    for (count, c) in balance_str.chars().rev().enumerate() {
         if count > 0 && count % 3 == 0 {
             result.insert(0, ',');
         }
         result.insert(0, c);
-        count += 1;
     }
 
     result

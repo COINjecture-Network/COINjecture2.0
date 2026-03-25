@@ -105,7 +105,7 @@ impl DimensionalPool {
         let scale = pool_type.scale();
         let allocation_pct = (scale / sum_of_scales) * 100.0;
         let total_allocation = ((total_supply as f64) * (allocation_pct / 100.0)) as u128;
-        
+
         DimensionalPool {
             pool_type,
             scale,
@@ -139,13 +139,13 @@ impl DimensionalPool {
     pub fn distribute(&mut self, amount: u128, current_block: u64) -> u128 {
         let available = self.available_balance(current_block);
         let actual = amount.min(available);
-        
+
         if actual > 0 {
             self.balance = self.balance.saturating_sub(actual);
             self.distributed += actual;
             self.unlocked_pct = self.calculate_unlock(current_block);
         }
-        
+
         actual
     }
 }
@@ -168,13 +168,13 @@ impl PoolManager {
     pub fn new(total_supply: u128) -> Self {
         // Calculate sum of scales for normalization
         let sum_of_scales: f64 = PoolType::all().iter().map(|p| p.scale()).sum();
-        
+
         let mut pools = HashMap::new();
         for pool_type in PoolType::all() {
             let pool = DimensionalPool::new(pool_type, total_supply, sum_of_scales);
             pools.insert(pool_type, pool);
         }
-        
+
         PoolManager {
             total_supply,
             sum_of_scales,
@@ -209,14 +209,16 @@ impl PoolManager {
 
     /// Get total available across all pools
     pub fn total_available(&self) -> u128 {
-        self.pools.values()
+        self.pools
+            .values()
             .map(|p| p.available_balance(self.current_block))
             .sum()
     }
 
     /// Get pool status summary
     pub fn status(&self) -> Vec<PoolStatus> {
-        self.pools.values()
+        self.pools
+            .values()
             .map(|p| PoolStatus {
                 pool_type: p.pool_type,
                 scale: p.scale,
@@ -252,11 +254,11 @@ mod tests {
     fn test_pool_scales() {
         // D1 should be 1.0 (e^0)
         assert!((PoolType::Genesis.scale() - 1.0).abs() < 0.01);
-        
+
         // D4 should be ~0.618 (golden ratio)
         let d4 = PoolType::Governance.scale();
         assert!(d4 > 0.6 && d4 < 0.65, "D4 scale: {}", d4);
-        
+
         // D5 should be ~0.5
         let d5 = PoolType::Bounties.scale();
         assert!(d5 > 0.48 && d5 < 0.52, "D5 scale: {}", d5);
@@ -266,11 +268,9 @@ mod tests {
     fn test_pool_allocations_sum_to_100() {
         let total_supply = 1_000_000_000_000u128; // 1 trillion
         let manager = PoolManager::new(total_supply);
-        
-        let total_allocated: u128 = manager.pools.values()
-            .map(|p| p.total_allocation)
-            .sum();
-        
+
+        let total_allocated: u128 = manager.pools.values().map(|p| p.total_allocation).sum();
+
         // Should be very close to total supply (within rounding)
         assert!(total_allocated <= total_supply);
         assert!(total_allocated > total_supply - 1000);
@@ -280,20 +280,23 @@ mod tests {
     fn test_unlock_curve() {
         let total_supply = 1_000_000_000_000u128;
         let mut manager = PoolManager::new(total_supply);
-        
+
         // At block 0, D1 (Genesis) should have some available (τ=0)
         manager.set_block(0);
         let genesis_pool = manager.get_pool(PoolType::Genesis).unwrap();
         // At exactly τ_n, unlock is 0, but immediately after it starts
-        
+
         // At block 10000, all pools should have some unlock
         manager.set_block(10000);
         for pool in manager.pools.values() {
             let unlock = pool.calculate_unlock(10000);
             if pool.unlock_start_block <= 10000 {
-                assert!(unlock > 0.0, "Pool {:?} should have unlocked", pool.pool_type);
+                assert!(
+                    unlock > 0.0,
+                    "Pool {:?} should have unlocked",
+                    pool.pool_type
+                );
             }
         }
     }
 }
-

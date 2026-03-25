@@ -25,8 +25,7 @@ pub const TAU_C: f64 = SQRT_2;
 /// Δ = 0.231 represents 23.1% operation above conservative stability bound
 pub const ORACLE_DELTA: f64 = 0.231;
 
-/// Golden ratio inverse φ^(-1) = (√5 - 1) / 2 ≈ 0.618034
-// PHI_INV is canonical in golden.rs (re-exported at crate level)
+// PHI_INV (φ^(-1) ≈ 0.618034) is canonical in golden.rs and re-exported at crate level.
 
 /// Golden ratio squared inverse φ^(-2) = (3 - √5) / 2 ≈ 0.382
 pub const PHI_INV_2: f64 = 0.381966011250105; // (3 - √5) / 2
@@ -173,7 +172,7 @@ impl ConsensusState {
         Self {
             tau,
             magnitude: (-ETA * tau).exp(), // |ψ(τ)| = e^(-ητ)
-            phase: LAMBDA * tau,            // θ(τ) = λτ
+            phase: LAMBDA * tau,           // θ(τ) = λτ
         }
     }
 
@@ -336,8 +335,8 @@ impl DimensionalEconomics {
 
 #[cfg(test)]
 mod tests {
-    use crate::golden::PHI_INV;
     use super::*;
+    use crate::golden::PHI_INV;
 
     #[test]
     fn test_satoshi_constant() {
@@ -442,7 +441,11 @@ mod tests {
 
         // D5 (τ=0.98): Should be partially unlocked
         let unlock_d5 = state_mid.unlock_fraction(4);
-        assert!(unlock_d5 > 0.0 && unlock_d5 < 1.0, "D5 unlock at τ=1.5: {}", unlock_d5);
+        assert!(
+            unlock_d5 > 0.0 && unlock_d5 < 1.0,
+            "D5 unlock at τ=1.5: {}",
+            unlock_d5
+        );
 
         // D8 (τ=2.72): Should not be unlocked yet at τ=1.5
         let unlock_d8 = state_mid.unlock_fraction(7);

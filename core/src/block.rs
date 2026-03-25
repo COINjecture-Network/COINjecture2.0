@@ -189,10 +189,7 @@ impl Block {
     /// Verify block validity
     pub fn verify(&self) -> bool {
         // 1. Verify solution reveal matches commitment
-        if !self
-            .solution_reveal
-            .verify(&self.header.epoch_salt())
-        {
+        if !self.solution_reveal.verify(&self.header.epoch_salt()) {
             return false;
         }
 

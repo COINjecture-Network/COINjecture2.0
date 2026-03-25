@@ -3,7 +3,10 @@
 use crate::keystore::Keystore;
 use crate::rpc_client::RpcClient;
 use anyhow::{anyhow, Result};
-use coinject_core::{Address, Balance, Ed25519Signature, PublicKey, Transaction, TransferTransaction, TimeLockTransaction, EscrowTransaction, EscrowType, ChannelTransaction, ChannelType, Hash};
+use coinject_core::{
+    Address, Balance, ChannelTransaction, ChannelType, Ed25519Signature, EscrowTransaction,
+    EscrowType, Hash, PublicKey, TimeLockTransaction, Transaction, TransferTransaction,
+};
 use colored::*;
 use ed25519_dalek::Signer;
 
@@ -22,8 +25,8 @@ pub async fn send_tokens(
 
     // Parse recipient address
     let to_address = to_address.trim_start_matches("0x");
-    let to_bytes = hex::decode(to_address)
-        .map_err(|e| anyhow!("Invalid recipient address: {}", e))?;
+    let to_bytes =
+        hex::decode(to_address).map_err(|e| anyhow!("Invalid recipient address: {}", e))?;
 
     if to_bytes.len() != 32 {
         return Err(anyhow!("Recipient address must be 32 bytes (64 hex chars)"));
@@ -127,8 +130,8 @@ pub async fn create_timelock(
 
     // Parse recipient address
     let recipient_address = recipient_address.trim_start_matches("0x");
-    let recipient_bytes = hex::decode(recipient_address)
-        .map_err(|e| anyhow!("Invalid recipient address: {}", e))?;
+    let recipient_bytes =
+        hex::decode(recipient_address).map_err(|e| anyhow!("Invalid recipient address: {}", e))?;
 
     if recipient_bytes.len() != 32 {
         return Err(anyhow!("Recipient address must be 32 bytes (64 hex chars)"));
@@ -168,9 +171,12 @@ pub async fn create_timelock(
     println!("Amount:     {} tokens", format_balance(amount));
     println!("Fee:        {} tokens", format_balance(fee));
     println!("Unlock In:  {} seconds", unlock_in_seconds);
-    println!("Unlock At:  {}", chrono::DateTime::from_timestamp(unlock_time, 0)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|| "Invalid timestamp".to_string()));
+    println!(
+        "Unlock At:  {}",
+        chrono::DateTime::from_timestamp(unlock_time, 0)
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_else(|| "Invalid timestamp".to_string())
+    );
     println!("Nonce:      {}", nonce);
     println!();
 
@@ -213,14 +219,22 @@ pub async fn create_timelock(
     match client.submit_transaction(&tx_hex).await {
         Ok(tx_hash) => {
             println!();
-            println!("{}", "✅ Time-Lock Transaction Submitted Successfully".green().bold());
+            println!(
+                "{}",
+                "✅ Time-Lock Transaction Submitted Successfully"
+                    .green()
+                    .bold()
+            );
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Transaction Hash: {}", tx_hash.green());
             println!();
-            println!("Funds are now locked until: {}",
+            println!(
+                "Funds are now locked until: {}",
                 chrono::DateTime::from_timestamp(unlock_time, 0)
                     .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| "Invalid timestamp".to_string()).yellow());
+                    .unwrap_or_else(|| "Invalid timestamp".to_string())
+                    .yellow()
+            );
             println!();
             println!("Check status with:");
             println!("  coinject-wallet transaction status {}", tx_hash);
@@ -254,8 +268,8 @@ pub async fn create_escrow(
 
     // Parse recipient address
     let recipient_address = recipient_address.trim_start_matches("0x");
-    let recipient_bytes = hex::decode(recipient_address)
-        .map_err(|e| anyhow!("Invalid recipient address: {}", e))?;
+    let recipient_bytes =
+        hex::decode(recipient_address).map_err(|e| anyhow!("Invalid recipient address: {}", e))?;
     if recipient_bytes.len() != 32 {
         return Err(anyhow!("Recipient address must be 32 bytes (64 hex chars)"));
     }
@@ -266,8 +280,8 @@ pub async fn create_escrow(
     // Parse arbiter address (if provided)
     let arbiter = if let Some(arb_addr) = arbiter_address {
         let arb_addr = arb_addr.trim_start_matches("0x");
-        let arb_bytes = hex::decode(arb_addr)
-            .map_err(|e| anyhow!("Invalid arbiter address: {}", e))?;
+        let arb_bytes =
+            hex::decode(arb_addr).map_err(|e| anyhow!("Invalid arbiter address: {}", e))?;
         if arb_bytes.len() != 32 {
             return Err(anyhow!("Arbiter address must be 32 bytes (64 hex chars)"));
         }
@@ -296,8 +310,14 @@ pub async fn create_escrow(
 
     // Generate escrow ID (hash of transaction details)
     let escrow_id_bytes = blake3::hash(
-        format!("{}-{}-{}-{}", sender.address, recipient_address, amount, current_time).as_bytes()
-    ).as_bytes().to_owned();
+        format!(
+            "{}-{}-{}-{}",
+            sender.address, recipient_address, amount, current_time
+        )
+        .as_bytes(),
+    )
+    .as_bytes()
+    .to_owned();
     let escrow_id = Hash::from_bytes(escrow_id_bytes);
 
     // Hash the conditions
@@ -322,9 +342,12 @@ pub async fn create_escrow(
     println!("Amount:     {} tokens", format_balance(amount));
     println!("Fee:        {} tokens", format_balance(fee));
     println!("Timeout In: {} seconds", timeout_in_seconds);
-    println!("Timeout At: {}", chrono::DateTime::from_timestamp(timeout, 0)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|| "Invalid timestamp".to_string()));
+    println!(
+        "Timeout At: {}",
+        chrono::DateTime::from_timestamp(timeout, 0)
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_else(|| "Invalid timestamp".to_string())
+    );
     println!("Conditions: {}", conditions);
     println!("Escrow ID:  {}", hex::encode(escrow_id.as_bytes()));
     println!("Nonce:      {}", nonce);
@@ -379,12 +402,18 @@ pub async fn create_escrow(
             println!("{}", "✅ Escrow Created Successfully".green().bold());
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Transaction Hash: {}", tx_hash.green());
-            println!("Escrow ID:        {}", hex::encode(escrow_id.as_bytes()).green());
+            println!(
+                "Escrow ID:        {}",
+                hex::encode(escrow_id.as_bytes()).green()
+            );
             println!();
-            println!("Funds are now escrowed until: {}",
+            println!(
+                "Funds are now escrowed until: {}",
                 chrono::DateTime::from_timestamp(timeout, 0)
                     .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| "Invalid timestamp".to_string()).yellow());
+                    .unwrap_or_else(|| "Invalid timestamp".to_string())
+                    .yellow()
+            );
             println!();
             println!("Check status with:");
             println!("  coinject-wallet transaction status {}", tx_hash);
@@ -401,11 +430,7 @@ pub async fn create_escrow(
 }
 
 /// Release escrowed funds
-pub async fn release_escrow(
-    from: &str,
-    escrow_id: &str,
-    client: &RpcClient,
-) -> Result<()> {
+pub async fn release_escrow(from: &str, escrow_id: &str, client: &RpcClient) -> Result<()> {
     println!("{}", "Preparing escrow release...".dimmed());
 
     // Load account from keystore
@@ -414,8 +439,8 @@ pub async fn release_escrow(
 
     // Parse escrow ID
     let escrow_id_str = escrow_id.trim_start_matches("0x");
-    let escrow_id_bytes = hex::decode(escrow_id_str)
-        .map_err(|e| anyhow!("Invalid escrow ID: {}", e))?;
+    let escrow_id_bytes =
+        hex::decode(escrow_id_str).map_err(|e| anyhow!("Invalid escrow ID: {}", e))?;
     if escrow_id_bytes.len() != 32 {
         return Err(anyhow!("Escrow ID must be 32 bytes (64 hex chars)"));
     }
@@ -451,13 +476,8 @@ pub async fn release_escrow(
     println!();
 
     // Create signing message for escrow release
-    let signing_message = create_escrow_release_refund_signing_message(
-        &esc_id,
-        &from_addr,
-        fee,
-        nonce,
-        &public_key,
-    );
+    let signing_message =
+        create_escrow_release_refund_signing_message(&esc_id, &from_addr, fee, nonce, &public_key);
 
     // Sign transaction
     println!("{}", "Signing transaction...".dimmed());
@@ -506,11 +526,7 @@ pub async fn release_escrow(
 }
 
 /// Refund escrowed funds
-pub async fn refund_escrow(
-    from: &str,
-    escrow_id: &str,
-    client: &RpcClient,
-) -> Result<()> {
+pub async fn refund_escrow(from: &str, escrow_id: &str, client: &RpcClient) -> Result<()> {
     println!("{}", "Preparing escrow refund...".dimmed());
 
     // Load account from keystore
@@ -519,8 +535,8 @@ pub async fn refund_escrow(
 
     // Parse escrow ID
     let escrow_id_str = escrow_id.trim_start_matches("0x");
-    let escrow_id_bytes = hex::decode(escrow_id_str)
-        .map_err(|e| anyhow!("Invalid escrow ID: {}", e))?;
+    let escrow_id_bytes =
+        hex::decode(escrow_id_str).map_err(|e| anyhow!("Invalid escrow ID: {}", e))?;
     if escrow_id_bytes.len() != 32 {
         return Err(anyhow!("Escrow ID must be 32 bytes (64 hex chars)"));
     }
@@ -556,13 +572,8 @@ pub async fn refund_escrow(
     println!();
 
     // Create signing message for escrow refund
-    let signing_message = create_escrow_release_refund_signing_message(
-        &esc_id,
-        &from_addr,
-        fee,
-        nonce,
-        &public_key,
-    );
+    let signing_message =
+        create_escrow_release_refund_signing_message(&esc_id, &from_addr, fee, nonce, &public_key);
 
     // Sign transaction
     println!("{}", "Signing transaction...".dimmed());
@@ -630,7 +641,9 @@ pub async fn open_channel(
     let participant_b_bytes = hex::decode(participant_b_str)
         .map_err(|e| anyhow!("Invalid participant B address: {}", e))?;
     if participant_b_bytes.len() != 32 {
-        return Err(anyhow!("Participant B address must be 32 bytes (64 hex chars)"));
+        return Err(anyhow!(
+            "Participant B address must be 32 bytes (64 hex chars)"
+        ));
     }
     let mut participant_b_addr_bytes = [0u8; 32];
     participant_b_addr_bytes.copy_from_slice(&participant_b_bytes);
@@ -657,8 +670,14 @@ pub async fn open_channel(
     // Generate channel ID using blake3 hash
     let current_time = chrono::Utc::now().timestamp();
     let channel_id_bytes = blake3::hash(
-        format!("{}-{}-{}-{}", sender.address, participant_b_address, deposit_a + deposit_b, current_time)
-            .as_bytes(),
+        format!(
+            "{}-{}-{}-{}",
+            sender.address,
+            participant_b_address,
+            deposit_a + deposit_b,
+            current_time
+        )
+        .as_bytes(),
     )
     .as_bytes()
     .to_owned();
@@ -672,11 +691,17 @@ pub async fn open_channel(
     println!("Participant B: {}", participant_b_str);
     println!("Deposit A:     {} tokens", format_balance(deposit_a));
     println!("Deposit B:     {} tokens", format_balance(deposit_b));
-    println!("Total:         {} tokens", format_balance(deposit_a + deposit_b));
+    println!(
+        "Total:         {} tokens",
+        format_balance(deposit_a + deposit_b)
+    );
     println!("Timeout:       {} seconds", timeout_seconds);
     println!("Fee:           {} tokens", format_balance(fee));
     println!("Nonce:         {}", nonce);
-    println!("Channel ID:    {}", hex::encode(channel_id.as_bytes()).yellow());
+    println!(
+        "Channel ID:    {}",
+        hex::encode(channel_id.as_bytes()).yellow()
+    );
     println!();
 
     // Create signing message for channel open
@@ -727,7 +752,10 @@ pub async fn open_channel(
             println!("{}", "✅ Channel Opened Successfully".green().bold());
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Transaction Hash: {}", tx_hash.green());
-            println!("Channel ID:       {}", hex::encode(channel_id.as_bytes()).green());
+            println!(
+                "Channel ID:       {}",
+                hex::encode(channel_id.as_bytes()).green()
+            );
             println!();
             println!("Check status with:");
             println!("  coinject-wallet transaction status {}", tx_hash);
@@ -760,8 +788,8 @@ pub async fn update_channel(
 
     // Parse channel ID
     let channel_id_str = channel_id.trim_start_matches("0x");
-    let channel_id_bytes = hex::decode(channel_id_str)
-        .map_err(|e| anyhow!("Invalid channel ID: {}", e))?;
+    let channel_id_bytes =
+        hex::decode(channel_id_str).map_err(|e| anyhow!("Invalid channel ID: {}", e))?;
     if channel_id_bytes.len() != 32 {
         return Err(anyhow!("Channel ID must be 32 bytes (64 hex chars)"));
     }
@@ -800,13 +828,8 @@ pub async fn update_channel(
     println!();
 
     // Create signing message for channel update
-    let signing_message = create_channel_update_signing_message(
-        &chan_id,
-        &from_addr,
-        fee,
-        nonce,
-        &public_key,
-    );
+    let signing_message =
+        create_channel_update_signing_message(&chan_id, &from_addr, fee, nonce, &public_key);
 
     // Sign transaction
     println!("{}", "Signing transaction...".dimmed());
@@ -874,8 +897,8 @@ pub async fn close_channel(
 
     // Parse channel ID
     let channel_id_str = channel_id.trim_start_matches("0x");
-    let channel_id_bytes = hex::decode(channel_id_str)
-        .map_err(|e| anyhow!("Invalid channel ID: {}", e))?;
+    let channel_id_bytes =
+        hex::decode(channel_id_str).map_err(|e| anyhow!("Invalid channel ID: {}", e))?;
     if channel_id_bytes.len() != 32 {
         return Err(anyhow!("Channel ID must be 32 bytes (64 hex chars)"));
     }
@@ -904,10 +927,20 @@ pub async fn close_channel(
     println!();
     println!("{}", "Channel Close Details".cyan().bold());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("From:            {} ({})", sender.name.cyan(), sender.address);
+    println!(
+        "From:            {} ({})",
+        sender.name.cyan(),
+        sender.address
+    );
     println!("Channel ID:      {}", channel_id_str);
-    println!("Final Balance A: {} tokens", format_balance(final_balance_a));
-    println!("Final Balance B: {} tokens", format_balance(final_balance_b));
+    println!(
+        "Final Balance A: {} tokens",
+        format_balance(final_balance_a)
+    );
+    println!(
+        "Final Balance B: {} tokens",
+        format_balance(final_balance_b)
+    );
     println!("Fee:             {} tokens", format_balance(fee));
     println!("Nonce:           {}", nonce);
     println!();
@@ -998,7 +1031,10 @@ pub async fn get_transaction_status(tx_hash: &str, client: &RpcClient) -> Result
             }
         }
         Err(e) => {
-            println!("{}", format!("❌ Failed to get transaction status: {}", e).red());
+            println!(
+                "{}",
+                format!("❌ Failed to get transaction status: {}", e).red()
+            );
         }
     }
 
@@ -1155,14 +1191,12 @@ fn format_balance(balance: u128) -> String {
     // Format with thousand separators
     let balance_str = balance.to_string();
     let mut result = String::new();
-    let mut count = 0;
 
-    for c in balance_str.chars().rev() {
+    for (count, c) in balance_str.chars().rev().enumerate() {
         if count > 0 && count % 3 == 0 {
             result.insert(0, ',');
         }
         result.insert(0, c);
-        count += 1;
     }
 
     result

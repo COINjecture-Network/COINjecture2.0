@@ -161,75 +161,173 @@ pub trait ProblemDescriptor: Send + Sync {
 
 pub struct SubsetSumDescriptor;
 impl ProblemDescriptor for SubsetSumDescriptor {
-    fn name(&self) -> &str { "SubsetSum" }
-    fn complexity_class(&self) -> ComplexityClass { ComplexityClass::NpComplete }
-    fn scaling_exponent(&self) -> f64 { 0.8 }
-    fn verification_cost(&self) -> VerificationCost { VerificationCost::Linear }
-    fn size_ratio(&self) -> f64 { 1.0 }
-    fn base_difficulty_weight(&self) -> f64 { 1.0 }
-    fn has_quality_gradient(&self) -> bool { false }
-    fn absolute_max_size(&self) -> usize { 60 }
+    fn name(&self) -> &str {
+        "SubsetSum"
+    }
+    fn complexity_class(&self) -> ComplexityClass {
+        ComplexityClass::NpComplete
+    }
+    fn scaling_exponent(&self) -> f64 {
+        0.8
+    }
+    fn verification_cost(&self) -> VerificationCost {
+        VerificationCost::Linear
+    }
+    fn size_ratio(&self) -> f64 {
+        1.0
+    }
+    fn base_difficulty_weight(&self) -> f64 {
+        1.0
+    }
+    fn has_quality_gradient(&self) -> bool {
+        false
+    }
+    fn absolute_max_size(&self) -> usize {
+        60
+    }
 }
 
 pub struct SatDescriptor;
 impl ProblemDescriptor for SatDescriptor {
-    fn name(&self) -> &str { "SAT" }
-    fn complexity_class(&self) -> ComplexityClass { ComplexityClass::NpComplete }
-    fn scaling_exponent(&self) -> f64 { 0.7 }
-    fn verification_cost(&self) -> VerificationCost { VerificationCost::Linear }
-    fn size_ratio(&self) -> f64 { 0.75 }
-    fn base_difficulty_weight(&self) -> f64 { 1.2 }
-    fn has_quality_gradient(&self) -> bool { false }
-    fn absolute_max_size(&self) -> usize { 120 }
+    fn name(&self) -> &str {
+        "SAT"
+    }
+    fn complexity_class(&self) -> ComplexityClass {
+        ComplexityClass::NpComplete
+    }
+    fn scaling_exponent(&self) -> f64 {
+        0.7
+    }
+    fn verification_cost(&self) -> VerificationCost {
+        VerificationCost::Linear
+    }
+    fn size_ratio(&self) -> f64 {
+        0.75
+    }
+    fn base_difficulty_weight(&self) -> f64 {
+        1.2
+    }
+    fn has_quality_gradient(&self) -> bool {
+        false
+    }
+    fn absolute_max_size(&self) -> usize {
+        120
+    }
 }
 
 pub struct TspDescriptor;
 impl ProblemDescriptor for TspDescriptor {
-    fn name(&self) -> &str { "TSP" }
-    fn complexity_class(&self) -> ComplexityClass { ComplexityClass::NpHard }
-    fn scaling_exponent(&self) -> f64 { 0.5 }
-    fn verification_cost(&self) -> VerificationCost { VerificationCost::Linear }
-    fn size_ratio(&self) -> f64 { 0.35 }
-    fn base_difficulty_weight(&self) -> f64 { 1.5 }
-    fn has_quality_gradient(&self) -> bool { true }
-    fn absolute_max_size(&self) -> usize { 30 }
+    fn name(&self) -> &str {
+        "TSP"
+    }
+    fn complexity_class(&self) -> ComplexityClass {
+        ComplexityClass::NpHard
+    }
+    fn scaling_exponent(&self) -> f64 {
+        0.5
+    }
+    fn verification_cost(&self) -> VerificationCost {
+        VerificationCost::Linear
+    }
+    fn size_ratio(&self) -> f64 {
+        0.35
+    }
+    fn base_difficulty_weight(&self) -> f64 {
+        1.5
+    }
+    fn has_quality_gradient(&self) -> bool {
+        true
+    }
+    fn absolute_max_size(&self) -> usize {
+        30
+    }
 }
 
 pub struct GraphColoringDescriptor;
 impl ProblemDescriptor for GraphColoringDescriptor {
-    fn name(&self) -> &str { "GraphColoring" }
-    fn complexity_class(&self) -> ComplexityClass { ComplexityClass::NpComplete }
-    fn scaling_exponent(&self) -> f64 { 0.65 }
-    fn verification_cost(&self) -> VerificationCost { VerificationCost::GraphLinear }
-    fn size_ratio(&self) -> f64 { 0.6 }
-    fn base_difficulty_weight(&self) -> f64 { 1.1 }
-    fn has_quality_gradient(&self) -> bool { true }
-    fn absolute_max_size(&self) -> usize { 80 }
+    fn name(&self) -> &str {
+        "GraphColoring"
+    }
+    fn complexity_class(&self) -> ComplexityClass {
+        ComplexityClass::NpComplete
+    }
+    fn scaling_exponent(&self) -> f64 {
+        0.65
+    }
+    fn verification_cost(&self) -> VerificationCost {
+        VerificationCost::GraphLinear
+    }
+    fn size_ratio(&self) -> f64 {
+        0.6
+    }
+    fn base_difficulty_weight(&self) -> f64 {
+        1.1
+    }
+    fn has_quality_gradient(&self) -> bool {
+        true
+    }
+    fn absolute_max_size(&self) -> usize {
+        80
+    }
 }
 
 pub struct FactorizationDescriptor;
 impl ProblemDescriptor for FactorizationDescriptor {
-    fn name(&self) -> &str { "Factorization" }
-    fn complexity_class(&self) -> ComplexityClass { ComplexityClass::NpHard }
-    fn scaling_exponent(&self) -> f64 { 0.33 }
-    fn verification_cost(&self) -> VerificationCost { VerificationCost::Constant }
-    fn size_ratio(&self) -> f64 { 0.5 }
-    fn base_difficulty_weight(&self) -> f64 { 1.8 }
-    fn has_quality_gradient(&self) -> bool { false }
-    fn absolute_max_size(&self) -> usize { 200 }
-    fn absolute_min_size(&self) -> usize { 16 }
+    fn name(&self) -> &str {
+        "Factorization"
+    }
+    fn complexity_class(&self) -> ComplexityClass {
+        ComplexityClass::NpHard
+    }
+    fn scaling_exponent(&self) -> f64 {
+        0.33
+    }
+    fn verification_cost(&self) -> VerificationCost {
+        VerificationCost::Constant
+    }
+    fn size_ratio(&self) -> f64 {
+        0.5
+    }
+    fn base_difficulty_weight(&self) -> f64 {
+        1.8
+    }
+    fn has_quality_gradient(&self) -> bool {
+        false
+    }
+    fn absolute_max_size(&self) -> usize {
+        200
+    }
+    fn absolute_min_size(&self) -> usize {
+        16
+    }
 }
 
 pub struct SvpDescriptor;
 impl ProblemDescriptor for SvpDescriptor {
-    fn name(&self) -> &str { "SVP" }
-    fn complexity_class(&self) -> ComplexityClass { ComplexityClass::NpHard }
-    fn scaling_exponent(&self) -> f64 { 0.5 }
-    fn verification_cost(&self) -> VerificationCost { VerificationCost::Constant }
-    fn size_ratio(&self) -> f64 { 0.4 }
-    fn base_difficulty_weight(&self) -> f64 { 2.0 }
-    fn has_quality_gradient(&self) -> bool { true }
-    fn absolute_max_size(&self) -> usize { 40 }
+    fn name(&self) -> &str {
+        "SVP"
+    }
+    fn complexity_class(&self) -> ComplexityClass {
+        ComplexityClass::NpHard
+    }
+    fn scaling_exponent(&self) -> f64 {
+        0.5
+    }
+    fn verification_cost(&self) -> VerificationCost {
+        VerificationCost::Constant
+    }
+    fn size_ratio(&self) -> f64 {
+        0.4
+    }
+    fn base_difficulty_weight(&self) -> f64 {
+        2.0
+    }
+    fn has_quality_gradient(&self) -> bool {
+        true
+    }
+    fn absolute_max_size(&self) -> usize {
+        40
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +336,12 @@ impl ProblemDescriptor for SvpDescriptor {
 
 pub struct ProblemRegistry {
     descriptors: HashMap<String, Arc<dyn ProblemDescriptor>>,
+}
+
+impl Default for ProblemRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ProblemRegistry {
@@ -256,11 +360,14 @@ impl ProblemRegistry {
     }
 
     pub fn empty() -> Self {
-        ProblemRegistry { descriptors: HashMap::new() }
+        ProblemRegistry {
+            descriptors: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, descriptor: Arc<dyn ProblemDescriptor>) {
-        self.descriptors.insert(descriptor.name().to_string(), descriptor);
+        self.descriptors
+            .insert(descriptor.name().to_string(), descriptor);
     }
 
     pub fn get(&self, name: &str) -> Option<&Arc<dyn ProblemDescriptor>> {
@@ -271,9 +378,13 @@ impl ProblemRegistry {
         self.descriptors.keys().map(|s| s.as_str()).collect()
     }
 
-    pub fn len(&self) -> usize { self.descriptors.len() }
+    pub fn len(&self) -> usize {
+        self.descriptors.len()
+    }
 
-    pub fn is_empty(&self) -> bool { self.descriptors.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.descriptors.is_empty()
+    }
 }
 
 pub type SharedRegistry = Arc<RwLock<ProblemRegistry>>;
@@ -306,14 +417,30 @@ mod tests {
     fn test_register_custom_problem() {
         struct CustomProblem;
         impl ProblemDescriptor for CustomProblem {
-            fn name(&self) -> &str { "CustomNP" }
-            fn complexity_class(&self) -> ComplexityClass { ComplexityClass::NpComplete }
-            fn scaling_exponent(&self) -> f64 { 0.6 }
-            fn verification_cost(&self) -> VerificationCost { VerificationCost::Linear }
-            fn size_ratio(&self) -> f64 { 0.5 }
-            fn base_difficulty_weight(&self) -> f64 { 1.3 }
-            fn has_quality_gradient(&self) -> bool { false }
-            fn absolute_max_size(&self) -> usize { 50 }
+            fn name(&self) -> &str {
+                "CustomNP"
+            }
+            fn complexity_class(&self) -> ComplexityClass {
+                ComplexityClass::NpComplete
+            }
+            fn scaling_exponent(&self) -> f64 {
+                0.6
+            }
+            fn verification_cost(&self) -> VerificationCost {
+                VerificationCost::Linear
+            }
+            fn size_ratio(&self) -> f64 {
+                0.5
+            }
+            fn base_difficulty_weight(&self) -> f64 {
+                1.3
+            }
+            fn has_quality_gradient(&self) -> bool {
+                false
+            }
+            fn absolute_max_size(&self) -> usize {
+                50
+            }
         }
 
         let mut registry = ProblemRegistry::new();
@@ -336,6 +463,8 @@ mod tests {
     fn test_verification_cost_scaling() {
         assert_eq!(VerificationCost::Constant.scaling_factor(100), 1.0);
         assert_eq!(VerificationCost::Linear.scaling_factor(100), 100.0);
-        assert!((VerificationCost::Polynomial(2.0).scaling_factor(10) - 100.0).abs() < f64::EPSILON);
+        assert!(
+            (VerificationCost::Polynomial(2.0).scaling_factor(10) - 100.0).abs() < f64::EPSILON
+        );
     }
 }

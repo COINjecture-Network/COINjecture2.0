@@ -1,3 +1,6 @@
+// Dataset collection functions accept many required parameters — no meaningful grouping exists.
+#![allow(clippy::too_many_arguments)]
+
 // Hugging Face Dataset Integration - INSTITUTIONAL GRADE v3.1
 // Comprehensive metrics collection for academic research and transparency
 // Real-time sync of marketplace problem and solution data to Hugging Face
@@ -13,17 +16,17 @@ pub mod metrics;
 pub mod serialize;
 pub mod streamer;
 
-pub use client::{HuggingFaceClient, HuggingFaceConfig, DatasetRecord};
-pub use energy::{EnergyMeasurement, EnergyMeasurementMethod, EnergyConfig};
-pub use metrics::{MetricsCollector, NetworkContext, HardwareContext};
+pub use client::{DatasetRecord, HuggingFaceClient, HuggingFaceConfig};
+pub use energy::{EnergyConfig, EnergyMeasurement, EnergyMeasurementMethod};
+pub use metrics::{HardwareContext, MetricsCollector, NetworkContext};
 pub use serialize::{serialize_problem, serialize_solution};
 pub use streamer::{
-    DualFeedStreamer, StreamerConfig, StreamerState, StreamerStateSummary,
-    UnconfirmedBlockRecord, ConfirmedBlockRecord, ReorgEventRecord, StreamerError,
+    ConfirmedBlockRecord, DualFeedStreamer, ReorgEventRecord, StreamerConfig, StreamerError,
+    StreamerState, StreamerStateSummary, UnconfirmedBlockRecord,
 };
 
-use coinject_state::ProblemSubmission;
 use coinject_core::Block;
+use coinject_state::ProblemSubmission;
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -85,7 +88,10 @@ impl HuggingFaceSync {
         let client = HuggingFaceClient::new(hf_config)?;
         let metrics_collector = MetricsCollector::new(energy_config);
 
-        eprintln!("📊 Hugging Face: Initialized with k={} confirmation guard", sync_config.min_confirmations);
+        eprintln!(
+            "📊 Hugging Face: Initialized with k={} confirmation guard",
+            sync_config.min_confirmations
+        );
 
         Ok(HuggingFaceSync {
             client: tokio::sync::Mutex::new(client),
@@ -107,11 +113,7 @@ impl HuggingFaceSync {
         }
 
         let collector = self.metrics_collector.lock().await;
-        let record = collector.collect_problem_record(
-            submission,
-            block_height,
-            &self.config,
-        )?;
+        let record = collector.collect_problem_record(submission, block_height, &self.config)?;
         drop(collector);
 
         let mut client = self.client.lock().await;
@@ -162,7 +164,8 @@ impl HuggingFaceSync {
         block: &Block,
         is_mined: bool,
     ) -> Result<(), SyncError> {
-        self.push_consensus_block_with_context(block, is_mined, None).await
+        self.push_consensus_block_with_context(block, is_mined, None)
+            .await
     }
 
     /// Push consensus block with network context - INSTITUTIONAL GRADE v3.0
@@ -196,10 +199,9 @@ impl HuggingFaceSync {
 
             // Check if this block is already in the pending buffer (avoid duplicates)
             let block_hash = block.hash();
-            let already_pending = pending.iter().any(|pb|
-                pb.block.header.height == block_height &&
-                pb.block.hash() == block_hash
-            );
+            let already_pending = pending
+                .iter()
+                .any(|pb| pb.block.header.height == block_height && pb.block.hash() == block_hash);
 
             if !already_pending {
                 pending.push_back(PendingBlock {
@@ -245,17 +247,23 @@ impl HuggingFaceSync {
         // Publish confirmed blocks
         for pb in blocks_to_publish {
             let confirmations = current_height.saturating_sub(pb.block.header.height);
-            eprintln!("✅ Hugging Face: Publishing block {} with {} confirmations (k={})",
-                pb.block.header.height, confirmations, k);
+            eprintln!(
+                "✅ Hugging Face: Publishing block {} with {} confirmations (k={})",
+                pb.block.header.height, confirmations, k
+            );
 
             let collector = self.metrics_collector.lock().await;
             let record = match collector.collect_consensus_block_record_with_context(
-                &pb.block, pb.is_mined, pb.network_ctx.as_ref()
+                &pb.block,
+                pb.is_mined,
+                pb.network_ctx.as_ref(),
             ) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("❌ Hugging Face: Failed to collect record for confirmed block {}: {}",
-                        pb.block.header.height, e);
+                    eprintln!(
+                        "❌ Hugging Face: Failed to collect record for confirmed block {}: {}",
+                        pb.block.header.height, e
+                    );
                     continue; // Skip this block but continue with others
                 }
             };
@@ -263,8 +271,10 @@ impl HuggingFaceSync {
 
             let mut client = self.client.lock().await;
             if let Err(e) = client.push_record(record).await {
-                eprintln!("❌ Hugging Face: Failed to push confirmed block {}: {}",
-                    pb.block.header.height, e);
+                eprintln!(
+                    "❌ Hugging Face: Failed to push confirmed block {}: {}",
+                    pb.block.header.height, e
+                );
                 // Continue with other blocks
             }
         }
@@ -298,7 +308,7 @@ impl HuggingFaceSync {
     pub async fn pending_count(&self) -> usize {
         self.pending_blocks.lock().await.len()
     }
-    
+
     /// Set the node's PeerId for attribution in metrics
     pub async fn set_node_id(&self, peer_id: String) {
         let mut collector = self.metrics_collector.lock().await;
@@ -329,4 +339,3 @@ pub enum SyncError {
     #[error("Energy measurement error: {0}")]
     Energy(#[from] energy::EnergyError),
 }
-

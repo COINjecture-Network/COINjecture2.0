@@ -45,10 +45,7 @@ pub enum BridgeCommand {
     },
 
     /// Update our advertised chain state (so heartbeats carry correct info).
-    UpdateChainState {
-        best_height: u64,
-        best_hash: Hash,
-    },
+    UpdateChainState { best_height: u64, best_hash: Hash },
 
     /// Connect to a seed/bootnode address.
     ConnectBootnode { addr: SocketAddr },
@@ -81,10 +78,7 @@ pub enum BridgeEvent {
     },
 
     /// A mesh peer disconnected.
-    PeerDisconnected {
-        peer_id: NodeId,
-        reason: String,
-    },
+    PeerDisconnected { peer_id: NodeId, reason: String },
 
     /// Status update from a peer (via heartbeat).
     StatusUpdate {
@@ -94,10 +88,7 @@ pub enum BridgeEvent {
     },
 
     /// A block was received from a peer.
-    BlockReceived {
-        block: Block,
-        peer_id: NodeId,
-    },
+    BlockReceived { block: Block, peer_id: NodeId },
 
     /// A transaction was received from a peer.
     TransactionReceived {

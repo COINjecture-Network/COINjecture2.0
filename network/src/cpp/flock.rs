@@ -22,9 +22,7 @@ use std::collections::HashMap;
 // The golden primitives are now in core/src/golden.rs for use by
 // commitment and merkle tree code. Re-exported here for backward compatibility.
 
-pub use coinject_core::golden::{
-    GoldenGenerator, PHI, PHI_INV, GOLDEN_SEED, GOLDEN_EPOCH_BLOCKS,
-};
+pub use coinject_core::golden::{GoldenGenerator, GOLDEN_EPOCH_BLOCKS, GOLDEN_SEED, PHI, PHI_INV};
 
 /// Murmuration epoch duration (in blocks) - alias for GOLDEN_EPOCH_BLOCKS
 /// Kept for backward compatibility with existing network code
@@ -125,9 +123,11 @@ impl FlockState {
         // Calculate cohesion (how tightly grouped are peers?)
         // Low variance = high cohesion
         let mean = sorted.iter().sum::<u64>() as f64 / sorted.len() as f64;
-        let variance = sorted.iter()
+        let variance = sorted
+            .iter()
             .map(|h| (*h as f64 - mean).powi(2))
-            .sum::<f64>() / sorted.len() as f64;
+            .sum::<f64>()
+            / sorted.len() as f64;
 
         // Cohesion = 1 / (1 + normalized_variance)
         // Uses η for scaling
@@ -201,14 +201,21 @@ impl MurmurationRules {
             state,
             peers: HashMap::new(),
             // Weights derived from golden ratio for optimal balance
-            w_separation: PHI_INV,      // 0.618
-            w_alignment: ETA,           // 0.707
-            w_cohesion: 1.0 - PHI_INV,  // 0.382
+            w_separation: PHI_INV,     // 0.618
+            w_alignment: ETA,          // 0.707
+            w_cohesion: 1.0 - PHI_INV, // 0.382
         }
     }
 
     /// Update peer observation
-    pub fn observe_peer(&mut self, peer_id: PeerId, height: u64, quality: f64, phase: u8, timestamp: u64) {
+    pub fn observe_peer(
+        &mut self,
+        peer_id: PeerId,
+        height: u64,
+        quality: f64,
+        phase: u8,
+        timestamp: u64,
+    ) {
         let velocity = if let Some(prev) = self.peers.get(&peer_id) {
             let dt = (timestamp - prev.last_seen).max(1) as f64;
             let dh = height as f64 - prev.height as f64;
@@ -218,13 +225,16 @@ impl MurmurationRules {
             0.0
         };
 
-        self.peers.insert(peer_id, PeerObservation {
-            height,
-            quality,
-            flock_phase: phase,
-            last_seen: timestamp,
-            velocity,
-        });
+        self.peers.insert(
+            peer_id,
+            PeerObservation {
+                height,
+                quality,
+                flock_phase: phase,
+                last_seen: timestamp,
+                velocity,
+            },
+        );
 
         // Update swarm state
         let heights: Vec<u64> = self.peers.values().map(|p| p.height).collect();
@@ -266,7 +276,13 @@ impl MurmurationRules {
     }
 
     /// Calculate combined flocking score for a peer
-    pub fn flock_score(&self, peer_id: &PeerId, peer_height: u64, our_height: u64, our_velocity: f64) -> f64 {
+    pub fn flock_score(
+        &self,
+        peer_id: &PeerId,
+        peer_height: u64,
+        our_height: u64,
+        our_velocity: f64,
+    ) -> f64 {
         let sep = self.separation_score(peer_height, our_height);
         let align = self.alignment_score(peer_id, our_velocity);
         let coh = self.cohesion_score(peer_height);
@@ -291,7 +307,9 @@ impl MurmurationRules {
         let fanout = (n.sqrt() * ETA * cohesion_factor).ceil() as usize;
 
         // Score all peers using flocking rules
-        let mut scored: Vec<(PeerId, f64)> = self.peers.iter()
+        let mut scored: Vec<(PeerId, f64)> = self
+            .peers
+            .iter()
             .map(|(id, obs)| {
                 let score = self.flock_score(id, obs.height, our_height, our_velocity);
                 // Add quality factor
@@ -306,18 +324,16 @@ impl MurmurationRules {
         // Add deterministic jitter using golden ratio
         // This prevents all nodes from selecting identical peers
         let jitter_seed = self.generator.next_u64();
-        if jitter_seed % 3 == 0 && scored.len() > fanout {
+        if jitter_seed.is_multiple_of(3) && scored.len() > fanout {
             // Occasionally swap in a random peer for diversity
-            let swap_idx = (GoldenGenerator::golden_fractional(jitter_seed) * scored.len() as f64) as usize;
+            let swap_idx =
+                (GoldenGenerator::golden_fractional(jitter_seed) * scored.len() as f64) as usize;
             if swap_idx < scored.len() && fanout > 0 {
                 scored.swap(fanout - 1, swap_idx);
             }
         }
 
-        scored.into_iter()
-            .take(fanout)
-            .map(|(id, _)| id)
-            .collect()
+        scored.into_iter().take(fanout).map(|(id, _)| id).collect()
     }
 
     /// Check if we should broadcast now based on phase alignment
@@ -349,7 +365,7 @@ impl MurmurationRules {
 // Serialization for Network Messages
 // =============================================================================
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Compact flock state for inclusion in StatusMessage
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -418,8 +434,11 @@ mod tests {
 
         // Each bucket should have ~1000 values (±10%)
         for bucket in buckets.iter() {
-            assert!(*bucket > 900 && *bucket < 1100,
-                "Bucket count {} not in expected range", bucket);
+            assert!(
+                *bucket > 900 && *bucket < 1100,
+                "Bucket count {} not in expected range",
+                bucket
+            );
         }
     }
 
@@ -440,8 +459,11 @@ mod tests {
 
         // Should be roughly 50/50 (±5%)
         let ratio = zeros as f64 / (zeros + ones) as f64;
-        assert!(ratio > 0.45 && ratio < 0.55,
-            "Coin flip ratio {} not fair", ratio);
+        assert!(
+            ratio > 0.45 && ratio < 0.55,
+            "Coin flip ratio {} not fair",
+            ratio
+        );
     }
 
     #[test]
@@ -477,7 +499,7 @@ mod tests {
         // Verify all phases are used and distribution is reasonable
         let total: u32 = phase_counts.iter().sum();
         assert_eq!(total, 1000);
-        
+
         // Check that no single phase dominates (< 50% of total)
         for count in phase_counts.iter() {
             assert!(*count < 500, "Phase count {} exceeds 50% of total", count);
@@ -494,11 +516,19 @@ mod tests {
 
         // Peers spread out → lower cohesion (but still reasonable)
         state.update_from_peers(&[100, 200, 300, 400]);
-        assert!(state.cohesion < 0.8, "Expected cohesion < 0.8 for spread peers, got {}", state.cohesion);
-        
+        assert!(
+            state.cohesion < 0.8,
+            "Expected cohesion < 0.8 for spread peers, got {}",
+            state.cohesion
+        );
+
         // Very spread peers → much lower cohesion
         state.update_from_peers(&[1, 100, 1000, 10000]);
-        assert!(state.cohesion < 0.35, "Expected cohesion < 0.35 for very spread peers, got {}", state.cohesion);
+        assert!(
+            state.cohesion < 0.35,
+            "Expected cohesion < 0.35 for very spread peers, got {}",
+            state.cohesion
+        );
     }
 
     #[test]

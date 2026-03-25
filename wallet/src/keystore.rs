@@ -52,9 +52,8 @@ impl Keystore {
         // Derive address from public key (use SHA256 of public key)
         let address = Self::derive_address(&verifying_key);
 
-        let account_name = name.unwrap_or_else(|| {
-            format!("account-{}", &hex::encode(&address.as_bytes())[0..8])
-        });
+        let account_name =
+            name.unwrap_or_else(|| format!("account-{}", &hex::encode(address.as_bytes())[0..8]));
 
         let account = StoredAccount {
             name: account_name.clone(),
@@ -82,9 +81,13 @@ impl Keystore {
     }
 
     /// Import a keypair from private key
-    pub fn import_keypair(&self, private_key_hex: &str, name: Option<String>) -> Result<StoredAccount> {
-        let private_key_bytes = hex::decode(private_key_hex)
-            .map_err(|e| anyhow!("Invalid private key hex: {}", e))?;
+    pub fn import_keypair(
+        &self,
+        private_key_hex: &str,
+        name: Option<String>,
+    ) -> Result<StoredAccount> {
+        let private_key_bytes =
+            hex::decode(private_key_hex).map_err(|e| anyhow!("Invalid private key hex: {}", e))?;
 
         if private_key_bytes.len() != 32 {
             return Err(anyhow!("Private key must be 32 bytes"));
@@ -97,9 +100,8 @@ impl Keystore {
         let verifying_key = signing_key.verifying_key();
         let address = Self::derive_address(&verifying_key);
 
-        let account_name = name.unwrap_or_else(|| {
-            format!("imported-{}", &hex::encode(&address.as_bytes())[0..8])
-        });
+        let account_name =
+            name.unwrap_or_else(|| format!("imported-{}", &hex::encode(address.as_bytes())[0..8]));
 
         let account = StoredAccount {
             name: account_name.clone(),
@@ -158,7 +160,10 @@ impl Keystore {
             }
         }
 
-        Err(anyhow!("Account '{}' not found in keystore", name_or_address))
+        Err(anyhow!(
+            "Account '{}' not found in keystore",
+            name_or_address
+        ))
     }
 
     /// Get signing key for an account
@@ -205,7 +210,9 @@ mod tests {
     #[test]
     fn test_keypair_generation() {
         let keystore = Keystore::new().unwrap();
-        let account = keystore.generate_keypair(Some("test-account".to_string())).unwrap();
+        let account = keystore
+            .generate_keypair(Some("test-account".to_string()))
+            .unwrap();
 
         assert_eq!(account.name, "test-account");
         assert_eq!(account.address.len(), 64); // 32 bytes in hex
@@ -221,11 +228,15 @@ mod tests {
         let keystore = Keystore::new().unwrap();
 
         // Generate a keypair to get a valid private key
-        let original = keystore.generate_keypair(Some("original".to_string())).unwrap();
+        let original = keystore
+            .generate_keypair(Some("original".to_string()))
+            .unwrap();
         let private_key = original.private_key.clone();
 
         // Import it with a new name
-        let imported = keystore.import_keypair(&private_key, Some("imported".to_string())).unwrap();
+        let imported = keystore
+            .import_keypair(&private_key, Some("imported".to_string()))
+            .unwrap();
 
         // Should have same address and keys
         assert_eq!(imported.address, original.address);

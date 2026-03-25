@@ -1,14 +1,16 @@
 // Marketplace State Management with Database Persistence
 // Web4 PoUW marketplace integrated into blockchain state
 
-use coinject_core::{Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
+use coinject_core::{Address, Balance, Hash, ProblemReveal, Solution, SubmissionMode};
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 // Table definitions for marketplace state
-const PROBLEMS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("marketplace_problems");
-const PROBLEM_INDEX_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("marketplace_index");
+const PROBLEMS_TABLE: TableDefinition<&[u8; 32], &[u8]> =
+    TableDefinition::new("marketplace_problems");
+const PROBLEM_INDEX_TABLE: TableDefinition<&[u8; 32], &[u8]> =
+    TableDefinition::new("marketplace_index");
 const ESCROW_TABLE: TableDefinition<&[u8; 32], u128> = TableDefinition::new("marketplace_escrow");
 
 /// Problem status in marketplace
@@ -114,9 +116,9 @@ impl MarketplaceState {
                 let problem_data = bincode::serialize(problem)?;
                 Hash::new(&problem_data)
             }
-            SubmissionMode::Private { problem_commitment, .. } => {
-                *problem_commitment
-            }
+            SubmissionMode::Private {
+                problem_commitment, ..
+            } => *problem_commitment,
         };
 
         // Check for duplicates
@@ -176,7 +178,8 @@ impl MarketplaceState {
         solver: Address,
         solution: Solution,
     ) -> Result<(), MarketplaceError> {
-        let mut submission = self.get_problem(&problem_id)?
+        let mut submission = self
+            .get_problem(&problem_id)?
             .ok_or(MarketplaceError::ProblemNotFound)?;
 
         // Check status
@@ -267,7 +270,8 @@ impl MarketplaceState {
 
     /// Claim bounty for solved problem
     pub fn claim_bounty(&self, problem_id: Hash) -> Result<(Address, Balance), MarketplaceError> {
-        let submission = self.get_problem(&problem_id)?
+        let submission = self
+            .get_problem(&problem_id)?
             .ok_or(MarketplaceError::ProblemNotFound)?;
 
         if submission.status != ProblemStatus::Solved {
@@ -280,7 +284,8 @@ impl MarketplaceState {
         let write_txn = self.db.begin_write()?;
         let bounty = {
             let mut escrow_table = write_txn.open_table(ESCROW_TABLE)?;
-            let bounty = escrow_table.remove(problem_id.as_bytes())?
+            let bounty = escrow_table
+                .remove(problem_id.as_bytes())?
                 .ok_or(MarketplaceError::BountyNotFound)?
                 .value();
             bounty
@@ -291,8 +296,13 @@ impl MarketplaceState {
     }
 
     /// Cancel problem and refund bounty
-    pub fn cancel_problem(&self, problem_id: Hash, requester: Address) -> Result<Balance, MarketplaceError> {
-        let mut submission = self.get_problem(&problem_id)?
+    pub fn cancel_problem(
+        &self,
+        problem_id: Hash,
+        requester: Address,
+    ) -> Result<Balance, MarketplaceError> {
+        let mut submission = self
+            .get_problem(&problem_id)?
             .ok_or(MarketplaceError::ProblemNotFound)?;
 
         // Only submitter can cancel
@@ -309,7 +319,8 @@ impl MarketplaceState {
         let write_txn = self.db.begin_write()?;
         let bounty = {
             let mut escrow_table = write_txn.open_table(ESCROW_TABLE)?;
-            let bounty = escrow_table.remove(problem_id.as_bytes())?
+            let bounty = escrow_table
+                .remove(problem_id.as_bytes())?
                 .ok_or(MarketplaceError::BountyNotFound)?
                 .value();
             bounty
@@ -323,7 +334,10 @@ impl MarketplaceState {
     }
 
     /// Get problem by ID
-    pub fn get_problem(&self, problem_id: &Hash) -> Result<Option<ProblemSubmission>, MarketplaceError> {
+    pub fn get_problem(
+        &self,
+        problem_id: &Hash,
+    ) -> Result<Option<ProblemSubmission>, MarketplaceError> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(PROBLEMS_TABLE)?;
 
@@ -350,7 +364,10 @@ impl MarketplaceState {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(PROBLEMS_TABLE)?;
-            table.insert(submission.problem_id.as_bytes(), submission_bytes.as_slice())?;
+            table.insert(
+                submission.problem_id.as_bytes(),
+                submission_bytes.as_slice(),
+            )?;
         }
         write_txn.commit()?;
 

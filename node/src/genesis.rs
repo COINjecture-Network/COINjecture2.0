@@ -6,7 +6,7 @@ use coinject_core::{
     Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, ProblemType, Solution,
     SolutionReveal,
 };
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Genesis block configuration
 pub struct GenesisConfig {
@@ -21,18 +21,21 @@ impl Default for GenesisConfig {
         // Public key: df52ac77a92607b348f742aa3542a3f4e72c7dff49c07819d98b459111979090
         // Description: Genesis Wallet - Controls D₈ (Foundation Endowment, 8.2% normalized)
         let public_key_hex = "df52ac77a92607b348f742aa3542a3f4e72c7dff49c07819d98b459111979090";
-        let public_key_bytes = hex::decode(public_key_hex)
-            .expect("Failed to decode public key from hex");
-        
+        let public_key_bytes =
+            hex::decode(public_key_hex).expect("Failed to decode public key from hex");
+
         if public_key_bytes.len() != 32 {
-            panic!("Public key must be 32 bytes, got {}", public_key_bytes.len());
+            panic!(
+                "Public key must be 32 bytes, got {}",
+                public_key_bytes.len()
+            );
         }
-        
+
         // Derive address using SHA256 (same as wallet/src/keystore.rs derive_address)
         let mut hasher = Sha256::new();
         hasher.update(&public_key_bytes);
         let address_hash = hasher.finalize();
-        
+
         let mut addr_bytes = [0u8; 32];
         addr_bytes.copy_from_slice(&address_hash[..32]);
 
@@ -77,8 +80,8 @@ pub fn create_genesis_block(config: GenesisConfig) -> Block {
         solve_time_us: 1,
         verify_time_us: 1,
         time_asymmetry_ratio: 1.0,
-        solution_quality: 1.0, // Perfect solution
-        complexity_weight: 1.0, // Minimal complexity
+        solution_quality: 1.0,         // Perfect solution
+        complexity_weight: 1.0,        // Minimal complexity
         energy_estimate_joules: 0.001, // Negligible energy
     };
 
@@ -130,17 +133,21 @@ pub fn is_valid_genesis(block: &Block) -> bool {
     }
 
     // Verify the solution
-    if !block.solution_reveal.solution.verify(&block.solution_reveal.problem) {
+    if !block
+        .solution_reveal
+        .solution
+        .verify(&block.solution_reveal.problem)
+    {
         return false;
     }
 
     // Verify the commitment
     let epoch_salt = Hash::new(b"coinject-genesis-epoch");
-    if !block
-        .solution_reveal
-        .commitment
-        .verify(&block.solution_reveal.problem, &block.solution_reveal.solution, &epoch_salt)
-    {
+    if !block.solution_reveal.commitment.verify(
+        &block.solution_reveal.problem,
+        &block.solution_reveal.solution,
+        &epoch_salt,
+    ) {
         return false;
     }
 
@@ -166,7 +173,10 @@ mod tests {
         let genesis = create_genesis_block(GenesisConfig::default());
 
         // Verify the solution is correct
-        assert!(genesis.solution_reveal.solution.verify(&genesis.solution_reveal.problem));
+        assert!(genesis
+            .solution_reveal
+            .solution
+            .verify(&genesis.solution_reveal.problem));
     }
 
     #[test]

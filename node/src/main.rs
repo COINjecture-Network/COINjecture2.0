@@ -1,5 +1,14 @@
 // COINjecture Node
 // Network B - NP-hard Consensus Blockchain
+
+// ChainError wraps redb errors that are inherently large; boxing would cascade through callers.
+#![allow(clippy::result_large_err)]
+// Service/fork/mining orchestration functions require many Arc<RwLock<...>> parameters.
+#![allow(clippy::too_many_arguments)]
+// HeaderServer uses Box<dyn Fn(...)> callback types — factoring them into aliases adds noise.
+#![allow(clippy::type_complexity)]
+// FFI boundary functions take raw pointers by design; unsafe is inappropriate for extern "C" ABI.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 //
 // Supports 6 Specialized Node Types with Dynamic Behavioral Classification:
 // - Light: Header-only sync, minimal storage (mobile-friendly)
@@ -12,7 +21,6 @@
 // CRITICAL: Nodes are classified EMPIRICALLY based on behavior, NOT self-declaration
 
 mod chain;
-mod sync_optimizer;
 #[cfg(feature = "adzdb")]
 mod chain_adzdb;
 mod config;
@@ -29,6 +37,7 @@ pub mod node_manager;
 pub mod node_types;
 mod peer_consensus;
 mod service;
+mod sync_optimizer;
 mod validator;
 
 use config::NodeConfig;
@@ -41,8 +50,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -95,7 +103,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_banner(config: &NodeConfig) {
-    println!(r#"
+    println!(
+        r#"
     ╔═══════════════════════════════════════════════════════════════╗
     ║                                                               ║
     ║         ██████╗ ██████╗ ██╗███╗   ██╗     ██╗███████╗ ██████╗████████╗██╗   ██╗██████╗ ███████╗    ║
@@ -109,11 +118,12 @@ fn print_banner(config: &NodeConfig) {
     ║                    η = 1/√2 Tokenomics Engine                ║
     ║                                                               ║
     ╚═══════════════════════════════════════════════════════════════╝
-    "#);
+    "#
+    );
     println!("    Version: {}", env!("CARGO_PKG_VERSION"));
     println!("    Repository: {}", env!("CARGO_PKG_REPOSITORY"));
     println!();
-    
+
     // Display node type information
     let target_type = config.target_node_type();
     let (icon, mode_name) = match target_type {
@@ -124,17 +134,21 @@ fn print_banner(config: &NodeConfig) {
         node_types::NodeType::Bounty => ("🎯", "BOUNTY"),
         node_types::NodeType::Oracle => ("🔮", "ORACLE"),
     };
-    
+
     println!("    ┌─────────────────────────────────────────────────────────────┐");
-    println!("    │ {} Node Type: {:<10} │ Reward Multiplier: {:.3}x       │", 
-             icon, mode_name, target_type.reward_multiplier());
+    println!(
+        "    │ {} Node Type: {:<10} │ Reward Multiplier: {:.3}x       │",
+        icon,
+        mode_name,
+        target_type.reward_multiplier()
+    );
     println!("    │ {} │", target_type.description());
     println!("    │                                                             │");
     println!("    │ ℹ️  Actual classification determined by BEHAVIOR, not config │");
     println!("    │    (storage ratio, validation speed, solve rate, uptime)   │");
     println!("    └─────────────────────────────────────────────────────────────┘");
     println!();
-    
+
     // Display hardware requirements
     let hw = target_type.hardware_requirements();
     println!("    Hardware Requirements for {} node:", mode_name);
@@ -143,7 +157,7 @@ fn print_banner(config: &NodeConfig) {
     println!("    • Bandwidth: {} Mbps minimum", hw.min_bandwidth_mbps);
     println!("    • CPU Cores: {} minimum", hw.min_cpu_cores);
     println!();
-    
+
     // Display stake requirement
     let stake = target_type.min_stake();
     if stake > 0 {

@@ -15,7 +15,10 @@ use tokio::net::TcpListener;
 /// Start metrics HTTP server
 pub async fn start_metrics_server(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr).await?;
-    tracing::info!("📊 Prometheus metrics server listening on http://{}/metrics", addr);
+    tracing::info!(
+        "📊 Prometheus metrics server listening on http://{}/metrics",
+        addr
+    );
 
     loop {
         let (stream, _) = listener.accept().await?;
