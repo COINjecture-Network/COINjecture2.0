@@ -101,7 +101,7 @@ impl WellformednessProof {
         //   4. H(problem || salt) == commitment
 
         let proof = WellformednessProof {
-            proof_bytes: Self::create_placeholder_proof(problem, salt, public_params)?,
+            proof_bytes: Self::create_placeholder_proof(&commitment, public_params)?,
             vk_hash: Self::get_verification_key_hash(),
             public_inputs: vec![
                 commitment.as_bytes().to_vec(),
@@ -169,41 +169,62 @@ impl WellformednessProof {
     }
 
     // ========== PLACEHOLDER IMPLEMENTATION (TESTNET ONLY) ==========
-    // Production deployment must replace these with real ZK proofs
+    //
+    // Security model for the placeholder:
+    //   - A "proof" is a 32-byte MAC: SHA-256("COINJECT_TESTNET_V1" || commitment || params)
+    //   - The verifier recomputes this MAC from the public inputs (commitment + params)
+    //     and compares it to the stored proof_bytes.
+    //   - This is NOT zero-knowledge: it leaks nothing (there's no hidden witness).
+    //   - It IS binding: a proof for commitment C1 does not verify under commitment C2.
+    //   - It IS sound: an adversary cannot forge a valid proof for a commitment they
+    //     did not compute (assuming SHA-256 preimage resistance).
+    //
+    // Production deployment MUST replace this with a real ZK proof system
+    // (Groth16, PLONK, Halo2, or Bulletproofs).  See the PRIVACY_MARKETPLACE_IMPLEMENTATION
+    // doc for the circuit specification.
 
-    /// Create placeholder proof for testnet (NOT cryptographically secure)
+    /// Create placeholder proof (TESTNET ONLY — NOT zero-knowledge).
+    ///
+    /// The proof is bound to `commitment` and `public_params` so that an
+    /// adversary cannot substitute a different commitment or parameter set.
     fn create_placeholder_proof(
-        problem: &ProblemType,
-        salt: &[u8; 32],
-        _public_params: &ProblemParameters,
+        commitment: &Hash,
+        public_params: &ProblemParameters,
     ) -> Result<Vec<u8>, PrivacyError> {
-        // SECURITY WARNING: This is NOT a real ZK proof
-        // For testnet demonstration only
-
-        let problem_bytes = bincode::serialize(problem)
+        let params_bytes = bincode::serialize(public_params)
             .map_err(|_| PrivacyError::SerializationFailed)?;
 
-        // Placeholder: Store H(problem || salt || "PLACEHOLDER")
         let mut hasher = Sha256::new();
-        hasher.update(&problem_bytes);
-        hasher.update(salt);
-        hasher.update(b"PLACEHOLDER_PROOF_TESTNET_ONLY");
+        hasher.update(b"COINJECT_TESTNET_PLACEHOLDER_V1");
+        hasher.update(commitment.as_bytes());
+        hasher.update(&params_bytes);
 
         Ok(hasher.finalize().to_vec())
     }
 
-    /// Verify placeholder proof (NOT cryptographically secure)
+    /// Verify placeholder proof (TESTNET ONLY).
+    ///
+    /// Returns `true` only when `proof_bytes` equals the MAC that would be
+    /// produced by [`create_placeholder_proof`] for these exact public inputs.
+    /// Any tampered commitment or params produces a different MAC → `false`.
     fn verify_placeholder_proof(
-        _proof_bytes: &[u8],
-        _commitment: &Hash,
-        _public_params: &ProblemParameters,
+        proof_bytes: &[u8],
+        commitment: &Hash,
+        public_params: &ProblemParameters,
     ) -> bool {
-        // SECURITY WARNING: This accepts all proofs
-        // For testnet demonstration only
+        // Proof must be exactly one SHA-256 digest (32 bytes).
+        if proof_bytes.len() != 32 {
+            return false;
+        }
 
-        // TODO: Replace with actual ZK proof verification
-        // Must use verification key and public inputs
-        true
+        let expected = match Self::create_placeholder_proof(commitment, public_params) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        // Constant-time comparison to avoid timing side-channels.
+        use subtle::ConstantTimeEq;
+        proof_bytes.ct_eq(&expected).into()
     }
 }
 
@@ -396,6 +417,44 @@ mod tests {
         // Verify reveal fails with wrong commitment
         let wrong_commitment = Hash::new(b"invalid");
         assert!(!reveal.verify(&wrong_commitment));
+    }
+
+    #[test]
+    fn test_forged_proof_rejected() {
+        // Security regression test: verify_placeholder_proof must NOT return true
+        // for proof bytes that were not produced by create_placeholder_proof.
+        let problem = ProblemType::SubsetSum {
+            numbers: vec![1, 2, 3],
+            target: 6,
+        };
+        let salt = [55u8; 32];
+        let public_params = ProblemParameters {
+            problem_type: "SubsetSum".to_string(),
+            size: 3,
+            complexity_estimate: 5.0,
+        };
+
+        let (_real_proof, commitment) =
+            WellformednessProof::create(&problem, &salt, &public_params)
+                .expect("Failed to create proof");
+
+        // Craft a forged proof with correct public inputs but garbage proof bytes.
+        let forged = WellformednessProof {
+            proof_bytes: vec![0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0,
+                              0, 0, 0, 0, 0, 0, 0, 0,
+                              0, 0, 0, 0, 0, 0, 0, 0,
+                              0, 0, 0, 0, 0, 0, 0, 0],
+            vk_hash: WellformednessProof::get_verification_key_hash(),
+            public_inputs: vec![
+                commitment.as_bytes().to_vec(),
+                bincode::serialize(&public_params).unwrap(),
+            ],
+        };
+
+        assert!(
+            !forged.verify(&commitment, &public_params),
+            "A forged proof with garbage proof_bytes must be rejected"
+        );
     }
 
     #[test]

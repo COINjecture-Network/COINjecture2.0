@@ -17,3 +17,5 @@ rand.workspace = true
 bincode.workspace = true
 hex.workspace = true
 tracing.workspace = true
+# Ed25519 commit signing (P0 security)
+ed25519-dalek.workspace = true

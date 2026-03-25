@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use http::{header, Method};
 use tower::ServiceBuilder;
-use tower_http::cors::{CorsLayer, Any};
+use tower_http::cors::CorsLayer;
 
 /// Trait for reading blockchain data (allows node to provide chain state without circular dependency)
 pub trait BlockchainReader: Send + Sync {
@@ -1000,6 +1001,56 @@ impl CoinjectRpcServer for RpcServerImpl {
     }
 }
 
+// ─── CORS helper ─────────────────────────────────────────────────────────────
+
+/// Default origins permitted for cross-origin requests in development.
+///
+/// These cover the Vite (5173) and CRA (3000) dev servers running on localhost.
+/// Production deployments MUST override this with the actual wallet domain.
+const DEFAULT_ALLOWED_ORIGINS: &[&str] = &[
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+];
+
+/// Build a [`CorsLayer`] that allows only the listed origins.
+///
+/// Permitted methods: GET, POST, OPTIONS.
+/// Permitted headers: Content-Type, Authorization, X-Requested-With.
+/// The `X-Requested-With` header supports the CSRF double-submit pattern.
+fn parse_origins(strs: &[impl AsRef<str>]) -> Result<Vec<http::HeaderValue>, String> {
+    strs.iter()
+        .map(|o| {
+            let s = o.as_ref();
+            s.parse::<http::HeaderValue>()
+                .map_err(|e| format!("Invalid CORS origin '{}': {}", s, e))
+        })
+        .collect()
+}
+
+fn build_cors_layer(
+    allowed_origins: Option<Vec<String>>,
+) -> Result<CorsLayer, Box<dyn std::error::Error>> {
+    let origins: Vec<http::HeaderValue> = match allowed_origins {
+        Some(ref list) => parse_origins(list).map_err(|e| e)?,
+        None => parse_origins(DEFAULT_ALLOWED_ORIGINS).map_err(|e| e)?,
+    };
+
+    let layer = CorsLayer::new()
+        .allow_origin(tower_http::cors::AllowOrigin::list(origins))
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            // X-Requested-With: allows web wallet to use CSRF double-submit pattern
+            header::HeaderName::from_static("x-requested-with"),
+        ])
+        .max_age(std::time::Duration::from_secs(3600));
+
+    Ok(layer)
+}
+
 /// RPC server handle
 pub struct RpcServer {
     handle: ServerHandle,
@@ -1007,20 +1058,42 @@ pub struct RpcServer {
 }
 
 impl RpcServer {
-    /// Create and start new RPC server with CORS support
+    /// Create and start a new RPC server.
+    ///
+    /// `allowed_origins`: list of exact origins that browsers are permitted to make
+    /// cross-origin requests from.  Defaults to localhost dev origins if `None`.
+    ///
+    /// # Security (P0 CSRF protection)
+    ///
+    /// The previous implementation used `CorsLayer::new().allow_origin(Any)`, which
+    /// allowed any web page to make credentialed cross-origin requests to the node's
+    /// JSON-RPC endpoint.  This enabled CSRF attacks where a malicious site could
+    /// trigger wallet operations on behalf of a user with a local node running.
+    ///
+    /// The new policy:
+    /// - Only the explicitly listed origins (typically localhost for dev, or the
+    ///   operator-configured production domain) may make cross-origin requests.
+    /// - Only GET, POST, and OPTIONS methods are allowed.
+    /// - The `X-Requested-With` custom header is allowed to support the
+    ///   CSRF double-submit pattern in the web wallet.
+    /// - Cache preflight results for 1 hour to reduce OPTIONS overhead.
+    ///
+    /// For production deployments, pass the actual wallet domain as `allowed_origins`.
     pub async fn new(
         listen_addr: SocketAddr,
         state: Arc<RpcServerState>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Create CORS layer that allows all origins, methods, and headers
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any)
-            .expose_headers(Any)
-            .max_age(std::time::Duration::from_secs(86400));
+        Self::new_with_origins(listen_addr, state, None).await
+    }
 
-        // Build server with CORS middleware wrapped in ServiceBuilder
+    /// Create and start a new RPC server with explicit allowed origins.
+    pub async fn new_with_origins(
+        listen_addr: SocketAddr,
+        state: Arc<RpcServerState>,
+        allowed_origins: Option<Vec<String>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let cors = build_cors_layer(allowed_origins)?;
+
         let middleware = ServiceBuilder::new().layer(cors);
         let server = Server::builder()
             .set_http_middleware(middleware)
@@ -1031,7 +1104,10 @@ impl RpcServer {
         let rpc_impl = RpcServerImpl::new(state);
         let handle = server.start(rpc_impl.into_rpc());
 
-        println!("JSON-RPC server listening on {} (CORS enabled)", addr);
+        tracing::info!(
+            addr = %addr,
+            "JSON-RPC server listening (CORS restricted to configured origins)"
+        );
 
         Ok(RpcServer { handle, addr })
     }

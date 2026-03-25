@@ -18,6 +18,11 @@ serde.workspace = true
 bincode.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
+# Ed25519 escrow authorization (P0 security)
+ed25519-dalek.workspace = true
+blake3.workspace = true
 
 [dev-dependencies]
 tempfile = "3.8"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
