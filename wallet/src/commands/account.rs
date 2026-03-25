@@ -16,8 +16,8 @@ pub async fn new_account(name: Option<String>) -> Result<()> {
     println!("Address:     {}", account.address);
     println!("Public Key:  {}", account.public_key.dimmed());
     println!();
-    println!("{}", "⚠️  IMPORTANT: Keep your private key safe!".yellow().bold());
-    println!("Private Key: {}", account.private_key.red());
+    println!("{}", "🔐 Private key encrypted at rest (AES-256-GCM).".green());
+    println!("   Use 'coinject-wallet account export' to view the key.");
     println!();
     println!("Account saved to keystore at: ~/.coinject/wallets/");
 
@@ -119,7 +119,11 @@ pub async fn export_account(name_or_address: &str) -> Result<()> {
             println!("Address:     {}", account.address);
             println!();
             println!("{}", "🔐 Private Key (keep this secret!):".yellow().bold());
-            println!("{}", account.private_key.red());
+            // Decrypt the signing key from the encrypted .key file and hex-encode it for export.
+            match keystore.get_signing_key(name_or_address) {
+                Ok(sk) => println!("{}", hex::encode(sk.to_bytes()).red()),
+                Err(e) => println!("{}", format!("❌ Failed to decrypt key: {}", e).red()),
+            }
             println!();
             println!("{}", "⚠️  Never share this key with anyone!".yellow().bold());
         }

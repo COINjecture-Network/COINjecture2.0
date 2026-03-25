@@ -1482,6 +1482,11 @@ impl CoinjectNode {
                                                     solution_hash: commit.solution_hash,
                                                     work_score: commit.work_score,
                                                     signature: commit.signature,
+                                                    // Migration default: network peers that have not yet
+                                                    // upgraded to include their public key send all-zeros.
+                                                    // The commit collector accepts these during the transition
+                                                    // window (all-zero pubkey bypasses signature verification).
+                                                    public_key: [0u8; 32],
                                                 },
                                             }
                                         );

@@ -21,6 +21,10 @@ ed25519-dalek = "2.1"
 rand = "0.8"
 sha2 = "0.10"
 blake3 = "1.5"
+# Encrypted keystore (P0 security)
+aes-gcm.workspace = true
+argon2.workspace = true
+zeroize.workspace = true
 
 # Serialization
 serde.workspace = true

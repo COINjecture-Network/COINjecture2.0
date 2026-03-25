@@ -29,6 +29,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use coinject_core::{Address, Block, Hash, ProblemType, Solution};
+use ed25519_dalek::{Signer, SigningKey};
 use tokio::sync::{mpsc, RwLock};
 
 // ─── Events (coordinator → node service) ─────────────────────────────────────
@@ -181,6 +182,10 @@ pub struct EpochCoordinator {
     consecutive_stalls: u32,
     /// Shared state for external queries.
     shared_state: Arc<RwLock<CoordinatorState>>,
+    /// Ed25519 signing key for commit authentication.
+    /// When set, all solution commits produced by this node are signed.
+    /// When None, commits are unsigned (legacy mode — remove in future version).
+    signing_key: Option<SigningKey>,
 }
 
 impl EpochCoordinator {
@@ -202,6 +207,22 @@ impl EpochCoordinator {
         chain_hash: Hash,
         miner_address: Address,
     ) -> (Self, Arc<RwLock<CoordinatorState>>) {
+        Self::with_signing_key(our_id, config, chain_height, chain_hash, miner_address, None)
+    }
+
+    /// Create a coordinator with an ed25519 signing key for commit authentication.
+    ///
+    /// When a `signing_key` is provided, every `SolutionCommit` produced by this
+    /// node is signed before broadcast.  Peers that have also upgraded will reject
+    /// commits with invalid or missing signatures (modulo the migration bypass).
+    pub fn with_signing_key(
+        our_id: NodeId,
+        config: CoordinatorConfig,
+        chain_height: u64,
+        chain_hash: Hash,
+        miner_address: Address,
+        signing_key: Option<SigningKey>,
+    ) -> (Self, Arc<RwLock<CoordinatorState>>) {
         let shared_state = Arc::new(RwLock::new(CoordinatorState {
             epoch: 0,
             phase: EpochPhase::Salt,
@@ -222,6 +243,7 @@ impl EpochCoordinator {
             local_solution: None,
             consecutive_stalls: 0,
             shared_state: shared_state.clone(),
+            signing_key,
         };
 
         (coordinator, shared_state)
@@ -540,12 +562,22 @@ impl EpochCoordinator {
                     solve_time,
                 });
 
-                // Add our own commit
+                // Sign the commit if we have a signing key.
+                let (signature, public_key) = if let Some(sk) = &self.signing_key {
+                    let msg = commit::commit_signing_message(epoch, &solution_hash, work_score);
+                    let sig = sk.sign(&msg);
+                    (sig.to_bytes().to_vec(), sk.verifying_key().to_bytes())
+                } else {
+                    (Vec::new(), [0u8; 32])
+                };
+
+                // Add our own commit (unsigned legacy or signed depending on config).
                 let commit = SolutionCommit {
                     node_id: self.our_id,
+                    public_key,
                     solution_hash,
                     work_score,
-                    signature: Vec::new(), // TODO: sign with node key
+                    signature,
                 };
                 self.collector.add_commit(commit);
 
