@@ -47,10 +47,17 @@ impl CommitCollector {
     }
 
     /// Add a commit from a node. Returns false if a commit from this node
-    /// was already received (duplicate/equivocation).
+    /// was already received (duplicate/equivocation) or the score is invalid.
+    ///
+    /// Rejects:
+    /// - Duplicate commits (same node_id).
+    /// - Zero, negative, or NaN work scores.
+    /// - Non-finite work scores (infinity).
     pub fn add_commit(&mut self, commit: SolutionCommit) -> bool {
-        if commit.work_score <= 0.0 {
-            return false; // Reject zero/negative work scores
+        // Reject any non-positive, NaN, or infinite score — these cannot
+        // participate in deterministic ordering.
+        if !commit.work_score.is_finite() || commit.work_score <= 0.0 {
+            return false;
         }
 
         use std::collections::hash_map::Entry;

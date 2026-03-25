@@ -28,6 +28,14 @@ pub enum ValidationError {
     FutureTimestamp,
     #[error("Invalid timestamp: block is too old")]
     TooOldTimestamp,
+    #[error("Invalid timestamp: block timestamp {block_ts} not after parent timestamp {parent_ts}")]
+    TimestampNotAfterParent { block_ts: i64, parent_ts: i64 },
+    #[error("Invalid block sequence: height {actual} does not follow parent height {parent}")]
+    InvalidSequence { actual: u64, parent: u64 },
+    #[error("Duplicate transaction in block")]
+    DuplicateTransaction,
+    #[error("Transactions not in canonical order")]
+    TransactionOrderViolation,
     #[error("Transaction validation failed: {0}")]
     InvalidTransaction(String),
     #[error("Coinbase amount exceeds maximum")]
@@ -212,6 +220,125 @@ impl BlockValidator {
         }
 
         println!("✅ Block hash meets difficulty (JSON)");
+        Ok(())
+    }
+
+    /// Validate a block's relationship to its parent block.
+    ///
+    /// Enforces:
+    /// 1. Height is exactly `parent.height + 1`.
+    /// 2. `prev_hash` matches the parent block's hash.
+    /// 3. Block timestamp is **strictly after** the parent's timestamp.
+    ///    (Prevents timestamp regression attacks and enforces chain monotonicity.)
+    ///
+    /// Call this *in addition to* `validate_block()` whenever the parent block
+    /// is available. During initial sync, pass `skip_timestamp_ordering = true`
+    /// only if the parent is known to pre-date the strict enforcement window.
+    pub fn validate_block_sequence(
+        &self,
+        block: &Block,
+        parent: &Block,
+    ) -> Result<(), ValidationError> {
+        // 1. Height must be parent + 1.
+        let expected_height = parent.header.height + 1;
+        if block.header.height != expected_height {
+            return Err(ValidationError::InvalidSequence {
+                actual: block.header.height,
+                parent: parent.header.height,
+            });
+        }
+
+        // 2. prev_hash must match parent block hash.
+        let parent_hash = parent.header.hash();
+        if block.header.prev_hash != parent_hash {
+            return Err(ValidationError::InvalidPrevHash);
+        }
+
+        // 3. Timestamp must be strictly greater than parent's timestamp.
+        //    This prevents timestamp regression and enforces a monotonic chain.
+        if block.header.timestamp <= parent.header.timestamp {
+            return Err(ValidationError::TimestampNotAfterParent {
+                block_ts: block.header.timestamp,
+                parent_ts: parent.header.timestamp,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Validate that transactions within a block are in canonical (deterministic) order.
+    ///
+    /// Canonical order: transactions are sorted by their hash in ascending
+    /// lexicographic order. This ensures all validators produce an identical
+    /// `transactions_root` regardless of the order transactions were received.
+    ///
+    /// Note: the coinbase transaction is exempt (it is always first, outside
+    /// this list) and genesis blocks with no transactions trivially satisfy
+    /// this rule.
+    pub fn validate_transaction_ordering(
+        &self,
+        block: &Block,
+    ) -> Result<(), ValidationError> {
+        if block.transactions.len() < 2 {
+            return Ok(()); // 0 or 1 transactions are trivially ordered.
+        }
+
+        // Check for duplicate transaction hashes and verify ascending order.
+        let mut prev_hash = block.transactions[0].hash();
+        for tx in block.transactions.iter().skip(1) {
+            let tx_hash = tx.hash();
+            if tx_hash == prev_hash {
+                return Err(ValidationError::DuplicateTransaction);
+            }
+            if tx_hash.as_bytes() < prev_hash.as_bytes() {
+                return Err(ValidationError::TransactionOrderViolation);
+            }
+            prev_hash = tx_hash;
+        }
+
+        Ok(())
+    }
+
+    /// Pre-validate transaction nonces against current account state.
+    ///
+    /// Checks that every transaction in the block has the correct next nonce
+    /// for its sender, **before** any state changes are applied. This prevents
+    /// double-spend via nonce reuse in a single block.
+    ///
+    /// Processes nonces in block order, so a block with two transactions from
+    /// the same sender is valid if their nonces are `n` and `n+1`.
+    pub fn validate_nonces(
+        &self,
+        block: &Block,
+        state: &AccountState,
+    ) -> Result<(), ValidationError> {
+        use std::collections::HashMap;
+        // Track nonces we've "consumed" within this block (in-memory only).
+        let mut pending_nonces: HashMap<[u8; 32], u64> = HashMap::new();
+
+        for tx in &block.transactions {
+            let sender = tx.from();
+            let key = *sender.as_bytes();
+
+            // Use the pending nonce (updated within this block) or look up state.
+            let expected = if let Some(&n) = pending_nonces.get(&key) {
+                n
+            } else {
+                state.get_nonce(sender)
+            };
+
+            let tx_nonce = tx.nonce();
+            if tx_nonce != expected {
+                return Err(ValidationError::InvalidTransaction(format!(
+                    "Nonce mismatch for {:?}: expected {}, got {}",
+                    sender, expected, tx_nonce
+                )));
+            }
+
+            // Advance the in-block nonce counter for this sender.
+            pending_nonces.insert(key, expected + 1);
+        }
+
         Ok(())
     }
 

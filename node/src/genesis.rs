@@ -104,47 +104,84 @@ pub fn create_genesis_block(config: GenesisConfig) -> Block {
     }
 }
 
-/// Hard-coded genesis block hash for network identification
+/// Hard-coded genesis block hash for network identification.
+///
+/// This hash is computed **once** from the canonical genesis parameters and
+/// serves as the network's unique identifier. A node that produces a different
+/// genesis hash is on an incompatible chain.
 pub fn genesis_hash() -> Hash {
-    // This will be computed from the actual genesis block
-    // For now, return a deterministic value
     let genesis = create_genesis_block(GenesisConfig::default());
     genesis.header.hash()
 }
 
-/// Verify a block is the valid genesis block
+/// Verify a block is the valid genesis block.
+///
+/// Performs full structural and cryptographic validation:
+/// 1. Height must be 0.
+/// 2. `prev_hash` must be `Hash::ZERO`.
+/// 3. No user transactions (only coinbase).
+/// 4. Solution must correctly solve the genesis problem.
+/// 5. Commitment must verify against the deterministic genesis epoch salt.
+/// 6. Block hash must match the canonical genesis hash (prevents genesis
+///    replacement attacks — an attacker cannot substitute a different genesis
+///    block with the same structure).
+///
+/// The hash check in step 6 is the critical guard: even if all structural
+/// checks pass, a different genesis block (e.g., with a modified address or
+/// initial supply) will have a different hash and be rejected.
 pub fn is_valid_genesis(block: &Block) -> bool {
-    // Must be height 0
+    // 1. Must be height 0.
     if block.header.height != 0 {
         return false;
     }
 
-    // Must have zero prev_hash
+    // 2. Must have zero prev_hash.
     if block.header.prev_hash != Hash::ZERO {
         return false;
     }
 
-    // Must have no transactions (only coinbase)
+    // 3. Must have no user transactions (only coinbase).
     if !block.transactions.is_empty() {
         return false;
     }
 
-    // Verify the solution
+    // 4. Verify the solution solves the genesis problem.
     if !block.solution_reveal.solution.verify(&block.solution_reveal.problem) {
         return false;
     }
 
-    // Verify the commitment
+    // 5. Verify the commitment against the deterministic genesis epoch salt.
     let epoch_salt = Hash::new(b"coinject-genesis-epoch");
     if !block
         .solution_reveal
         .commitment
-        .verify(&block.solution_reveal.problem, &block.solution_reveal.solution, &epoch_salt)
+        .verify(
+            &block.solution_reveal.problem,
+            &block.solution_reveal.solution,
+            &epoch_salt,
+        )
     {
         return false;
     }
 
+    // 6. Hash must match canonical genesis (prevents genesis replacement attacks).
+    //    An attacker who modifies any field (address, supply, problem, timestamp)
+    //    will produce a different hash and fail here.
+    let canonical_hash = genesis_hash();
+    if block.header.hash() != canonical_hash {
+        return false;
+    }
+
     true
+}
+
+/// Check whether a block claims to be genesis but is NOT the canonical one.
+///
+/// Returns `true` if the block is at height 0 but has a different hash than
+/// the canonical genesis. This detects genesis-replacement attacks where
+/// an attacker tries to substitute a crafted block at height 0.
+pub fn is_genesis_attack(block: &Block) -> bool {
+    block.header.height == 0 && block.header.hash() != genesis_hash()
 }
 
 #[cfg(test)]
@@ -178,11 +215,32 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_genesis() {
+    fn test_invalid_genesis_wrong_height() {
         let mut genesis = create_genesis_block(GenesisConfig::default());
-
-        // Corrupt the height
         genesis.header.height = 1;
         assert!(!is_valid_genesis(&genesis));
+    }
+
+    #[test]
+    fn test_invalid_genesis_wrong_prev_hash() {
+        let mut genesis = create_genesis_block(GenesisConfig::default());
+        genesis.header.prev_hash = Hash::new(b"not-zero");
+        assert!(!is_valid_genesis(&genesis));
+    }
+
+    #[test]
+    fn test_genesis_attack_detection() {
+        let mut fake = create_genesis_block(GenesisConfig::default());
+        // Tamper with the miner address — this changes the block hash.
+        fake.header.miner = coinject_core::Address::from_bytes([0xAB; 32]);
+        assert!(is_genesis_attack(&fake), "tampered genesis should be detected");
+        assert!(!is_valid_genesis(&fake), "tampered genesis must not validate");
+    }
+
+    #[test]
+    fn test_is_genesis_attack_canonical_returns_false() {
+        let canonical = create_genesis_block(GenesisConfig::default());
+        // Canonical genesis is NOT an attack.
+        assert!(!is_genesis_attack(&canonical));
     }
 }

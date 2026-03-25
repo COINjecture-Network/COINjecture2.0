@@ -10,6 +10,10 @@ pub mod commitment;
 pub mod dimensional;
 pub mod privacy;
 pub mod golden;
+/// Deterministic fixed-point integer arithmetic for consensus-critical paths.
+/// Replaces f64 in any code that must agree across heterogeneous validator
+/// platforms (ARM, x86, RISC-V) without floating-point non-determinism.
+pub mod fixed_point;
 
 // Re-exports
 pub use types::*;

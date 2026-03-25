@@ -67,6 +67,8 @@ pub struct EpochState {
     pub phase: EpochPhase,
     /// When the current phase started.
     pub phase_start: Instant,
+    /// When this epoch started (used for hard deadline tracking).
+    pub epoch_start: Instant,
     /// The epoch salt (set during Salt phase, used throughout).
     pub salt: Option<[u8; 32]>,
 }
@@ -74,10 +76,12 @@ pub struct EpochState {
 impl EpochState {
     /// Create a new epoch starting in the Salt phase.
     pub fn new(epoch: u64) -> Self {
+        let now = Instant::now();
         Self {
             epoch,
             phase: EpochPhase::Salt,
-            phase_start: Instant::now(),
+            phase_start: now,
+            epoch_start: now,
             salt: None,
         }
     }
@@ -88,6 +92,7 @@ impl EpochState {
             epoch,
             phase: EpochPhase::Salt,
             phase_start: start,
+            epoch_start: start,
             salt: None,
         }
     }
@@ -95,6 +100,11 @@ impl EpochState {
     /// How long the current phase has been running.
     pub fn phase_elapsed(&self) -> Duration {
         self.phase_start.elapsed()
+    }
+
+    /// How long the entire epoch has been running (from first Salt phase).
+    pub fn epoch_elapsed(&self) -> Duration {
+        self.epoch_start.elapsed()
     }
 
     /// Whether the current phase's duration has expired.
@@ -105,6 +115,25 @@ impl EpochState {
     /// Whether the epoch has stalled (phase expired + stall_timeout exceeded).
     pub fn is_stalled(&self, config: &CoordinatorConfig) -> bool {
         self.phase_elapsed() >= self.phase.duration(config) + config.stall_timeout
+    }
+
+    /// Whether the epoch has exceeded its hard deadline.
+    ///
+    /// The hard deadline is the maximum total duration an epoch is allowed to
+    /// run before it is force-terminated, regardless of phase. This prevents
+    /// consensus from being permanently blocked by a misbehaving leader or
+    /// Byzantine nodes that inject delays.
+    ///
+    /// Hard deadline = sum of all phase durations + 2 × stall_timeout.
+    /// This gives enough room for normal operation and one stall recovery
+    /// before forcing a new epoch.
+    pub fn has_exceeded_hard_deadline(&self, config: &CoordinatorConfig) -> bool {
+        let total_phase_time = config.salt_duration
+            + config.mine_duration
+            + config.commit_duration
+            + config.seal_duration;
+        let hard_deadline = total_phase_time + config.stall_timeout * 2;
+        self.epoch_elapsed() >= hard_deadline
     }
 
     /// Try to advance to the next phase. Returns the new phase if successful,
