@@ -330,55 +330,120 @@ impl std::error::Error for StateError {}
 mod tests {
     use super::*;
     use coinject_core::Address;
+    use tempfile::tempdir;
 
-    #[test]
-    fn test_account_balance() {
-        let state = AccountState::new("test_db").unwrap();
-        let addr = Address::from_bytes([1u8; 32]);
-
-        // Initial balance should be 0
-        assert_eq!(state.get_balance(&addr), 0);
-
-        // Set balance
-        state.set_balance(&addr, 1000).unwrap();
-        assert_eq!(state.get_balance(&addr), 1000);
-
-        // Cleanup
-        std::fs::remove_file("test_db").ok();
+    fn temp_state() -> (AccountState, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let state = AccountState::new(&path).unwrap();
+        (state, dir) // keep dir alive so it isn't dropped/deleted early
     }
 
     #[test]
-    fn test_transfer() {
-        let state = AccountState::new("test_transfer_db").unwrap();
+    fn test_initial_balance_is_zero() {
+        let (state, _dir) = temp_state();
+        let addr = Address::from_bytes([1u8; 32]);
+        assert_eq!(state.get_balance(&addr), 0);
+    }
+
+    #[test]
+    fn test_set_and_get_balance() {
+        let (state, _dir) = temp_state();
+        let addr = Address::from_bytes([1u8; 32]);
+
+        state.set_balance(&addr, 1000).unwrap();
+        assert_eq!(state.get_balance(&addr), 1000);
+
+        state.set_balance(&addr, 5000).unwrap();
+        assert_eq!(state.get_balance(&addr), 5000);
+    }
+
+    #[test]
+    fn test_transfer_moves_funds() {
+        let (state, _dir) = temp_state();
         let sender = Address::from_bytes([1u8; 32]);
         let receiver = Address::from_bytes([2u8; 32]);
 
-        // Setup
         state.set_balance(&sender, 1000).unwrap();
         state.set_balance(&receiver, 0).unwrap();
-
-        // Transfer
         state.transfer(&sender, &receiver, 300).unwrap();
 
         assert_eq!(state.get_balance(&sender), 700);
         assert_eq!(state.get_balance(&receiver), 300);
-
-        // Cleanup
-        std::fs::remove_file("test_transfer_db").ok();
     }
 
     #[test]
-    fn test_nonce() {
-        let state = AccountState::new("test_nonce_db").unwrap();
+    fn test_transfer_insufficient_balance_errors() {
+        let (state, _dir) = temp_state();
+        let sender = Address::from_bytes([1u8; 32]);
+        let receiver = Address::from_bytes([2u8; 32]);
+
+        state.set_balance(&sender, 100).unwrap();
+
+        let result = state.transfer(&sender, &receiver, 500);
+        assert!(
+            matches!(result, Err(StateError::InsufficientBalance { .. })),
+            "Expected InsufficientBalance error"
+        );
+        // Funds must not have moved
+        assert_eq!(state.get_balance(&sender), 100);
+    }
+
+    #[test]
+    fn test_transfer_full_balance() {
+        let (state, _dir) = temp_state();
+        let sender = Address::from_bytes([10u8; 32]);
+        let receiver = Address::from_bytes([11u8; 32]);
+
+        state.set_balance(&sender, 500).unwrap();
+        state.transfer(&sender, &receiver, 500).unwrap();
+
+        assert_eq!(state.get_balance(&sender), 0);
+        assert_eq!(state.get_balance(&receiver), 500);
+    }
+
+    #[test]
+    fn test_nonce_starts_at_zero() {
+        let (state, _dir) = temp_state();
+        let addr = Address::from_bytes([3u8; 32]);
+        assert_eq!(state.get_nonce(&addr), 0);
+    }
+
+    #[test]
+    fn test_nonce_increments_sequentially() {
+        let (state, _dir) = temp_state();
         let addr = Address::from_bytes([3u8; 32]);
 
-        assert_eq!(state.get_nonce(&addr), 0);
         assert_eq!(state.increment_nonce(&addr).unwrap(), 1);
         assert_eq!(state.get_nonce(&addr), 1);
         assert_eq!(state.increment_nonce(&addr).unwrap(), 2);
+        assert_eq!(state.get_nonce(&addr), 2);
+    }
 
-        // Cleanup
-        std::fs::remove_file("test_nonce_db").ok();
+    #[test]
+    fn test_apply_batch_sets_multiple_balances() {
+        let (state, _dir) = temp_state();
+        let a = Address::from_bytes([1u8; 32]);
+        let b = Address::from_bytes([2u8; 32]);
+        let c = Address::from_bytes([3u8; 32]);
+
+        let changes = vec![(a, 100), (b, 200), (c, 300)];
+        state.apply_batch(&changes).unwrap();
+
+        assert_eq!(state.get_balance(&a), 100);
+        assert_eq!(state.get_balance(&b), 200);
+        assert_eq!(state.get_balance(&c), 300);
+    }
+
+    #[test]
+    fn test_different_addresses_are_isolated() {
+        let (state, _dir) = temp_state();
+        let addr_a = Address::from_bytes([0xAA; 32]);
+        let addr_b = Address::from_bytes([0xBB; 32]);
+
+        state.set_balance(&addr_a, 999).unwrap();
+        assert_eq!(state.get_balance(&addr_a), 999);
+        assert_eq!(state.get_balance(&addr_b), 0); // Unaffected
     }
 
     #[test]

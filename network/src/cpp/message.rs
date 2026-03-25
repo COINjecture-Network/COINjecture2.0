@@ -679,13 +679,126 @@ mod tests {
     fn test_dimensional_scales() {
         // D1 should be 1.0 (e^0)
         assert!((MessagePriority::D1_Critical.scale() - 1.0).abs() < 0.01);
-        
+
         // D4 should be ~0.618 (golden ratio)
         let d4_scale = MessagePriority::D4_Low.scale();
         assert!(d4_scale > 0.6 && d4_scale < 0.65);
-        
+
         // D5 should be ~0.5 (2^-1)
         let d5_scale = MessagePriority::D5_Background.scale();
         assert!(d5_scale > 0.48 && d5_scale < 0.52);
+    }
+
+    // =========================================================================
+    // Serialization round-trip tests
+    // =========================================================================
+
+    #[test]
+    fn test_hello_message_bincode_roundtrip() {
+        use coinject_core::Hash;
+        let msg = HelloMessage {
+            version: 1,
+            peer_id: [0xABu8; 32],
+            best_height: 42,
+            best_hash: Hash::new(b"best"),
+            genesis_hash: Hash::new(b"genesis"),
+            node_type: 2,
+            timestamp: 1_700_000_000,
+            connection_nonce: 99,
+        };
+        let bytes = bincode::serialize(&msg).expect("HelloMessage must serialize");
+        let recovered: HelloMessage = bincode::deserialize(&bytes).expect("HelloMessage must deserialize");
+        assert_eq!(recovered.version, msg.version);
+        assert_eq!(recovered.peer_id, msg.peer_id);
+        assert_eq!(recovered.best_height, msg.best_height);
+        assert_eq!(recovered.best_hash, msg.best_hash);
+        assert_eq!(recovered.genesis_hash, msg.genesis_hash);
+        assert_eq!(recovered.connection_nonce, msg.connection_nonce);
+    }
+
+    #[test]
+    fn test_ping_pong_bincode_roundtrip() {
+        let ping = PingMessage { timestamp: 123_456, nonce: 7_890 };
+        let bytes = bincode::serialize(&ping).unwrap();
+        let recovered: PingMessage = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(recovered.timestamp, ping.timestamp);
+        assert_eq!(recovered.nonce, ping.nonce);
+
+        let pong = PongMessage { timestamp: 123_456, nonce: 7_890 };
+        let bytes = bincode::serialize(&pong).unwrap();
+        let recovered: PongMessage = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(recovered.nonce, pong.nonce);
+    }
+
+    #[test]
+    fn test_get_blocks_message_roundtrip() {
+        let msg = GetBlocksMessage { from_height: 10, to_height: 50, request_id: 42 };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let recovered: GetBlocksMessage = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(recovered.from_height, 10);
+        assert_eq!(recovered.to_height, 50);
+        assert_eq!(recovered.request_id, 42);
+    }
+
+    #[test]
+    fn test_disconnect_message_roundtrip() {
+        let msg = DisconnectMessage { reason: "too many peers".to_string() };
+        let bytes = bincode::serialize(&msg).unwrap();
+        let recovered: DisconnectMessage = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(recovered.reason, msg.reason);
+    }
+
+    #[test]
+    fn test_message_size_limit_awareness() {
+        // Verify HelloMessage can be measured — network layer enforces a limit
+        use coinject_core::Hash;
+        let msg = HelloMessage {
+            version: 1,
+            peer_id: [0u8; 32],
+            best_height: 0,
+            best_hash: Hash::ZERO,
+            genesis_hash: Hash::ZERO,
+            node_type: 0,
+            timestamp: 0,
+            connection_nonce: 0,
+        };
+        let bytes = bincode::serialize(&msg).unwrap();
+        // A basic handshake must be well under 1 MB
+        assert!(bytes.len() < 1024 * 1024, "HelloMessage must fit in 1 MB");
+    }
+
+    #[test]
+    fn test_all_message_types_have_unique_byte_values() {
+        let all_types = [
+            MessageType::Hello,
+            MessageType::HelloAck,
+            MessageType::Status,
+            MessageType::GetBlocks,
+            MessageType::Blocks,
+            MessageType::GetHeaders,
+            MessageType::Headers,
+            MessageType::NewBlock,
+            MessageType::NewTransaction,
+            MessageType::SubmitWork,
+            MessageType::WorkAccepted,
+            MessageType::WorkRejected,
+            MessageType::GetWork,
+            MessageType::Work,
+            MessageType::Ping,
+            MessageType::Pong,
+            MessageType::Disconnect,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for mt in &all_types {
+            let byte = *mt as u8;
+            assert!(seen.insert(byte), "Duplicate byte value 0x{:02X} for {:?}", byte, mt);
+        }
+    }
+
+    #[test]
+    fn test_unknown_message_type_returns_error() {
+        // 0x99 is not a defined message type
+        let result = MessageType::from_u8(0x99);
+        assert!(result.is_err(), "Unknown byte must return Err");
     }
 }

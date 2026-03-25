@@ -19,5 +19,10 @@ bs58.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
-# Constant-time comparison for security-sensitive byte comparisons (P0)
-subtle = "2.5"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+chrono = { workspace = true }
+bincode = { workspace = true }
+serde_json = { workspace = true }
