@@ -10,6 +10,7 @@
 pub mod reputation; // Peer reputation tracking
 pub mod cpp;        // COINjecture P2P Protocol (CPP)
 pub mod mesh;       // P2P Mesh Networking Layer (discovery, gossip, direct messaging)
+pub mod security;   // Network security primitives (Phase 5)
 
 // Core exports
 pub use reputation::*;

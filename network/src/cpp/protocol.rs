@@ -7,6 +7,7 @@ use crate::cpp::{
     config::{MAGIC, VERSION, MAX_MESSAGE_SIZE},
     message::*,
 };
+use crate::security::MessageSizePolicy;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use bincode;
@@ -71,11 +72,13 @@ impl MessageEnvelope {
     pub fn new<T: serde::Serialize>(msg_type: MessageType, payload: &T) -> Result<Self, ProtocolError> {
         let payload = bincode::serialize(payload)
             .map_err(|e| ProtocolError::SerializationError(e.to_string()))?;
-        
-        if payload.len() > MAX_MESSAGE_SIZE {
+
+        // Enforce per-type size limit on outbound messages too
+        let type_limit = MessageSizePolicy::max_for_type(msg_type as u8).min(MAX_MESSAGE_SIZE);
+        if payload.len() > type_limit {
             return Err(ProtocolError::MessageTooLarge(payload.len()));
         }
-        
+
         Ok(MessageEnvelope {
             msg_type,
             payload,
@@ -132,35 +135,37 @@ impl MessageEnvelope {
         let msg_type_byte = header[5];
         let msg_type = MessageType::from_u8(msg_type_byte)
             .map_err(|_| ProtocolError::InvalidMessageType(msg_type_byte))?;
-        
+
         // Parse payload length
         let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
-        
-        // Check size limit
-        if payload_len > MAX_MESSAGE_SIZE {
+
+        // Enforce per-type size limit (more granular than the global MAX_MESSAGE_SIZE)
+        let type_limit = MessageSizePolicy::max_for_type(msg_type_byte)
+            .min(MAX_MESSAGE_SIZE);
+        if payload_len > type_limit {
             return Err(ProtocolError::MessageTooLarge(payload_len));
         }
-        
+
         // Read payload
         let mut payload = vec![0u8; payload_len];
         stream.read_exact(&mut payload).await?;
-        
+
         // Read checksum
         let mut checksum = [0u8; 32];
         stream.read_exact(&mut checksum).await?;
-        
+
         // Verify checksum
         let computed = blake3::hash(&payload);
         if computed.as_bytes() != &checksum {
             return Err(ProtocolError::InvalidChecksum);
         }
-        
+
         Ok(MessageEnvelope {
             msg_type,
             payload,
         })
     }
-    
+
     /// Deserialize payload into specific message type
     pub fn deserialize<T: serde::de::DeserializeOwned>(&self) -> Result<T, ProtocolError> {
         bincode::deserialize(&self.payload)
@@ -228,29 +233,31 @@ impl MessageCodec {
         let msg_type_byte = header[5];
         let msg_type = MessageType::from_u8(msg_type_byte)
             .map_err(|_| ProtocolError::InvalidMessageType(msg_type_byte))?;
-        
+
         // Parse payload length
         let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
-        
-        // Check size limit
-        if payload_len > MAX_MESSAGE_SIZE {
+
+        // Per-type size limit enforcement
+        let type_limit = MessageSizePolicy::max_for_type(msg_type_byte)
+            .min(MAX_MESSAGE_SIZE);
+        if payload_len > type_limit {
             return Err(ProtocolError::MessageTooLarge(payload_len));
         }
-        
+
         // Read payload
         let mut payload = vec![0u8; payload_len];
         read_half.read_exact(&mut payload).await?;
-        
+
         // Read checksum
         let mut checksum = [0u8; 32];
         read_half.read_exact(&mut checksum).await?;
-        
+
         // Verify checksum
         let computed = blake3::hash(&payload);
         if computed.as_bytes() != &checksum {
             return Err(ProtocolError::InvalidChecksum);
         }
-        
+
         Ok(MessageEnvelope {
             msg_type,
             payload,

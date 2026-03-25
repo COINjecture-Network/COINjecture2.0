@@ -3,17 +3,34 @@
 // =============================================================================
 
 use crate::cpp::{
-    config::{CppConfig, NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE, MESSAGE_READ_TIMEOUT, MIN_HEALTHY_PEERS},
+    config::{
+        CppConfig, NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE,
+        MESSAGE_READ_TIMEOUT, MIN_HEALTHY_PEERS,
+        SECURITY_RATE_BUCKET_CAPACITY, SECURITY_RATE_MSGS_PER_SEC,
+        SECURITY_RATE_STRIKE_THRESHOLD, SECURITY_MALFORMED_STRIKE_THRESHOLD,
+    },
     block_provider::{BlockProvider, EmptyBlockProvider},
-    message::*,
+    message::{
+        self, HelloMessage, HelloAckMessage, StatusMessage, GetBlocksMessage, BlocksMessage,
+        GetHeadersMessage, HeadersMessage, NewBlockMessage, NewTransactionMessage,
+        SubmitWorkMessage, WorkAcceptedMessage, WorkRejectedMessage, GetWorkMessage, WorkMessage,
+        PingMessage, PongMessage, DisconnectMessage, MessageType,
+        verify_hello_auth, sign_hello,
+    },
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     peer::{Peer, PeerState, PeerId},
     router::{EquilibriumRouter, PeerInfo},
     node_integration::{NodeMetrics, PeerSelector},
     flock::{FlockState, FlockStateCompact},
+    encryption,
 };
 use crate::reputation::ReputationManager;
+use crate::security::{
+    ConnectionLimiter, BanList, TokenBucket, EclipseGuard, NetworkSecurityMetrics,
+    DEFAULT_RATE_BUCKET_CAPACITY, DEFAULT_RATE_MSGS_PER_SEC,
+};
 use coinject_core::{Block, Transaction, Hash, BlockHeader};
+use ed25519_dalek::SigningKey;
 use rand::Rng;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, RwLock, broadcast};
@@ -201,6 +218,33 @@ pub struct CppNetwork {
 
     /// Seen-message deduplication cache (hash, timestamp) — max 5000 entries, 60s TTL
     seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+
+    // =========================================================================
+    // Security subsystems (Phase 5)
+    // =========================================================================
+
+    /// Optional ed25519 signing key for peer authentication.
+    /// When Some, outbound Hello/HelloAck messages are signed and inbound
+    /// authentication is enforced (if config.require_encryption is true).
+    signing_key: Option<Arc<SigningKey>>,
+
+    /// Per-IP / total connection limiter.
+    connection_limiter: Arc<RwLock<ConnectionLimiter>>,
+
+    /// Peer and IP ban list with configurable expiry.
+    ban_list: Arc<RwLock<BanList>>,
+
+    /// Eclipse attack protection — enforces subnet diversity.
+    eclipse_guard: Arc<RwLock<EclipseGuard>>,
+
+    /// Per-peer token-bucket rate limiters.
+    rate_limiters: Arc<RwLock<HashMap<PeerId, TokenBucket>>>,
+
+    /// Per-peer malformed message strike counters.
+    malformed_strikes: Arc<RwLock<HashMap<PeerId, u32>>>,
+
+    /// Network security metrics (connected peers, bandwidth, churn, drops).
+    security_metrics: Arc<RwLock<NetworkSecurityMetrics>>,
 }
 
 impl CppNetwork {
@@ -241,6 +285,14 @@ impl CppNetwork {
             genesis_hash,
         }));
         
+        let connection_limiter = ConnectionLimiter::new(
+            config.max_connections_per_ip,
+            config.max_total_connections,
+        );
+        let ban_duration = std::time::Duration::from_secs(config.ban_duration_secs);
+        let eclipse_guard = EclipseGuard::new(config.max_peers_per_subnet);
+        let (rate_cap, rate_refill) = (config.rate_bucket_capacity, config.rate_msgs_per_sec);
+
         let network = CppNetwork {
             config,
             local_peer_id,
@@ -259,8 +311,18 @@ impl CppNetwork {
             last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
             flock_state: Arc::new(RwLock::new(FlockState::new(&genesis_hash, initial_height, &local_peer_id))),
             seen_messages: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+            // Security
+            signing_key: None,
+            connection_limiter: Arc::new(RwLock::new(connection_limiter)),
+            ban_list: Arc::new(RwLock::new(BanList::new(ban_duration))),
+            eclipse_guard: Arc::new(RwLock::new(eclipse_guard)),
+            rate_limiters: Arc::new(RwLock::new(HashMap::new())),
+            malformed_strikes: Arc::new(RwLock::new(HashMap::new())),
+            security_metrics: Arc::new(RwLock::new(NetworkSecurityMetrics::default())),
         };
-        
+
+        let _ = (rate_cap, rate_refill); // stored in config; used when creating per-peer buckets
+
         (network, command_tx, event_rx)
     }
     /// Create new CPP network service with initial chain state
@@ -278,13 +340,20 @@ impl CppNetwork {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-        
+
         let chain_state = Arc::new(RwLock::new(ChainState {
             best_height: initial_height,
             best_hash: initial_hash,
             genesis_hash,
         }));
-        
+
+        let connection_limiter = ConnectionLimiter::new(
+            config.max_connections_per_ip,
+            config.max_total_connections,
+        );
+        let ban_duration = std::time::Duration::from_secs(config.ban_duration_secs);
+        let eclipse_guard = EclipseGuard::new(config.max_peers_per_subnet);
+
         let network = CppNetwork {
             config,
             local_peer_id,
@@ -303,9 +372,27 @@ impl CppNetwork {
             last_bootnode_attempt: Arc::new(RwLock::new(HashMap::new())),
             flock_state: Arc::new(RwLock::new(FlockState::new(&genesis_hash, initial_height, &local_peer_id))),
             seen_messages: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+            // Security
+            signing_key: None,
+            connection_limiter: Arc::new(RwLock::new(connection_limiter)),
+            ban_list: Arc::new(RwLock::new(BanList::new(ban_duration))),
+            eclipse_guard: Arc::new(RwLock::new(eclipse_guard)),
+            rate_limiters: Arc::new(RwLock::new(HashMap::new())),
+            malformed_strikes: Arc::new(RwLock::new(HashMap::new())),
+            security_metrics: Arc::new(RwLock::new(NetworkSecurityMetrics::default())),
         };
-        
+
         (network, command_tx, event_rx)
+    }
+
+    /// Create a new CPP network with an ed25519 signing key for peer authentication.
+    ///
+    /// Use this constructor when running a node that participates in authenticated
+    /// peer connections.  Peers that cannot authenticate will be rejected when
+    /// `config.require_encryption` is true.
+    pub fn with_signing_key(mut self, signing_key: SigningKey) -> Self {
+        self.signing_key = Some(Arc::new(signing_key));
+        self
     }
     
     // =========================================================================
@@ -334,6 +421,50 @@ impl CppNetwork {
             tokio::select! {
                 // Accept incoming connections
                 Ok((stream, addr)) = listener.accept() => {
+                    let ip = addr.ip();
+
+                    // --- Phase 5: Security gate ---
+
+                    // 1. Ban list check
+                    {
+                        let ban = self.ban_list.read().await;
+                        if ban.is_ip_banned(ip) {
+                            let mut m = self.security_metrics.write().await;
+                            m.connections_rejected_ban += 1;
+                            tracing::info!("[SECURITY][ACCEPT] Rejecting banned IP {}", ip);
+                            continue;
+                        }
+                    }
+
+                    // 2. Per-IP / total connection limit
+                    {
+                        let mut limiter = self.connection_limiter.write().await;
+                        if let Err(e) = limiter.try_acquire(ip) {
+                            let mut m = self.security_metrics.write().await;
+                            match &e {
+                                crate::security::ConnectionDenied::TooManyFromIp { .. } =>
+                                    m.connections_rejected_ip_limit += 1,
+                                crate::security::ConnectionDenied::TotalCapacityReached { .. } =>
+                                    m.connections_rejected_total_limit += 1,
+                            }
+                            tracing::warn!("[SECURITY][ACCEPT] Connection rejected from {}: {}", addr, e);
+                            continue;
+                        }
+                    }
+
+                    // 3. Eclipse attack protection
+                    {
+                        let mut eclipse = self.eclipse_guard.write().await;
+                        if !eclipse.try_add(ip) {
+                            // Release the connection slot we just acquired
+                            self.connection_limiter.write().await.release(ip);
+                            let mut m = self.security_metrics.write().await;
+                            m.connections_rejected_eclipse += 1;
+                            tracing::warn!("[SECURITY][ECLIPSE] Rejecting {} — subnet at capacity", addr);
+                            continue;
+                        }
+                    }
+
                     tracing::info!("[CPP][ACCEPT] Incoming connection from {}", addr);
                     let peers = self.peers.clone();
                     let router = self.router.clone();
@@ -346,6 +477,16 @@ impl CppNetwork {
                     let local_peer_id = self.local_peer_id;
                     let shutdown = self.shutdown_tx.subscribe();
                     let block_provider = self.block_provider.clone();
+                    let ban_list = self.ban_list.clone();
+                    let connection_limiter = self.connection_limiter.clone();
+                    let eclipse_guard = self.eclipse_guard.clone();
+                    let rate_limiters = self.rate_limiters.clone();
+                    let malformed_strikes = self.malformed_strikes.clone();
+                    let security_metrics = self.security_metrics.clone();
+                    let signing_key = self.signing_key.clone();
+                    let require_encryption = self.config.require_encryption;
+                    let rate_cap = self.config.rate_bucket_capacity;
+                    let rate_refill = self.config.rate_msgs_per_sec;
 
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_incoming_connection(
@@ -362,6 +503,16 @@ impl CppNetwork {
                             event_tx,
                             block_provider,
                             shutdown,
+                            ban_list,
+                            connection_limiter,
+                            eclipse_guard,
+                            rate_limiters,
+                            malformed_strikes,
+                            security_metrics,
+                            signing_key,
+                            require_encryption,
+                            rate_cap,
+                            rate_refill,
                         ).await {
                             tracing::error!("Connection error from {}: {}", addr, e);
                         }
@@ -423,6 +574,7 @@ impl CppNetwork {
     // =========================================================================
     
     /// Handle incoming connection
+    #[allow(clippy::too_many_arguments)]
     async fn handle_incoming_connection(
         mut stream: TcpStream,
         addr: SocketAddr,
@@ -437,16 +589,90 @@ impl CppNetwork {
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
         _shutdown: broadcast::Receiver<()>,
+        // Security parameters
+        ban_list: Arc<RwLock<BanList>>,
+        connection_limiter: Arc<RwLock<ConnectionLimiter>>,
+        eclipse_guard: Arc<RwLock<EclipseGuard>>,
+        rate_limiters: Arc<RwLock<HashMap<PeerId, TokenBucket>>>,
+        malformed_strikes: Arc<RwLock<HashMap<PeerId, u32>>>,
+        security_metrics: Arc<RwLock<NetworkSecurityMetrics>>,
+        signing_key: Option<Arc<SigningKey>>,
+        require_encryption: bool,
+        rate_cap: f64,
+        rate_refill: f64,
     ) -> Result<(), NetworkError> {
+        let ip = addr.ip();
         tracing::debug!("[CPP][INCOMING] Starting handshake with {}", addr);
-        // Perform handshake
+
+        // ---- Phase 5: Encryption + peer authentication ----
+        // If we have a signing key, perform the mutual auth handshake first.
+        // This happens before the CPP Hello/HelloAck so all subsequent frames
+        // are encrypted.
+        let authenticated_peer_id: Option<[u8; 32]> = if let Some(ref sk) = signing_key {
+            match tokio::time::timeout(
+                crate::cpp::config::HANDSHAKE_TIMEOUT,
+                encryption::perform_handshake_responder(&mut stream, sk),
+            ).await {
+                Ok(Ok(result)) => {
+                    tracing::info!("[SECURITY][AUTH] Peer {} authenticated with pubkey {}",
+                        addr,
+                        hex::encode(&result.remote_ed25519_pubkey[..4]));
+                    security_metrics.write().await.on_peer_connect();
+                    Some(result.authenticated_peer_id)
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("[SECURITY][AUTH] Authentication failed from {}: {}", addr, e);
+                    security_metrics.write().await.auth_failures += 1;
+                    // Release connection slot before returning
+                    connection_limiter.write().await.release(ip);
+                    eclipse_guard.write().await.remove(ip);
+                    return Err(NetworkError::InvalidHandshake(format!("Auth failed: {}", e)));
+                }
+                Err(_) => {
+                    tracing::warn!("[SECURITY][AUTH] Auth handshake timeout from {}", addr);
+                    security_metrics.write().await.auth_failures += 1;
+                    connection_limiter.write().await.release(ip);
+                    eclipse_guard.write().await.remove(ip);
+                    return Err(NetworkError::Timeout);
+                }
+            }
+        } else if require_encryption {
+            // Encryption required but no signing key configured — reject
+            tracing::error!("[SECURITY] require_encryption=true but no signing_key configured!");
+            connection_limiter.write().await.release(ip);
+            eclipse_guard.write().await.remove(ip);
+            return Err(NetworkError::InvalidHandshake("Node not configured for encryption".to_string()));
+        } else {
+            // No encryption — count the connection but without auth
+            security_metrics.write().await.on_peer_connect();
+            None
+        };
+
+        // Perform CPP Hello/HelloAck handshake
         let state = chain_state.read().await;
         let (peer_id, node_type, best_height, best_hash) = Self::handshake(
             &mut stream,
             local_peer_id,
             &state,
-        ).await?;
+            signing_key.as_deref(),
+        ).await.map_err(|e| {
+            // Cleanup on handshake failure
+            let _ = connection_limiter.try_read().map(|_| ());  // best-effort
+            e
+        })?;
         drop(state);
+
+        // Verify the authenticated peer ID matches the claimed peer_id in Hello
+        if let Some(auth_id) = authenticated_peer_id {
+            if auth_id != peer_id {
+                tracing::warn!("[SECURITY][AUTH] peer_id mismatch: auth={} hello={}",
+                    hex::encode(&auth_id[..4]), hex::encode(&peer_id[..4]));
+                ban_list.write().await.ban_ip(ip, "peer_id/auth key mismatch");
+                connection_limiter.write().await.release(ip);
+                eclipse_guard.write().await.remove(ip);
+                return Err(NetworkError::InvalidHandshake("peer_id does not match authenticated key".to_string()));
+            }
+        }
         
         // Check if peer already connected
         {
@@ -499,6 +725,12 @@ impl CppNetwork {
             best_hash,
         });
         
+        // Initialize per-peer rate limiter
+        {
+            let mut limiters = rate_limiters.write().await;
+            limiters.entry(peer_id).or_insert_with(|| TokenBucket::new(rate_cap, rate_refill));
+        }
+
         // Start message loop for this peer (using read half)
         let peers_clone = peers.clone();
         let router_clone = router.clone();
@@ -509,6 +741,13 @@ impl CppNetwork {
         let event_tx_clone = event_tx.clone();
         let block_provider_clone = block_provider.clone();
         let peer_id_clone = peer_id;
+        let ban_list_clone = ban_list.clone();
+        let rate_limiters_clone = rate_limiters.clone();
+        let malformed_clone = malformed_strikes.clone();
+        let sec_metrics_clone = security_metrics.clone();
+        let conn_limiter_clone = connection_limiter.clone();
+        let eclipse_clone = eclipse_guard.clone();
+        let ip_clone = ip;
 
         tokio::spawn(async move {
             if let Err(e) = Self::peer_message_loop(
@@ -522,9 +761,17 @@ impl CppNetwork {
                 chain_state_clone,
                 event_tx_clone,
                 block_provider_clone,
+                ban_list_clone,
+                rate_limiters_clone,
+                malformed_clone,
+                sec_metrics_clone,
             ).await {
-                tracing::error!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
+                tracing::error!("Peer {} message loop error: {}",
+                    peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
             }
+            // Release security slots when peer disconnects
+            conn_limiter_clone.write().await.release(ip_clone);
+            eclipse_clone.write().await.remove(ip_clone);
         });
 
         Ok(())
@@ -537,6 +784,7 @@ impl CppNetwork {
     /// 2. Processes each message through the handler
     /// 3. Handles timeouts and disconnections
     /// 4. Updates peer state and metrics
+    #[allow(clippy::too_many_arguments)]
     async fn peer_message_loop(
         peer_id: PeerId,
         mut read_half: tokio::io::ReadHalf<TcpStream>,
@@ -548,6 +796,11 @@ impl CppNetwork {
         chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
+        // Security parameters
+        ban_list: Arc<RwLock<BanList>>,
+        rate_limiters: Arc<RwLock<HashMap<PeerId, TokenBucket>>>,
+        malformed_strikes: Arc<RwLock<HashMap<PeerId, u32>>>,
+        security_metrics: Arc<RwLock<NetworkSecurityMetrics>>,
     ) -> Result<(), NetworkError> {
         loop {
             // Check if peer still exists and is connected
@@ -578,6 +831,47 @@ impl CppNetwork {
                             p.on_successful_read(envelope.payload.len());
                         }
                     }
+
+                    // Phase 5: Rate limiting — consume one token for this message
+                    let rate_allowed = {
+                        let mut limiters = rate_limiters.write().await;
+                        if let Some(bucket) = limiters.get_mut(&peer_id) {
+                            bucket.try_consume()
+                        } else {
+                            true // No bucket yet = first message, always allow
+                        }
+                    };
+
+                    if !rate_allowed {
+                        let strikes = {
+                            let limiters = rate_limiters.read().await;
+                            limiters.get(&peer_id).map(|b| b.strikes()).unwrap_or(0)
+                        };
+                        security_metrics.write().await.messages_dropped_rate_limit += 1;
+
+                        if strikes >= SECURITY_RATE_STRIKE_THRESHOLD {
+                            let peer_addr = peers.read().await.get(&peer_id).map(|p| p.addr);
+                            if let Some(paddr) = peer_addr {
+                                let ip = paddr.ip();
+                                let mut ban = ban_list.write().await;
+                                ban.ban_ip_short(ip, "rate limit strikes exceeded");
+                                ban.ban_peer_short(&peer_id, "rate limit strikes exceeded");
+                            }
+                            tracing::warn!("[SECURITY][RATE_LIMIT] peer={} short-banned after {} strikes",
+                                peer_id_short, strikes);
+                            break; // disconnect
+                        }
+                        tracing::debug!("[SECURITY][RATE_LIMIT] peer={} message dropped (strike {})",
+                            peer_id_short, strikes);
+                        continue; // drop this message, keep connection
+                    }
+
+                    // Update security metrics for successful receive
+                    {
+                        let mut metrics = security_metrics.write().await;
+                        metrics.on_message_received(envelope.msg_type as u8, envelope.payload.len() as u64);
+                    }
+
                     envelope
                 }
                 Err(ProtocolError::Timeout(_)) => {
@@ -599,21 +893,53 @@ impl CppNetwork {
                     continue;
                 }
                 Err(e) => {
-                    // Detailed READ_ERR logging for M2 debugging
+                    // Detailed READ_ERR logging
                     let err_type = match &e {
                         ProtocolError::Io(io_err) => {
-                            // Handle EOF gracefully - peer may have closed connection
+                            // Handle EOF gracefully — peer may have closed connection
                             if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
                                 tracing::info!("[CPP][CONN][READ_EOF] peer={} - peer closed connection gracefully", peer_id_short);
                                 break;
                             }
                             format!("IO({})", io_err.kind())
                         },
-                        ProtocolError::InvalidMagic(_) => "InvalidMagic".to_string(),
-                        ProtocolError::InvalidVersion(_) => "InvalidVersion".to_string(),
-                        ProtocolError::InvalidMessageType(_) => "InvalidMsgType".to_string(),
-                        ProtocolError::InvalidChecksum => "InvalidChecksum".to_string(),
-                        ProtocolError::MessageTooLarge(sz) => format!("TooLarge({})", sz),
+                        ProtocolError::InvalidMagic(_)
+                        | ProtocolError::InvalidVersion(_)
+                        | ProtocolError::InvalidMessageType(_)
+                        | ProtocolError::InvalidChecksum => {
+                            // Phase 5: Track malformed message strikes → may lead to ban
+                            let strikes = {
+                                let mut s = malformed_strikes.write().await;
+                                let count = s.entry(peer_id).or_insert(0);
+                                *count += 1;
+                                *count
+                            };
+                            security_metrics.write().await.messages_dropped_malformed += 1;
+
+                            if strikes >= SECURITY_MALFORMED_STRIKE_THRESHOLD {
+                                let peer_addr = peers.read().await.get(&peer_id).map(|p| p.addr);
+                                if let Some(paddr) = peer_addr {
+                                    let ip = paddr.ip();
+                                    let mut ban = ban_list.write().await;
+                                    ban.ban_ip(ip, "malformed messages");
+                                    ban.ban_peer(&peer_id, "malformed messages");
+                                    security_metrics.write().await.peers_banned += 1;
+                                }
+                                tracing::warn!("[SECURITY][MALFORMED] peer={} banned after {} malformed messages",
+                                    peer_id_short, strikes);
+                            }
+
+                            match &e {
+                                ProtocolError::InvalidMagic(_) => "InvalidMagic",
+                                ProtocolError::InvalidVersion(_) => "InvalidVersion",
+                                ProtocolError::InvalidMessageType(_) => "InvalidMsgType",
+                                _ => "InvalidChecksum",
+                            }.to_string()
+                        },
+                        ProtocolError::MessageTooLarge(sz) => {
+                            security_metrics.write().await.messages_dropped_size_limit += 1;
+                            format!("TooLarge({})", sz)
+                        },
                         ProtocolError::SerializationError(_) => "SerializeErr".to_string(),
                         ProtocolError::DeserializationError(_) => "DeserializeErr".to_string(),
                         ProtocolError::Timeout(_) => "Timeout".to_string(), // Should not reach here
@@ -663,10 +989,15 @@ impl CppNetwork {
                 reason: "Connection closed".to_string(),
             });
         }
-        
+
+        // Clean up per-peer security state
+        rate_limiters.write().await.remove(&peer_id);
+        malformed_strikes.write().await.remove(&peer_id);
+        security_metrics.write().await.on_peer_disconnect();
+
         Ok(())
     }
-    
+
     /// Handle incoming message from peer
     async fn handle_peer_message(
         peer_id: PeerId,
@@ -732,6 +1063,7 @@ impl CppNetwork {
         stream: &mut TcpStream,
         local_peer_id: PeerId,
         chain_state: &ChainState,
+        signing_key: Option<&SigningKey>,
     ) -> Result<(PeerId, NodeType, u64, Hash), NetworkError> {
         tracing::debug!("[CPP][HANDSHAKE] Waiting for Hello message (timeout: {:?})...",
             crate::cpp::config::HANDSHAKE_TIMEOUT);
@@ -770,7 +1102,19 @@ impl CppNetwork {
         let node_type = NodeType::from_u8(hello.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
 
-        // Send HelloAck with connection nonce for tie-breaking
+        // Send HelloAck with connection nonce for tie-breaking + optional auth
+        let ack_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ack_nonce = rand::random::<u64>();
+
+        let (ack_ed25519_pubkey, ack_auth_signature) = if let Some(sk) = signing_key {
+            sign_hello(sk, &chain_state.genesis_hash, ack_timestamp, ack_nonce, &local_peer_id)
+        } else {
+            ([0u8; 32], [0u8; 64])
+        };
+
         let hello_ack = HelloAckMessage {
             version: crate::cpp::config::VERSION,
             peer_id: local_peer_id,
@@ -778,11 +1122,10 @@ impl CppNetwork {
             best_hash: chain_state.best_hash,
             genesis_hash: chain_state.genesis_hash,
             node_type: NodeType::Full.as_u8(), // TODO: Get from config
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            connection_nonce: rand::random::<u64>(), // Generate nonce for incoming connection
+            timestamp: ack_timestamp,
+            connection_nonce: ack_nonce,
+            ed25519_pubkey: ack_ed25519_pubkey,
+            auth_signature: ack_auth_signature,
         };
 
         tracing::debug!("[CPP][HANDSHAKE] Sending HelloAck (timeout: {:?})...",
@@ -853,7 +1196,18 @@ impl CppNetwork {
         // Generate connection nonce for deterministic tie-breaking of simultaneous connections
         let our_connection_nonce = rand::random::<u64>();
 
-        // Send Hello message first (with timeout)
+        // Send Hello message first (with timeout) — include auth signature if signing key available
+        let hello_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let (hello_ed25519_pubkey, hello_auth_signature) = if let Some(ref sk) = self.signing_key {
+            sign_hello(sk, &state.genesis_hash, hello_timestamp, our_connection_nonce, &self.local_peer_id)
+        } else {
+            ([0u8; 32], [0u8; 64])
+        };
+
         let hello = HelloMessage {
             version: crate::cpp::config::VERSION,
             peer_id: self.local_peer_id,
@@ -861,11 +1215,10 @@ impl CppNetwork {
             best_hash: state.best_hash,
             genesis_hash: state.genesis_hash,
             node_type: self.config.node_type.as_u8(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            timestamp: hello_timestamp,
             connection_nonce: our_connection_nonce,
+            ed25519_pubkey: hello_ed25519_pubkey,
+            auth_signature: hello_auth_signature,
         };
         
         tracing::debug!("[CPP][BOOTNODE] Sending Hello message to {}...", addr);
@@ -971,6 +1324,23 @@ impl CppNetwork {
             best_hash: hello_ack.best_hash,
         });
         
+        // Eclipse guard for outbound connections too
+        {
+            let mut eclipse = self.eclipse_guard.write().await;
+            if !eclipse.try_add(addr.ip()) {
+                tracing::warn!("[SECURITY][ECLIPSE] Not adding outbound peer {} — subnet at capacity", addr);
+                // Don't error out hard for outbound — just log. The connection was already made.
+            }
+        }
+
+        // Initialize per-peer rate limiter for outbound peer
+        {
+            let cap = self.config.rate_bucket_capacity;
+            let refill = self.config.rate_msgs_per_sec;
+            let mut limiters = self.rate_limiters.write().await;
+            limiters.entry(peer_id).or_insert_with(|| TokenBucket::new(cap, refill));
+        }
+
         // Start message loop for this peer
         let peers_clone = self.peers.clone();
         let router_clone = self.router.clone();
@@ -981,6 +1351,13 @@ impl CppNetwork {
         let block_provider_clone = self.block_provider.clone();
         let event_tx_clone = self.event_tx.clone();
         let peer_id_clone = peer_id;
+        let ban_clone = self.ban_list.clone();
+        let rl_clone = self.rate_limiters.clone();
+        let ms_clone = self.malformed_strikes.clone();
+        let sm_clone = self.security_metrics.clone();
+        let cl_clone = self.connection_limiter.clone();
+        let eg_clone = self.eclipse_guard.clone();
+        let outbound_ip = addr.ip();
 
         tokio::spawn(async move {
             if let Err(e) = Self::peer_message_loop(
@@ -994,9 +1371,16 @@ impl CppNetwork {
                 chain_state_clone,
                 event_tx_clone,
                 block_provider_clone,
+                ban_clone,
+                rl_clone,
+                ms_clone,
+                sm_clone,
             ).await {
                 tracing::error!("Peer {} message loop error: {}", peer_id_clone.iter().take(4).map(|b| format!("{:02x}", b)).collect::<String>(), e);
             }
+            // Release eclipse slot for outbound peer
+            eg_clone.write().await.remove(outbound_ip);
+            let _ = cl_clone; // outbound not tracked in connection_limiter (inbound only)
         });
 
         Ok(())
@@ -1627,6 +2011,35 @@ impl CppNetwork {
             // Clean up stale pending requests (TTL: 30s)
             let mut pending = self.pending_requests.write().await;
             pending.retain(|_, instant| instant.elapsed() < Duration::from_secs(30));
+
+            // Clean up per-peer security state for removed peers
+            {
+                let mut limiters = self.rate_limiters.write().await;
+                let mut strikes = self.malformed_strikes.write().await;
+                for peer_id in &to_remove {
+                    limiters.remove(peer_id);
+                    strikes.remove(peer_id);
+                }
+            }
+        }
+
+        // Phase 5: Periodic ban expiry cleanup
+        self.ban_list.write().await.cleanup_expired();
+
+        // Log security metrics snapshot periodically
+        {
+            let m = self.security_metrics.read().await;
+            if m.churn() > 0 || m.total_messages_received() > 0 {
+                tracing::debug!(
+                    "[SECURITY][METRICS] peers={} sent={} recv={} bans={} rate_drops={} malformed_drops={}",
+                    m.connected_peers,
+                    m.total_messages_sent(),
+                    m.total_messages_received(),
+                    m.peers_banned,
+                    m.messages_dropped_rate_limit,
+                    m.messages_dropped_malformed,
+                );
+            }
         }
     }
     

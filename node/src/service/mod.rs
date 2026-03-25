@@ -697,6 +697,7 @@ impl CoinjectNode {
             max_peers: self.config.max_peers,
             enable_websocket: true,
             node_type: CppNodeType::Full, // TODO: Get from node classification
+            ..Default::default()
         };
         
         // Get current chain state before creating CPP network

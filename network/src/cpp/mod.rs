@@ -19,6 +19,7 @@ pub mod peer;
 pub mod node_integration;
 pub mod network;
 pub mod flock;
+pub mod encryption;
 
 // Re-export commonly used types
 pub use config::{

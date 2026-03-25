@@ -6,6 +6,7 @@
 use coinject_core::{Block, Transaction, Hash, BlockHeader};
 use serde::{Deserialize, Serialize};
 use crate::cpp::flock::FlockStateCompact;
+// blake3 and ed25519_dalek used in authentication helpers below
 
 /// Message type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,14 +140,58 @@ impl MessagePriority {
     }
 }
 
+// === SERDE HELPERS FOR LARGE ARRAYS ===
+//
+// serde_core v1.0.x only implements Serialize/Deserialize for arrays up to [T; 32].
+// For [u8; 64] (ed25519 signatures) we need a custom module.
+
+mod serde_sig64 {
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(arr: &[u8; 64], s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeTuple;
+        let mut tup = s.serialize_tuple(64)?;
+        for byte in arr {
+            tup.serialize_element(byte)?;
+        }
+        tup.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 64], D::Error> {
+        use serde::de::{SeqAccess, Visitor};
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = [u8; 64];
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "a 64-byte array")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<[u8; 64], A::Error> {
+                let mut arr = [0u8; 64];
+                for (i, slot) in arr.iter_mut().enumerate() {
+                    *slot = seq.next_element()?
+                        .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
+                }
+                Ok(arr)
+            }
+        }
+        d.deserialize_tuple(64, V)
+    }
+}
+
+fn default_sig() -> [u8; 64] { [0u8; 64] }
+
 // === MESSAGE PAYLOADS ===
 
 /// Hello message (initial handshake)
+///
+/// After the encryption/auth handshake, the sender proves ownership of `peer_id`
+/// by including their ed25519 public key and a signature over the challenge data.
+/// Challenge = genesis_hash || timestamp_bytes || connection_nonce_bytes || peer_id
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloMessage {
     /// Protocol version
     pub version: u8,
-    /// Peer ID (32-byte hash of public key)
+    /// Peer ID (BLAKE3 hash of ed25519 public key, 32 bytes)
     pub peer_id: [u8; 32],
     /// Best block height
     pub best_height: u64,
@@ -156,20 +201,31 @@ pub struct HelloMessage {
     pub genesis_hash: Hash,
     /// Node type
     pub node_type: u8,
-    /// Timestamp (for replay protection)
+    /// Timestamp (for replay protection, Unix seconds)
     pub timestamp: u64,
     /// Connection nonce for deterministic tie-breaking of simultaneous connections
     /// Lower nonce wins in race condition resolution (backward compatible with default 0)
     #[serde(default)]
     pub connection_nonce: u64,
+    /// Ed25519 verifying (public) key of this node (32 bytes).
+    /// All zeros = unauthenticated (legacy / dev mode).
+    #[serde(default)]
+    pub ed25519_pubkey: [u8; 32],
+    /// Ed25519 signature over the challenge:
+    ///   genesis_hash || timestamp (8 LE) || connection_nonce (8 LE) || peer_id
+    /// All zeros = unauthenticated (legacy / dev mode).
+    #[serde(with = "serde_sig64", default = "default_sig")]
+    pub auth_signature: [u8; 64],
 }
 
 /// HelloAck message (handshake response)
+///
+/// Same authentication scheme as HelloMessage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HelloAckMessage {
     /// Protocol version
     pub version: u8,
-    /// Peer ID
+    /// Peer ID (BLAKE3 hash of ed25519 public key, 32 bytes)
     pub peer_id: [u8; 32],
     /// Best block height
     pub best_height: u64,
@@ -185,6 +241,88 @@ pub struct HelloAckMessage {
     /// Lower nonce wins in race condition resolution (backward compatible with default 0)
     #[serde(default)]
     pub connection_nonce: u64,
+    /// Ed25519 verifying key (32 bytes).  All zeros = unauthenticated.
+    #[serde(default)]
+    pub ed25519_pubkey: [u8; 32],
+    /// Ed25519 signature over challenge (same scheme as HelloMessage).
+    /// All zeros = unauthenticated.
+    #[serde(with = "serde_sig64", default = "default_sig")]
+    pub auth_signature: [u8; 64],
+}
+
+// ---------------------------------------------------------------------------
+// Authentication helpers for Hello / HelloAck
+// ---------------------------------------------------------------------------
+
+/// Build the challenge bytes that are signed / verified in Hello and HelloAck.
+///
+/// challenge = genesis_hash (32) || timestamp LE (8) || connection_nonce LE (8) || peer_id (32)
+pub fn hello_challenge(
+    genesis_hash: &Hash,
+    timestamp: u64,
+    connection_nonce: u64,
+    peer_id: &[u8; 32],
+) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(80);
+    msg.extend_from_slice(genesis_hash.as_bytes());
+    msg.extend_from_slice(&timestamp.to_le_bytes());
+    msg.extend_from_slice(&connection_nonce.to_le_bytes());
+    msg.extend_from_slice(peer_id);
+    msg
+}
+
+/// Sign a Hello challenge with an ed25519 signing key.
+/// Returns (ed25519_pubkey, auth_signature).
+pub fn sign_hello(
+    signing_key: &ed25519_dalek::SigningKey,
+    genesis_hash: &Hash,
+    timestamp: u64,
+    connection_nonce: u64,
+    peer_id: &[u8; 32],
+) -> ([u8; 32], [u8; 64]) {
+    use ed25519_dalek::Signer;
+    let challenge = hello_challenge(genesis_hash, timestamp, connection_nonce, peer_id);
+    let sig = signing_key.sign(&challenge);
+    (signing_key.verifying_key().to_bytes(), sig.to_bytes())
+}
+
+/// Verify the authentication signature in a Hello or HelloAck message.
+///
+/// Returns `Err(description)` if verification fails.
+pub fn verify_hello_auth(
+    ed25519_pubkey: &[u8; 32],
+    auth_signature: &[u8; 64],
+    genesis_hash: &Hash,
+    timestamp: u64,
+    connection_nonce: u64,
+    peer_id: &[u8; 32],
+) -> Result<(), String> {
+    use ed25519_dalek::{Verifier, VerifyingKey, Signature};
+
+    // All-zeros means unauthenticated (legacy/dev mode) — caller decides whether to allow
+    if *ed25519_pubkey == [0u8; 32] {
+        return Err("ed25519_pubkey is all-zeros (unauthenticated)".to_string());
+    }
+
+    let verifying_key = VerifyingKey::from_bytes(ed25519_pubkey)
+        .map_err(|e| format!("Invalid ed25519 pubkey: {}", e))?;
+
+    let challenge = hello_challenge(genesis_hash, timestamp, connection_nonce, peer_id);
+    let signature = Signature::from_bytes(auth_signature);
+
+    verifying_key.verify(&challenge, &signature)
+        .map_err(|e| format!("Signature verification failed: {}", e))?;
+
+    // Also verify peer_id matches BLAKE3(ed25519_pubkey)
+    let derived_peer_id = *blake3::hash(ed25519_pubkey).as_bytes();
+    if derived_peer_id != *peer_id {
+        return Err(format!(
+            "peer_id mismatch: claimed {:?} but derived from pubkey {:?}",
+            &peer_id[..4], &derived_peer_id[..4]
+        ));
+    }
+
+    Ok(())
 }
 
 /// Status update message with murmuration coordination
