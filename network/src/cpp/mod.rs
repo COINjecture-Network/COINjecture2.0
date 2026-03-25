@@ -11,6 +11,7 @@
 #![allow(dead_code)]
 
 pub mod config;
+pub mod version;
 pub mod message;
 pub mod flow_control;
 pub mod router;
@@ -43,6 +44,11 @@ pub use flow_control::{FlowControl, FlowControlStats};
 pub use router::{EquilibriumRouter, PeerInfo, PeerId};
 
 pub use protocol::{MessageEnvelope, MessageCodec, ProtocolError};
+
+pub use version::{
+    ProtocolVersion, NegotiatedVersion, FeatureFlags, VersionDispatch,
+    ConnectionPolicy, CURRENT_PROTOCOL_VERSION, MIN_SUPPORTED_VERSION,
+};
 
 pub use peer::{Peer, PeerState, PeerStats};
 

@@ -34,8 +34,14 @@ pub const DEFAULT_WS_LISTEN: &str = "0.0.0.0:8080";
 /// "COIN" in ASCII: 0x43 0x4F 0x49 0x4E
 pub const MAGIC: [u8; 4] = *b"COIN";
 
-/// Protocol version
-pub const VERSION: u8 = 1;
+/// Protocol version (wire-level header byte for outbound messages).
+/// Matches `version::CURRENT_PROTOCOL_VERSION`; kept here so the hot-path
+/// encode path has a single const in scope without importing version.
+pub const VERSION: u8 = 2;
+
+/// Oldest protocol version accepted from remote peers.
+/// Mirrors `version::MIN_SUPPORTED_VERSION`.
+pub const MIN_PROTOCOL_VERSION: u8 = 1;
 
 /// Maximum message size (10 MB)
 /// Large enough for block batches, small enough to prevent DoS

@@ -11,6 +11,100 @@ use coinject_core::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// ─── Proposal Actions ─────────────────────────────────────────────────────────
+
+/// Typed payload that describes WHAT a proposal does when executed.
+///
+/// Each `ProposalType` maps to specific `ProposalAction` variants:
+/// - `Parameter` proposals use `ChangeParameter`.
+/// - `Upgrade` proposals use `ProtocolUpgrade`.
+/// - `Treasury` proposals use `TreasuryTransfer`.
+/// - `Emergency` proposals may use any variant.
+/// - `Constitutional` proposals use `ConstitutionalAmendment`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ProposalAction {
+    /// Change a named network parameter.
+    ///
+    /// The `key` is a dot-path string (e.g. `"consensus.block_time_target_ms"`,
+    /// `"mempool.max_tx_per_block"`, `"tokenomics.emission_rate_bps"`).
+    /// The `value` is a JSON-encoded new value so arbitrary types can be carried.
+    ChangeParameter {
+        key: String,
+        old_value: String,
+        new_value: String,
+    },
+
+    /// Activate a new protocol version via feature flag.
+    ///
+    /// `target_version` is the CPP protocol version byte to activate.
+    /// `activation_height` is the block height at which the upgrade takes effect.
+    /// `feature_flags` is a bitmask of new features to enable (for soft-forks).
+    ProtocolUpgrade {
+        target_version: u8,
+        activation_height: u64,
+        description: String,
+    },
+
+    /// Transfer funds from the treasury pool to a recipient.
+    TreasuryTransfer {
+        recipient: Address,
+        amount: u128,
+        purpose: String,
+    },
+
+    /// Amend governance rules (quorum thresholds, voting period, etc.).
+    ConstitutionalAmendment {
+        amendment_text: String,
+        new_quorum_threshold: Option<f64>,
+        new_supermajority_threshold: Option<f64>,
+        new_voting_period_blocks: Option<u64>,
+    },
+
+    /// Emergency: halt/resume the network or specific subsystem.
+    EmergencyAction {
+        action_type: EmergencyActionType,
+        reason: String,
+    },
+}
+
+/// Type of emergency action that can be triggered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EmergencyActionType {
+    /// Pause all transaction processing (maintenance mode).
+    PauseNetwork,
+    /// Resume normal operation after a pause.
+    ResumeNetwork,
+    /// Freeze a specific account (exploit response).
+    FreezeAccount,
+    /// Slash a validator (misbehavior response).
+    SlashValidator,
+}
+
+/// Execution result after a proposal action is applied.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionReceipt {
+    pub proposal_id: u64,
+    pub action: ProposalAction,
+    pub executed_at: u64,
+    pub success: bool,
+    pub message: String,
+}
+
+/// Errors that can occur during proposal execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutionError {
+    /// Proposal is not in the Passed state.
+    NotPassed,
+    /// Timelock period has not elapsed.
+    TimelockNotExpired,
+    /// Proposal action payload is missing.
+    NoAction,
+    /// The action itself failed (with reason string).
+    ActionFailed(String),
+    /// Proposal was already executed.
+    AlreadyExecuted,
+}
+
 /// Proposal threshold: total_supply × Δ_critical = 23.1%
 pub fn proposal_threshold_pct() -> f64 { delta_critical() }
 
@@ -148,6 +242,13 @@ pub struct Proposal {
     pub votes_abstain: u128,
     /// Individual votes by address
     pub votes: HashMap<Address, Vote>,
+    /// Typed action to execute when this proposal passes.
+    /// `None` = informational proposal with no on-chain effect.
+    #[serde(default)]
+    pub action: Option<ProposalAction>,
+    /// Receipt populated after execution.
+    #[serde(default)]
+    pub execution_receipt: Option<ExecutionReceipt>,
 }
 
 /// Proposal status
@@ -177,7 +278,7 @@ pub struct Vote {
 }
 
 impl Proposal {
-    /// Create new proposal
+    /// Create new proposal (informational — no on-chain action).
     pub fn new(
         id: u64,
         proposal_type: ProposalType,
@@ -186,10 +287,23 @@ impl Proposal {
         proposer: Address,
         current_block: u64,
     ) -> Self {
+        Self::new_with_action(id, proposal_type, title, description, proposer, current_block, None)
+    }
+
+    /// Create new proposal with a typed action to execute on passage.
+    pub fn new_with_action(
+        id: u64,
+        proposal_type: ProposalType,
+        title: String,
+        description: String,
+        proposer: Address,
+        current_block: u64,
+        action: Option<ProposalAction>,
+    ) -> Self {
         let voting_starts = current_block + 1000; // Start after 1000 blocks
         let voting_ends = voting_starts + VOTING_PERIOD_BLOCKS;
         let execution_at = voting_ends + proposal_type.timelock_blocks();
-        
+
         Proposal {
             id,
             proposal_type,
@@ -205,7 +319,52 @@ impl Proposal {
             votes_against: 0,
             votes_abstain: 0,
             votes: HashMap::new(),
+            action,
+            execution_receipt: None,
         }
+    }
+
+    /// Execute this proposal's action.
+    ///
+    /// # Lifecycle
+    /// Proposal must be in `Passed` status and the timelock must have elapsed
+    /// (`current_block >= execution_at`).  On success the status transitions to
+    /// `Executed` and an `ExecutionReceipt` is stored.
+    ///
+    /// Callers are responsible for actually applying the action; this method
+    /// only validates the preconditions and records the outcome.
+    pub fn execute(
+        &mut self,
+        current_block: u64,
+        success: bool,
+        message: String,
+    ) -> Result<ExecutionReceipt, ExecutionError> {
+        if self.status == ProposalStatus::Executed {
+            return Err(ExecutionError::AlreadyExecuted);
+        }
+        if self.status != ProposalStatus::Passed {
+            return Err(ExecutionError::NotPassed);
+        }
+        if current_block < self.execution_at {
+            return Err(ExecutionError::TimelockNotExpired);
+        }
+
+        let action = self.action.clone().ok_or(ExecutionError::NoAction)?;
+
+        let receipt = ExecutionReceipt {
+            proposal_id: self.id,
+            action,
+            executed_at: current_block,
+            success,
+            message,
+        };
+
+        self.execution_receipt = Some(receipt.clone());
+        if success {
+            self.status = ProposalStatus::Executed;
+        }
+
+        Ok(receipt)
     }
 
     /// Cast vote
@@ -354,7 +513,7 @@ impl GovernanceManager {
         ((self.total_voting_power as f64) * proposal_threshold_pct()) as u128
     }
 
-    /// Create new proposal
+    /// Create new informational proposal (no on-chain action).
     pub fn create_proposal(
         &mut self,
         proposal_type: ProposalType,
@@ -363,26 +522,88 @@ impl GovernanceManager {
         proposer: Address,
         current_block: u64,
     ) -> Result<u64, GovernanceError> {
-        // Check proposer has enough voting power
+        self.create_proposal_with_action(proposal_type, title, description, proposer, current_block, None)
+    }
+
+    /// Create new proposal with a typed on-chain action.
+    pub fn create_proposal_with_action(
+        &mut self,
+        proposal_type: ProposalType,
+        title: String,
+        description: String,
+        proposer: Address,
+        current_block: u64,
+        action: Option<ProposalAction>,
+    ) -> Result<u64, GovernanceError> {
         let proposer_power = self.get_voting_power(&proposer, current_block);
         if proposer_power < self.proposal_threshold() {
             return Err(GovernanceError::InsufficientPower);
         }
-        
+
         let id = self.next_id;
         self.next_id += 1;
-        
-        let proposal = Proposal::new(
+
+        let proposal = Proposal::new_with_action(
             id,
             proposal_type,
             title,
             description,
             proposer,
             current_block,
+            action,
         );
-        
+
         self.proposals.insert(id, proposal);
         Ok(id)
+    }
+
+    /// Execute a passed proposal.
+    ///
+    /// Returns the `ExecutionReceipt` on success.
+    /// The caller must interpret the receipt's `action` field and apply the
+    /// actual state change (e.g., update a parameter, activate a protocol version).
+    pub fn execute_proposal(
+        &mut self,
+        proposal_id: u64,
+        current_block: u64,
+    ) -> Result<ExecutionReceipt, ExecutionError> {
+        let proposal = self.proposals.get_mut(&proposal_id)
+            .ok_or(ExecutionError::ActionFailed("proposal not found".into()))?;
+
+        // Dispatch based on action type and validate prerequisites
+        match &proposal.action {
+            None => return Err(ExecutionError::NoAction),
+            Some(ProposalAction::ProtocolUpgrade { activation_height, .. }) => {
+                if current_block < *activation_height {
+                    return Err(ExecutionError::TimelockNotExpired);
+                }
+            }
+            _ => {}
+        }
+
+        let message = format!(
+            "Proposal {} executed at block {} by governance",
+            proposal_id, current_block
+        );
+        proposal.execute(current_block, true, message)
+    }
+
+    /// Get proposals that are Passed and ready to execute (timelock elapsed).
+    pub fn executable_proposals(&self, current_block: u64) -> Vec<&Proposal> {
+        self.proposals.values()
+            .filter(|p| {
+                p.status == ProposalStatus::Passed
+                    && current_block >= p.execution_at
+                    && p.action.is_some()
+            })
+            .collect()
+    }
+
+    /// Get execution receipts for all executed proposals.
+    pub fn execution_history(&self) -> Vec<&ExecutionReceipt> {
+        self.proposals.values()
+            .filter_map(|p| p.execution_receipt.as_ref())
+            .collect()
     }
 
     /// Get voting power for address
@@ -490,6 +711,119 @@ mod tests {
         // Can't vote twice
         let result2 = proposal.cast_vote(voter, VoteOption::Against, 500, 60);
         assert_eq!(result2, Err(GovernanceError::AlreadyVoted));
+    }
+
+    #[test]
+    fn test_proposal_execute_parameter_change() {
+        let proposer = Address::from_bytes([0; 32]);
+
+        let action = ProposalAction::ChangeParameter {
+            key: "mempool.max_tx_per_block".into(),
+            old_value: "1000".into(),
+            new_value: "2000".into(),
+        };
+
+        let mut proposal = Proposal::new_with_action(
+            1,
+            ProposalType::Parameter,
+            "Increase block tx limit".to_string(),
+            "Double the max transactions per block".to_string(),
+            proposer,
+            0,
+            Some(action),
+        );
+
+        // Force into Passed state with elapsed timelock
+        proposal.status = ProposalStatus::Passed;
+        proposal.execution_at = 0; // already elapsed
+
+        let receipt = proposal.execute(100, true, "applied".into()).unwrap();
+        assert_eq!(receipt.proposal_id, 1);
+        assert!(receipt.success);
+        assert_eq!(proposal.status, ProposalStatus::Executed);
+    }
+
+    #[test]
+    fn test_proposal_execute_requires_passed_status() {
+        let proposer = Address::from_bytes([0; 32]);
+
+        let action = ProposalAction::ChangeParameter {
+            key: "k".into(),
+            old_value: "1".into(),
+            new_value: "2".into(),
+        };
+
+        let mut proposal = Proposal::new_with_action(
+            2,
+            ProposalType::Parameter,
+            "T".to_string(),
+            "D".to_string(),
+            proposer,
+            0,
+            Some(action),
+        );
+
+        // Active — cannot execute
+        proposal.status = ProposalStatus::Active;
+        proposal.execution_at = 0;
+        assert_eq!(
+            proposal.execute(100, true, "".into()).unwrap_err(),
+            ExecutionError::NotPassed,
+        );
+    }
+
+    #[test]
+    fn test_proposal_execute_timelock_not_expired() {
+        let proposer = Address::from_bytes([0; 32]);
+
+        let action = ProposalAction::ChangeParameter {
+            key: "k".into(),
+            old_value: "1".into(),
+            new_value: "2".into(),
+        };
+
+        let mut proposal = Proposal::new_with_action(
+            3,
+            ProposalType::Parameter,
+            "T".to_string(),
+            "D".to_string(),
+            proposer,
+            0,
+            Some(action),
+        );
+
+        proposal.status = ProposalStatus::Passed;
+        proposal.execution_at = 50_000;
+
+        // Block 100 — timelock has not elapsed
+        assert_eq!(
+            proposal.execute(100, true, "".into()).unwrap_err(),
+            ExecutionError::TimelockNotExpired,
+        );
+    }
+
+    #[test]
+    fn test_protocol_upgrade_proposal() {
+        let proposer = Address::from_bytes([0; 32]);
+
+        let action = ProposalAction::ProtocolUpgrade {
+            target_version: 3,
+            activation_height: 500_000,
+            description: "Enable encrypted transport (Noise XX)".into(),
+        };
+
+        let proposal = Proposal::new_with_action(
+            4,
+            ProposalType::Upgrade,
+            "Protocol V3 Upgrade".to_string(),
+            "Activate encrypted peer connections".to_string(),
+            proposer,
+            0,
+            Some(action),
+        );
+
+        assert!(proposal.action.is_some());
+        assert_eq!(proposal.status, ProposalStatus::Pending);
     }
 }
 
