@@ -454,6 +454,70 @@ lazy_static! {
         "Number of full nodes serving this light client"
     )
     .unwrap();
+
+    // === DATABASE METRICS (Phase 13) ===
+
+    /// Chain database file size in bytes
+    pub static ref DB_CHAIN_SIZE_BYTES: IntGauge = register_int_gauge!(
+        "coinject_db_chain_size_bytes",
+        "On-disk size of the chain database file in bytes"
+    )
+    .unwrap();
+
+    /// State database file size in bytes
+    pub static ref DB_STATE_SIZE_BYTES: IntGauge = register_int_gauge!(
+        "coinject_db_state_size_bytes",
+        "On-disk size of the state database file in bytes"
+    )
+    .unwrap();
+
+    /// Number of blocks stored in chain database
+    pub static ref DB_BLOCK_COUNT: IntGauge = register_int_gauge!(
+        "coinject_db_block_count",
+        "Number of blocks stored in the chain database"
+    )
+    .unwrap();
+
+    /// Database read latency histogram (seconds)
+    pub static ref DB_READ_LATENCY: HistogramVec = register_histogram_vec!(
+        "coinject_db_read_latency_seconds",
+        "Database read operation latency",
+        &["table"],
+        vec![0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+    )
+    .unwrap();
+
+    /// Database write latency histogram (seconds)
+    pub static ref DB_WRITE_LATENCY: HistogramVec = register_histogram_vec!(
+        "coinject_db_write_latency_seconds",
+        "Database write operation latency",
+        &["table"],
+        vec![0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+    )
+    .unwrap();
+
+    /// Total database read operations
+    pub static ref DB_READS_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "coinject_db_reads_total",
+        "Total database read operations by table",
+        &["table"]
+    )
+    .unwrap();
+
+    /// Total database write operations
+    pub static ref DB_WRITES_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "coinject_db_writes_total",
+        "Total database write operations by table",
+        &["table"]
+    )
+    .unwrap();
+
+    /// Last compaction timestamp (Unix epoch)
+    pub static ref DB_LAST_COMPACTION: IntGauge = register_int_gauge!(
+        "coinject_db_last_compaction_timestamp",
+        "Unix timestamp of the last database compaction"
+    )
+    .unwrap();
 }
 
 /// Initialize all metrics
@@ -621,7 +685,40 @@ pub fn init() {
         .register(Box::new(LIGHT_CLIENT_PEERS.clone()))
         .expect("Failed to register light_client_peers");
 
-    tracing::info!("✓ Prometheus metrics initialized (incl. node type classification)");
+    // Database metrics (Phase 13)
+    REGISTRY
+        .register(Box::new(DB_CHAIN_SIZE_BYTES.clone()))
+        .expect("Failed to register db_chain_size_bytes");
+    REGISTRY
+        .register(Box::new(DB_STATE_SIZE_BYTES.clone()))
+        .expect("Failed to register db_state_size_bytes");
+    REGISTRY
+        .register(Box::new(DB_BLOCK_COUNT.clone()))
+        .expect("Failed to register db_block_count");
+    REGISTRY
+        .register(Box::new(DB_READ_LATENCY.clone()))
+        .expect("Failed to register db_read_latency");
+    REGISTRY
+        .register(Box::new(DB_WRITE_LATENCY.clone()))
+        .expect("Failed to register db_write_latency");
+    REGISTRY
+        .register(Box::new(DB_READS_TOTAL.clone()))
+        .expect("Failed to register db_reads_total");
+    REGISTRY
+        .register(Box::new(DB_WRITES_TOTAL.clone()))
+        .expect("Failed to register db_writes_total");
+    REGISTRY
+        .register(Box::new(DB_LAST_COMPACTION.clone()))
+        .expect("Failed to register db_last_compaction");
+
+    tracing::info!("✓ Prometheus metrics initialized (incl. node type classification + database)");
+}
+
+/// Update database size metrics.  Call periodically (e.g. after each block store).
+pub fn update_db_metrics(chain_size_bytes: u64, state_size_bytes: u64, block_count: u64) {
+    DB_CHAIN_SIZE_BYTES.set(chain_size_bytes as i64);
+    DB_STATE_SIZE_BYTES.set(state_size_bytes as i64);
+    DB_BLOCK_COUNT.set(block_count as i64);
 }
 
 /// Export metrics in Prometheus text format

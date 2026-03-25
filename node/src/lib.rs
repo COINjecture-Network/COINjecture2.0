@@ -1,5 +1,6 @@
 // COINjecture Node Library
 // Re-exports for external use (tests, etc.)
+#![recursion_limit = "512"]
 
 pub mod node_types;
 pub mod node_manager;

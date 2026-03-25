@@ -1,5 +1,6 @@
 // COINjecture Node
 // Network B - NP-hard Consensus Blockchain
+#![recursion_limit = "512"]
 //
 // Supports 6 Specialized Node Types with Dynamic Behavioral Classification:
 // - Light: Header-only sync, minimal storage (mobile-friendly)
