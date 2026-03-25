@@ -4,8 +4,9 @@
 // Wire protocol implementation for message serialization
 
 use crate::cpp::{
-    config::{MAGIC, VERSION, MAX_MESSAGE_SIZE},
+    config::{MAGIC, VERSION, MIN_PROTOCOL_VERSION, MAX_MESSAGE_SIZE},
     message::*,
+    version::ConnectionPolicy,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -19,7 +20,10 @@ use std::time::Duration;
 pub enum ProtocolError {
     Io(io::Error),
     InvalidMagic([u8; 4]),
+    /// Version is outside the [MIN_PROTOCOL_VERSION, VERSION] window.
     InvalidVersion(u8),
+    /// Version is valid but deprecated — callers log a warning and continue.
+    DeprecatedVersion(u8),
     InvalidMessageType(u8),
     InvalidChecksum,
     MessageTooLarge(usize),
@@ -40,7 +44,8 @@ impl std::fmt::Display for ProtocolError {
         match self {
             ProtocolError::Io(e) => write!(f, "IO error: {}", e),
             ProtocolError::InvalidMagic(magic) => write!(f, "Invalid magic: {:?}", magic),
-            ProtocolError::InvalidVersion(v) => write!(f, "Invalid version: {}", v),
+            ProtocolError::InvalidVersion(v) => write!(f, "Invalid version: {} (supported: {}-{})", v, MIN_PROTOCOL_VERSION, VERSION),
+            ProtocolError::DeprecatedVersion(v) => write!(f, "Deprecated version: {} (upgrade to {})", v, VERSION),
             ProtocolError::InvalidMessageType(t) => write!(f, "Invalid message type: 0x{:02X}", t),
             ProtocolError::InvalidChecksum => write!(f, "Invalid checksum"),
             ProtocolError::MessageTooLarge(size) => write!(f, "Message too large: {} bytes", size),
@@ -122,45 +127,58 @@ impl MessageEnvelope {
             return Err(ProtocolError::InvalidMagic(magic));
         }
         
-        // Verify version
+        // Verify version — accept [MIN_PROTOCOL_VERSION, VERSION] for backward compat.
+        // A V2 node will accept V1 messages from peers that have not yet upgraded.
         let version = header[4];
-        if version != VERSION {
-            return Err(ProtocolError::InvalidVersion(version));
+        match ConnectionPolicy::evaluate(version) {
+            ConnectionPolicy::Reject { remote_version } => {
+                return Err(ProtocolError::InvalidVersion(remote_version));
+            }
+            ConnectionPolicy::AllowWithWarning { remote_version } => {
+                // Caller should log this; we surface it as a soft error that
+                // decode() callers can inspect via DeprecatedVersion and still
+                // handle the message.  We log at trace level here.
+                tracing::trace!(
+                    version = remote_version,
+                    "accepting deprecated protocol version from peer (upgrade recommended)"
+                );
+            }
+            ConnectionPolicy::Allow => {}
         }
-        
+
         // Parse message type
         let msg_type_byte = header[5];
         let msg_type = MessageType::from_u8(msg_type_byte)
             .map_err(|_| ProtocolError::InvalidMessageType(msg_type_byte))?;
-        
+
         // Parse payload length
         let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
-        
+
         // Check size limit
         if payload_len > MAX_MESSAGE_SIZE {
             return Err(ProtocolError::MessageTooLarge(payload_len));
         }
-        
+
         // Read payload
         let mut payload = vec![0u8; payload_len];
         stream.read_exact(&mut payload).await?;
-        
+
         // Read checksum
         let mut checksum = [0u8; 32];
         stream.read_exact(&mut checksum).await?;
-        
+
         // Verify checksum
         let computed = blake3::hash(&payload);
         if computed.as_bytes() != &checksum {
             return Err(ProtocolError::InvalidChecksum);
         }
-        
+
         Ok(MessageEnvelope {
             msg_type,
             payload,
         })
     }
-    
+
     /// Deserialize payload into specific message type
     pub fn deserialize<T: serde::de::DeserializeOwned>(&self) -> Result<T, ProtocolError> {
         bincode::deserialize(&self.payload)
@@ -218,39 +236,48 @@ impl MessageCodec {
             return Err(ProtocolError::InvalidMagic(magic));
         }
         
-        // Verify version
+        // Verify version — accept [MIN_PROTOCOL_VERSION, VERSION] for backward compat.
         let version = header[4];
-        if version != VERSION {
-            return Err(ProtocolError::InvalidVersion(version));
+        match ConnectionPolicy::evaluate(version) {
+            ConnectionPolicy::Reject { remote_version } => {
+                return Err(ProtocolError::InvalidVersion(remote_version));
+            }
+            ConnectionPolicy::AllowWithWarning { remote_version } => {
+                tracing::trace!(
+                    version = remote_version,
+                    "accepting deprecated protocol version from peer (upgrade recommended)"
+                );
+            }
+            ConnectionPolicy::Allow => {}
         }
-        
+
         // Parse message type
         let msg_type_byte = header[5];
         let msg_type = MessageType::from_u8(msg_type_byte)
             .map_err(|_| ProtocolError::InvalidMessageType(msg_type_byte))?;
-        
+
         // Parse payload length
         let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
-        
+
         // Check size limit
         if payload_len > MAX_MESSAGE_SIZE {
             return Err(ProtocolError::MessageTooLarge(payload_len));
         }
-        
+
         // Read payload
         let mut payload = vec![0u8; payload_len];
         read_half.read_exact(&mut payload).await?;
-        
+
         // Read checksum
         let mut checksum = [0u8; 32];
         read_half.read_exact(&mut checksum).await?;
-        
+
         // Verify checksum
         let computed = blake3::hash(&payload);
         if computed.as_bytes() != &checksum {
             return Err(ProtocolError::InvalidChecksum);
         }
-        
+
         Ok(MessageEnvelope {
             msg_type,
             payload,

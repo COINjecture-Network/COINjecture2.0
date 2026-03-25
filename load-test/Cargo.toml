@@ -1,0 +1,48 @@
+[package]
+name = "load-test"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Load testing and stress testing harness for COINjecture nodes"
+
+[[bin]]
+name = "load-test"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates
+coinject-core = { path = "../core", package = "coinject-core" }
+coinject-rpc = { path = "../rpc", package = "coinject-rpc" }
+
+# Async
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Crypto (for generating test keys)
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+blake3 = { workspace = true }
+
+# HTTP / RPC client (for RPC load test)
+reqwest = { version = "0.12", features = ["json"] }
+
+# CLI
+clap = { workspace = true }
+
+# Metrics / reporting
+chrono = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Hex encoding
+hex = { workspace = true }
+
+# Math
+num-traits = { workspace = true }

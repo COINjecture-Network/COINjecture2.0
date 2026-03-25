@@ -611,6 +611,7 @@ impl CppNetwork {
                         },
                         ProtocolError::InvalidMagic(_) => "InvalidMagic".to_string(),
                         ProtocolError::InvalidVersion(_) => "InvalidVersion".to_string(),
+                        ProtocolError::DeprecatedVersion(v) => format!("DeprecatedVersion({})", v),
                         ProtocolError::InvalidMessageType(_) => "InvalidMsgType".to_string(),
                         ProtocolError::InvalidChecksum => "InvalidChecksum".to_string(),
                         ProtocolError::MessageTooLarge(sz) => format!("TooLarge({})", sz),

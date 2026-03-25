@@ -1647,6 +1647,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
+name = "load-test"
+version = "4.8.4"
+dependencies = [
+ "blake3",
+ "chrono",
+ "clap",
+ "coinject-core",
+ "coinject-rpc",
+ "ed25519-dalek",
+ "futures",
+ "hex",
+ "num-traits",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -15,6 +15,7 @@ members = [
     "marketplace-export",
     "huggingface",
     "mobile-sdk",
+    "load-test",
 ]
 
 [workspace.package]
