@@ -74,3 +74,7 @@ setup_*.py
 
 # Web wallet dependencies (large)
 web-wallet/node_modules/
+
+# Claude Code internals (worktrees, session data, memory)
+.claude/
+.claire/
