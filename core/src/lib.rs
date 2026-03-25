@@ -15,6 +15,7 @@ pub mod golden;
 /// Replaces f64 in any code that must agree across heterogeneous validator
 /// platforms (ARM, x86, RISC-V) without floating-point non-determinism.
 pub mod fixed_point;
+pub mod validation;
 
 pub use error::{
     unix_now_secs, unix_now_secs_i64,
@@ -31,3 +32,4 @@ pub use commitment::*;
 pub use dimensional::*;
 pub use privacy::*;
 pub use golden::*;
+// validation is accessed as coinject_core::validation::<item> (not wildcard-re-exported)
