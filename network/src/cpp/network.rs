@@ -778,10 +778,7 @@ impl CppNetwork {
             best_hash: chain_state.best_hash,
             genesis_hash: chain_state.genesis_hash,
             node_type: NodeType::Full.as_u8(), // TODO: Get from config
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            timestamp: coinject_core::unix_now_secs(),
             connection_nonce: rand::random::<u64>(), // Generate nonce for incoming connection
         };
 
@@ -861,10 +858,7 @@ impl CppNetwork {
             best_hash: state.best_hash,
             genesis_hash: state.genesis_hash,
             node_type: self.config.node_type.as_u8(),
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+            timestamp: coinject_core::unix_now_secs(),
             connection_nonce: our_connection_nonce,
         };
         
@@ -1321,10 +1315,7 @@ impl CppNetwork {
         if let Some(peer) = peers_guard.get(&peer_id) {
             let pong = PongMessage {
                 nonce: ping.nonce,
-                timestamp: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
+                timestamp: coinject_core::unix_now_secs(),
             };
             
             let envelope = MessageEnvelope::new(MessageType::Pong, &pong)
@@ -1572,10 +1563,7 @@ impl CppNetwork {
                 let nonce: u64 = rand::thread_rng().gen();
                 let ping = PingMessage {
                     nonce,
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
+                    timestamp: coinject_core::unix_now_secs(),
                 };
                 
                 let envelope = match MessageEnvelope::new(MessageType::Ping, &ping) {

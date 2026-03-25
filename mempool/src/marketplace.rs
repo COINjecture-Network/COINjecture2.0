@@ -2,10 +2,9 @@
 // Users submit NP-hard problems with escrowed bounties
 // Supports both public and private (commitment-based) submissions
 
-use coinject_core::{Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
+use coinject_core::{unix_now_secs_i64, Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Problem submission with bounty
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -153,10 +152,7 @@ impl ProblemMarketplace {
             return Err(MarketplaceError::DuplicateProblem);
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now_secs_i64();
 
         let expires_at = now + (expiration_days as i64 * 86400);
 
@@ -213,10 +209,7 @@ impl ProblemMarketplace {
         }
 
         // Check expiration
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now_secs_i64();
 
         if now > problem.expires_at {
             problem.status = ProblemStatus::Expired;
@@ -374,10 +367,7 @@ impl ProblemMarketplace {
 
     /// Expire old problems and refund bounties
     pub fn expire_old_problems(&mut self) -> Vec<(Address, Balance)> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now_secs_i64();
 
         let mut refunds = Vec::new();
 

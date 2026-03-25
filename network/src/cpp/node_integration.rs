@@ -228,7 +228,7 @@ impl PeerSelector {
             })
             .collect();
         
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         
         scored.into_iter()
             .take(count)
@@ -259,7 +259,7 @@ impl PeerSelector {
                 _ => 0.0,
             } * b.quality;
             
-            b_score.partial_cmp(&a_score).unwrap()
+            b_score.total_cmp(&a_score)
         });
         
         candidates.into_iter()
@@ -287,7 +287,7 @@ impl PeerSelector {
             })
             .collect();
         
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         
         scored.into_iter()
             .take(count)

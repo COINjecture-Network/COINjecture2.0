@@ -20,13 +20,18 @@ impl Default for GenesisConfig {
         // Derive address from public key using SHA256 (same as keystore.rs)
         // Public key: df52ac77a92607b348f742aa3542a3f4e72c7dff49c07819d98b459111979090
         // Description: Genesis Wallet - Controls D₈ (Foundation Endowment, 8.2% normalized)
+        // Compile-time-constant hex string — decode is always valid and length always 32.
+        // The expect messages here are intentionally developer-facing: if this fails, the
+        // genesis key constant in source code is wrong and must be corrected before shipping.
         let public_key_hex = "df52ac77a92607b348f742aa3542a3f4e72c7dff49c07819d98b459111979090";
         let public_key_bytes = hex::decode(public_key_hex)
-            .expect("Failed to decode public key from hex");
-        
-        if public_key_bytes.len() != 32 {
-            panic!("Public key must be 32 bytes, got {}", public_key_bytes.len());
-        }
+            .expect("BUG: genesis public key hex constant is malformed — fix the constant in genesis.rs");
+
+        assert_eq!(
+            public_key_bytes.len(), 32,
+            "BUG: genesis public key constant decoded to {} bytes, expected 32 — fix the constant in genesis.rs",
+            public_key_bytes.len()
+        );
         
         // Derive address using SHA256 (same as wallet/src/keystore.rs derive_address)
         let mut hasher = Sha256::new();

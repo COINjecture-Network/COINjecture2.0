@@ -1,6 +1,7 @@
 // COINjecture Network B - Core Types
 // Custom Layer 1 blockchain with NP-hard consensus
 
+pub mod error;
 pub mod types;
 pub mod crypto;
 pub mod transaction;
@@ -14,6 +15,11 @@ pub mod golden;
 /// Replaces f64 in any code that must agree across heterogeneous validator
 /// platforms (ARM, x86, RISC-V) without floating-point non-determinism.
 pub mod fixed_point;
+
+pub use error::{
+    unix_now_secs, unix_now_secs_i64,
+    CryptoError, BlockError, TransactionError, ConsensusError, NetworkError, StateError, ConfigError,
+};
 
 // Re-exports
 pub use types::*;

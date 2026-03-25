@@ -2,10 +2,9 @@
 // Rate-limited token distribution for testing
 #![allow(dead_code)]
 
-use coinject_core::Address;
+use coinject_core::{unix_now_secs, Address};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Faucet state tracker
 #[derive(Clone)]
@@ -47,12 +46,11 @@ impl Faucet {
         }
 
         let addr_str = hex::encode(address.as_bytes());
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
 
-        let mut last_req = self.last_request.lock().unwrap();
+        // A poisoned mutex means a previous thread panicked while holding the lock.
+        // We recover the inner value to avoid a cascading failure in the faucet.
+        let mut last_req = self.last_request.lock().unwrap_or_else(|p| p.into_inner());
 
         // Check if address has requested before
         if let Some(&last_time) = last_req.get(&addr_str) {
@@ -79,12 +77,9 @@ impl Faucet {
     /// Get remaining cooldown for an address (in seconds)
     pub fn get_remaining_cooldown(&self, address: &Address) -> Option<u64> {
         let addr_str = hex::encode(address.as_bytes());
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_now_secs();
 
-        let last_req = self.last_request.lock().unwrap();
+        let last_req = self.last_request.lock().unwrap_or_else(|p| p.into_inner());
 
         if let Some(&last_time) = last_req.get(&addr_str) {
             let elapsed = now - last_time;
