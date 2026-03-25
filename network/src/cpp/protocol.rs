@@ -8,6 +8,7 @@ use crate::cpp::{
     message::*,
     version::ConnectionPolicy,
 };
+use crate::security::MessageSizePolicy;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use bincode;
@@ -76,11 +77,13 @@ impl MessageEnvelope {
     pub fn new<T: serde::Serialize>(msg_type: MessageType, payload: &T) -> Result<Self, ProtocolError> {
         let payload = bincode::serialize(payload)
             .map_err(|e| ProtocolError::SerializationError(e.to_string()))?;
-        
-        if payload.len() > MAX_MESSAGE_SIZE {
+
+        // Enforce per-type size limit on outbound messages too
+        let type_limit = MessageSizePolicy::max_for_type(msg_type as u8).min(MAX_MESSAGE_SIZE);
+        if payload.len() > type_limit {
             return Err(ProtocolError::MessageTooLarge(payload.len()));
         }
-        
+
         Ok(MessageEnvelope {
             msg_type,
             payload,
@@ -155,8 +158,10 @@ impl MessageEnvelope {
         // Parse payload length
         let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
 
-        // Check size limit
-        if payload_len > MAX_MESSAGE_SIZE {
+        // Enforce per-type size limit (more granular than the global MAX_MESSAGE_SIZE)
+        let type_limit = MessageSizePolicy::max_for_type(msg_type_byte)
+            .min(MAX_MESSAGE_SIZE);
+        if payload_len > type_limit {
             return Err(ProtocolError::MessageTooLarge(payload_len));
         }
 
@@ -261,8 +266,10 @@ impl MessageCodec {
         // Parse payload length
         let payload_len = u32::from_be_bytes([header[6], header[7], header[8], header[9]]) as usize;
 
-        // Check size limit
-        if payload_len > MAX_MESSAGE_SIZE {
+        // Per-type size limit enforcement
+        let type_limit = MessageSizePolicy::max_for_type(msg_type_byte)
+            .min(MAX_MESSAGE_SIZE);
+        if payload_len > type_limit {
             return Err(ProtocolError::MessageTooLarge(payload_len));
         }
 

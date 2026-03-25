@@ -43,9 +43,44 @@ pub const VERSION: u8 = 2;
 /// Mirrors `version::MIN_SUPPORTED_VERSION`.
 pub const MIN_PROTOCOL_VERSION: u8 = 1;
 
-/// Maximum message size (10 MB)
-/// Large enough for block batches, small enough to prevent DoS
-pub const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum message size (legacy global cap — per-type limits in `security::MessageSizePolicy`
+/// supersede this for known message types; this remains as a hard backstop for unknown types)
+pub const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MB (was 10 MB — reduced for DoS protection)
+
+// ---------------------------------------------------------------------------
+// Security constants (Phase 5 — Network Security)
+// ---------------------------------------------------------------------------
+
+/// Maximum inbound connections from a single IP address.
+pub const SECURITY_MAX_CONNS_PER_IP: usize = 3;
+
+/// Maximum total concurrent P2P connections (inbound + outbound).
+pub const SECURITY_MAX_TOTAL_CONNECTIONS: usize = 128;
+
+/// Maximum peers allowed from the same /16 subnet (eclipse attack protection).
+pub const SECURITY_MAX_PEERS_PER_SUBNET: usize = 8;
+
+/// Default ban duration for peers that send malformed/malicious messages.
+pub const SECURITY_BAN_DURATION_SECS: u64 = 3600; // 1 hour
+
+/// Short-ban duration for rate-limit offenders (less severe).
+pub const SECURITY_SHORT_BAN_SECS: u64 = 300; // 5 minutes
+
+/// Token-bucket capacity for per-peer rate limiting (burst allowance).
+pub const SECURITY_RATE_BUCKET_CAPACITY: f64 = 200.0;
+
+/// Token-bucket refill rate — sustained messages per second per peer.
+pub const SECURITY_RATE_MSGS_PER_SEC: f64 = 50.0;
+
+/// How many rate-limit strikes before a peer is short-banned.
+pub const SECURITY_RATE_STRIKE_THRESHOLD: u32 = 10;
+
+/// How many malformed message strikes before a peer is (long) banned.
+pub const SECURITY_MALFORMED_STRIKE_THRESHOLD: u32 = 5;
+
+/// Whether to require full encryption + mutual authentication for all peers.
+/// When true, peers that do not perform the key-exchange handshake are rejected.
+pub const SECURITY_REQUIRE_ENCRYPTION: bool = true;
 
 /// Connection timeout
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -192,21 +227,46 @@ pub mod timeouts {
 pub struct CppConfig {
     /// P2P listen address
     pub p2p_listen: String,
-    
+
     /// WebSocket listen address
     pub ws_listen: String,
-    
+
     /// Bootnode addresses (format: "IP:PORT")
     pub bootnodes: Vec<String>,
-    
+
     /// Maximum number of peers
     pub max_peers: usize,
-    
+
     /// Enable WebSocket RPC
     pub enable_websocket: bool,
-    
+
     /// Node type
     pub node_type: NodeType,
+
+    // -----------------------------------------------------------------------
+    // Security settings (Phase 5)
+    // -----------------------------------------------------------------------
+
+    /// Maximum inbound connections from a single IP.
+    pub max_connections_per_ip: usize,
+
+    /// Maximum total connections (inbound + outbound).
+    pub max_total_connections: usize,
+
+    /// Maximum peers per /16 subnet (eclipse attack protection).
+    pub max_peers_per_subnet: usize,
+
+    /// Ban duration in seconds for misbehaving peers.
+    pub ban_duration_secs: u64,
+
+    /// Token-bucket burst capacity for per-peer rate limiting.
+    pub rate_bucket_capacity: f64,
+
+    /// Token-bucket refill rate (msgs/sec) for per-peer rate limiting.
+    pub rate_msgs_per_sec: f64,
+
+    /// When true, peers must complete the encryption + auth handshake.
+    pub require_encryption: bool,
 }
 
 impl Default for CppConfig {
@@ -218,6 +278,14 @@ impl Default for CppConfig {
             max_peers: MAX_PEERS,
             enable_websocket: true,
             node_type: NodeType::Full,
+            // Security defaults
+            max_connections_per_ip: SECURITY_MAX_CONNS_PER_IP,
+            max_total_connections: SECURITY_MAX_TOTAL_CONNECTIONS,
+            max_peers_per_subnet: SECURITY_MAX_PEERS_PER_SUBNET,
+            ban_duration_secs: SECURITY_BAN_DURATION_SECS,
+            rate_bucket_capacity: SECURITY_RATE_BUCKET_CAPACITY,
+            rate_msgs_per_sec: SECURITY_RATE_MSGS_PER_SEC,
+            require_encryption: SECURITY_REQUIRE_ENCRYPTION,
         }
     }
 }
