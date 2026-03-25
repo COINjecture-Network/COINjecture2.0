@@ -657,6 +657,123 @@ impl Database {
             genesis_hash: self.metadata.genesis_hash,
         }
     }
+
+    // =========================================================================
+    // Phase 13: Snapshot, Pruning, Compaction, Metrics
+    // =========================================================================
+
+    /// Return the total on-disk size of all four ADZDB files in bytes.
+    pub fn db_size(&self) -> Result<u64> {
+        let files = ["adzdb.idx", "adzdb.dat", "adzdb.hgt", "adzdb.meta"];
+        let mut total = 0u64;
+        for name in &files {
+            let path = self.config.path.join(name);
+            if path.exists() {
+                total += std::fs::metadata(&path)?.len();
+            }
+        }
+        Ok(total)
+    }
+
+    /// Export a portable snapshot of all ADZDB files to `dest_dir`.
+    ///
+    /// The destination directory is created if it does not exist.  After the
+    /// copy the caller can archive, compress, or ship the directory to another
+    /// node for fast-sync via `Database::import_snapshot`.
+    pub fn export_snapshot(&self, dest_dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(dest_dir)?;
+        for name in &["adzdb.idx", "adzdb.dat", "adzdb.hgt", "adzdb.meta"] {
+            let src = self.config.path.join(name);
+            let dst = dest_dir.join(name);
+            if src.exists() {
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Import a previously exported snapshot into `dest_config.path` and open it.
+    ///
+    /// `src_dir` must be a directory produced by `export_snapshot`.  The
+    /// destination directory must **not** already contain an ADZDB database.
+    pub fn import_snapshot(src_dir: &Path, dest_config: Config) -> Result<Self> {
+        std::fs::create_dir_all(&dest_config.path)?;
+        for name in &["adzdb.idx", "adzdb.dat", "adzdb.hgt", "adzdb.meta"] {
+            let src = src_dir.join(name);
+            let dst = dest_config.path.join(name);
+            if src.exists() {
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+        Self::open(dest_config)
+    }
+
+    /// Logically prune all entries at heights strictly less than `keep_height`
+    /// from the in-memory indices.
+    ///
+    /// **Important:** Because ADZDB is append-only, the data bytes remain on
+    /// disk until `compact_to` is called.  After pruning, the entries are
+    /// inaccessible via `get`/`get_by_height` but the raw data file is unchanged.
+    /// Returns the number of entries removed from memory.
+    pub fn prune_before(&mut self, keep_height: u64) -> Result<u64> {
+        if keep_height == 0 {
+            return Ok(0);
+        }
+        // Collect hashes to remove (skip genesis at height 0)
+        let hashes: Vec<Hash> = self
+            .height_index
+            .iter()
+            .filter(|(&h, _)| h > 0 && h < keep_height)
+            .map(|(_, hash)| *hash)
+            .collect();
+
+        let pruned = hashes.len() as u64;
+        for hash in &hashes {
+            if let Some(entry) = self.hash_index.remove(hash) {
+                self.height_index.remove(&entry.height);
+            }
+        }
+        Ok(pruned)
+    }
+
+    /// Compact: write a clean copy of the database (only currently indexed
+    /// entries) to `dest_config.path`, then open and return it.
+    ///
+    /// This is the mechanism for reclaiming disk space after `prune_before`.
+    /// The original database is left intact.
+    pub fn compact_to(&self, dest_config: Config) -> Result<Self> {
+        // Create a new empty database at the destination
+        let mut new_db = Self::create(dest_config)?;
+        // Replay only the entries still present in the in-memory index,
+        // ordered by height so the metadata ends up consistent.
+        let mut entries: Vec<(u64, Hash)> = self
+            .height_index
+            .iter()
+            .map(|(&h, &hash)| (h, hash))
+            .collect();
+        entries.sort_by_key(|(h, _)| *h);
+
+        for (height, hash) in entries {
+            let data = self.get(&hash)?;
+            new_db.put(&hash, height, &data)?;
+        }
+        new_db.sync()?;
+        Ok(new_db)
+    }
+
+    /// Return extended statistics including on-disk size.
+    pub fn extended_stats(&self) -> ExtendedDatabaseStats {
+        let db_size_bytes = self.db_size().unwrap_or(0);
+        ExtendedDatabaseStats {
+            entry_count: self.metadata.entry_count,
+            data_size: self.metadata.data_size,
+            latest_height: self.metadata.latest_height,
+            latest_hash: self.metadata.latest_hash,
+            genesis_hash: self.metadata.genesis_hash,
+            db_size_bytes,
+            index_entries_in_memory: self.hash_index.len() as u64,
+        }
+    }
 }
 
 /// Database statistics
@@ -667,6 +784,20 @@ pub struct DatabaseStats {
     pub latest_height: u64,
     pub latest_hash: Hash,
     pub genesis_hash: Hash,
+}
+
+/// Extended database statistics including on-disk size and cache state
+#[derive(Debug, Clone)]
+pub struct ExtendedDatabaseStats {
+    pub entry_count: u64,
+    pub data_size: u64,
+    pub latest_height: u64,
+    pub latest_hash: Hash,
+    pub genesis_hash: Hash,
+    /// Total size of all four ADZDB files on disk
+    pub db_size_bytes: u64,
+    /// Number of entries currently held in the in-memory hash index
+    pub index_entries_in_memory: u64,
 }
 
 #[cfg(test)]

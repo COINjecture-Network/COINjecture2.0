@@ -18,6 +18,34 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 // =============================================================================
+// Pruning Mode
+// =============================================================================
+
+/// Block pruning strategy
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PruningMode {
+    /// Keep all blocks forever (archive node behaviour, default)
+    Archive,
+    /// Keep only the most recent N blocks (saves disk space)
+    Full,
+}
+
+impl Default for PruningMode {
+    fn default() -> Self {
+        PruningMode::Archive
+    }
+}
+
+impl std::fmt::Display for PruningMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PruningMode::Archive => write!(f, "archive"),
+            PruningMode::Full => write!(f, "full"),
+        }
+    }
+}
+
+// =============================================================================
 // Block Version Configuration
 // =============================================================================
 
@@ -186,6 +214,40 @@ pub struct NodeConfig {
     /// Requires compilation with --features adzdb
     #[arg(long)]
     pub use_adzdb: bool,
+
+    // ==========================================================================
+    // DATABASE CONFIGURATION
+    // ==========================================================================
+
+    /// Database page cache size in megabytes (default: 64)
+    /// Larger caches improve read performance at the cost of RAM usage.
+    #[arg(long, default_value = "64")]
+    pub db_cache_mb: u64,
+
+    /// Block pruning mode: "archive" keeps all blocks, "full" keeps recent blocks only
+    #[arg(long, value_enum, default_value = "archive")]
+    pub pruning_mode: PruningMode,
+
+    /// Number of recent blocks to retain when pruning_mode = full (default: 10 000)
+    #[arg(long, default_value = "10000")]
+    pub pruning_keep_blocks: u64,
+
+    /// Compact the chain database every N hours (0 = disabled, default: 24)
+    /// Compaction reclaims disk space left by deleted/pruned entries.
+    #[arg(long, default_value = "24")]
+    pub compaction_interval_hours: u64,
+
+    // ==========================================================================
+    // CACHE CONFIGURATION
+    // ==========================================================================
+
+    /// Number of recent blocks to keep in the in-memory block cache (default: 512)
+    #[arg(long, default_value = "512")]
+    pub block_cache_size: usize,
+
+    /// Number of account state entries to keep in the in-memory state cache (default: 1024)
+    #[arg(long, default_value = "1024")]
+    pub state_cache_size: usize,
 
     // ==========================================================================
     // NETWORK CONNECTIVITY
@@ -498,6 +560,20 @@ impl NodeConfig {
             ));
         }
 
+        // Validate database configuration
+        if self.db_cache_mb == 0 {
+            return Err("db_cache_mb must be at least 1".to_string());
+        }
+        if self.pruning_mode == PruningMode::Full && self.pruning_keep_blocks < 100 {
+            return Err("pruning_keep_blocks must be at least 100 for safe operation".to_string());
+        }
+        if self.block_cache_size == 0 {
+            return Err("block_cache_size must be at least 1".to_string());
+        }
+        if self.state_cache_size == 0 {
+            return Err("state_cache_size must be at least 1".to_string());
+        }
+
         // Warn about deprecated libp2p-era flags
         if self.p2p_addr != "/ip4/0.0.0.0/tcp/30333" {
             tracing::warn!("--p2p-addr is DEPRECATED (libp2p removed). Use --cpp-p2p-addr instead. This flag is ignored.");
@@ -548,6 +624,12 @@ mod tests {
             hf_token: None,
             hf_dataset_name: None,
             use_adzdb: false,
+            db_cache_mb: 64,
+            pruning_mode: PruningMode::Archive,
+            pruning_keep_blocks: 10000,
+            compaction_interval_hours: 24,
+            block_cache_size: 512,
+            state_cache_size: 1024,
             external_addr: None,
             allow_private_addrs: false,
             disable_mdns: false,

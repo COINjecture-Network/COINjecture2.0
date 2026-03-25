@@ -3,11 +3,14 @@
 #![allow(dead_code)]
 
 use coinject_core::{Block, BlockHeader, Hash};
+use lru::LruCache;
 use redb::{Database, TableDefinition};
-use std::path::Path;
-use std::sync::Arc;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::RwLock;
+
 
 // Table definitions for redb (using fixed-size arrays for hash keys, strings for metadata keys)
 const BLOCKS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("blocks");
@@ -41,24 +44,39 @@ pub enum ChainError {
     SerializationError(#[from] bincode::Error),
     #[error("Genesis block mismatch")]
     GenesisMismatch,
+    #[error("Compaction error: {0}")]
+    CompactionError(#[from] redb::CompactionError),
 }
 
 /// Chain state manager handling block storage and retrieval
 pub struct ChainState {
     /// redb database for block storage
     db: Arc<Database>,
+    /// Path to the database file (used for backup/restore)
+    db_path: PathBuf,
     /// Best block height
     best_height: Arc<RwLock<u64>>,
     /// Best block hash
     best_hash: Arc<RwLock<Hash>>,
     /// Genesis hash for network verification
     genesis_hash: Hash,
+    /// In-memory LRU cache for deserialized blocks (avoids repeated bincode decodes)
+    block_cache: Arc<Mutex<LruCache<Hash, Block>>>,
 }
 
 impl ChainState {
-    /// Create or open chain state database
-    pub fn new<P: AsRef<Path>>(path: P, genesis_block: &Block) -> Result<Self, ChainError> {
-        let db = Database::create(path)?;
+    /// Create or open chain state database.
+    ///
+    /// `block_cache_size` controls how many recently-accessed deserialized
+    /// `Block` values are held in memory (LRU eviction).  Use `512` as a
+    /// sensible default for full nodes.
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        genesis_block: &Block,
+        block_cache_size: usize,
+    ) -> Result<Self, ChainError> {
+        let db_path = path.as_ref().to_path_buf();
+        let db = Database::create(&db_path)?;
         let db = Arc::new(db);
 
         let genesis_hash = genesis_block.header.hash();
@@ -162,11 +180,14 @@ impl ChainState {
             eprintln!("   The node will re-sync from peers.");
         }
 
+        let cache_cap = NonZeroUsize::new(block_cache_size.max(1)).unwrap();
         Ok(ChainState {
             db,
+            db_path,
             best_height: Arc::new(RwLock::new(best_height)),
             best_hash: Arc::new(RwLock::new(best_hash)),
             genesis_hash,
+            block_cache: Arc::new(Mutex::new(LruCache::new(cache_cap))),
         })
     }
 
@@ -238,14 +259,27 @@ impl ChainState {
         Ok(false)
     }
 
-    /// Get block by hash
+    /// Get block by hash.
+    ///
+    /// Results are cached in an LRU cache to avoid repeated bincode deserialisation.
     pub fn get_block_by_hash(&self, hash: &Hash) -> Result<Option<Block>, ChainError> {
+        // Check cache first
+        if let Ok(mut cache) = self.block_cache.lock() {
+            if let Some(block) = cache.get(hash) {
+                return Ok(Some(block.clone()));
+            }
+        }
+
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(BLOCKS_TABLE)?;
 
         match table.get(hash.as_bytes())? {
             Some(bytes_ref) => {
                 let block: Block = bincode::deserialize(bytes_ref.value())?;
+                // Store in cache
+                if let Ok(mut cache) = self.block_cache.lock() {
+                    cache.put(*hash, block.clone());
+                }
                 Ok(Some(block))
             }
             None => Ok(None),
@@ -312,10 +346,12 @@ impl ChainState {
 
     /// Get chain statistics
     pub async fn get_stats(&self) -> ChainStats {
+        let db_file_size_bytes = self.db_file_size().unwrap_or(0);
         ChainStats {
             best_height: self.best_block_height().await,
             best_hash: self.best_block_hash().await,
             genesis_hash: self.genesis_hash,
+            db_file_size_bytes,
         }
     }
 
@@ -551,6 +587,141 @@ impl ChainState {
         println!("🔄 Chain reorganized: new best block height={} hash={:?}", new_best_height, new_best_hash);
         Ok(())
     }
+
+    // =========================================================================
+    // Phase 13: Database Management — Pruning, Backup, Compaction
+    // =========================================================================
+
+    /// Prune blocks older than `keep_height` from the database.
+    ///
+    /// Removes both the block data and the height-index entries for all heights
+    /// strictly less than `keep_height`.  The genesis block (height 0) is always
+    /// preserved.  Returns the number of blocks pruned.
+    ///
+    /// NOTE: The best block and any block at or above `keep_height` are never touched.
+    pub async fn prune_blocks_before(&self, keep_height: u64) -> Result<u64, ChainError> {
+        if keep_height == 0 {
+            return Ok(0);
+        }
+
+        let current_best = self.best_block_height().await;
+        // Never prune up to or above the best block
+        let prune_below = keep_height.min(current_best);
+
+        // Collect the hashes we need to remove (heights 1..prune_below)
+        let to_prune: Vec<(u64, [u8; 32])> = {
+            let read_txn = self.db.begin_read()?;
+            let height_table = read_txn.open_table(HEIGHT_INDEX_TABLE)?;
+            height_table
+                .range(1..prune_below)?
+                .filter_map(|r| r.ok())
+                .map(|(h, hash_ref)| (h.value(), *hash_ref.value()))
+                .collect()
+        };
+
+        if to_prune.is_empty() {
+            return Ok(0);
+        }
+
+        let pruned_count = to_prune.len() as u64;
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut height_table = write_txn.open_table(HEIGHT_INDEX_TABLE)?;
+            let mut blocks_table = write_txn.open_table(BLOCKS_TABLE)?;
+            for (_height, hash) in &to_prune {
+                height_table.remove(_height)?;
+                blocks_table.remove(hash)?;
+            }
+        }
+        write_txn.commit()?;
+
+        // Evict pruned blocks from the LRU cache
+        if let Ok(mut cache) = self.block_cache.lock() {
+            for (_height, hash) in &to_prune {
+                let h = Hash::from_bytes(*hash);
+                cache.pop(&h);
+            }
+        }
+
+        tracing::info!("Pruned {} blocks (heights 1..{})", pruned_count, prune_below);
+        Ok(pruned_count)
+    }
+
+    /// Back up the chain database to `dest_dir`.
+    ///
+    /// Copies the redb file to `{dest_dir}/chain.db.bak`.  The database is
+    /// flushed before the copy so the backup is consistent.  For safest results
+    /// run this when no writes are in flight (e.g. node is idle).
+    pub fn backup(&self, dest_dir: &Path) -> Result<(), ChainError> {
+        std::fs::create_dir_all(dest_dir).map_err(|e| {
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
+                redb::StorageError::Io(e),
+            ))
+        })?;
+        let backup_path = dest_dir.join("chain.db.bak");
+        std::fs::copy(&self.db_path, &backup_path).map_err(|e| {
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
+                redb::StorageError::Io(e),
+            ))
+        })?;
+        tracing::info!("Chain database backed up to {:?}", backup_path);
+        Ok(())
+    }
+
+    /// Compact the chain database, reclaiming space freed by pruned entries.
+    ///
+    /// **The node must be stopped before calling this.**  Compaction opens a
+    /// fresh database handle and calls redb's `compact()`, which requires
+    /// exclusive `&mut` access.  Pass `self.db_path()` as the argument.
+    ///
+    /// Returns `true` if the database was actually compacted (i.e. wasted
+    /// space existed), `false` if already fully compact.
+    pub fn compact_database(db_path: &Path) -> Result<bool, ChainError> {
+        let mut db = Database::create(db_path)?;
+        let compacted = db.compact()?;
+        if compacted {
+            tracing::info!("Chain database compacted at {:?}", db_path);
+        }
+        Ok(compacted)
+    }
+
+    /// Return the path of the underlying database file.
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    /// Return the on-disk size of the chain database file in bytes.
+    pub fn db_file_size(&self) -> Result<u64, ChainError> {
+        let meta = std::fs::metadata(&self.db_path).map_err(|e| {
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
+                redb::StorageError::Io(e),
+            ))
+        })?;
+        Ok(meta.len())
+    }
+
+    /// Export a portable state snapshot.
+    ///
+    /// Copies the chain database to `{dest_dir}/chain-snapshot-{height}.db` for
+    /// use by nodes performing fast-sync.  The snapshot filename embeds the best
+    /// block height so receivers can validate integrity.
+    pub async fn export_snapshot(&self, dest_dir: &Path) -> Result<PathBuf, ChainError> {
+        std::fs::create_dir_all(dest_dir).map_err(|e| {
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
+                redb::StorageError::Io(e),
+            ))
+        })?;
+        let height = self.best_block_height().await;
+        let snap_name = format!("chain-snapshot-{}.db", height);
+        let snap_path = dest_dir.join(&snap_name);
+        std::fs::copy(&self.db_path, &snap_path).map_err(|e| {
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
+                redb::StorageError::Io(e),
+            ))
+        })?;
+        tracing::info!("Chain snapshot exported to {:?} (height {})", snap_path, height);
+        Ok(snap_path)
+    }
 }
 
 /// Chain statistics
@@ -559,6 +730,8 @@ pub struct ChainStats {
     pub best_height: u64,
     pub best_hash: Hash,
     pub genesis_hash: Hash,
+    /// On-disk size of the chain database in bytes (0 if unavailable)
+    pub db_file_size_bytes: u64,
 }
 
 #[cfg(test)]
@@ -572,7 +745,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
 
         let genesis = create_genesis_block(GenesisConfig::default());
-        let chain = ChainState::new(&temp_dir, &genesis).unwrap();
+        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
 
         assert_eq!(chain.best_block_height().await, 0);
         assert_eq!(chain.genesis_hash(), genesis.header.hash());
@@ -586,7 +759,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
 
         let genesis = create_genesis_block(GenesisConfig::default());
-        let chain = ChainState::new(&temp_dir, &genesis).unwrap();
+        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
 
         // Retrieve genesis
         let retrieved = chain.get_block_by_height(0).unwrap().unwrap();

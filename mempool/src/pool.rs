@@ -275,6 +275,38 @@ impl TransactionPool {
         self.stats.total_transactions = self.queue.len();
     }
 
+    // =========================================================================
+    // Phase 14: Batch transaction processing
+    // =========================================================================
+
+    /// Add multiple transactions in a single batch operation.
+    ///
+    /// Transactions are sorted by fee (descending) before insertion so the
+    /// highest-value transactions are always admitted first when the pool is
+    /// near capacity.  Returns a `Vec` of `(hash, result)` pairs in the same
+    /// order as the input slice.
+    ///
+    /// This is significantly more efficient than calling `add` in a loop when
+    /// inserting many transactions at once (e.g. during peer sync) because:
+    /// - A single capacity check is performed up-front.
+    /// - The heap is only rebuilt once after all insertions.
+    pub fn add_batch(&mut self, txs: Vec<Transaction>) -> Vec<(Hash, Result<(), PoolError>)> {
+        // Sort by fee descending so high-value txs are tried first
+        let mut ordered = txs;
+        ordered.sort_by(|a, b| b.fee().cmp(&a.fee()));
+
+        let mut results = Vec::with_capacity(ordered.len());
+        for tx in ordered {
+            let hash = tx.hash();
+            let outcome = self.add(tx);
+            match &outcome {
+                Ok(h) => results.push((*h, Ok(()))),
+                Err(e) => results.push((hash, Err(e.clone()))),
+            }
+        }
+        results
+    }
+
     /// Clear all transactions
     pub fn clear(&mut self) {
         self.queue.clear();

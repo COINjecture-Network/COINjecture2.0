@@ -1,0 +1,574 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "COINjecture JSON-RPC API",
+    "version": "4.8.4",
+    "description": "JSON-RPC 2.0 API for the COINjecture blockchain node. Endpoint: http://{rpc_addr} (default: 127.0.0.1:9933)",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "name": "Local Node",
+      "url": "http://127.0.0.1:9933"
+    }
+  ],
+  "methods": [
+    {
+      "name": "account_getBalance",
+      "summary": "Get the confirmed balance of an address",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": { "type": "string", "description": "64-character hex address (32 bytes)" }
+        }
+      ],
+      "result": {
+        "name": "balance",
+        "schema": { "type": "integer", "description": "Balance in smallest unit (u128)" }
+      },
+      "errors": [
+        { "code": -32002, "message": "INVALID_ADDRESS" }
+      ]
+    },
+    {
+      "name": "account_getNonce",
+      "summary": "Get the current transaction nonce for an address",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "nonce",
+        "schema": { "type": "integer", "description": "Current nonce (u64)" }
+      },
+      "errors": [
+        { "code": -32002, "message": "INVALID_ADDRESS" }
+      ]
+    },
+    {
+      "name": "account_getInfo",
+      "summary": "Get full account information",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "accountInfo",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "address": { "type": "string" },
+            "balance": { "type": "integer" },
+            "nonce": { "type": "integer" }
+          }
+        }
+      }
+    },
+    {
+      "name": "transaction_submit",
+      "summary": "Submit a signed transaction",
+      "params": [
+        {
+          "name": "tx_hex",
+          "required": true,
+          "schema": { "type": "string", "description": "Hex-encoded bincode-serialized Transaction, or JSON-encoded Transaction" }
+        }
+      ],
+      "result": {
+        "name": "txHash",
+        "schema": { "type": "string", "description": "Transaction hash (64-char hex)" }
+      },
+      "errors": [
+        { "code": -32003, "message": "INVALID_SIGNATURE" },
+        { "code": -32004, "message": "INSUFFICIENT_BALANCE" },
+        { "code": -32005, "message": "INVALID_NONCE" },
+        { "code": -32006, "message": "TX_TOO_LARGE" },
+        { "code": -32007, "message": "POOL_FULL" },
+        { "code": -32008, "message": "FEE_TOO_LOW" }
+      ]
+    },
+    {
+      "name": "transaction_getStatus",
+      "summary": "Get the status of a submitted transaction",
+      "params": [
+        {
+          "name": "tx_hash",
+          "required": true,
+          "schema": { "type": "string", "description": "64-char hex transaction hash" }
+        }
+      ],
+      "result": {
+        "name": "transactionStatus",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "tx_hash": { "type": "string" },
+            "status": { "type": "string", "enum": ["pending", "confirmed", "failed"] },
+            "block_height": { "type": ["integer", "null"] }
+          }
+        }
+      },
+      "errors": [
+        { "code": -32001, "message": "NOT_FOUND" }
+      ]
+    },
+    {
+      "name": "chain_getBlock",
+      "summary": "Get a block by height",
+      "params": [
+        {
+          "name": "height",
+          "required": true,
+          "schema": { "type": "integer", "description": "Block height (u64)" }
+        }
+      ],
+      "result": {
+        "name": "block",
+        "schema": {
+          "oneOf": [
+            { "$ref": "#/components/schemas/Block" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "chain_getLatestBlock",
+      "summary": "Get the current chain tip block",
+      "params": [],
+      "result": {
+        "name": "block",
+        "schema": {
+          "oneOf": [
+            { "$ref": "#/components/schemas/Block" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "chain_getBlockHeader",
+      "summary": "Get a block header by height (lighter than full block)",
+      "params": [
+        {
+          "name": "height",
+          "required": true,
+          "schema": { "type": "integer" }
+        }
+      ],
+      "result": {
+        "name": "blockHeader",
+        "schema": {
+          "oneOf": [
+            { "$ref": "#/components/schemas/BlockHeader" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "chain_getInfo",
+      "summary": "Get high-level chain status",
+      "params": [],
+      "result": {
+        "name": "chainInfo",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "chain_id": { "type": "string" },
+            "best_height": { "type": "integer" },
+            "best_hash": { "type": "string" },
+            "genesis_hash": { "type": "string" },
+            "peer_count": { "type": "integer" },
+            "total_work": { "type": "integer", "description": "Cumulative work score of best chain" },
+            "is_syncing": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    {
+      "name": "chain_submitBlock",
+      "summary": "Submit a fully-formed block (used by miners)",
+      "params": [
+        {
+          "name": "block",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Block" }
+        }
+      ],
+      "result": {
+        "name": "blockHash",
+        "schema": { "type": "string" }
+      }
+    },
+    {
+      "name": "marketplace_getOpenProblems",
+      "summary": "List all open problems with active bounties",
+      "params": [],
+      "result": {
+        "name": "problems",
+        "schema": {
+          "type": "array",
+          "items": { "$ref": "#/components/schemas/ProblemInfo" }
+        }
+      }
+    },
+    {
+      "name": "marketplace_getProblem",
+      "summary": "Get details of a specific problem by ID",
+      "params": [
+        {
+          "name": "problem_id",
+          "required": true,
+          "schema": { "type": "string", "description": "64-char hex problem hash" }
+        }
+      ],
+      "result": {
+        "name": "problem",
+        "schema": {
+          "oneOf": [
+            { "$ref": "#/components/schemas/ProblemInfo" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "marketplace_getStats",
+      "summary": "Get aggregate marketplace statistics",
+      "params": [],
+      "result": {
+        "name": "stats",
+        "schema": {
+          "type": "object",
+          "description": "MarketplaceStats: total problems, solved, total bounties, etc."
+        }
+      }
+    },
+    {
+      "name": "marketplace_submitPrivateProblem",
+      "summary": "Submit a private problem with a ZK commitment",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "commitment": { "type": "string" },
+              "proof_bytes": { "type": "string" },
+              "vk_hash": { "type": "string" },
+              "public_inputs": { "type": "array", "items": { "type": "string" } },
+              "problem_type": { "type": "string" },
+              "size": { "type": "integer" },
+              "complexity_estimate": { "type": "number" },
+              "bounty": { "type": "integer" },
+              "min_work_score": { "type": "number" },
+              "expiration_days": { "type": "integer" }
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "problemId",
+        "schema": { "type": "string", "description": "64-char hex problem ID" }
+      }
+    },
+    {
+      "name": "marketplace_revealProblem",
+      "summary": "Reveal a private problem after the commit period",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "problem_id": { "type": "string" },
+              "reveal_data": { "type": "string" }
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "success",
+        "schema": { "type": "boolean" }
+      },
+      "errors": [
+        { "code": -32017, "message": "COMMITMENT_MISMATCH" }
+      ]
+    },
+    {
+      "name": "marketplace_submitPublicSubsetSum",
+      "summary": "Submit a public subset-sum problem with a bounty",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "submitter": { "type": "string" },
+              "set": { "type": "array", "items": { "type": "integer" } },
+              "target": { "type": "integer" },
+              "bounty": { "type": "integer" },
+              "min_work_score": { "type": "number" },
+              "expiration_days": { "type": "integer" }
+            },
+            "required": ["submitter", "set", "target", "bounty"]
+          }
+        }
+      ],
+      "result": {
+        "name": "problemId",
+        "schema": { "type": "string" }
+      }
+    },
+    {
+      "name": "marketplace_submitSolution",
+      "summary": "Submit a solution for a marketplace problem",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "problem_id": { "type": "string" },
+              "solver": { "type": "string" },
+              "solution_type": { "type": "string" },
+              "solution_data": { "type": "string" },
+              "work_score": { "type": "number" }
+            },
+            "required": ["problem_id", "solver", "solution_data"]
+          }
+        }
+      ],
+      "result": {
+        "name": "accepted",
+        "schema": { "type": "boolean" }
+      },
+      "errors": [
+        { "code": -32009, "message": "PROBLEM_NOT_FOUND" },
+        { "code": -32010, "message": "PROBLEM_EXPIRED" },
+        { "code": -32011, "message": "INVALID_SOLUTION" },
+        { "code": -32012, "message": "SOLUTION_ALREADY_SUBMITTED" }
+      ]
+    },
+    {
+      "name": "timelock_getByRecipient",
+      "summary": "Get time-locked outputs for a recipient address",
+      "params": [
+        {
+          "name": "recipient",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "timelocks",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "timelock_getUnlocked",
+      "summary": "List all currently unlocked time-lock outputs",
+      "params": [],
+      "result": {
+        "name": "timelocks",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "escrow_getBySender",
+      "summary": "Get escrows created by a sender",
+      "params": [
+        {
+          "name": "sender",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "escrows",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "escrow_getByRecipient",
+      "summary": "Get escrows held for a recipient",
+      "params": [
+        {
+          "name": "recipient",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "escrows",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "escrow_getActive",
+      "summary": "List all active escrows",
+      "params": [],
+      "result": {
+        "name": "escrows",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "channel_getByAddress",
+      "summary": "Get payment channels involving an address",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "channels",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "channel_getOpen",
+      "summary": "List all open payment channels",
+      "params": [],
+      "result": {
+        "name": "channels",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "channel_getDisputed",
+      "summary": "List all disputed payment channels",
+      "params": [],
+      "result": {
+        "name": "channels",
+        "schema": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    {
+      "name": "faucet_requestTokens",
+      "summary": "Request testnet tokens (testnet only, requires --enable-faucet)",
+      "params": [
+        {
+          "name": "address",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "faucetResponse",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "success": { "type": "boolean" },
+            "amount": { "type": "integer" },
+            "message": { "type": "string" },
+            "cooldown_remaining": { "type": ["integer", "null"] }
+          }
+        }
+      },
+      "errors": [
+        { "code": -32013, "message": "FAUCET_COOLDOWN" },
+        { "code": -32014, "message": "FAUCET_DISABLED" }
+      ]
+    },
+    {
+      "name": "network_getInfo",
+      "summary": "Get P2P network information",
+      "params": [],
+      "result": {
+        "name": "networkInfo",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "peer_id": { "type": "string" },
+            "peer_count": { "type": "integer" },
+            "listen_addresses": { "type": "array", "items": { "type": "string" } },
+            "bootnode_address_hint": { "type": "string" }
+          }
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Block": {
+        "type": "object",
+        "description": "A complete block including header and transactions",
+        "properties": {
+          "header": { "$ref": "#/components/schemas/BlockHeader" },
+          "transactions": {
+            "type": "array",
+            "items": { "type": "object", "description": "Transaction" }
+          },
+          "solution_reveal": { "type": "object", "description": "SolutionReveal" }
+        }
+      },
+      "BlockHeader": {
+        "type": "object",
+        "properties": {
+          "height": { "type": "integer" },
+          "previous_hash": { "type": "string" },
+          "merkle_root": { "type": "string" },
+          "timestamp": { "type": "integer" },
+          "difficulty": { "type": "number" },
+          "work_score": { "type": "number" },
+          "nonce": { "type": "integer" }
+        }
+      },
+      "ProblemInfo": {
+        "type": "object",
+        "properties": {
+          "problem_id": { "type": "string" },
+          "submitter": { "type": "string" },
+          "bounty": { "type": "integer" },
+          "min_work_score": { "type": "number" },
+          "status": { "type": "string", "enum": ["open", "solved", "expired"] },
+          "submitted_at": { "type": "integer" },
+          "expires_at": { "type": "integer" },
+          "is_private": { "type": "boolean" },
+          "problem_type": { "type": ["string", "null"] },
+          "problem_size": { "type": ["integer", "null"] },
+          "is_revealed": { "type": "boolean" }
+        }
+      }
+    },
+    "errors": {
+      "NOT_FOUND": { "code": -32001, "message": "Requested resource does not exist" },
+      "INVALID_ADDRESS": { "code": -32002, "message": "Malformed address" },
+      "INVALID_SIGNATURE": { "code": -32003, "message": "Signature verification failed" },
+      "INSUFFICIENT_BALANCE": { "code": -32004, "message": "Account balance too low" },
+      "INVALID_NONCE": { "code": -32005, "message": "Incorrect transaction nonce" },
+      "TX_TOO_LARGE": { "code": -32006, "message": "Transaction exceeds size limit" },
+      "POOL_FULL": { "code": -32007, "message": "Mempool at capacity" },
+      "FEE_TOO_LOW": { "code": -32008, "message": "Transaction fee below minimum" },
+      "PROBLEM_NOT_FOUND": { "code": -32009, "message": "Problem ID not found" },
+      "PROBLEM_EXPIRED": { "code": -32010, "message": "Problem bounty expired" },
+      "INVALID_SOLUTION": { "code": -32011, "message": "Solution does not satisfy the problem" },
+      "SOLUTION_ALREADY_SUBMITTED": { "code": -32012, "message": "Correct solution already accepted" },
+      "FAUCET_COOLDOWN": { "code": -32013, "message": "Faucet cooldown active" },
+      "FAUCET_DISABLED": { "code": -32014, "message": "Faucet not enabled" },
+      "CHAIN_SYNCING": { "code": -32015, "message": "Node is still syncing" },
+      "INVALID_BLOCK_VERSION": { "code": -32016, "message": "Block version not supported" },
+      "COMMITMENT_MISMATCH": { "code": -32017, "message": "Commitment does not match revealed problem" },
+      "UNAUTHORIZED": { "code": -32018, "message": "Client not authenticated" },
+      "RATE_LIMITED": { "code": -32019, "message": "Request rate limit exceeded" },
+      "FEATURE_NOT_AVAILABLE": { "code": -32020, "message": "Feature not available on this node type" }
+    }
+  }
+}

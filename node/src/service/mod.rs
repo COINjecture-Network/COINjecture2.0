@@ -163,7 +163,7 @@ impl CoinjectNode {
         if let Some(parent) = chain_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let chain = Arc::new(ChainState::new(chain_db_path, &genesis)?);
+        let chain = Arc::new(ChainState::new(chain_db_path, &genesis, config.block_cache_size)?);
         let best_height = chain.best_block_height().await;
         println!("   Best height: {}", best_height);
         println!();

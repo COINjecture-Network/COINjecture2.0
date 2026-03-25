@@ -1,0 +1,370 @@
+{
+  "info": {
+    "name": "COINjecture RPC API",
+    "description": "JSON-RPC 2.0 API for the COINjecture blockchain node (v4.8.4). Import into Postman or Insomnia. Set the {{rpc_url}} variable to your node's RPC endpoint (default: http://127.0.0.1:9933).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "coinject-v4.8.4"
+  },
+  "variable": [
+    {
+      "key": "rpc_url",
+      "value": "http://127.0.0.1:9933",
+      "type": "string"
+    },
+    {
+      "key": "address",
+      "value": "0000000000000000000000000000000000000000000000000000000000000001",
+      "type": "string"
+    },
+    {
+      "key": "tx_hash",
+      "value": "0000000000000000000000000000000000000000000000000000000000000001",
+      "type": "string"
+    },
+    {
+      "key": "block_height",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "problem_id",
+      "value": "0000000000000000000000000000000000000000000000000000000000000001",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Chain",
+      "item": [
+        {
+          "name": "chain_getInfo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"chain_getInfo\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "chain_getLatestBlock",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"chain_getLatestBlock\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "chain_getBlock",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"chain_getBlock\",\n  \"params\": [{{block_height}}],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "chain_getBlockHeader",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"chain_getBlockHeader\",\n  \"params\": [{{block_height}}],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Account",
+      "item": [
+        {
+          "name": "account_getBalance",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"account_getBalance\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "account_getNonce",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"account_getNonce\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "account_getInfo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"account_getInfo\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "transaction_getStatus",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"transaction_getStatus\",\n  \"params\": [\"{{tx_hash}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "transaction_submit (example)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"transaction_submit\",\n  \"params\": [\"<hex-encoded-signed-transaction>\"],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Marketplace",
+      "item": [
+        {
+          "name": "marketplace_getOpenProblems",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"marketplace_getOpenProblems\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "marketplace_getProblem",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"marketplace_getProblem\",\n  \"params\": [\"{{problem_id}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "marketplace_getStats",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"marketplace_getStats\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "marketplace_submitPublicSubsetSum",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"marketplace_submitPublicSubsetSum\",\n  \"params\": [{\n    \"submitter\": \"{{address}}\",\n    \"set\": [10, 20, 30, 40, 50],\n    \"target\": 60,\n    \"bounty\": 100000,\n    \"min_work_score\": 0.1,\n    \"expiration_days\": 7\n  }],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "marketplace_submitSolution",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"marketplace_submitSolution\",\n  \"params\": [{\n    \"problem_id\": \"{{problem_id}}\",\n    \"solver\": \"{{address}}\",\n    \"solution_type\": \"SubsetSum\",\n    \"solution_data\": \"{\\\"indices\\\": [0, 2, 4]}\",\n    \"work_score\": 0.85\n  }],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Timelocks",
+      "item": [
+        {
+          "name": "timelock_getByRecipient",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"timelock_getByRecipient\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "timelock_getUnlocked",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"timelock_getUnlocked\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Escrows",
+      "item": [
+        {
+          "name": "escrow_getBySender",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"escrow_getBySender\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "escrow_getByRecipient",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"escrow_getByRecipient\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "escrow_getActive",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"escrow_getActive\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Channels",
+      "item": [
+        {
+          "name": "channel_getByAddress",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"channel_getByAddress\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "channel_getOpen",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"channel_getOpen\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        },
+        {
+          "name": "channel_getDisputed",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"channel_getDisputed\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Network",
+      "item": [
+        {
+          "name": "network_getInfo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"network_getInfo\",\n  \"params\": [],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Faucet (Testnet)",
+      "item": [
+        {
+          "name": "faucet_requestTokens",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{rpc_url}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"faucet_requestTokens\",\n  \"params\": [\"{{address}}\"],\n  \"id\": 1\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
