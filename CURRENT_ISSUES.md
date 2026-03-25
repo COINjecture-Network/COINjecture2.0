@@ -1,6 +1,25 @@
 # Current Issues and Status
 
-Last Updated: 2026-03-13
+Last Updated: 2026-03-25
+
+## Cross-Validated Audit Findings — Applied 2026-03-25
+
+The following 12 findings were identified and resolved in the audit pass on the `remove-libp2p` branch:
+
+| # | Finding | Severity | File(s) | Status |
+|---|---------|----------|---------|--------|
+| 1 | Hardcoded HuggingFace token | Medium | `node/src/service/mod.rs` | Fixed — env var fallback (`HUGGINGFACE_TOKEN` / `HF_TOKEN`) |
+| 2 | Inbound connection slot leak | High | `network/src/cpp/network.rs` | Fixed — release slots on handshake failure and duplicate peer |
+| 3 | CI not triggered on `remove-libp2p` | Low | `.github/workflows/ci.yml` | Fixed — added `remove-libp2p` to push/PR branches |
+| 4 | Unsigned commit bypass not feature-gated | Medium | `consensus/src/coordinator/commit.rs` | Fixed — gated behind `allow-unsigned-commits` Cargo feature |
+| 5 | README SubsetSum example incorrect | Low | `README.md` | Fixed — corrected indices to `[0,1,6]` → `[15,22,16]` = 53 |
+| 6 | `web-wallet/node_modules/` tracked in git | Low | `.gitignore` / git index | Fixed — removed from git index (`git rm -r --cached`) |
+| 7 | No warning for zero-address submitter | Low | `node/src/service/mining.rs` | Fixed — added testnet-only `warn!` on all-zero submitter |
+| 8 | Stub/TODO paths return no error | Low | `marketplace-export/src/lib.rs` | Fixed — returns `Err(ExportError::NotImplemented)` |
+| 9 | CURRENT_ISSUES.md not updated with findings | Low | `CURRENT_ISSUES.md` | Fixed — this entry |
+| 10 | Empty Cursor screenshot assets tracked | Low | `assets/*.png` | Fixed — removed 4 zero-byte PNGs from git index |
+| 11 | Mobile SDK FFI functions missing Safety docs | Medium | `mobile-sdk/src/lib.rs` | Fixed — added `# Safety` docs to all `extern "C"` functions |
+| 12 | Dangerous `unwrap()` in network handshake | Medium | `network/src/cpp/network.rs` | Fixed — replaced with `unwrap_or_default()` |
 
 ## Testnet MVP Scope
 

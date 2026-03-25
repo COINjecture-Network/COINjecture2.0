@@ -85,13 +85,22 @@ pub struct SolutionCommit {
 ///
 /// Returns `true` (bypass) if `public_key` is all-zeros or `signature` is empty,
 /// to allow unsigned legacy commits during the migration window.
+///
+/// The bypass is gated behind the `allow-unsigned-commits` Cargo feature flag.
+/// Disable this feature on mainnet once all nodes have upgraded to signed commits.
 pub fn verify_commit_signature(epoch: u64, commit: &SolutionCommit) -> bool {
     let no_public_key = commit.public_key == [0u8; 32];
     let no_signature = commit.signature.is_empty();
 
     // Bypass for unsigned commits (legacy / migration window).
+    // Feature-gated: disable `allow-unsigned-commits` to enforce signatures on mainnet.
+    #[cfg(feature = "allow-unsigned-commits")]
     if no_public_key || no_signature {
         return true;
+    }
+    #[cfg(not(feature = "allow-unsigned-commits"))]
+    if no_public_key || no_signature {
+        return false;
     }
 
     let Ok(vk) = VerifyingKey::from_bytes(&commit.public_key) else {

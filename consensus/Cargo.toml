@@ -21,6 +21,12 @@ rand.workspace = true
 bincode.workspace = true
 hex.workspace = true
 tracing.workspace = true
+ed25519-dalek.workspace = true
+
+[features]
+# Allow unsigned (all-zero pubkey) commits during the migration window.
+# MUST be disabled for mainnet once all nodes sign their commits.
+allow-unsigned-commits = []
 
 [dev-dependencies]
 criterion.workspace = true

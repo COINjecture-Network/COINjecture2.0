@@ -357,6 +357,10 @@ impl CoinjectNode {
                         tokio::spawn(async move {
                             match marketplace_clone.get_problem(&problem_id) {
                                 Ok(Some(submission)) => {
+                                    // Fix 7: Warn on zero-address submitter (testnet-only guard)
+                                    if submission.submitter.as_bytes().iter().all(|&b| b == 0) {
+                                        warn!(problem_id = ?problem_id, "problem submitter is all-zeros — testnet placeholder address, not valid for mainnet");
+                                    }
                                     debug!(problem_id = ?problem_id, "uploading problem submission to hugging face");
                                     if let Err(e) = hf_clone.push_problem_submission(&submission, block_height).await {
                                         error!(problem_id = ?problem_id, error = %e, "failed to upload problem submission");

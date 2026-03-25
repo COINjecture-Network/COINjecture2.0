@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, remove-libp2p]
   pull_request:
-    branches: [main]
+    branches: [main, remove-libp2p]
 
 env:
   CARGO_TERM_COLOR: always

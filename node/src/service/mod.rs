@@ -275,7 +275,11 @@ impl CoinjectNode {
         };
 
         // Initialize HuggingFace sync if configured
-        let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) = (&config.hf_token, &config.hf_dataset_name) {
+        // Fix 1: Resolve token from config, falling back to env vars HUGGINGFACE_TOKEN / HF_TOKEN
+        let hf_token_resolved = config.hf_token.clone()
+            .or_else(|| std::env::var("HUGGINGFACE_TOKEN").ok())
+            .or_else(|| std::env::var("HF_TOKEN").ok());
+        let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) = (&hf_token_resolved, &config.hf_dataset_name) {
             info!(dataset = %hf_dataset_name, "initializing huggingface sync");
 
             let hf_config = HuggingFaceConfig {
@@ -316,7 +320,7 @@ impl CoinjectNode {
         };
 
         // Initialize Phase 1C: Dual-Feed Streamer (alongside legacy hf_sync)
-        let dual_feed_streamer = if config.hf_token.is_some() {
+        let dual_feed_streamer = if hf_token_resolved.is_some() {
             info!("initializing dual-feed streamer (head_unconfirmed, canonical_confirmed, reorg_events)");
 
             let streamer_config = StreamerConfig {

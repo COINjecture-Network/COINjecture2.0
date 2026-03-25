@@ -27,6 +27,7 @@ bs58.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 bincode.workspace = true
+subtle.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

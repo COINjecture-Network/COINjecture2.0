@@ -223,7 +223,7 @@ rpc_client.submit_transaction(hex::encode(bincode::serialize(&tx)?)).await?;
 
 ```rust
 // Solve the problem (indices of numbers that sum to target)
-let solution = Solution::SubsetSum(vec![0, 2, 4, 6]); // [15, 14, 32, 16] = 77? No! [15, 14, 16, 8] = 53
+let solution = Solution::SubsetSum(vec![0, 1, 6]); // indices 0,1,6 → [15, 22, 16] = 53 ✓
 
 // Submit solution - BOUNTY PAID AUTOMATICALLY IN THE SAME BLOCK!
 let tx = Transaction::Marketplace(

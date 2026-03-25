@@ -650,17 +650,23 @@ impl CppNetwork {
 
         // Perform CPP Hello/HelloAck handshake
         let state = chain_state.read().await;
-        let (peer_id, node_type, best_height, best_hash) = Self::handshake(
+        let handshake_result = Self::handshake(
             &mut stream,
             local_peer_id,
             &state,
             signing_key.as_deref(),
-        ).await.map_err(|e| {
-            // Cleanup on handshake failure
-            let _ = connection_limiter.try_read().map(|_| ());  // best-effort
-            e
-        })?;
+        ).await;
         drop(state);
+
+        // Fix 2: Release connection slots on handshake failure (slot leak fix)
+        let (peer_id, node_type, best_height, best_hash) = match handshake_result {
+            Ok(v) => v,
+            Err(e) => {
+                connection_limiter.write().await.release(ip);
+                eclipse_guard.write().await.remove(ip);
+                return Err(e);
+            }
+        };
 
         // Verify the authenticated peer ID matches the claimed peer_id in Hello
         if let Some(auth_id) = authenticated_peer_id {
@@ -674,10 +680,13 @@ impl CppNetwork {
             }
         }
         
-        // Check if peer already connected
+        // Check if peer already connected — release slots to prevent leak
         {
             let peers_guard = peers.read().await;
             if peers_guard.contains_key(&peer_id) {
+                drop(peers_guard);
+                connection_limiter.write().await.release(ip);
+                eclipse_guard.write().await.remove(ip);
                 return Err(NetworkError::InvalidHandshake("Peer already connected".to_string()));
             }
         }
@@ -1106,7 +1115,7 @@ impl CppNetwork {
         // Send HelloAck with connection nonce for tie-breaking + optional auth
         let ack_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         let ack_nonce = rand::random::<u64>();
 
@@ -1200,7 +1209,7 @@ impl CppNetwork {
         // Send Hello message first (with timeout) — include auth signature if signing key available
         let hello_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         let (hello_ed25519_pubkey, hello_auth_signature) = if let Some(ref sk) = self.signing_key {

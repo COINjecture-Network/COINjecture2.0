@@ -550,6 +550,11 @@ pub mod ffi {
     pub type LightClientHandle = *mut LightClient;
 
     /// Create new light client (FFI)
+    ///
+    /// # Safety
+    /// `genesis_hex` must be a valid, nul-terminated UTF-8 C string or null.
+    /// Returns null on error. The caller owns the returned handle and must free
+    /// it with `coinject_light_client_free`.
     #[no_mangle]
     pub extern "C" fn coinject_light_client_new(genesis_hex: *const c_char) -> LightClientHandle {
         if genesis_hex.is_null() {
@@ -570,6 +575,10 @@ pub mod ffi {
     }
 
     /// Free light client (FFI)
+    ///
+    /// # Safety
+    /// `handle` must have been returned by `coinject_light_client_new` and must
+    /// not be used after this call. Passing null is safe and a no-op.
     #[no_mangle]
     pub extern "C" fn coinject_light_client_free(handle: LightClientHandle) {
         if !handle.is_null() {
@@ -578,6 +587,10 @@ pub mod ffi {
     }
 
     /// Get verified height (FFI)
+    ///
+    /// # Safety
+    /// `handle` must be a valid pointer returned by `coinject_light_client_new`
+    /// or null. Returns 0 for a null handle.
     #[no_mangle]
     pub extern "C" fn coinject_light_client_height(handle: LightClientHandle) -> u64 {
         if handle.is_null() {
@@ -587,7 +600,13 @@ pub mod ffi {
     }
 
     /// Verify MMR proof from JSON (FFI)
-    /// Returns 0 for success, negative for error
+    ///
+    /// Returns 0 if the proof is valid, 1 if invalid, or a negative error code.
+    ///
+    /// # Safety
+    /// Both `handle` and `proof_json` must be valid non-null pointers, or null.
+    /// `proof_json` must be a valid nul-terminated UTF-8 C string.
+    /// Null inputs return -1 immediately.
     #[no_mangle]
     pub extern "C" fn coinject_verify_mmr_proof(
         handle: LightClientHandle,
@@ -618,7 +637,12 @@ pub mod ffi {
     }
 
     /// Export state to JSON (FFI)
-    /// Caller must free with coinject_free_string
+    ///
+    /// Returns a heap-allocated nul-terminated JSON string. The caller **must**
+    /// free the returned string with `coinject_free_string`. Returns null on error.
+    ///
+    /// # Safety
+    /// `handle` must be a valid pointer returned by `coinject_light_client_new` or null.
     #[no_mangle]
     pub extern "C" fn coinject_light_client_export(handle: LightClientHandle) -> *mut c_char {
         if handle.is_null() {
@@ -634,7 +658,12 @@ pub mod ffi {
         }
     }
 
-    /// Free string allocated by FFI
+    /// Free string allocated by FFI (e.g. from `coinject_light_client_export`)
+    ///
+    /// # Safety
+    /// `s` must have been returned by a `coinject_*` function that allocates a
+    /// C string, or null. Passing null is safe and a no-op. Must not be called
+    /// more than once for the same pointer.
     #[no_mangle]
     pub extern "C" fn coinject_free_string(s: *mut c_char) {
         if !s.is_null() {
