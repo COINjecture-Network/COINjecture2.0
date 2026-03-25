@@ -68,7 +68,7 @@ impl TestNode {
         let genesis_hash = genesis.header.hash();
 
         let chain = Arc::new(
-            ChainState::new(dir.path().join("chain.db"), &genesis)
+            ChainState::new(dir.path().join("chain.db"), &genesis, 128)
                 .expect("ChainState::new"),
         );
 
@@ -335,6 +335,7 @@ async fn test_3_block_propagation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..CppConfig::default()
     };
     let cfg_b = CppConfig { ..cfg_a.clone() };
 
@@ -448,6 +449,7 @@ async fn test_4_consensus_round() {
                             epoch: *epoch,
                             commit: coinject_consensus::SolutionCommit {
                                 node_id: peer_id,
+                                public_key: [0u8; 32],
                                 solution_hash: peer_hash,
                                 work_score: 150.0,
                                 signature: vec![],
@@ -576,6 +578,7 @@ async fn test_6_peer_discovery() {
         max_peers: 20,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..CppConfig::default()
     };
 
     let new_peer_id = [0x33u8; 32];
@@ -786,6 +789,7 @@ async fn test_8_mempool_sync() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..CppConfig::default()
     };
     let (_net, cmd_tx, _evt_rx) = CppNetwork::new(cfg, [0x44u8; 32], genesis);
     cmd_tx

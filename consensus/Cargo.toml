@@ -30,3 +30,4 @@ allow-unsigned-commits = []
 
 [dev-dependencies]
 criterion.workspace = true
+proptest.workspace = true

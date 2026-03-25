@@ -64,6 +64,7 @@ async fn test_two_node_network_creation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..CppConfig::default()
     };
     let peer_id1 = [1u8; 32];
     let (_network1, _cmd_tx1, _event_rx1) = CppNetwork::new(config1, peer_id1, genesis);
@@ -76,6 +77,7 @@ async fn test_two_node_network_creation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..CppConfig::default()
     };
     let peer_id2 = [2u8; 32];
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, peer_id2, genesis);

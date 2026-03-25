@@ -813,6 +813,7 @@ mod tests {
         drop(cmd_tx);
     }
 
+    #[cfg(feature = "allow-unsigned-commits")]
     #[tokio::test]
     async fn test_commit_collection() {
         let our_id = test_node_id(1);
@@ -867,6 +868,7 @@ mod tests {
                 epoch: 1,
                 commit: SolutionCommit {
                     node_id: test_node_id(2),
+                    public_key: [0u8; 32],
                     solution_hash: [0xBB; 32],
                     work_score: 100.0,
                     signature: vec![],

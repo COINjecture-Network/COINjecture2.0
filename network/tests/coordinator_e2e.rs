@@ -165,6 +165,7 @@ impl TestNode {
                                 epoch,
                                 commit: SolutionCommit {
                                     node_id: commit.node_id.0,
+                                    public_key: [0u8; 32],
                                     solution_hash: commit.solution_hash,
                                     work_score: commit.work_score,
                                     signature: commit.signature,

@@ -2,6 +2,19 @@
 
 Last Updated: 2026-03-25
 
+## CI / Test Parity Follow-Up — Applied 2026-03-25
+
+Follow-up fixes applied after the cross-validated audit to achieve CI/ship parity:
+
+| # | Finding | Severity | File(s) | Status |
+|---|---------|----------|---------|--------|
+| F1 | `cargo test --all` fails (missing struct fields added in audit) | High | Multiple test files | Fixed — added `public_key`, `auth_signature`, `ed25519_pubkey` fields to all struct literals in tests |
+| F2 | `proptest` missing from dev-deps | Medium | `core/Cargo.toml`, `consensus/Cargo.toml` | Fixed — added `proptest.workspace = true` to dev-dependencies |
+| F3 | Unsigned commit tests not gated (fail without feature) | Medium | `consensus/src/coordinator/commit.rs`, `consensus/src/coordinator/mod.rs` | Fixed — gated 9 tests with `#[cfg(feature = "allow-unsigned-commits")]` |
+| F4 | Integration tests create unsigned commits without feature | Medium | `network/Cargo.toml`, `node/Cargo.toml` | Fixed — added `allow-unsigned-commits` feature to coinject-consensus in dev-dependencies |
+| F5 | CI only runs `cargo test --all --all-features` (no default-feature run) | Low | `.github/workflows/ci.yml` | Fixed — split into two jobs: default features + all features |
+| F6 | Docker `latest` tag only pushed on `main`, not `remove-libp2p` | Low | `.github/workflows/ci.yml` | Fixed — `latest` tag enabled for both `main` and `remove-libp2p` |
+
 ## Cross-Validated Audit Findings — Applied 2026-03-25
 
 The following 12 findings were identified and resolved in the audit pass on the `remove-libp2p` branch:

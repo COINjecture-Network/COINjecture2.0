@@ -573,6 +573,8 @@ mod tests {
             node_type: 1,
             timestamp: 0,
             connection_nonce: 0,
+            ed25519_pubkey: [0u8; 32],
+            auth_signature: [0u8; 64],
         };
         assert!(valid.validate().is_ok());
 
@@ -591,6 +593,8 @@ mod tests {
             node_type: 1,
             timestamp: 0,
             connection_nonce: 0,
+            ed25519_pubkey: [0u8; 32],
+            auth_signature: [0u8; 64],
         };
         assert!(msg.validate().is_err());
     }
@@ -705,6 +709,8 @@ mod tests {
             node_type: 2,
             timestamp: 1_700_000_000,
             connection_nonce: 99,
+            ed25519_pubkey: [0u8; 32],
+            auth_signature: [0u8; 64],
         };
         let bytes = bincode::serialize(&msg).expect("HelloMessage must serialize");
         let recovered: HelloMessage = bincode::deserialize(&bytes).expect("HelloMessage must deserialize");
@@ -761,6 +767,8 @@ mod tests {
             node_type: 0,
             timestamp: 0,
             connection_nonce: 0,
+            ed25519_pubkey: [0u8; 32],
+            auth_signature: [0u8; 64],
         };
         let bytes = bincode::serialize(&msg).unwrap();
         // A basic handshake must be well under 1 MB

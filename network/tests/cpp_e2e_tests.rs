@@ -236,6 +236,7 @@ async fn test_network_multiple_peers() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..CppConfig::default()
     };
     let (_network1, _cmd_tx1, _event_rx1) = CppNetwork::new(config1, [1u8; 32], genesis);
 
@@ -246,6 +247,7 @@ async fn test_network_multiple_peers() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..CppConfig::default()
     };
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, [2u8; 32], genesis);
 

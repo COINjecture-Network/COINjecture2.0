@@ -32,6 +32,7 @@ fn test_config(port: u16) -> CppConfig {
         max_peers: 10,
         enable_websocket: false,
         node_type: NodeType::Full,
+        ..CppConfig::default()
     }
 }
 
