@@ -72,6 +72,10 @@ bs58 = "0.5"
 # Time
 chrono = "0.4"
 
+# Testing
+proptest = "1"
+tempfile = "3"
+
 # RPC
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
 
