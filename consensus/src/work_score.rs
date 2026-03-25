@@ -57,20 +57,27 @@
 //! COMPLIANCE: Empirical ✓ | Self-referential ✓ | Dimensionless ✓
 
 use coinject_core::{ProblemType, Solution, WorkScore};
+use coinject_core::fixed_point::{self, Fixed64};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Minimum verify time floor (prevents division by zero and log₂ explosion
-/// from negligibly fast verification). 1ms is a conservative floor —
-/// real verification of any non-trivial NP instance takes at least this.
+/// Minimum verify time floor in seconds (f64 path only — display/compat).
+/// Prevents division-by-zero for negligibly fast verification.
 const MIN_VERIFY_TIME_SECS: f64 = 0.001;
 
-/// Minimum meaningful asymmetry ratio. Below this, the "work" is negligible.
+/// Minimum verify time floor in microseconds (deterministic integer path).
+/// 1 ms = 1_000 μs.  Real NP verification takes at least this long.
+const MIN_VERIFY_TIME_US: u64 = 1_000;
+
+/// Minimum meaningful asymmetry ratio (f64 path).
 /// log₂(2) = 1 bit — solving took at least 2× longer than verifying.
 const MIN_ASYMMETRY_RATIO: f64 = 2.0;
+
+/// Minimum asymmetry for the deterministic path: solve_us ≥ 2 × verify_us.
+const MIN_ASYMMETRY_US: u64 = 2;
 
 // ---------------------------------------------------------------------------
 // Calculator
@@ -168,6 +175,71 @@ impl WorkScoreCalculator {
     /// ratio would produce a target_bits work score at quality 1.0?"
     pub fn required_asymmetry_for_bits(target_bits: f64) -> f64 {
         2.0_f64.powf(target_bits)
+    }
+
+    // -----------------------------------------------------------------------
+    // Deterministic integer path (consensus-critical)
+    // -----------------------------------------------------------------------
+
+    /// Calculate work score using **integer arithmetic only** — consensus-safe.
+    ///
+    /// This is the authoritative implementation for validator agreement.
+    /// It replaces floating-point `calculate()` in all consensus paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `solve_time_us`  — Solution wall-clock time in **microseconds**
+    ///                      (use `block.header.solve_time_us`).
+    /// * `verify_time_us` — Verification time in **microseconds**
+    ///                      (use `block.header.verify_time_us`).
+    /// * `quality_bps`    — Solution quality in basis points `[0, 10_000]`.
+    ///                      For decision problems (SubsetSum, SAT) use 10_000.
+    ///                      Convert f64 quality with `fixed_point::quality_f64_to_bps`.
+    ///
+    /// # Returns
+    ///
+    /// Work score as a [`Fixed64`] value (scaled by `fixed_point::SCALE = 1_000_000`).
+    /// A score of `13_290_000` represents 13.29 bits of equivalent work.
+    /// Returns `0` for invalid or trivially asymmetric solutions.
+    pub fn calculate_deterministic(
+        &self,
+        solve_time_us: u64,
+        verify_time_us: u64,
+        quality_bps: u16,
+    ) -> Fixed64 {
+        if quality_bps == 0 {
+            return 0;
+        }
+
+        // Enforce minimum verify time floor to prevent ratio explosion.
+        let verify_us = verify_time_us.max(MIN_VERIFY_TIME_US);
+
+        // Reject solutions with insufficient time asymmetry.
+        if solve_time_us < verify_us.saturating_mul(MIN_ASYMMETRY_US) {
+            return 0;
+        }
+
+        match fixed_point::log2_ratio(solve_time_us, verify_us) {
+            None => 0,
+            Some(bits) => fixed_point::apply_quality(bits, quality_bps),
+        }
+    }
+
+    /// Cumulative chain security in `Fixed64` units.
+    ///
+    /// Returns the sum of all fixed-point work scores as a u128 to avoid
+    /// overflow for long chains. Divide by `fixed_point::SCALE` to get bits.
+    pub fn chain_security_fixed(work_scores: &[Fixed64]) -> u128 {
+        fixed_point::chain_security(work_scores)
+    }
+
+    /// Compare two blocks by deterministic work score.
+    ///
+    /// Returns `true` if `a_score > b_score` — i.e., block A represents
+    /// strictly more work and should be preferred in the fork choice rule.
+    #[inline]
+    pub fn block_a_wins(a_score: Fixed64, b_score: Fixed64) -> bool {
+        a_score > b_score
     }
 }
 
@@ -327,5 +399,66 @@ mod tests {
             score_a, score_b,
             "Same inputs should give same score — formula is problem-type agnostic"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Deterministic integer path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_deterministic_basic() {
+        let calc = WorkScoreCalculator::new();
+        // 10s solve (10_000_000 μs), 1ms verify (1_000 μs) → ratio = 10_000
+        // log₂(10_000) ≈ 13.29
+        let score = calc.calculate_deterministic(10_000_000, 1_000, 10_000);
+        let bits = coinject_core::fixed_point::to_f64(score);
+        assert!(bits > 13.0 && bits < 13.5, "expected ~13.29 bits, got {:.4}", bits);
+    }
+
+    #[test]
+    fn test_deterministic_zero_quality() {
+        let calc = WorkScoreCalculator::new();
+        assert_eq!(calc.calculate_deterministic(10_000_000, 1_000, 0), 0);
+    }
+
+    #[test]
+    fn test_deterministic_trivial_asymmetry_returns_zero() {
+        let calc = WorkScoreCalculator::new();
+        // solve = verify → no asymmetry → zero
+        assert_eq!(calc.calculate_deterministic(1_000, 1_000, 10_000), 0);
+        // solve < 2× verify → zero
+        assert_eq!(calc.calculate_deterministic(1_500, 1_000, 10_000), 0);
+    }
+
+    #[test]
+    fn test_deterministic_is_bit_exact() {
+        let calc = WorkScoreCalculator::new();
+        // Same inputs must always produce the same output — no floating-point drift.
+        let a = calc.calculate_deterministic(5_000_000, 500, 10_000);
+        let b = calc.calculate_deterministic(5_000_000, 500, 10_000);
+        assert_eq!(a, b, "deterministic path must be bit-exact");
+    }
+
+    #[test]
+    fn test_deterministic_quality_half() {
+        let calc = WorkScoreCalculator::new();
+        let full = calc.calculate_deterministic(10_000_000, 1_000, 10_000);
+        let half = calc.calculate_deterministic(10_000_000, 1_000, 5_000);
+        assert_eq!(half, full / 2, "half quality should halve the score");
+    }
+
+    #[test]
+    fn test_block_a_wins_ordering() {
+        assert!(WorkScoreCalculator::block_a_wins(200_000, 100_000));
+        assert!(!WorkScoreCalculator::block_a_wins(100_000, 200_000));
+        assert!(!WorkScoreCalculator::block_a_wins(100_000, 100_000));
+    }
+
+    #[test]
+    fn test_chain_security_fixed() {
+        use coinject_core::fixed_point::SCALE;
+        let scores = vec![10 * SCALE, 12 * SCALE, 11 * SCALE];
+        let total = WorkScoreCalculator::chain_security_fixed(&scores);
+        assert_eq!(total, 33 * SCALE as u128);
     }
 }

@@ -351,6 +351,29 @@ impl EpochCoordinator {
         let current_phase = self.epoch_state.phase;
         let epoch = self.epoch_state.epoch;
 
+        // Hard deadline: force epoch termination if the epoch has run too long
+        // regardless of which phase it's in. This prevents Byzantine leaders
+        // from blocking consensus indefinitely via crafted timeouts.
+        if self.epoch_state.has_exceeded_hard_deadline(&self.config) {
+            tracing::error!(
+                epoch,
+                phase = %current_phase,
+                elapsed_ms = self.epoch_state.epoch_elapsed().as_millis(),
+                "epoch exceeded hard deadline — forcing new epoch (consensus safety)"
+            );
+            let _ = event_tx.send(CoordinatorEvent::EpochStalled {
+                epoch,
+                phase: current_phase,
+                reason: format!(
+                    "hard deadline exceeded after {}ms",
+                    self.epoch_state.epoch_elapsed().as_millis()
+                ),
+            });
+            self.consecutive_stalls += 1;
+            self.start_epoch(epoch + 1, event_tx).await;
+            return;
+        }
+
         // Check for stall (phase + stall_timeout exceeded)
         if self.epoch_state.is_stalled(&self.config) {
             self.handle_stall(event_tx).await;

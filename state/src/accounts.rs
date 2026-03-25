@@ -1,6 +1,6 @@
 // Account-based state management with redb database (pure Rust, ACID-compliant)
 use coinject_core::{Address, Balance};
-use redb::{Database, TableDefinition};
+use redb::{Database, ReadableTable, TableDefinition};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -151,6 +151,112 @@ impl AccountState {
         // This method exists for API compatibility
         Ok(())
     }
+
+    // -------------------------------------------------------------------------
+    // Phase-4: Atomic block application (double-spend prevention)
+    // -------------------------------------------------------------------------
+
+    /// Apply all balance changes and nonce increments for a block in a single
+    /// ACID write transaction.
+    ///
+    /// ## Why this matters
+    ///
+    /// Calling `transfer()` / `set_balance()` individually for each transaction
+    /// in a block creates multiple separate database transactions. If the node
+    /// crashes between two of them the state becomes inconsistent (partial
+    /// block application). More critically, concurrent reads between individual
+    /// writes could observe intermediate balances, enabling double-spend races.
+    ///
+    /// This method applies the entire block's state changes atomically: either
+    /// every change commits, or none do.
+    ///
+    /// ## Arguments
+    ///
+    /// * `balance_changes` — Slice of `(address, new_balance)` pairs. These are
+    ///   the **final post-block** balances, already validated for sufficiency.
+    ///   Computing the deltas and validation is the caller's responsibility.
+    /// * `nonce_increments` — Addresses whose nonce should be incremented by 1.
+    ///   Pass every sender address that appeared in the block's transactions.
+    pub fn apply_block_atomically(
+        &self,
+        balance_changes: &[(Address, Balance)],
+        nonce_increments: &[Address],
+    ) -> Result<(), StateError> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut bal_table = write_txn.open_table(BALANCES_TABLE)?;
+            let mut nonce_table = write_txn.open_table(NONCES_TABLE)?;
+
+            // Apply all balance changes.
+            for (addr, balance) in balance_changes {
+                bal_table.insert(addr.as_bytes(), *balance)?;
+            }
+
+            // Increment nonces for all transaction senders.
+            for addr in nonce_increments {
+                let current = nonce_table
+                    .get(addr.as_bytes())?
+                    .map(|v| v.value())
+                    .unwrap_or(0u64);
+                nonce_table.insert(addr.as_bytes(), current + 1)?;
+            }
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Read the current balance of multiple addresses in a single read transaction.
+    ///
+    /// More efficient than calling `get_balance()` repeatedly when you need
+    /// balances for several accounts (e.g., for block validation pre-checks).
+    pub fn get_balances_batch(&self, addresses: &[Address]) -> Vec<(Address, Balance)> {
+        let read_txn = match self.db.begin_read() {
+            Ok(t) => t,
+            Err(_) => return addresses.iter().map(|a| (*a, 0)).collect(),
+        };
+        let table = match read_txn.open_table(BALANCES_TABLE) {
+            Ok(t) => t,
+            Err(_) => return addresses.iter().map(|a| (*a, 0)).collect(),
+        };
+
+        addresses
+            .iter()
+            .map(|addr| {
+                let bal = table
+                    .get(addr.as_bytes())
+                    .ok()
+                    .flatten()
+                    .map(|v| v.value())
+                    .unwrap_or(0);
+                (*addr, bal)
+            })
+            .collect()
+    }
+
+    /// Read nonces for multiple addresses in a single read transaction.
+    pub fn get_nonces_batch(&self, addresses: &[Address]) -> Vec<(Address, u64)> {
+        let read_txn = match self.db.begin_read() {
+            Ok(t) => t,
+            Err(_) => return addresses.iter().map(|a| (*a, 0)).collect(),
+        };
+        let table = match read_txn.open_table(NONCES_TABLE) {
+            Ok(t) => t,
+            Err(_) => return addresses.iter().map(|a| (*a, 0)).collect(),
+        };
+
+        addresses
+            .iter()
+            .map(|addr| {
+                let nonce = table
+                    .get(addr.as_bytes())
+                    .ok()
+                    .flatten()
+                    .map(|v| v.value())
+                    .unwrap_or(0);
+                (*addr, nonce)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug)]
@@ -273,5 +379,57 @@ mod tests {
 
         // Cleanup
         std::fs::remove_file("test_nonce_db").ok();
+    }
+
+    #[test]
+    fn test_apply_block_atomically() {
+        let state = AccountState::new("test_atomic_db").unwrap();
+        let alice = Address::from_bytes([10u8; 32]);
+        let bob = Address::from_bytes([11u8; 32]);
+        let miner = Address::from_bytes([12u8; 32]);
+
+        // Setup initial balances.
+        state.set_balance(&alice, 1_000).unwrap();
+        state.set_balance(&bob, 500).unwrap();
+        state.set_balance(&miner, 0).unwrap();
+
+        // Simulate a block that:
+        //  - alice sends 100 to bob (fee 10 to miner)
+        //  - miner gets coinbase of 50
+        let balance_changes = vec![
+            (alice, 890u128),  // 1000 - 100 - 10
+            (bob, 600u128),    // 500 + 100
+            (miner, 60u128),   // 0 + 10 (fee) + 50 (coinbase)
+        ];
+        let nonce_increments = vec![alice];
+
+        state.apply_block_atomically(&balance_changes, &nonce_increments).unwrap();
+
+        assert_eq!(state.get_balance(&alice), 890);
+        assert_eq!(state.get_balance(&bob), 600);
+        assert_eq!(state.get_balance(&miner), 60);
+        assert_eq!(state.get_nonce(&alice), 1);
+        assert_eq!(state.get_nonce(&bob), 0); // bob didn't send, nonce unchanged
+
+        // Cleanup
+        std::fs::remove_file("test_atomic_db").ok();
+    }
+
+    #[test]
+    fn test_get_balances_batch() {
+        let state = AccountState::new("test_batch_db").unwrap();
+        let a = Address::from_bytes([20u8; 32]);
+        let b = Address::from_bytes([21u8; 32]);
+
+        state.set_balance(&a, 100).unwrap();
+        state.set_balance(&b, 200).unwrap();
+
+        let results = state.get_balances_batch(&[a, b]);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], (a, 100));
+        assert_eq!(results[1], (b, 200));
+
+        // Cleanup
+        std::fs::remove_file("test_batch_db").ok();
     }
 }

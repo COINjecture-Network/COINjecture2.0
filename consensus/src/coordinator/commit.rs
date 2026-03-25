@@ -132,12 +132,14 @@ impl CommitCollector {
     /// Add a commit from a node.
     ///
     /// Returns `false` (and discards the commit) if:
-    ///   - `work_score` is zero or negative
+    ///   - `work_score` is zero or negative, NaN, or non-finite
     ///   - The commit carries a signature that does not verify (wrong key / tampered data)
     ///   - A commit from this node has already been received (equivocation)
     pub fn add_commit(&mut self, commit: SolutionCommit) -> bool {
-        if commit.work_score <= 0.0 {
-            return false; // Reject zero/negative work scores
+        // Reject any non-positive, NaN, or infinite score — these cannot
+        // participate in deterministic ordering.
+        if !commit.work_score.is_finite() || commit.work_score <= 0.0 {
+            return false;
         }
 
         // Verify signature when present (rejects forged commits).
