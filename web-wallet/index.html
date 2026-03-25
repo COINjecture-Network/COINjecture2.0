@@ -2,12 +2,51 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+
+    <!-- Security: Content Security Policy
+         script-src 'self'      — only bundled scripts, no inline scripts
+         style-src  'self' 'unsafe-inline' — React JSX style={{}} props render as inline style attributes
+         connect-src 'self'     — RPC / metrics calls go through same-origin Vite proxy
+         img-src 'self' data:   — favicon + any data-URIs used in the UI
+         font-src 'self'        — no external font CDNs
+         frame-ancestors 'none' — clickjacking protection
+         base-uri 'self'        — prevent <base> tag injection
+         form-action 'self'     — no cross-origin form submissions
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline';
+      connect-src 'self';
+      img-src 'self' data:;
+      font-src 'self';
+      frame-ancestors 'none';
+      base-uri 'self';
+      form-action 'self';
+      upgrade-insecure-requests;
+    " />
+
+    <!-- Security: prevent MIME-type sniffing -->
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+
+    <!-- Security: no referrer leakage -->
+    <meta name="referrer" content="no-referrer" />
+
+    <!-- HTTPS enforcement: upgrade any accidental HTTP sub-resources -->
+    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests" />
+
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>COINjecture Network B - Wallet & Explorer</title>
+    <title>COINjecture Wallet &amp; Explorer</title>
+
+    <!-- Preconnect hint (same origin only) -->
+    <link rel="preconnect" href="/" />
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Skip-to-content link for keyboard / screen-reader users -->
+    <a href="#root" class="skip-link">Skip to main content</a>
+
+    <div id="root" role="main" aria-label="COINjecture Wallet application"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

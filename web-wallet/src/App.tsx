@@ -4,101 +4,120 @@ import WalletView from './components/WalletView'
 import ExplorerView from './components/ExplorerView'
 import AdvancedMetricsView from './components/AdvancedMetricsView'
 import Marketplace from './pages/Marketplace'
+import { ToastProvider } from './components/Toast'
 
 type Tab = 'wallet' | 'explorer' | 'metrics' | 'marketplace'
 
-function App() {
+const TAB_LABELS: Record<Tab, string> = {
+  wallet: 'Wallet',
+  explorer: 'Explorer',
+  metrics: 'Metrics',
+  marketplace: 'Marketplace',
+}
+
+function AppContent() {
   const [activeTab, setActiveTab] = useState<Tab>('wallet')
 
   return (
     <div style={{ minHeight: '100vh' }}>
       {/* Header */}
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ textAlign: 'center' }}>
-          <h1 style={{
-            fontSize: 32,
-            fontWeight: 700,
-            marginBottom: 8,
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text'
-          }}>
-            COINjecture Network B
-          </h1>
-          <p style={{ color: '#718096', marginBottom: 16 }}>
-            WEB4 Testnet • Dimensional Economics • η = λ = 1/√2
-          </p>
+      <header>
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div style={{ textAlign: 'center' }}>
+            <h1
+              aria-label="COINjecture Network B"
+              style={{
+                fontSize: 32,
+                fontWeight: 700,
+                marginBottom: 8,
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              COINjecture Network B
+            </h1>
+            <p style={{ color: '#718096', marginBottom: 16 }}>
+              WEB4 Testnet • Dimensional Economics • η = λ = 1/√2
+            </p>
 
-          {/* Tab Navigation */}
-          <div style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'center',
-            borderTop: '1px solid #e2e8f0',
-            paddingTop: 16
-          }}>
-            <TabButton
-              active={activeTab === 'wallet'}
-              onClick={() => setActiveTab('wallet')}
-              icon={<Wallet size={18} />}
-              label="Wallet"
-            />
-            <TabButton
-              active={activeTab === 'explorer'}
-              onClick={() => setActiveTab('explorer')}
-              icon={<Network size={18} />}
-              label="Explorer"
-            />
-            <TabButton
-              active={activeTab === 'metrics'}
-              onClick={() => setActiveTab('metrics')}
-              icon={<BarChart3 size={18} />}
-              label="Metrics"
-            />
-            <TabButton
-              active={activeTab === 'marketplace'}
-              onClick={() => setActiveTab('marketplace')}
-              icon={<ShoppingBag size={18} />}
-              label="Marketplace"
-            />
+            {/* Tab Navigation */}
+            <nav
+              aria-label="Main navigation"
+              role="navigation"
+            >
+              <div
+                className="tab-nav"
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  justifyContent: 'center',
+                  borderTop: '1px solid #e2e8f0',
+                  paddingTop: 16,
+                }}
+              >
+                {(['wallet', 'explorer', 'metrics', 'marketplace'] as Tab[]).map(tab => (
+                  <TabButton
+                    key={tab}
+                    tab={tab}
+                    active={activeTab === tab}
+                    onClick={() => setActiveTab(tab)}
+                  />
+                ))}
+              </div>
+            </nav>
           </div>
         </div>
-      </div>
+      </header>
 
       {/* Tab Content */}
-      {activeTab === 'wallet' && <WalletView />}
-      {activeTab === 'explorer' && <ExplorerView />}
-      {activeTab === 'metrics' && <AdvancedMetricsView />}
-      {activeTab === 'marketplace' && <Marketplace />}
+      <main id="main-content" tabIndex={-1}>
+        {activeTab === 'wallet'      && <WalletView />}
+        {activeTab === 'explorer'    && <ExplorerView />}
+        {activeTab === 'metrics'     && <AdvancedMetricsView />}
+        {activeTab === 'marketplace' && <Marketplace />}
+      </main>
 
       {/* Footer */}
-      <div style={{
-        textAlign: 'center',
-        padding: 20,
-        color: 'white',
-        fontSize: 14
-      }}>
+      <footer
+        role="contentinfo"
+        style={{ textAlign: 'center', padding: 20, color: 'white', fontSize: 14 }}
+      >
         <p>COINjecture Network B v4.5.0 • Testnet</p>
         <p style={{ marginTop: 4, opacity: 0.8 }}>
           Proof of Useful Work (PoUW) • NP-Hard Consensus
         </p>
-      </div>
+        <p style={{ marginTop: 4, opacity: 0.6, fontSize: 12 }}>
+          ⚠ Testnet only — do not use real funds
+        </p>
+      </footer>
     </div>
   )
 }
 
-interface TabButtonProps {
-  active: boolean
-  onClick: () => void
-  icon: React.ReactNode
-  label: string
+// ── Tab icon map ──────────────────────────────────────────────────────────────
+const TAB_ICONS: Record<Tab, JSX.Element> = {
+  wallet:      <Wallet size={18} aria-hidden="true" />,
+  explorer:    <Network size={18} aria-hidden="true" />,
+  metrics:     <BarChart3 size={18} aria-hidden="true" />,
+  marketplace: <ShoppingBag size={18} aria-hidden="true" />,
 }
 
-function TabButton({ active, onClick, icon, label }: TabButtonProps) {
+interface TabButtonProps {
+  tab: Tab
+  active: boolean
+  onClick: () => void
+}
+
+function TabButton({ tab, active, onClick }: TabButtonProps) {
   return (
     <button
       onClick={onClick}
+      role="tab"
+      aria-selected={active}
+      aria-controls={`tabpanel-${tab}`}
+      id={`tab-${tab}`}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -110,13 +129,20 @@ function TabButton({ active, onClick, icon, label }: TabButtonProps) {
         borderRadius: 6,
         cursor: 'pointer',
         fontWeight: 500,
-        transition: 'all 0.2s'
+        transition: 'all 0.2s',
       }}
     >
-      {icon}
-      {label}
+      {TAB_ICONS[tab]}
+      {TAB_LABELS[tab]}
     </button>
   )
 }
 
-export default App
+// Wrap everything in the ToastProvider so any child can call useToast()
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
+    </ToastProvider>
+  )
+}
