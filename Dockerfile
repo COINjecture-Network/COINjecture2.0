@@ -1,6 +1,8 @@
 # Dockerfile for COINjecture CPP Network (libp2p removed)
-# Multi-stage build for optimized image size
+# Multi-stage build: builder compiles, runtime is minimal debian-slim
+# Security: runs as non-root user 'coinject' (uid 10001)
 
+# ── Builder stage ────────────────────────────────────────────────────────────
 FROM rust:1.88-slim AS builder
 
 # Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
@@ -49,7 +51,7 @@ COPY mobile-sdk ./mobile-sdk
 # Build release binary
 RUN cargo build --release --bin coinject
 
-# Runtime stage
+# ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
 # Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
@@ -62,11 +64,19 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user and group
+# uid/gid 10001 — avoids collision with common system users
+RUN groupadd --gid 10001 coinject \
+ && useradd --uid 10001 --gid coinject --shell /sbin/nologin --no-create-home coinject
+
 # Copy binary from builder
 COPY --from=builder /build/target/release/coinject /usr/local/bin/coinject
 
-# Create data directory
-RUN mkdir -p /data
+# Create data directory owned by coinject user
+RUN mkdir -p /data && chown coinject:coinject /data
+
+# Drop to non-root user for all subsequent instructions and runtime
+USER coinject
 
 # Expose CPP network ports
 # CPP P2P port (default: 707)
@@ -75,12 +85,16 @@ EXPOSE 707
 EXPOSE 8080
 # JSON-RPC port (default: 9933)
 EXPOSE 9933
-# Metrics port (default: 9090)
+# Metrics port (default: 9090) — also serves /health
 EXPOSE 9090
 
 WORKDIR /data
 
+# Health check — polls the /health endpoint on the metrics port
+# Adjust --metrics-addr in CMD to match if overridden
+HEALTHCHECK --interval=15s --timeout=5s --start-period=40s --retries=3 \
+    CMD curl -sf http://localhost:9090/health || exit 1
+
 # Default command
 ENTRYPOINT ["/usr/local/bin/coinject"]
 CMD ["--help"]
-

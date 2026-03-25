@@ -3,18 +3,29 @@ version: '3.8'
 # COINjecture Custom P2P Network — Docker Testnet
 # Uses CPP protocol on port 707 (NOT libp2p)
 # Health endpoint: GET /health on metrics port (9090)
+#
+# Environment: copy .env.example to .env and fill in values before running.
+# Secrets: sensitive values come from .env file — never hardcode in this file.
 
 services:
-  # Bootnode - first node in the network
+  # ── Bootnode ─────────────────────────────────────────────────────────────
+  # First node in the network. Other nodes dial this address at startup.
   bootnode:
     build:
       context: .
       dockerfile: Dockerfile
+    image: coinject-node:latest
     container_name: coinject-bootnode
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     ports:
-      - "707:707"      # CPP P2P
+      - "707:707"      # CPP P2P  — must be reachable by external peers
       - "9090:9090"    # Metrics + Health
-      - "9933:9933"    # RPC
+      - "9933:9933"    # JSON-RPC
     volumes:
       - bootnode-data:/data
     command: >
@@ -23,28 +34,41 @@ services:
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
-    environment:
-      - RUST_LOG=info
-      - RUST_BACKTRACE=1
     networks:
-      - coinject-network
+      - coinject-internal
+      - coinject-rpc
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
 
-  # Node 1 - connects to bootnode via CPP protocol
+  # ── Node 1 ────────────────────────────────────────────────────────────────
   node1:
     build:
       context: .
       dockerfile: Dockerfile
+    image: coinject-node:latest
     container_name: coinject-node1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     ports:
-      - "708:707"      # CPP P2P (mapped to host 708)
+      - "708:707"      # CPP P2P (host 708 → container 707)
       - "9091:9090"    # Metrics + Health
-      - "9934:9933"    # RPC
+      - "9934:9933"    # JSON-RPC
     volumes:
       - node1-data:/data
     command: >
@@ -54,31 +78,44 @@ services:
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
       --bootnodes bootnode:707
-    environment:
-      - RUST_LOG=info
-      - RUST_BACKTRACE=1
     networks:
-      - coinject-network
+      - coinject-internal
+      - coinject-rpc
     depends_on:
       bootnode:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
 
-  # Node 2 - connects to bootnode via CPP protocol
+  # ── Node 2 ────────────────────────────────────────────────────────────────
   node2:
     build:
       context: .
       dockerfile: Dockerfile
+    image: coinject-node:latest
     container_name: coinject-node2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     ports:
-      - "709:707"      # CPP P2P (mapped to host 709)
+      - "709:707"      # CPP P2P (host 709 → container 707)
       - "9092:9090"    # Metrics + Health
-      - "9935:9933"    # RPC
+      - "9935:9933"    # JSON-RPC
     volumes:
       - node2-data:/data
     command: >
@@ -88,31 +125,44 @@ services:
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
       --bootnodes bootnode:707
-    environment:
-      - RUST_LOG=info
-      - RUST_BACKTRACE=1
     networks:
-      - coinject-network
+      - coinject-internal
+      - coinject-rpc
     depends_on:
       bootnode:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
 
-  # Node 3 - connects to bootnode via CPP protocol
+  # ── Node 3 ────────────────────────────────────────────────────────────────
   node3:
     build:
       context: .
       dockerfile: Dockerfile
+    image: coinject-node:latest
     container_name: coinject-node3
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
     ports:
-      - "710:707"      # CPP P2P (mapped to host 710)
+      - "710:707"      # CPP P2P (host 710 → container 707)
       - "9093:9090"    # Metrics + Health
-      - "9936:9933"    # RPC
+      - "9936:9933"    # JSON-RPC
     volumes:
       - node3-data:/data
     command: >
@@ -122,27 +172,41 @@ services:
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
       --bootnodes bootnode:707
-    environment:
-      - RUST_LOG=info
-      - RUST_BACKTRACE=1
     networks:
-      - coinject-network
+      - coinject-internal
+      - coinject-rpc
     depends_on:
       bootnode:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 40s
 
+# ── Volumes ───────────────────────────────────────────────────────────────────
+# Named volumes — Docker manages path; coinject user (uid 10001) owns /data inside
 volumes:
   bootnode-data:
   node1-data:
   node2-data:
   node3-data:
 
+# ── Networks ──────────────────────────────────────────────────────────────────
+# coinject-internal: node-to-node P2P traffic only (not exposed to host)
+# coinject-rpc:      RPC/metrics traffic — attach only services that need external RPC
 networks:
-  coinject-network:
+  coinject-internal:
     driver: bridge
+    internal: true          # no external routing; nodes talk to each other only
+  coinject-rpc:
+    driver: bridge          # routable — port mappings work on this network
