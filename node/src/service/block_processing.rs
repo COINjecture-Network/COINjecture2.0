@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use super::*;
+use tracing::{debug, info, warn, error};
 
 impl CoinjectNode {
     /// Process buffered blocks sequentially
@@ -33,7 +34,7 @@ impl CoinjectNode {
 
             match block_opt {
                 Some(block) => {
-                    println!("🔄 Processing buffered block {} from buffer", next_height);
+                    debug!(block_height = next_height, "processing buffered block");
 
                     let best_hash = chain.best_block_hash().await;
 
@@ -56,10 +57,12 @@ impl CoinjectNode {
                         match chain.has_block(&block.header.prev_hash) {
                             Ok(true) => {
                                 // We have the parent - this is a valid sidechain block
-                                println!("🔀 Buffered fork block detected at height {}: extends {:?} (not our tip {:?})",
-                                    block.header.height,
-                                    &block.header.prev_hash.to_string()[..16],
-                                    &best_hash.to_string()[..16]);
+                                warn!(
+                                    block_height = block.header.height,
+                                    prev_hash = &block.header.prev_hash.to_string()[..16],
+                                    our_tip = &best_hash.to_string()[..16],
+                                    "buffered fork block detected"
+                                );
 
                                 // Validate against its declared parent (not best_hash)
                                 validator.validate_block_with_options(&block, &block.header.prev_hash, next_height, skip_age_check)
@@ -69,9 +72,11 @@ impl CoinjectNode {
                                 // We can't process it without its parent. Don't re-add to buffer
                                 // (that would cause infinite loop). The block will be re-sent by peers
                                 // during normal sync or gossip if we need it later.
-                                println!("👻 Buffered orphan block at height {}: parent {:?} not found - discarding fork block",
-                                    block.header.height,
-                                    &block.header.prev_hash.to_string()[..16]);
+                                warn!(
+                                    block_height = block.header.height,
+                                    prev_hash = &block.header.prev_hash.to_string()[..16],
+                                    "orphan block discarded: parent not found"
+                                );
 
                                 // Request missing blocks from peers to help sync
                                 if let Some(net_tx) = network_tx {
@@ -83,7 +88,7 @@ impl CoinjectNode {
                                 break; // Exit the loop - can't process more without syncing
                             }
                             Err(e) => {
-                                println!("❌ Error checking for parent block: {}", e);
+                                error!(error = %e, "error checking for parent block");
                                 continue;
                             }
                         }
@@ -116,19 +121,19 @@ impl CoinjectNode {
                                         let consensus_state = ConsensusState::at_tau(tau);
 
                                         if let Err(e) = dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state) {
-                                            println!("⚠️  Warning: Failed to save consensus state: {}", e);
+                                            warn!(block_height = block.header.height, error = %e, "failed to save consensus state");
                                         }
 
                                         match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
                                             Ok(applied_txs) => {
-                                                println!("✅ Buffered block {} applied to chain (τ={:.4})", next_height, tau);
+                                                info!(block_height = next_height, tau = tau, "buffered block applied to chain");
 
                                                 // If store_block didn't update best chain, manually update it
                                                 if !is_new_best && extends_chain {
                                                     if let Err(e) = chain.update_best_chain(block.header.hash(), block.header.height).await {
-                                                        println!("⚠️  Warning: Failed to update best chain after applying buffered block: {}", e);
+                                                        warn!(block_height = block.header.height, error = %e, "failed to update best chain after buffered block");
                                                     } else {
-                                                        println!("📈 Updated best chain to height {} (was {} before)", block.header.height, current_best);
+                                                        info!(block_height = block.header.height, prev_best = current_best, "best chain updated");
                                                     }
                                                 }
 
@@ -145,7 +150,7 @@ impl CoinjectNode {
                                                     let block_clone = block.clone();
                                                     tokio::spawn(async move {
                                                         if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
-                                                            eprintln!("⚠️  Failed to push consensus block to Hugging Face: {}", e);
+                                                            warn!(error = %e, "failed to push consensus block to hugging face");
                                                         }
                                                     });
                                                 }
@@ -153,30 +158,30 @@ impl CoinjectNode {
                                                 // Continue loop to check for next sequential block
                                             }
                                             Err(e) => {
-                                                println!("❌ Failed to apply buffered block transactions: {}", e);
+                                                error!(block_height = next_height, error = %e, "failed to apply buffered block transactions");
                                                 break;
                                             }
                                         }
                                     } else {
                                         // Block doesn't extend our chain - might be a fork, duplicate, or out of order
                                         // Skip it and continue processing (don't break, as there might be other sequential blocks)
-                                        println!("⚠️  Buffered block {} doesn't extend best chain (best: {}), skipping", next_height, current_best);
+                                        warn!(block_height = next_height, best_height = current_best, "buffered block does not extend best chain, skipping");
                                         // Continue loop to check for next sequential block
                                     }
                                 }
                                 Err(e) => {
-                                    println!("❌ Failed to store buffered block: {}", e);
+                                    error!(block_height = next_height, error = %e, "failed to store buffered block");
                                     break;
                                 }
                             }
                         }
                         Err(e) => {
-                            println!("❌ Buffered block validation failed: {}", e);
+                            warn!(block_height = next_height, error = %e, "buffered block validation failed");
                             // If validation failed due to invalid prev_hash, the block might have been
                             // buffered before the previous block was applied. Remove it from buffer
                             // so it can be re-received with the correct prev_hash.
                             if e.to_string().contains("Invalid previous hash") {
-                                println!("   Removing invalid buffered block {} - will be re-requested", next_height);
+                                debug!(block_height = next_height, "removing invalid buffered block, will be re-requested");
                                 // Block already removed from buffer above, so we can continue
                             }
                             // Don't break - continue to check for next sequential block
@@ -198,8 +203,7 @@ impl CoinjectNode {
                             // Request only the next missing block first, then expand if needed
                             let request_to = next_height;
                             
-                            println!("⚠️  Missing block {} (have blocks up to {} in buffer), requesting single block {}", 
-                                next_height, max_buffered_height, request_from);
+                            warn!(block_height = next_height, max_buffered = max_buffered_height, "missing block, requesting from peers");
                             
                             drop(buffer);
                             
@@ -209,7 +213,7 @@ impl CoinjectNode {
                                     from_height: request_from,
                                     to_height: request_to,
                                 }) {
-                                    eprintln!("Failed to request missing block: {}", e);
+                                    error!(error = %e, "failed to request missing block");
                                 }
                             }
                             
@@ -259,15 +263,18 @@ impl CoinjectNode {
                     applied_txs.push(tx.hash());
                 }
                 Err(e) => {
-                    println!("⚠️  Skipping transaction {:?}: {}", tx.hash(), e);
+                    warn!(tx_hash = ?tx.hash(), error = %e, "skipping transaction");
                     continue; // Skip this transaction and continue with the rest
                 }
             }
         }
 
         if applied_txs.len() < block.transactions.len() {
-            println!("📊 Applied {}/{} transactions from block",
-                applied_txs.len(), block.transactions.len());
+            debug!(
+                applied = applied_txs.len(),
+                total = block.transactions.len(),
+                "partial transaction application"
+            );
         }
 
         Ok(applied_txs)
@@ -290,7 +297,7 @@ impl CoinjectNode {
         // Unwind transactions in reverse order
         for tx in block.transactions.iter().rev() {
             if let Err(e) = Self::unwind_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height) {
-                println!("⚠️  Warning: Failed to unwind transaction {:?}: {}", tx.hash(), e);
+                warn!(tx_hash = ?tx.hash(), error = %e, "failed to unwind transaction");
                 // Continue unwinding other transactions even if one fails
             }
         }
@@ -304,7 +311,7 @@ impl CoinjectNode {
                 .map_err(|e| format!("Failed to unwind miner reward: {}", e))?;
         } else {
             // Miner balance insufficient - this shouldn't happen but handle gracefully
-            println!("⚠️  Warning: Miner balance {} < reward {}, setting to 0", current_balance, reward);
+            warn!(balance = current_balance, reward = reward, "miner balance below reward, setting to zero");
             state.set_balance(&miner, 0)
                 .map_err(|e| format!("Failed to set miner balance: {}", e))?;
         }
@@ -388,7 +395,7 @@ impl CoinjectNode {
 
                             // Remove escrow - note: perfect reversal requires delete method
                             // For now, we mark it as an approximate reversal
-                            println!("   ⚠️  Escrow deletion requires delete_escrow method - state may be approximate");
+                            warn!("escrow deletion requires delete_escrow method, state may be approximate");
                         }
                         Ok(())
                     }
@@ -447,14 +454,14 @@ impl CoinjectNode {
                         }
 
                         // Remove channel - note: perfect reversal requires delete method
-                        println!("   ⚠️  Channel deletion requires delete_channel method - state may be approximate");
+                        warn!("channel deletion requires delete_channel method, state may be approximate");
                         Ok(())
                     }
 
                     ChannelType::Update { .. } => {
                         // Channel updates are state changes, hard to reverse perfectly
                         // For now, just log - in practice, we'd need to track previous state
-                        println!("⚠️  Warning: Cannot perfectly reverse channel update, state may be inconsistent");
+                        warn!("cannot perfectly reverse channel update, state may be inconsistent");
                         Ok(())
                     }
 
@@ -481,7 +488,7 @@ impl CoinjectNode {
 
                             // Restore channel to open (approximate - we don't have exact previous state)
                             // This is a limitation - we'd need to store channel history
-                            println!("⚠️  Warning: Channel state restoration is approximate");
+                            warn!("channel state restoration is approximate");
                         }
                         Ok(())
                     }
@@ -489,7 +496,7 @@ impl CoinjectNode {
                     ChannelType::UnilateralClose { .. } => {
                         // Reverse dispute - restore channel state
                         // This is complex and approximate
-                        println!("⚠️  Warning: Cannot perfectly reverse unilateral close, state may be inconsistent");
+                        warn!("cannot perfectly reverse unilateral close, state may be inconsistent");
                         Ok(())
                     }
                 }
@@ -511,16 +518,16 @@ impl CoinjectNode {
                 match &trustline_tx.trustline_type {
                     TrustLineType::Create { .. } => {
                         // Remove trustline - note: perfect reversal requires delete method
-                        println!("   ⚠️  TrustLine deletion requires delete_trustline method - state may be approximate");
+                        warn!("trustline deletion requires delete_trustline method, state may be approximate");
                     }
                     TrustLineType::UpdateLimits { .. } | TrustLineType::Freeze | TrustLineType::EvolvePhase { .. } => {
                         // These are state changes - hard to reverse perfectly
                         // In practice, we'd need to store previous state
-                        println!("⚠️  Warning: TrustLine state reversal is approximate");
+                        warn!("trustline state reversal is approximate");
                     }
                     TrustLineType::Close => {
                         // Restore trustline - this is complex, would need previous state
-                        println!("⚠️  Warning: Cannot perfectly reverse trustline close");
+                        warn!("cannot perfectly reverse trustline close");
                     }
                 }
                 Ok(())
@@ -540,7 +547,7 @@ impl CoinjectNode {
 
                 // Reverse swap - this is complex and may not be perfectly reversible
                 // We'd need to track swap history
-                println!("⚠️  Warning: Dimensional pool swap reversal is approximate");
+                warn!("dimensional pool swap reversal is approximate");
                 Ok(())
             }
 
@@ -564,22 +571,22 @@ impl CoinjectNode {
                         state.set_balance(&marketplace_tx.from, sender_balance + marketplace_tx.fee + bounty)
                             .map_err(|e| format!("Failed to unwind problem submission: {}", e))?;
                         // Remove problem - would need problem_id
-                        println!("⚠️  Warning: Problem removal requires problem_id tracking");
+                        warn!("problem removal requires problem_id tracking");
                     }
                     MarketplaceOperation::SubmitSolution { .. } => {
                         // Reverse: remove solution, potentially reverse auto-payout
                         // This is complex - we'd need to track if bounty was paid
-                        println!("⚠️  Warning: Solution reversal is approximate");
+                        warn!("solution reversal is approximate");
                     }
                     MarketplaceOperation::ClaimBounty { .. } => {
                         // Reverse: debit solver, restore bounty to escrow
                         // Would need to track who received the bounty
-                        println!("⚠️  Warning: Bounty claim reversal requires tracking");
+                        warn!("bounty claim reversal requires tracking");
                     }
                     MarketplaceOperation::CancelProblem { .. } => {
                         // Reverse: debit refund, restore problem
                         // Would need to track refund amount
-                        println!("⚠️  Warning: Problem cancellation reversal requires tracking");
+                        warn!("problem cancellation reversal requires tracking");
                     }
                 }
                 Ok(())
@@ -995,7 +1002,7 @@ impl CoinjectNode {
                             *expiration_days,
                         ).map_err(|e| format!("Failed to submit problem: {}", e))?;
 
-                        println!("✅ Problem submitted to marketplace: {:?} (bounty: {})", problem_id, bounty);
+                        info!(problem_id = ?problem_id, bounty = bounty, "problem submitted to marketplace");
                     }
                     MarketplaceOperation::SubmitSolution { problem_id, solution } => {
                         // AUTONOMOUS BOUNTY PAYOUT
@@ -1025,7 +1032,7 @@ impl CoinjectNode {
                         state.set_balance(&solver, solver_balance + bounty)
                             .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
 
-                        println!("✅ Solution accepted! Auto-paid {} tokens to solver {:?}", bounty, solver);
+                        info!(bounty = bounty, solver = ?solver, "solution accepted, bounty auto-paid");
                     }
                     MarketplaceOperation::ClaimBounty { problem_id } => {
                         // Just need fee
@@ -1047,7 +1054,7 @@ impl CoinjectNode {
                         state.set_balance(&solver, solver_balance + bounty)
                             .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
 
-                        println!("✅ Bounty claimed: {} tokens paid to solver {:?}", bounty, solver);
+                        info!(bounty = bounty, solver = ?solver, "bounty claimed");
                     }
                     MarketplaceOperation::CancelProblem { problem_id } => {
                         // Just need fee
@@ -1069,7 +1076,7 @@ impl CoinjectNode {
                         state.set_balance(&marketplace_tx.from, submitter_balance + bounty)
                             .map_err(|e| format!("Failed to refund bounty to submitter: {}", e))?;
 
-                        println!("✅ Problem cancelled: {} tokens refunded to submitter", bounty);
+                        info!(bounty = bounty, "problem cancelled, bounty refunded");
                     }
                 }
 

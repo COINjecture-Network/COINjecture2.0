@@ -24,7 +24,8 @@ adzdb = { path = "../adzdb", optional = true }
 tokio.workspace = true
 clap.workspace = true
 tracing.workspace = true
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "json", "fmt"] }
+tracing-appender.workspace = true
 anyhow.workspace = true
 redb.workspace = true
 thiserror.workspace = true

@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use super::*;
+use tracing::{trace, debug, info, warn, error};
 
 impl CoinjectNode {
     /// Check for chain reorganization opportunities
@@ -25,16 +26,16 @@ impl CoinjectNode {
         let current_best_height = chain.best_block_height().await;
         let current_best_hash = chain.best_block_hash().await;
         
-        println!("🔍 Reorganization check: Current best height: {}, hash: {:?}", current_best_height, current_best_hash);
+        debug!(block_height = current_best_height, block_hash = ?current_best_hash, "reorganization check");
 
         // Check if we have blocks in buffer that might form a longer chain
         let buffer = block_buffer.read().await;
         let buffer_info = if buffer.is_empty() {
-            println!("🔍 Reorganization check: Buffer is empty, checking stored blocks only");
+            trace!("buffer is empty, checking stored blocks only");
             (0, Vec::new())
         } else {
             let heights: Vec<u64> = buffer.keys().take(10).copied().collect();
-            println!("🔍 Reorganization check: Buffer has {} blocks (heights: {:?})", buffer.len(), heights);
+            trace!(buffer_len = buffer.len(), "buffer has blocks");
             (buffer.keys().max().copied().unwrap_or(0), heights)
         };
         drop(buffer);
@@ -58,31 +59,31 @@ impl CoinjectNode {
                     Ok(Some((_common_hash, common_height))) => {
                         if common_height < current_best_height {
                             // This buffered chain forks from before our current best - it's a reorganization candidate
-                            println!("🔍 Reorganization check: Buffered chain (height {}) forks at common ancestor height {}", 
-                                max_buffered_height, common_height);
-                            
-                            // The chain at max_buffered_height branches from common_height
-                            // If it's longer than our current chain, it's a reorg candidate
                             let fork_length = max_buffered_height - common_height;
                             let our_length = current_best_height - common_height;
-                            
+                            warn!(
+                                buffered_height = max_buffered_height,
+                                fork_height = common_height,
+                                fork_length = fork_length,
+                                our_length = our_length,
+                                "buffered chain forks before current tip"
+                            );
+
                             if fork_length > our_length {
-                                println!("🔍 Buffered fork is longer: fork has {} blocks after common ancestor, we have {}", 
-                                    fork_length, our_length);
+                                warn!(fork_length = fork_length, our_length = our_length, "buffered fork is longer than current chain");
                             }
                         } else {
-                            println!("🔍 Reorganization check: Buffered blocks connect to current chain at height {}", common_height);
+                            debug!(common_height = common_height, "buffered blocks connect to current chain");
                         }
                     },
                     Ok(None) => {
                         // COMPLETE FORK DETECTED: No common ancestor means we're on a completely different chain
                         // This requires a full chain review from genesis OR complete chain replacement
-                        println!("🚨 COMPLETE FORK DETECTED: Buffered blocks at height {} have no common ancestor with current chain", max_buffered_height);
-                        
+                        warn!(buffered_height = max_buffered_height, "complete fork detected: no common ancestor with buffered chain");
+
                         // Check if the buffered chain is longer than ours
                         if max_buffered_height > current_best_height {
-                            println!("   🔀 Fork chain is LONGER ({} > {})", max_buffered_height, current_best_height);
-                            println!("   💡 Requesting full chain from best peer to resolve fork");
+                            warn!(fork_height = max_buffered_height, our_height = current_best_height, "fork chain is longer, requesting full chain from best peer");
                             
                             // Use CPP network commands with best peer from peer_consensus
                             if let Some(cpp_tx) = cpp_network_cmd_tx {
@@ -101,8 +102,7 @@ impl CoinjectNode {
                                             // Use chunked requests (16 blocks per request, CPP network limit)
                                             const CHUNK_SIZE: u64 = 16; // MAX_BLOCKS_PER_RESPONSE
                                             let mut current = 0u64;
-                                            println!("   📦 Requesting fork chain in {} block chunks from peer {} (height: {}) via CPP...", 
-                                                CHUNK_SIZE, &peer_id_str[..8], peer_state.best_height);
+                                            debug!(chunk_size = CHUNK_SIZE, peer_id = &peer_id_str[..8], peer_height = peer_state.best_height, "requesting fork chain in chunks via cpp");
                                             
                                             while current <= max_buffered_height {
                                                 let end = std::cmp::min(current + CHUNK_SIZE - 1, max_buffered_height);
@@ -114,30 +114,30 @@ impl CoinjectNode {
                                                     to_height: end,
                                                     request_id,
                                                 }) {
-                                                    eprintln!("⚠️  Failed to request chain chunk {}-{}: {}", current, end, e);
+                                                    error!(from_height = current, to_height = end, error = %e, "failed to request chain chunk");
                                                     break;
                                                 }
                                                 current = end + 1;
                                             }
-                                            println!("   ✅ Requested full chain from genesis (0 to {}) in chunks via CPP", max_buffered_height);
+                                            debug!(max_height = max_buffered_height, "requested full chain from genesis via cpp");
                                         } else {
-                                            eprintln!("⚠️  Invalid peer_id length: expected 32 bytes, got {}", peer_id_bytes.len());
+                                            error!(peer_id = %peer_id_str, actual_len = peer_id_bytes.len(), "invalid peer_id length, expected 32 bytes");
                                         }
                                     } else {
-                                        eprintln!("⚠️  Failed to decode peer_id from hex: {}", peer_id_str);
+                                        error!(peer_id = %peer_id_str, "failed to decode peer_id from hex");
                                     }
                                 } else {
-                                    println!("   ⚠️  No active peers available from peer_consensus, cannot request blocks");
+                                    warn!("no active peers available, cannot request blocks");
                                 }
                             } else {
-                                println!("   ⚠️  No CPP network command channel available to request full chain");
+                                warn!("no cpp network command channel available to request full chain");
                             }
                         } else {
-                            println!("   ℹ️ Fork chain is NOT longer ({} <= {}), keeping current chain", max_buffered_height, current_best_height);
+                            debug!(buffered_height = max_buffered_height, our_height = current_best_height, "fork chain is not longer, keeping current chain");
                         }
                     },
                     Err(e) => {
-                        println!("⚠️  Error finding common ancestor for buffered blocks: {:?}", e);
+                        warn!(error = ?e, "error finding common ancestor for buffered blocks");
                     }
                 }
             } else {
@@ -185,7 +185,7 @@ impl CoinjectNode {
                 if fork_block.header.hash() != current_best_hash {
                     // Fork detected - we'd need to request the full chain from the peer
                     // to see if it's longer. This is handled by status update handler.
-                    println!("   Fork block at height {} detected in buffer, waiting for full chain...", current_best_height);
+                    warn!(block_height = current_best_height, "fork block at current height detected in buffer, waiting for full chain");
                 }
             }
         }
@@ -204,7 +204,7 @@ impl CoinjectNode {
         drop(buffer);
         
         if !buffer_heights.is_empty() {
-            println!("🔍 Reorganization check: Checking {} buffered blocks for chain connections", buffer_heights.len());
+            trace!(buffered_count = buffer_heights.len(), "checking buffered blocks for chain connections");
             
             // Find the highest block in buffer
             let max_buffered_height = *buffer_heights.iter().max().unwrap_or(&current_best_height);
@@ -294,8 +294,12 @@ impl CoinjectNode {
                             if chain_end_height > best_candidate_height {
                                 best_candidate_height = chain_end_height;
                                 best_candidate_hash = chain_end_hash;
-                                println!("🔍 Reorganization check: Found potential chain connection at height {} (connects to current chain at prev_hash {:?}, hash: {:?})", 
-                                    chain_end_height, block.header.prev_hash, chain_end_hash);
+                                debug!(
+                                    chain_end_height = chain_end_height,
+                                    prev_hash = ?block.header.prev_hash,
+                                    chain_end_hash = ?chain_end_hash,
+                                    "found potential chain connection"
+                                );
                             }
                         }
                     }
@@ -312,11 +316,11 @@ impl CoinjectNode {
         // This handles the case where blocks are stored sequentially
         // Scan up to 1000 blocks ahead, but don't stop at first missing block
         let scan_limit = current_best_height + 1000;
-        println!("🔍 Reorganization check: Also scanning stored blocks sequentially from height {} to {} (continuing past gaps)", current_best_height + 1, scan_limit);
+        trace!(from_height = current_best_height + 1, to_height = scan_limit, "scanning stored blocks sequentially");
         for height in (current_best_height + 1)..=scan_limit {
             if let Ok(Some(block)) = chain.get_block_by_height(height) {
                 if height <= current_best_height + 10 {
-                    println!("🔍 Reorganization check: Found block at height {} in sequential scan", height);
+                    trace!(block_height = height, "found block in sequential scan");
                 }
                 // Verify this block is part of a valid chain by checking its previous block
                 if let Ok(Some(prev_block)) = chain.get_block_by_hash(&block.header.prev_hash) {
@@ -329,13 +333,13 @@ impl CoinjectNode {
                     } else {
                         // Chain broken - but don't stop, continue scanning
                         if height <= current_best_height + 10 {
-                            println!("🔍 Reorganization check: Chain broken at height {} (prev block at height {}), continuing scan", height, prev_block.header.height);
+                            warn!(block_height = height, prev_height = prev_block.header.height, "chain broken in sequential scan");
                         }
                     }
                 } else {
                     // Previous block not found - but don't stop, continue scanning
                     if height <= current_best_height + 10 {
-                        println!("🔍 Reorganization check: Previous block not found for height {} (prev_hash: {:?}), continuing scan", height, block.header.prev_hash);
+                        warn!(block_height = height, prev_hash = ?block.header.prev_hash, "previous block not found in sequential scan");
                     }
                 }
             }
@@ -349,35 +353,34 @@ impl CoinjectNode {
             let from_height = current_best_height + 1;
             let to_height = max_stored_height;
             
-            println!("📡 Requesting missing blocks {} to {} to complete chain for reorganization", 
-                from_height, to_height);
-            
+            debug!(from_height = from_height, to_height = to_height, "requesting missing blocks to complete chain for reorg");
+
             if let Some(cmd_tx) = network_cmd_tx {
                 if let Err(e) = cmd_tx.send(NetworkCommand::RequestBlocks {
                     from_height,
                     to_height,
                 }) {
-                    eprintln!("⚠️  Failed to request missing blocks for reorganization: {}", e);
+                    error!(from_height = from_height, to_height = to_height, error = %e, "failed to request missing blocks for reorganization");
                 }
             }
         }
         
         // If we found a longer chain in stored blocks, attempt reorganization
         if max_stored_height > current_best_height {
-            println!("🔍 Found longer chain in stored blocks (height {}), attempting reorganization...", max_stored_height);
-            
+            info!(max_stored_height = max_stored_height, "found longer chain in stored blocks, attempting reorganization");
+
             // Check if this chain has no common ancestor (complete fork)
             // If so, we need to validate from genesis
             match chain.find_common_ancestor(&max_stored_hash, max_stored_height).await {
                 Ok(Some((_common_hash, common_height))) => {
-                    println!("   Found common ancestor at height {}", common_height);
+                    debug!(common_height = common_height, "found common ancestor");
                     // Normal reorganization with common ancestor
                 }
                 Ok(None) => {
-                    println!("   ⚠️  No common ancestor - this is a complete fork, will validate from genesis");
+                    warn!("no common ancestor found, complete fork will be validated from genesis");
                 }
                 Err(e) => {
-                    println!("   ⚠️  Error finding common ancestor: {:?}", e);
+                    warn!(error = ?e, "error finding common ancestor");
                 }
             }
             
@@ -405,7 +408,7 @@ impl CoinjectNode {
                     &marketplace_clone,
                     &validator_clone,
                 ).await {
-                    eprintln!("⚠️  Failed to attempt reorganization for stored blocks: {}", e);
+                    error!(error = %e, "failed to attempt reorganization for stored blocks");
                 }
             });
         }
@@ -441,14 +444,13 @@ impl CoinjectNode {
         // 1. At least 6 blocks deep (to prevent shallow reorganizations)
         // 2. Valid and stored in our chain
         // 3. Not at genesis (unless absolutely necessary)
-        let (common_hash, common_height) = match chain.find_common_ancestor(&new_chain_end_hash, new_chain_end_height).await
+        let (_common_hash, common_height) = match chain.find_common_ancestor(&new_chain_end_hash, new_chain_end_height).await
             .map_err(|e| format!("Failed to find common ancestor: {}", e)) {
             Ok(Some((hash, height))) => {
                 // Validate common ancestor is anchored (at least 6 blocks deep)
                 const MIN_ANCHOR_DEPTH: u64 = 6;
                 if height < MIN_ANCHOR_DEPTH {
-                    println!("⚠️  Common ancestor at height {} is too shallow (min depth: {}), cannot reorganize", 
-                        height, MIN_ANCHOR_DEPTH);
+                    warn!(fork_height = height, min_anchor_depth = MIN_ANCHOR_DEPTH, "common ancestor too shallow, cannot reorganize");
                     return Ok(false);
                 }
                 
@@ -458,18 +460,17 @@ impl CoinjectNode {
                         // Verify the block is actually on our current chain
                         let current_best = chain.best_block_height().await;
                         if block.header.height > current_best {
-                            println!("⚠️  Common ancestor block at height {} is ahead of our best ({})", 
-                                block.header.height, current_best);
+                            warn!(ancestor_height = block.header.height, our_best = current_best, "common ancestor block is ahead of our best");
                             return Ok(false);
                         }
                         (hash, height)
                     }
                     Ok(None) => {
-                        println!("⚠️  Common ancestor block not found in storage");
+                        warn!("common ancestor block not found in storage");
                         return Ok(false);
                     }
                     Err(e) => {
-                        println!("⚠️  Error verifying common ancestor: {}", e);
+                        warn!(error = %e, "error verifying common ancestor");
                         return Ok(false);
                     }
                 }
@@ -477,8 +478,7 @@ impl CoinjectNode {
             Ok(None) => {
                 // COMPLETE FORK DETECTED: No common ancestor means we're on a completely different chain
                 // This requires a full chain review from genesis
-                println!("🚨 COMPLETE FORK DETECTED: No common ancestor found with chain ending at height {}", new_chain_end_height);
-                println!("   This requires full chain validation from genesis");
+                warn!(new_chain_end_height = new_chain_end_height, "complete fork detected: no common ancestor found, requires full chain validation from genesis");
                 
                 // Request full chain from genesis to validate the new chain
                 // The caller should have already requested blocks, but we need to ensure we have the full chain
@@ -493,8 +493,7 @@ impl CoinjectNode {
                     validator,
                 ).await {
                     Ok((new_chain_blocks, new_chain_work)) => {
-                        println!("✅ New chain validated from genesis: {} blocks, total work: {}", 
-                            new_chain_blocks.len(), new_chain_work);
+                        info!(block_count = new_chain_blocks.len(), total_work = new_chain_work, "new chain validated from genesis");
                         
                         // Get our current chain from genesis
                         let (our_chain_blocks, our_chain_work) = match Self::get_chain_from_genesis(
@@ -504,14 +503,18 @@ impl CoinjectNode {
                         ).await {
                             Ok(chain_data) => chain_data,
                             Err(e) => {
-                                println!("⚠️  Failed to get our chain from genesis: {}", e);
+                                warn!(error = %e, "failed to get our chain from genesis");
                                 return Ok(false);
                             }
                         };
                         
-                        println!("📊 Complete chain comparison:");
-                        println!("   Our chain: {} blocks, total work: {}", our_chain_blocks.len(), our_chain_work);
-                        println!("   New chain: {} blocks, total work: {}", new_chain_blocks.len(), new_chain_work);
+                        info!(
+                            our_blocks = our_chain_blocks.len(),
+                            our_work = our_chain_work,
+                            new_blocks = new_chain_blocks.len(),
+                            new_work = new_chain_work,
+                            "complete chain comparison"
+                        );
                         
                         // Compare by work score first, then height
                         use crate::peer_consensus::WorkScoreCalculator;
@@ -519,13 +522,18 @@ impl CoinjectNode {
                         
                         if comparison <= 0 && new_chain_end_height <= current_best_height {
                             // Our chain has equal or more work and equal or greater height
-                            println!("   ⏸️  Skipping reorganization: our chain has equal or better work/height");
+                            debug!("skipping reorganization: our chain has equal or better work/height");
                             return Ok(false);
                         }
                         
                         // New chain is better - reorganize from genesis
-                        println!("🔄 Reorganizing from genesis: unwinding {} blocks (work: {}), applying {} blocks (work: {})",
-                            our_chain_blocks.len(), our_chain_work, new_chain_blocks.len(), new_chain_work);
+                        warn!(
+                            old_blocks = our_chain_blocks.len(),
+                            old_work = our_chain_work,
+                            new_blocks = new_chain_blocks.len(),
+                            new_work = new_chain_work,
+                            "reorganizing from genesis"
+                        );
                         
                         // Perform complete reorganization (unwind all blocks to genesis, apply new chain)
                         Self::reorganize_chain_from_genesis(
@@ -545,8 +553,7 @@ impl CoinjectNode {
                         return Ok(true);
                     }
                     Err(e) => {
-                        println!("⚠️  Failed to validate new chain from genesis: {}", e);
-                        println!("   Requesting full chain from genesis for validation...");
+                        warn!(error = %e, "failed to validate new chain from genesis, requesting full chain");
                         // Return false but the caller should request full chain
                         return Ok(false);
                     }
@@ -555,7 +562,7 @@ impl CoinjectNode {
             Err(e) => return Err(e),
         };
 
-        println!("🔄 Found anchored common ancestor at height {} (hash: {:?})", common_height, common_hash);
+        debug!(fork_height = common_height, old_tip_hash = ?current_best_hash, new_tip_hash = ?new_chain_end_hash, reorg_depth = current_best_height.saturating_sub(common_height), "found anchored common ancestor");
 
         // Get old chain blocks (from common ancestor to current best, excluding common ancestor)
         let mut old_chain_blocks = Vec::new();
@@ -604,22 +611,32 @@ impl CoinjectNode {
             .map(|b| b.header.work_score as u64)
             .sum();
         
-        println!("📊 Chain comparison:");
-        println!("   Old chain: {} blocks, total work: {}", old_chain_blocks.len(), old_chain_work);
-        println!("   New chain: {} blocks, total work: {}", new_chain_blocks.len(), new_chain_work);
+        info!(
+            old_blocks = old_chain_blocks.len(),
+            old_work = old_chain_work,
+            new_blocks = new_chain_blocks.len(),
+            new_work = new_chain_work,
+            "chain comparison"
+        );
         
         // Use work score comparison (with tolerance)
         let comparison = WorkScoreCalculator::compare_chains(old_chain_work, new_chain_work);
         
         if comparison <= 0 {
             // Our chain has equal or more work, don't reorganize
-            println!("   ⏸️  Skipping reorganization: our chain has equal or more work (comparison: {})", comparison);
+            debug!(comparison = comparison, "skipping reorganization: our chain has equal or more work");
             return Ok(false);
         }
         
         // New chain has more work - proceed with reorganization
-        println!("🔄 Reorganizing: unwinding {} blocks (work: {}), applying {} blocks (work: {})",
-            old_chain_blocks.len(), old_chain_work, new_chain_blocks.len(), new_chain_work);
+        warn!(
+            old_tip_hash = ?current_best_hash,
+            new_tip_hash = ?new_chain_end_hash,
+            reorg_depth = old_chain_blocks.len(),
+            old_work = old_chain_work,
+            new_work = new_chain_work,
+            "chain reorg: switching to heavier chain"
+        );
 
         // Perform reorganization
         Self::reorganize_chain(
@@ -653,12 +670,15 @@ impl CoinjectNode {
         marketplace_state: &Arc<MarketplaceState>,
         validator: &Arc<BlockValidator>,
     ) -> Result<(), String> {
-        println!("🔄 Starting chain reorganization: unwinding {} blocks, applying {} blocks",
-            old_chain_blocks.len(), new_chain_blocks.len());
+        warn!(
+            unwind_count = old_chain_blocks.len(),
+            apply_count = new_chain_blocks.len(),
+            "starting chain reorganization"
+        );
 
         // Step 1: Unwind old chain blocks (in reverse order - newest to oldest)
         for block in old_chain_blocks.iter().rev() {
-            println!("   Unwinding block {}...", block.header.height);
+            debug!(block_height = block.header.height, "unwinding block");
             if let Err(e) = Self::unwind_block_transactions(
                 block, state, timelock_state, escrow_state, channel_state,
                 trustline_state, dimensional_pool_state, marketplace_state,
@@ -669,7 +689,7 @@ impl CoinjectNode {
             // Also need to reverse dimensional pool state changes
             // This is complex - for now we log a warning
             if block.header.height > 0 {
-                println!("   ⚠️  Note: Dimensional pool state reversal is approximate");
+                warn!(block_height = block.header.height, "dimensional pool state reversal is approximate");
             }
         }
 
@@ -707,7 +727,7 @@ impl CoinjectNode {
 
         // Step 3: Apply new chain blocks
         for block in &new_chain_blocks {
-            println!("   Applying new chain block {}...", block.header.height);
+            debug!(block_height = block.header.height, "applying new chain block");
             
             // Store block
             chain.store_block(block).await
@@ -733,7 +753,7 @@ impl CoinjectNode {
                 .map_err(|e| format!("Failed to update best chain: {}", e))?;
         }
 
-        println!("✅ Chain reorganization complete!");
+        info!("chain reorganization complete");
         Ok(())
     }
 
@@ -906,8 +926,11 @@ impl CoinjectNode {
         marketplace_state: &Arc<MarketplaceState>,
         _validator: &Arc<BlockValidator>,
     ) -> Result<(), String> {
-        println!("🔄 Starting complete reorganization from genesis: unwinding {} blocks, applying {} blocks",
-            old_chain_blocks.len(), new_chain_blocks.len());
+        warn!(
+            unwind_count = old_chain_blocks.len(),
+            apply_count = new_chain_blocks.len(),
+            "starting complete reorganization from genesis"
+        );
 
         // Verify both chains start from genesis
         if old_chain_blocks.is_empty() || new_chain_blocks.is_empty() {
@@ -926,7 +949,7 @@ impl CoinjectNode {
         // old_chain_blocks is [genesis, block1, ..., tip]
         // [1..] skips genesis, then .rev() gives us [tip, ..., block1] (no genesis)
         for block in old_chain_blocks[1..].iter().rev() {
-            println!("   Unwinding block {}...", block.header.height);
+            debug!(block_height = block.header.height, "unwinding block");
             if let Err(e) = Self::unwind_block_transactions(
                 block, state, timelock_state, escrow_state, channel_state,
                 trustline_state, dimensional_pool_state, marketplace_state,
@@ -943,7 +966,7 @@ impl CoinjectNode {
 
         // Step 3: Apply new chain blocks (skip genesis, it's already applied)
         for block in new_chain_blocks.iter().skip(1) { // Skip genesis
-            println!("   Applying new chain block {}...", block.header.height);
+            debug!(block_height = block.header.height, "applying new chain block");
             
             // Store block
             chain.store_block(block).await
@@ -969,7 +992,7 @@ impl CoinjectNode {
                 .map_err(|e| format!("Failed to update best chain: {}", e))?;
         }
 
-        println!("✅ Complete reorganization from genesis complete!");
+        info!("complete reorganization from genesis finished");
 
         Ok(())
     }

@@ -16,27 +16,13 @@ serde.workspace = true
 serde_json.workspace = true
 bincode.workspace = true
 hex.workspace = true
-blake3.workspace = true
-tracing.workspace = true
-chrono.workspace = true
-futures = "0.3"
-
-# HTTP/Tower stack
-tower = { version = "0.4.13", features = ["timeout", "util"] }
+tower = "0.4.13"
 tower-http = { version = "0.5.0", features = ["cors"] }
-http = "1"
-http-body = "1.0"
-http-body-util.workspace = true
-bytes = "1"
 tokio-tungstenite = "0.21"
-
-# Rate limiting
-dashmap = "6"
-
-# TLS
-tokio-rustls = "0.26"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-rustls-pemfile = "2"
+futures = "0.3"
+chrono.workspace = true
+tracing.workspace = true
+uuid = { version = "1.6", features = ["v4"] }
 
 [dev-dependencies]
 adzdb = { path = "../adzdb" }
