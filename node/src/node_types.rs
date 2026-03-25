@@ -70,24 +70,24 @@ impl NodeType {
     /// Based on the golden ratio cascade: φ, 1/φ, 1/φ², etc.
     pub fn reward_multiplier(&self) -> f64 {
         match self {
-            NodeType::Light => 0.146,      // D8 scale - minimal contribution
-            NodeType::Full => 0.500,       // D5 scale - standard
-            NodeType::Archive => 0.382,    // D6 scale - storage premium
-            NodeType::Validator => 1.000,  // D1 scale - highest
-            NodeType::Bounty => 0.618,     // D4 scale - golden ratio
-            NodeType::Oracle => 0.750,     // D3 scale - data premium
+            NodeType::Light => 0.146,     // D8 scale - minimal contribution
+            NodeType::Full => 0.500,      // D5 scale - standard
+            NodeType::Archive => 0.382,   // D6 scale - storage premium
+            NodeType::Validator => 1.000, // D1 scale - highest
+            NodeType::Bounty => 0.618,    // D4 scale - golden ratio
+            NodeType::Oracle => 0.750,    // D3 scale - data premium
         }
     }
 
     /// Get minimum stake requirement (in tokens)
     pub fn min_stake(&self) -> u128 {
         match self {
-            NodeType::Light => 0,                     // No stake required
-            NodeType::Full => 1_000_000_000,          // 1,000 tokens
-            NodeType::Archive => 10_000_000_000,      // 10,000 tokens
-            NodeType::Validator => 100_000_000_000,   // 100,000 tokens
-            NodeType::Bounty => 5_000_000_000,        // 5,000 tokens
-            NodeType::Oracle => 50_000_000_000,       // 50,000 tokens
+            NodeType::Light => 0,                   // No stake required
+            NodeType::Full => 1_000_000_000,        // 1,000 tokens
+            NodeType::Archive => 10_000_000_000,    // 10,000 tokens
+            NodeType::Validator => 100_000_000_000, // 100,000 tokens
+            NodeType::Bounty => 5_000_000_000,      // 5,000 tokens
+            NodeType::Oracle => 50_000_000_000,     // 50,000 tokens
         }
     }
 
@@ -196,7 +196,7 @@ pub struct NodeBehaviorMetrics {
     pub storage_bytes: u64,
     /// Headers stored (for light nodes)
     pub headers_only: bool,
-    
+
     // === Validation Metrics ===
     /// Blocks validated per second (rolling average)
     pub validation_speed: f64,
@@ -204,7 +204,7 @@ pub struct NodeBehaviorMetrics {
     pub blocks_validated: u64,
     /// Validation errors
     pub validation_errors: u64,
-    
+
     // === Solving Metrics ===
     /// Solutions submitted
     pub solutions_submitted: u64,
@@ -212,7 +212,7 @@ pub struct NodeBehaviorMetrics {
     pub solutions_accepted: u64,
     /// Solve rate (solutions per hour)
     pub solve_rate: f64,
-    
+
     // === Uptime Metrics ===
     /// Total uptime in seconds
     pub uptime_seconds: u64,
@@ -220,7 +220,7 @@ pub struct NodeBehaviorMetrics {
     pub expected_uptime_seconds: u64,
     /// Connection drops
     pub connection_drops: u64,
-    
+
     // === Network Metrics ===
     /// Blocks propagated
     pub blocks_propagated: u64,
@@ -228,13 +228,13 @@ pub struct NodeBehaviorMetrics {
     pub avg_peer_count: f64,
     /// Data served to peers (bytes)
     pub data_served_bytes: u64,
-    
+
     // === Oracle Metrics ===
     /// External data feeds provided
     pub oracle_feeds_provided: u64,
     /// Oracle data accuracy (0.0 - 1.0)
     pub oracle_accuracy: f64,
-    
+
     // === Timing ===
     /// First observation block
     pub first_observation_block: u64,
@@ -307,7 +307,8 @@ impl NodeBehaviorMetrics {
 
     /// Get observation duration in blocks
     pub fn observation_blocks(&self) -> u64 {
-        self.last_update_block.saturating_sub(self.first_observation_block)
+        self.last_update_block
+            .saturating_sub(self.first_observation_block)
     }
 
     /// Check if enough data for classification
@@ -340,26 +341,26 @@ pub struct ClassificationResult {
 /// Classify a node based on its behavioral metrics
 /// This is the core meritocratic classification logic
 pub fn classify_from_behavior(metrics: &NodeBehaviorMetrics) -> ClassificationResult {
-    let mut scores: Vec<(NodeType, f64)> = Vec::new();
-    
     // Calculate score for each node type
-    scores.push((NodeType::Light, score_light(metrics)));
-    scores.push((NodeType::Full, score_full(metrics)));
-    scores.push((NodeType::Archive, score_archive(metrics)));
-    scores.push((NodeType::Validator, score_validator(metrics)));
-    scores.push((NodeType::Bounty, score_bounty(metrics)));
-    scores.push((NodeType::Oracle, score_oracle(metrics)));
-    
+    let mut scores: Vec<(NodeType, f64)> = vec![
+        (NodeType::Light, score_light(metrics)),
+        (NodeType::Full, score_full(metrics)),
+        (NodeType::Archive, score_archive(metrics)),
+        (NodeType::Validator, score_validator(metrics)),
+        (NodeType::Bounty, score_bounty(metrics)),
+        (NodeType::Oracle, score_oracle(metrics)),
+    ];
+
     // Sort by score (highest first)
     scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    
+
     let (best_type, best_score) = scores[0];
     let secondary = if scores.len() > 1 && scores[1].1 > 0.3 {
         Some(scores[1].0)
     } else {
         None
     };
-    
+
     // Determine confidence based on gap between top scores
     let confidence = if scores.len() > 1 {
         let gap = best_score - scores[1].1;
@@ -367,9 +368,9 @@ pub fn classify_from_behavior(metrics: &NodeBehaviorMetrics) -> ClassificationRe
     } else {
         best_score
     };
-    
+
     let reason = generate_classification_reason(best_type, metrics);
-    
+
     ClassificationResult {
         node_type: best_type,
         confidence,
@@ -383,22 +384,22 @@ pub fn classify_from_behavior(metrics: &NodeBehaviorMetrics) -> ClassificationRe
 /// Score for Light node classification
 fn score_light(metrics: &NodeBehaviorMetrics) -> f64 {
     let mut score = 0.0_f64;
-    
+
     // Headers only is a strong indicator
     if metrics.headers_only {
         score += 0.5;
     }
-    
+
     // Very low storage ratio
     if metrics.storage_ratio() < LIGHT_STORAGE_RATIO {
         score += 0.3;
     }
-    
+
     // Low validation activity
     if metrics.blocks_validated < 100 {
         score += 0.2;
     }
-    
+
     score.min(1.0)
 }
 
@@ -406,39 +407,39 @@ fn score_light(metrics: &NodeBehaviorMetrics) -> f64 {
 fn score_full(metrics: &NodeBehaviorMetrics) -> f64 {
     let mut score = 0.0_f64;
     let storage_ratio = metrics.storage_ratio();
-    
+
     // Good storage ratio (50-95%)
-    if storage_ratio >= FULL_STORAGE_RATIO && storage_ratio < ARCHIVE_STORAGE_RATIO {
+    if (FULL_STORAGE_RATIO..ARCHIVE_STORAGE_RATIO).contains(&storage_ratio) {
         score += 0.4;
     }
-    
+
     // Validates blocks but not at validator speed
     if metrics.validation_speed > 0.0 && metrics.validation_speed < VALIDATOR_SPEED_THRESHOLD {
         score += 0.3;
     }
-    
+
     // Good uptime
     if metrics.uptime_ratio() > 0.8 {
         score += 0.2;
     }
-    
+
     // Serves data to peers
     if metrics.data_served_bytes > 0 {
         score += 0.1;
     }
-    
+
     score.min(1.0)
 }
 
 /// Score for Archive node classification
 fn score_archive(metrics: &NodeBehaviorMetrics) -> f64 {
     let mut score = 0.0_f64;
-    
+
     // Very high storage ratio
     if metrics.storage_ratio() >= ARCHIVE_STORAGE_RATIO {
         score += 0.5;
     }
-    
+
     // Large storage
     let storage_gb = metrics.storage_bytes / (1024 * 1024 * 1024);
     if storage_gb >= 2000 {
@@ -446,90 +447,91 @@ fn score_archive(metrics: &NodeBehaviorMetrics) -> f64 {
     } else if storage_gb >= 1000 {
         score += 0.1;
     }
-    
+
     // Serves lots of data (historical queries)
-    if metrics.data_served_bytes > 1_000_000_000_000 { // 1TB served
+    if metrics.data_served_bytes > 1_000_000_000_000 {
+        // 1TB served
         score += 0.2;
     }
-    
+
     score.min(1.0)
 }
 
 /// Score for Validator node classification
 fn score_validator(metrics: &NodeBehaviorMetrics) -> f64 {
     let mut score = 0.0_f64;
-    
+
     // High validation speed
     if metrics.validation_speed >= VALIDATOR_SPEED_THRESHOLD {
         score += 0.4;
     }
-    
+
     // High block propagation
     if metrics.blocks_propagated > 1000 {
         score += 0.2;
     }
-    
+
     // High validation accuracy
     if metrics.validation_accuracy() > 0.99 {
         score += 0.2;
     }
-    
+
     // Good uptime
     if metrics.uptime_ratio() > 0.95 {
         score += 0.1;
     }
-    
+
     // Many peers (well connected)
     if metrics.avg_peer_count > 20.0 {
         score += 0.1;
     }
-    
+
     score.min(1.0)
 }
 
 /// Score for Bounty node classification
 fn score_bounty(metrics: &NodeBehaviorMetrics) -> f64 {
     let mut score = 0.0_f64;
-    
+
     // High solve rate
     if metrics.solve_rate >= BOUNTY_SOLVE_RATE {
         score += 0.5;
     } else if metrics.solve_rate >= BOUNTY_SOLVE_RATE / 2.0 {
         score += 0.25;
     }
-    
+
     // Good solution acceptance rate
     if metrics.solution_acceptance_rate() > 0.8 {
         score += 0.3;
     }
-    
+
     // Has submitted solutions
     if metrics.solutions_submitted > 10 {
         score += 0.2;
     }
-    
+
     score.min(1.0)
 }
 
 /// Score for Oracle node classification
 fn score_oracle(metrics: &NodeBehaviorMetrics) -> f64 {
     let mut score = 0.0_f64;
-    
+
     // Provides oracle feeds
     if metrics.oracle_feeds_provided > 0 {
         score += 0.4;
     }
-    
+
     // High accuracy
     if metrics.oracle_accuracy > 0.99 {
         score += 0.3;
     }
-    
+
     // Very high uptime (critical for oracles)
     if metrics.uptime_ratio() >= ORACLE_UPTIME_THRESHOLD {
         score += 0.3;
     }
-    
+
     score.min(1.0)
 }
 
@@ -635,16 +637,16 @@ impl NodeClassificationManager {
     /// Record block validated
     pub fn record_block_validated(&mut self, duration_ms: u64) {
         self.local_metrics.blocks_validated += 1;
-        
+
         // Update rolling average validation speed
         let speed = if duration_ms > 0 {
             1000.0 / duration_ms as f64
         } else {
             100.0 // Max speed if instant
         };
-        
+
         // EMA with α = 0.1
-        self.local_metrics.validation_speed = 
+        self.local_metrics.validation_speed =
             0.1 * speed + 0.9 * self.local_metrics.validation_speed;
     }
 
@@ -659,12 +661,12 @@ impl NodeClassificationManager {
         if accepted {
             self.local_metrics.solutions_accepted += 1;
         }
-        
+
         // Update solve rate (solutions per hour)
         if let Some(started) = self.local_metrics.observation_started {
             let hours = started.elapsed().as_secs_f64() / 3600.0;
             if hours > 0.0 {
-                self.local_metrics.solve_rate = 
+                self.local_metrics.solve_rate =
                     self.local_metrics.solutions_accepted as f64 / hours;
             }
         }
@@ -683,10 +685,10 @@ impl NodeClassificationManager {
     /// Record oracle feed
     pub fn record_oracle_feed(&mut self, accurate: bool) {
         self.local_metrics.oracle_feeds_provided += 1;
-        
+
         // Update accuracy EMA
         let accuracy_value = if accurate { 1.0 } else { 0.0 };
-        self.local_metrics.oracle_accuracy = 
+        self.local_metrics.oracle_accuracy =
             0.1 * accuracy_value + 0.9 * self.local_metrics.oracle_accuracy;
     }
 
@@ -704,7 +706,7 @@ impl NodeClassificationManager {
     /// Update peer count
     pub fn update_peer_count(&mut self, count: usize) {
         // EMA for average peer count
-        self.local_metrics.avg_peer_count = 
+        self.local_metrics.avg_peer_count =
             0.1 * count as f64 + 0.9 * self.local_metrics.avg_peer_count;
     }
 
@@ -724,25 +726,25 @@ impl NodeClassificationManager {
         if current_block < self.last_classification_block + CLASSIFICATION_INTERVAL {
             return None;
         }
-        
+
         // Check if we have enough data
         if !self.local_metrics.has_enough_data() {
             return None;
         }
-        
+
         // Perform classification
         let result = classify_from_behavior(&self.local_metrics);
-        
+
         // Store result
         self.current_classification = Some(result.clone());
         self.classification_history.push(result.clone());
         self.last_classification_block = current_block;
-        
+
         // Trim history
         if self.classification_history.len() > 100 {
             self.classification_history.remove(0);
         }
-        
+
         Some(result)
     }
 
@@ -763,7 +765,7 @@ impl NodeClassificationManager {
     pub fn is_meeting_target(&self) -> Option<(bool, String)> {
         let target = self.target_type?;
         let current = self.current_type();
-        
+
         if current == target {
             Some((true, format!("Meeting {} target", target)))
         } else {
@@ -775,7 +777,7 @@ impl NodeClassificationManager {
     /// Get advice for improving to target type
     fn get_improvement_advice(&self, target: NodeType) -> String {
         let metrics = &self.local_metrics;
-        
+
         match target {
             NodeType::Archive => {
                 format!(
@@ -786,15 +788,13 @@ impl NodeClassificationManager {
             NodeType::Validator => {
                 format!(
                     "Need validation speed >= {} blocks/sec (current: {:.1}). Upgrade hardware.",
-                    VALIDATOR_SPEED_THRESHOLD,
-                    metrics.validation_speed
+                    VALIDATOR_SPEED_THRESHOLD, metrics.validation_speed
                 )
             }
             NodeType::Bounty => {
                 format!(
                     "Need solve rate >= {}/hr (current: {:.1}). Focus on problem solving.",
-                    BOUNTY_SOLVE_RATE,
-                    metrics.solve_rate
+                    BOUNTY_SOLVE_RATE, metrics.solve_rate
                 )
             }
             NodeType::Oracle => {
@@ -814,7 +814,8 @@ impl NodeClassificationManager {
         NodeTypeStatus {
             current_type: self.current_type(),
             target_type: self.target_type,
-            confidence: self.current_classification
+            confidence: self
+                .current_classification
                 .as_ref()
                 .map(|c| c.confidence)
                 .unwrap_or(0.0),
@@ -854,10 +855,10 @@ mod tests {
     fn test_reward_multipliers() {
         // Validator should have highest reward
         assert_eq!(NodeType::Validator.reward_multiplier(), 1.0);
-        
+
         // Archive should be mid-tier
         assert!(NodeType::Archive.reward_multiplier() > NodeType::Light.reward_multiplier());
-        
+
         // Bounty at golden ratio
         assert!((NodeType::Bounty.reward_multiplier() - 0.618).abs() < 0.001);
     }
@@ -868,7 +869,7 @@ mod tests {
         metrics.headers_only = true;
         metrics.blocks_stored = 50; // 0.5% storage
         metrics.last_update_block = 11000;
-        
+
         let result = classify_from_behavior(&metrics);
         assert_eq!(result.node_type, NodeType::Light);
     }
@@ -880,7 +881,7 @@ mod tests {
         metrics.storage_bytes = 2 * 1024 * 1024 * 1024 * 1024; // 2TB
         metrics.data_served_bytes = 1_500_000_000_000; // 1.5TB served
         metrics.last_update_block = 11000;
-        
+
         let result = classify_from_behavior(&metrics);
         assert_eq!(result.node_type, NodeType::Archive);
     }
@@ -896,7 +897,7 @@ mod tests {
         metrics.expected_uptime_seconds = 86400;
         metrics.avg_peer_count = 25.0;
         metrics.last_update_block = 11000;
-        
+
         let result = classify_from_behavior(&metrics);
         assert_eq!(result.node_type, NodeType::Validator);
     }
@@ -908,7 +909,7 @@ mod tests {
         metrics.solutions_submitted = 50;
         metrics.solutions_accepted = 45; // 90% acceptance
         metrics.last_update_block = 11000;
-        
+
         let result = classify_from_behavior(&metrics);
         assert_eq!(result.node_type, NodeType::Bounty);
     }
@@ -921,7 +922,7 @@ mod tests {
         metrics.uptime_seconds = 86400;
         metrics.expected_uptime_seconds = 86400; // 100% uptime
         metrics.last_update_block = 11000;
-        
+
         let result = classify_from_behavior(&metrics);
         assert_eq!(result.node_type, NodeType::Oracle);
     }
@@ -929,12 +930,12 @@ mod tests {
     #[test]
     fn test_manager_recording() {
         let mut manager = NodeClassificationManager::new(1000);
-        
+
         manager.record_block_stored();
         manager.record_block_validated(100);
         manager.record_solution_submitted(true);
         manager.record_block_propagated();
-        
+
         assert_eq!(manager.local_metrics.blocks_stored, 1);
         assert_eq!(manager.local_metrics.blocks_validated, 1);
         assert_eq!(manager.local_metrics.solutions_accepted, 1);
@@ -945,10 +946,9 @@ mod tests {
     fn test_stake_requirements() {
         // Light should require no stake
         assert_eq!(NodeType::Light.min_stake(), 0);
-        
+
         // Validator should require most stake
         assert!(NodeType::Validator.min_stake() > NodeType::Full.min_stake());
         assert!(NodeType::Validator.min_stake() > NodeType::Bounty.min_stake());
     }
 }
-

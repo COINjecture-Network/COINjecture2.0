@@ -5,17 +5,17 @@
 // NOTE: Some message handlers are prepared for future protocol extensions
 #![allow(dead_code)]
 
-use coinject_core::{Transaction, Hash, Address, ProblemType};
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, RwLock, broadcast};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
-use futures::{StreamExt, SinkExt};
-use serde::{Serialize, Deserialize};
+use chrono::Utc;
+use coinject_core::{Address, Hash, ProblemType, Transaction};
+use futures::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpListener;
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time::{interval, Duration, Instant};
-use chrono::Utc;
+use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 // =============================================================================
 // RPC Message Types
@@ -26,54 +26,43 @@ use chrono::Utc;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RpcMessage {
     // === Client → Server ===
-    
     /// Authenticate light client
     Auth {
         client_id: String,
         signature: Vec<u8>,
     },
-    
+
     /// Request mining work
     GetWork,
-    
+
     /// Submit proof-of-work
     SubmitWork {
         work_id: u64,
         solution: Vec<u8>,
         nonce: u64,
     },
-    
+
     /// Query chain status
     GetStatus,
-    
+
     /// Query balance
-    GetBalance {
-        address: String,
-    },
-    
+    GetBalance { address: String },
+
     /// Query block
-    GetBlock {
-        height: u64,
-    },
-    
+    GetBlock { height: u64 },
+
     /// Query transaction
-    GetTransaction {
-        tx_hash: String,
-    },
-    
+    GetTransaction { tx_hash: String },
+
     /// Submit transaction
     SubmitTransaction {
         transaction: String, // JSON-encoded
     },
-    
+
     // === Server → Client ===
-    
     /// Authentication response
-    AuthResponse {
-        success: bool,
-        message: String,
-    },
-    
+    AuthResponse { success: bool, message: String },
+
     /// Mining work response
     WorkResponse {
         work_id: u64,
@@ -82,14 +71,14 @@ pub enum RpcMessage {
         reward: u128,
         expires_at: i64, // Unix timestamp
     },
-    
+
     /// Work submission response
     SubmitResponse {
         accepted: bool,
         message: String,
         reward: Option<u128>,
     },
-    
+
     /// Status response
     StatusResponse {
         best_height: u64,
@@ -97,42 +86,33 @@ pub enum RpcMessage {
         peer_count: usize,
         sync_progress: f64,
     },
-    
+
     /// Balance response
     BalanceResponse {
         address: String,
         balance: u128,
         pending: u128,
     },
-    
+
     /// Block response
     BlockResponse {
         block: String, // JSON-encoded block
     },
-    
+
     /// Transaction response
     TransactionResponse {
         transaction: String, // JSON-encoded transaction
         confirmations: u64,
     },
-    
+
     /// Error response
-    Error {
-        code: i32,
-        message: String,
-    },
-    
+    Error { code: i32, message: String },
+
     /// New block notification (push)
-    NewBlock {
-        height: u64,
-        hash: String,
-    },
-    
+    NewBlock { height: u64, hash: String },
+
     /// Reward notification (push)
-    RewardNotification {
-        amount: u128,
-        block_height: u64,
-    },
+    RewardNotification { amount: u128, block_height: u64 },
 }
 
 // =============================================================================
@@ -147,12 +127,10 @@ pub enum RpcEvent {
         client_id: ClientId,
         addr: SocketAddr,
     },
-    
+
     /// Light client disconnected
-    ClientDisconnected {
-        client_id: ClientId,
-    },
-    
+    ClientDisconnected { client_id: ClientId },
+
     /// PoW submission received
     WorkSubmitted {
         client_id: ClientId,
@@ -160,7 +138,7 @@ pub enum RpcEvent {
         solution: Vec<u8>,
         nonce: u64,
     },
-    
+
     /// Transaction submitted
     TransactionSubmitted {
         transaction: Transaction,
@@ -172,28 +150,20 @@ pub enum RpcEvent {
 #[derive(Debug, Clone)]
 pub enum RpcCommand {
     /// Distribute mining work to clients
-    DistributeWork {
-        work: MiningWork,
-    },
-    
+    DistributeWork { work: MiningWork },
+
     /// Notify client of reward
     NotifyReward {
         client_id: ClientId,
         amount: u128,
         block_height: u64,
     },
-    
+
     /// Broadcast new block to all clients
-    BroadcastBlock {
-        height: u64,
-        hash: Hash,
-    },
-    
+    BroadcastBlock { height: u64, hash: Hash },
+
     /// Disconnect client
-    DisconnectClient {
-        client_id: ClientId,
-        reason: String,
-    },
+    DisconnectClient { client_id: ClientId, reason: String },
 }
 
 // =============================================================================
@@ -211,14 +181,14 @@ pub struct LightClient {
     pub last_seen: Instant,
     pub authenticated: bool,
     pub address: Option<Address>,
-    
+
     // Mining stats
     pub work_requests: u64,
     pub submissions: u64,
     pub accepted: u64,
     pub rejected: u64,
     pub total_reward: u128,
-    
+
     // WebSocket sender
     pub tx: mpsc::UnboundedSender<Message>,
 }
@@ -238,12 +208,18 @@ pub struct MiningWork {
 pub struct WorkQueue {
     /// Available work
     work: Vec<MiningWork>,
-    
+
     /// Assigned work (client_id → work_id)
     assigned: HashMap<ClientId, u64>,
-    
+
     /// Work ID counter
     next_work_id: u64,
+}
+
+impl Default for WorkQueue {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorkQueue {
@@ -254,20 +230,20 @@ impl WorkQueue {
             next_work_id: 1,
         }
     }
-    
+
     /// Add work to queue
     pub fn add_work(&mut self, mut work: MiningWork) {
         work.work_id = self.next_work_id;
         self.next_work_id += 1;
         self.work.push(work);
     }
-    
+
     /// Get work for client
     pub fn get_work(&mut self, client_id: &ClientId) -> Option<MiningWork> {
         // Remove expired work
         let now = Utc::now().timestamp();
         self.work.retain(|w| w.expires_at > now);
-        
+
         // Get next available work
         if let Some(work) = self.work.pop() {
             self.assigned.insert(client_id.clone(), work.work_id);
@@ -276,7 +252,7 @@ impl WorkQueue {
             None
         }
     }
-    
+
     /// Verify work assignment
     pub fn verify_assignment(&self, client_id: &ClientId, work_id: u64) -> bool {
         self.assigned.get(client_id) == Some(&work_id)
@@ -302,22 +278,22 @@ pub struct RpcMetrics {
 pub struct WebSocketRpc {
     /// Listen address
     listen_addr: SocketAddr,
-    
+
     /// Connected clients
     clients: Arc<RwLock<HashMap<ClientId, LightClient>>>,
-    
+
     /// Work queue
     work_queue: Arc<RwLock<WorkQueue>>,
-    
+
     /// Metrics
     metrics: Arc<RwLock<RpcMetrics>>,
-    
+
     /// Event sender (to node service)
     event_tx: mpsc::UnboundedSender<RpcEvent>,
-    
+
     /// Command receiver (from node service)
     command_rx: mpsc::UnboundedReceiver<RpcCommand>,
-    
+
     /// Shutdown signal
     shutdown_tx: broadcast::Sender<()>,
     shutdown_rx: broadcast::Receiver<()>,
@@ -335,7 +311,7 @@ impl WebSocketRpc {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-        
+
         let rpc = WebSocketRpc {
             listen_addr,
             clients: Arc::new(RwLock::new(HashMap::new())),
@@ -346,23 +322,23 @@ impl WebSocketRpc {
             shutdown_tx,
             shutdown_rx,
         };
-        
+
         (rpc, command_tx, event_rx)
     }
-    
+
     // =========================================================================
     // Main Event Loop
     // =========================================================================
-    
+
     /// Start the WebSocket RPC service
     pub async fn start(mut self) -> Result<(), RpcError> {
         // Bind TCP listener
         let listener = TcpListener::bind(&self.listen_addr).await?;
         println!("WebSocket RPC listening on {}", self.listen_addr);
-        
+
         // Periodic cleanup interval
         let mut cleanup_interval = interval(Duration::from_secs(60));
-        
+
         loop {
             tokio::select! {
                 // Accept incoming WebSocket connections
@@ -372,7 +348,7 @@ impl WebSocketRpc {
                     let metrics = self.metrics.clone();
                     let event_tx = self.event_tx.clone();
                     let shutdown = self.shutdown_tx.subscribe();
-                    
+
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_client_connection(
                             stream,
@@ -387,19 +363,19 @@ impl WebSocketRpc {
                         }
                     });
                 }
-                
+
                 // Handle commands from node service
                 Some(command) = self.command_rx.recv() => {
                     if let Err(e) = self.handle_command(command).await {
                         eprintln!("RPC command error: {}", e);
                     }
                 }
-                
+
                 // Periodic: Cleanup stale clients
                 _ = cleanup_interval.tick() => {
                     self.cleanup_stale_clients().await;
                 }
-                
+
                 // Shutdown signal
                 _ = self.shutdown_rx.recv() => {
                     println!("WebSocket RPC shutting down");
@@ -407,14 +383,14 @@ impl WebSocketRpc {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     // =========================================================================
     // Client Connection Handling
     // =========================================================================
-    
+
     /// Handle client WebSocket connection
     async fn handle_client_connection(
         stream: tokio::net::TcpStream,
@@ -428,16 +404,16 @@ impl WebSocketRpc {
         // Accept WebSocket handshake
         let ws_stream = accept_async(stream).await?;
         println!("WebSocket client connected: {}", addr);
-        
+
         // Split stream into sender and receiver
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-        
+
         // Create message channel for this client
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-        
+
         // Generate client ID
         let client_id = format!("client_{}", addr);
-        
+
         // Create light client
         let client = LightClient {
             id: client_id.clone(),
@@ -453,26 +429,26 @@ impl WebSocketRpc {
             total_reward: 0,
             tx: tx.clone(),
         };
-        
+
         // Add to clients map
         {
             let mut clients_guard = clients.write().await;
             clients_guard.insert(client_id.clone(), client);
         }
-        
+
         // Update metrics
         {
             let mut metrics_guard = metrics.write().await;
             metrics_guard.total_connections += 1;
             metrics_guard.active_connections = clients.read().await.len();
         }
-        
+
         // Send ClientConnected event
         let _ = event_tx.send(RpcEvent::ClientConnected {
             client_id: client_id.clone(),
             addr,
         });
-        
+
         // Spawn task to send messages to client
         let _clients_clone = clients.clone();
         tokio::spawn(async move {
@@ -482,19 +458,19 @@ impl WebSocketRpc {
                 }
             }
         });
-        
+
         // Handle incoming messages
         loop {
             tokio::select! {
                 // Receive message from client
                 Some(msg_result) = ws_receiver.next() => {
                     let msg = msg_result?;
-                    
+
                     if let Message::Text(text) = msg {
                         // Parse JSON message
                         let rpc_msg: RpcMessage = serde_json::from_str(&text)
-                            .map_err(|e| RpcError::Json(e))?;
-                        
+                            .map_err(RpcError::Json)?;
+
                         // Handle message
                         if let Some(response) = Self::handle_message(
                             &client_id,
@@ -507,7 +483,7 @@ impl WebSocketRpc {
                             let json = serde_json::to_string(&response)?;
                             let _ = tx.send(Message::Text(json));
                         }
-                        
+
                         // Update last_seen
                         {
                             let mut clients_guard = clients.write().await;
@@ -519,38 +495,38 @@ impl WebSocketRpc {
                         break;
                     }
                 }
-                
+
                 // Shutdown signal
                 _ = shutdown.recv() => {
                     break;
                 }
             }
         }
-        
+
         // Remove client
         {
             let mut clients_guard = clients.write().await;
             clients_guard.remove(&client_id);
         }
-        
+
         // Update metrics
         {
             let mut metrics_guard = metrics.write().await;
             metrics_guard.active_connections = clients.read().await.len();
         }
-        
+
         // Send ClientDisconnected event
         let _ = event_tx.send(RpcEvent::ClientDisconnected {
             client_id: client_id.clone(),
         });
-        
+
         Ok(())
     }
-    
+
     // =========================================================================
     // Message Handling
     // =========================================================================
-    
+
     /// Handle RPC message from client
     async fn handle_message(
         client_id: &ClientId,
@@ -560,19 +536,22 @@ impl WebSocketRpc {
         event_tx: &mpsc::UnboundedSender<RpcEvent>,
     ) -> Result<Option<RpcMessage>, RpcError> {
         match msg {
-            RpcMessage::Auth { client_id: id, signature: _ } => {
+            RpcMessage::Auth {
+                client_id: id,
+                signature: _,
+            } => {
                 // TODO: Validate signature
                 let mut clients_guard = clients.write().await;
                 if let Some(client) = clients_guard.get_mut(&id) {
                     client.authenticated = true;
                 }
-                
+
                 Ok(Some(RpcMessage::AuthResponse {
                     success: true,
                     message: "Authenticated".to_string(),
                 }))
             }
-            
+
             RpcMessage::GetWork => {
                 // Get work from queue
                 let mut queue = work_queue.write().await;
@@ -584,11 +563,10 @@ impl WebSocketRpc {
                             client.work_requests += 1;
                         }
                     }
-                    
+
                     Ok(Some(RpcMessage::WorkResponse {
                         work_id: work.work_id,
-                        problem: serde_json::to_string(&work.problem)
-                            .map_err(|e| RpcError::Json(e))?,
+                        problem: serde_json::to_string(&work.problem).map_err(RpcError::Json)?,
                         difficulty: work.difficulty,
                         reward: work.reward,
                         expires_at: work.expires_at,
@@ -600,8 +578,12 @@ impl WebSocketRpc {
                     }))
                 }
             }
-            
-            RpcMessage::SubmitWork { work_id, solution, nonce } => {
+
+            RpcMessage::SubmitWork {
+                work_id,
+                solution,
+                nonce,
+            } => {
                 // Verify assignment
                 let queue = work_queue.read().await;
                 if !queue.verify_assignment(client_id, work_id) {
@@ -611,7 +593,7 @@ impl WebSocketRpc {
                         reward: None,
                     }));
                 }
-                
+
                 // Update client stats
                 {
                     let mut clients_guard = clients.write().await;
@@ -619,7 +601,7 @@ impl WebSocketRpc {
                         client.submissions += 1;
                     }
                 }
-                
+
                 // Send to node service for validation
                 let _ = event_tx.send(RpcEvent::WorkSubmitted {
                     client_id: client_id.clone(),
@@ -627,11 +609,11 @@ impl WebSocketRpc {
                     solution,
                     nonce,
                 });
-                
+
                 // Response will come via RpcCommand::NotifyReward
                 Ok(None)
             }
-            
+
             RpcMessage::GetStatus => {
                 // TODO: Query chain state
                 Ok(Some(RpcMessage::StatusResponse {
@@ -641,7 +623,7 @@ impl WebSocketRpc {
                     sync_progress: 1.0,
                 }))
             }
-            
+
             RpcMessage::GetBalance { address } => {
                 // TODO: Query balance
                 Ok(Some(RpcMessage::BalanceResponse {
@@ -650,7 +632,7 @@ impl WebSocketRpc {
                     pending: 0,
                 }))
             }
-            
+
             RpcMessage::GetBlock { height: _ } => {
                 // TODO: Query block
                 Ok(Some(RpcMessage::Error {
@@ -658,7 +640,7 @@ impl WebSocketRpc {
                     message: "Block not found".to_string(),
                 }))
             }
-            
+
             RpcMessage::GetTransaction { tx_hash: _ } => {
                 // TODO: Query transaction
                 Ok(Some(RpcMessage::Error {
@@ -666,28 +648,28 @@ impl WebSocketRpc {
                     message: "Transaction not found".to_string(),
                 }))
             }
-            
-            RpcMessage::SubmitTransaction { transaction: _transaction } => {
+
+            RpcMessage::SubmitTransaction {
+                transaction: _transaction,
+            } => {
                 // TODO: Parse and submit transaction
                 Ok(Some(RpcMessage::Error {
                     code: 400,
                     message: "Invalid transaction".to_string(),
                 }))
             }
-            
-            _ => {
-                Ok(Some(RpcMessage::Error {
-                    code: 400,
-                    message: "Invalid message type".to_string(),
-                }))
-            }
+
+            _ => Ok(Some(RpcMessage::Error {
+                code: 400,
+                message: "Invalid message type".to_string(),
+            })),
         }
     }
-    
+
     // =========================================================================
     // Command Handling
     // =========================================================================
-    
+
     /// Handle command from node service
     async fn handle_command(&mut self, command: RpcCommand) -> Result<(), RpcError> {
         match command {
@@ -695,27 +677,31 @@ impl WebSocketRpc {
                 let mut queue = self.work_queue.write().await;
                 queue.add_work(work);
             }
-            
-            RpcCommand::NotifyReward { client_id, amount, block_height } => {
+
+            RpcCommand::NotifyReward {
+                client_id,
+                amount,
+                block_height,
+            } => {
                 self.notify_reward(&client_id, amount, block_height).await?;
             }
-            
+
             RpcCommand::BroadcastBlock { height, hash } => {
                 self.broadcast_block(height, hash).await?;
             }
-            
+
             RpcCommand::DisconnectClient { client_id, reason } => {
                 self.disconnect_client(&client_id, &reason).await;
             }
         }
-        
+
         Ok(())
     }
-    
+
     // =========================================================================
     // Broadcasting
     // =========================================================================
-    
+
     /// Notify client of reward
     async fn notify_reward(
         &self,
@@ -731,7 +717,7 @@ impl WebSocketRpc {
             };
             let json = serde_json::to_string(&msg)?;
             let _ = client.tx.send(Message::Text(json));
-            
+
             // Update client stats
             drop(clients);
             let mut clients_guard = self.clients.write().await;
@@ -739,16 +725,16 @@ impl WebSocketRpc {
                 client.accepted += 1;
                 client.total_reward += amount;
             }
-            
+
             // Update metrics
             let mut metrics = self.metrics.write().await;
             metrics.total_accepted += 1;
             metrics.total_rewards_distributed += amount;
         }
-        
+
         Ok(())
     }
-    
+
     /// Broadcast new block to all clients
     async fn broadcast_block(&self, height: u64, hash: Hash) -> Result<(), RpcError> {
         let msg = RpcMessage::NewBlock {
@@ -756,36 +742,36 @@ impl WebSocketRpc {
             hash: hex::encode(hash.as_bytes()),
         };
         let json = serde_json::to_string(&msg)?;
-        
+
         let clients = self.clients.read().await;
         for client in clients.values() {
             let _ = client.tx.send(Message::Text(json.clone()));
         }
-        
+
         Ok(())
     }
-    
+
     // =========================================================================
     // Maintenance
     // =========================================================================
-    
+
     /// Disconnect client
     async fn disconnect_client(&self, client_id: &ClientId, reason: &str) {
         let mut clients = self.clients.write().await;
         if let Some(_client) = clients.remove(client_id) {
             println!("Client {} disconnected: {}", client_id, reason);
-            
+
             let _ = self.event_tx.send(RpcEvent::ClientDisconnected {
                 client_id: client_id.clone(),
             });
         }
     }
-    
+
     /// Cleanup stale clients
     async fn cleanup_stale_clients(&self) {
         let now = Instant::now();
         let timeout = Duration::from_secs(300); // 5 minutes
-        
+
         let mut clients = self.clients.write().await;
         clients.retain(|id, client| {
             if now.duration_since(client.last_seen) > timeout {
@@ -842,4 +828,3 @@ impl std::fmt::Display for RpcError {
 }
 
 impl std::error::Error for RpcError {}
-

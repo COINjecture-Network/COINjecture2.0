@@ -8,17 +8,14 @@ pub(crate) fn build_merkle_proof(
     transactions: &[coinject_core::Transaction],
     target_tx_hash: &coinject_core::Hash,
 ) -> Vec<(coinject_core::Hash, bool)> {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     if transactions.is_empty() {
         return Vec::new();
     }
 
     // Get transaction hashes
-    let mut leaves: Vec<coinject_core::Hash> = transactions
-        .iter()
-        .map(|tx| tx.hash())
-        .collect();
+    let mut leaves: Vec<coinject_core::Hash> = transactions.iter().map(|tx| tx.hash()).collect();
 
     // Find target index
     let target_index = match leaves.iter().position(|h| h == target_tx_hash) {
@@ -72,7 +69,7 @@ pub(crate) fn verify_merkle_proof(
     proof: &[(coinject_core::Hash, bool)],
     expected_root: &coinject_core::Hash,
 ) -> bool {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     let mut current = *tx_hash;
 

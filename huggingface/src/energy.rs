@@ -3,14 +3,14 @@
 // Microsecond precision with robust small-value handling
 
 use std::time::Duration;
-use sysinfo::{System, RefreshKind};
+use sysinfo::{RefreshKind, System};
 
 /// Energy measurement method (institutional-grade hierarchy)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnergyMeasurementMethod {
-    RAPL,         // Hardware counters (Intel/AMD)
-    CPUTracking,  // Actual CPU utilization measurement
-    Estimate,     // TDP-based fallback
+    RAPL,        // Hardware counters (Intel/AMD)
+    CPUTracking, // Actual CPU utilization measurement
+    Estimate,    // TDP-based fallback
 }
 
 /// Energy measurement configuration
@@ -45,10 +45,10 @@ pub struct EnergyMeasurement {
 /// Measurement confidence level for data provenance
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeasurementConfidence {
-    VeryHigh,  // Hardware RAPL counters
-    High,      // CPU utilization tracking
-    Medium,    // TDP estimation with corrections
-    Low,       // Pure TDP estimation
+    VeryHigh, // Hardware RAPL counters
+    High,     // CPU utilization tracking
+    Medium,   // TDP estimation with corrections
+    Low,      // Pure TDP estimation
 }
 
 impl MeasurementConfidence {
@@ -73,7 +73,7 @@ impl EnergyMeasurer {
     /// Create new energy measurer with capability detection
     pub fn new(config: EnergyConfig) -> Self {
         let mut system = System::new_with_specifics(
-            RefreshKind::new().with_cpu(sysinfo::CpuRefreshKind::everything())
+            RefreshKind::new().with_cpu(sysinfo::CpuRefreshKind::everything()),
         );
         system.refresh_cpu_all();
 
@@ -124,7 +124,8 @@ impl EnergyMeasurer {
 
         // Tier 2: CPU utilization tracking
         if self.config.method == EnergyMeasurementMethod::CPUTracking
-            || (self.config.method == EnergyMeasurementMethod::RAPL && !self.rapl_available) {
+            || (self.config.method == EnergyMeasurementMethod::RAPL && !self.rapl_available)
+        {
             let energy = self.measure_with_cpu_tracking(duration)?;
             tracing::debug!("[CPU] {} energy: {:.6} J", operation_type, energy);
             return Ok(energy);
@@ -144,7 +145,9 @@ impl EnergyMeasurer {
         // Read initial energy counter
         let before_str = std::fs::read_to_string(rapl_path)
             .map_err(|e| EnergyError::IoError(format!("Failed to read RAPL: {}", e)))?;
-        let before_uj: u64 = before_str.trim().parse()
+        let before_uj: u64 = before_str
+            .trim()
+            .parse()
             .map_err(|e| EnergyError::ParseError(format!("Invalid RAPL value: {}", e)))?;
 
         // NOTE: In a real measurement, we would:
@@ -158,9 +161,11 @@ impl EnergyMeasurer {
         // This gives us average power consumption
         std::thread::sleep(duration.min(Duration::from_millis(100))); // Sample briefly
 
-        let after_str = std::fs::read_to_string(rapl_path)
-            .map_err(|e| EnergyError::IoError(e.to_string()))?;
-        let after_uj: u64 = after_str.trim().parse()
+        let after_str =
+            std::fs::read_to_string(rapl_path).map_err(|e| EnergyError::IoError(e.to_string()))?;
+        let after_uj: u64 = after_str
+            .trim()
+            .parse()
             .map_err(|e| EnergyError::ParseError(format!("Invalid RAPL value: {}", e)))?;
 
         // Calculate average power from sample
@@ -221,15 +226,16 @@ impl EnergyMeasurer {
         let verify_energy = self.measure_energy(verify_time, "verify")?;
 
         // Determine confidence based on method and availability
-        let confidence = if self.rapl_available && self.config.method == EnergyMeasurementMethod::RAPL {
-            MeasurementConfidence::VeryHigh
-        } else if self.config.method == EnergyMeasurementMethod::CPUTracking {
-            MeasurementConfidence::High
-        } else if solve_energy > 0.01 || verify_energy > 0.01 {
-            MeasurementConfidence::Medium // TDP estimation with measurable energy
-        } else {
-            MeasurementConfidence::Low // Very small values, high uncertainty
-        };
+        let confidence =
+            if self.rapl_available && self.config.method == EnergyMeasurementMethod::RAPL {
+                MeasurementConfidence::VeryHigh
+            } else if self.config.method == EnergyMeasurementMethod::CPUTracking {
+                MeasurementConfidence::High
+            } else if solve_energy > 0.01 || verify_energy > 0.01 {
+                MeasurementConfidence::Medium // TDP estimation with measurable energy
+            } else {
+                MeasurementConfidence::Low // Very small values, high uncertainty
+            };
 
         Ok(EnergyMeasurement {
             solve_energy_joules: solve_energy,
@@ -264,7 +270,9 @@ impl EnergyMeasurer {
 
         // Sanity check - asymmetry should correlate with time asymmetry
         // If they differ by more than 10x, prefer time asymmetry
-        if asymmetry > 0.0 && (asymmetry / time_asymmetry > 10.0 || time_asymmetry / asymmetry > 10.0) {
+        if asymmetry > 0.0
+            && (asymmetry / time_asymmetry > 10.0 || time_asymmetry / asymmetry > 10.0)
+        {
             tracing::warn!(
                 "Energy asymmetry ({:.2}) differs significantly from time asymmetry ({:.2}), using time",
                 asymmetry, time_asymmetry

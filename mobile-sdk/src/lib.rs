@@ -30,7 +30,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::fmt;
 
 // =============================================================================
@@ -58,7 +58,7 @@ impl Hash {
 
     /// Convert to hex string
     pub fn to_hex(&self) -> String {
-        hex::encode(&self.bytes)
+        hex::encode(self.bytes)
     }
 
     /// Parse from hex string
@@ -80,7 +80,7 @@ impl Hash {
     /// Calculate SHA256(SHA256(data)) - Bitcoin-style double hash
     pub fn double_sha256(data: &[u8]) -> Self {
         let first = Sha256::digest(data);
-        let second = Sha256::digest(&first);
+        let second = Sha256::digest(first);
         Hash::from_bytes(second.into())
     }
 
@@ -182,7 +182,7 @@ impl BlockHeader {
         if bytes.len() < 92 {
             return Err(ParseError::InvalidLength);
         }
-        
+
         Ok(BlockHeader {
             version: u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
             height: u64::from_le_bytes(bytes[4..12].try_into().unwrap()),
@@ -246,7 +246,7 @@ impl MMRProof {
         let mut hasher = Sha256::new();
         hasher.update(b"MMR_NODE");
         hasher.update(height.to_le_bytes());
-        
+
         if is_right {
             // Our node is on the left
             hasher.update(left.as_bytes());
@@ -256,7 +256,7 @@ impl MMRProof {
             hasher.update(right.as_bytes());
             hasher.update(left.as_bytes());
         }
-        
+
         Hash::from_bytes(hasher.finalize().into())
     }
 
@@ -381,7 +381,7 @@ impl TxProof {
         for (sibling, is_right) in &self.merkle_path {
             let mut hasher = Sha256::new();
             hasher.update(b"MERKLE_NODE");
-            
+
             if *is_right {
                 hasher.update(current.as_bytes());
                 hasher.update(sibling.as_bytes());
@@ -389,7 +389,7 @@ impl TxProof {
                 hasher.update(sibling.as_bytes());
                 hasher.update(current.as_bytes());
             }
-            
+
             current = Hash::from_bytes(hasher.finalize().into());
         }
 
@@ -451,15 +451,14 @@ impl LightClient {
             self.verified_mmr_root = Some(proof.mmr_root);
             self.verified_height = proof.tip_header.height;
         }
-        
+
         self.verification_count += 1;
         Ok(())
     }
 
     /// Verify a block is in the chain
     pub fn verify_block(&self, proof: &MMRProof) -> Result<bool, VerifyError> {
-        let mmr_root = self.verified_mmr_root
-            .ok_or(VerifyError::NoVerifiedState)?;
+        let mmr_root = self.verified_mmr_root.ok_or(VerifyError::NoVerifiedState)?;
         Ok(proof.verify(&mmr_root))
     }
 
@@ -581,7 +580,9 @@ pub mod ffi {
     /// Get verified height (FFI)
     #[no_mangle]
     pub extern "C" fn coinject_light_client_height(handle: LightClientHandle) -> u64 {
-        if handle.is_null() { return 0; }
+        if handle.is_null() {
+            return 0;
+        }
         unsafe { (*handle).verified_height() }
     }
 
@@ -626,7 +627,7 @@ pub mod ffi {
 
         let client = unsafe { &*handle };
         let json = client.to_json();
-        
+
         match CString::new(json) {
             Ok(cstr) => cstr.into_raw(),
             Err(_) => std::ptr::null_mut(),
@@ -688,7 +689,8 @@ pub mod wasm {
         /// Get MMR root as hex (or empty if not verified)
         #[wasm_bindgen(getter)]
         pub fn mmr_root(&self) -> String {
-            self.inner.verified_mmr_root()
+            self.inner
+                .verified_mmr_root()
                 .map(|h| h.to_hex())
                 .unwrap_or_default()
         }
@@ -712,8 +714,9 @@ pub mod wasm {
         pub fn verify_mmr_proof(&self, proof_json: &str) -> Result<bool, JsError> {
             let proof: MMRProof = serde_json::from_str(proof_json)
                 .map_err(|e| JsError::new(&format!("Invalid proof JSON: {}", e)))?;
-            
-            self.inner.verify_block(&proof)
+
+            self.inner
+                .verify_block(&proof)
                 .map_err(|e| JsError::new(&e.to_string()))
         }
 
@@ -722,8 +725,9 @@ pub mod wasm {
         pub fn verify_flyclient_proof(&mut self, proof_json: &str) -> Result<bool, JsError> {
             let proof: FlyClientProof = serde_json::from_str(proof_json)
                 .map_err(|e| JsError::new(&format!("Invalid proof JSON: {}", e)))?;
-            
-            self.inner.verify_flyclient(&proof)
+
+            self.inner
+                .verify_flyclient(&proof)
                 .map(|_| true)
                 .map_err(|e| JsError::new(&e.to_string()))
         }
@@ -732,8 +736,8 @@ pub mod wasm {
     /// Hash a hex string using double SHA256
     #[wasm_bindgen]
     pub fn hash_double_sha256(data_hex: &str) -> Result<String, JsError> {
-        let bytes = hex::decode(data_hex)
-            .map_err(|e| JsError::new(&format!("Invalid hex: {}", e)))?;
+        let bytes =
+            hex::decode(data_hex).map_err(|e| JsError::new(&format!("Invalid hex: {}", e)))?;
         Ok(Hash::double_sha256(&bytes).to_hex())
     }
 }
@@ -788,7 +792,7 @@ mod tests {
     fn test_light_client_creation() {
         let genesis = Hash::from_bytes([0u8; 32]);
         let client = LightClient::new(genesis);
-        
+
         assert_eq!(client.verified_height(), 0);
         assert!(client.verified_tip().is_none());
         assert!(client.verified_mmr_root().is_none());
@@ -798,10 +802,10 @@ mod tests {
     fn test_light_client_json_roundtrip() {
         let genesis = Hash::from_bytes([0xAB; 32]);
         let client = LightClient::new(genesis);
-        
+
         let json = client.to_json();
         let recovered = LightClient::from_json(&json).unwrap();
-        
+
         assert_eq!(client.genesis_hash(), recovered.genesis_hash());
         assert_eq!(client.verified_height(), recovered.verified_height());
     }
@@ -830,4 +834,3 @@ mod tests {
         assert_eq!(format!("{}", err), "Invalid MMR proof for block 100");
     }
 }
-

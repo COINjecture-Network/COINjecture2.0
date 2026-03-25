@@ -1,15 +1,15 @@
 // Mining Loop with NP-hard Proof-of-Work
 // Implements commit-reveal protocol to prevent grinding attacks
 
+use crate::problem_registry::SharedRegistry;
+use crate::{DifficultyAdjuster, WorkScoreCalculator};
 use coinject_core::{
     Address, Block, BlockHeader, Clause, CoinbaseTransaction, Commitment, Hash, ProblemType,
     Solution, SolutionReveal, Transaction, unix_now_secs,
 };
-use coinject_tokenomics::{RewardCalculator, NetworkMetrics};
-use crate::{WorkScoreCalculator, DifficultyAdjuster};
-use crate::problem_registry::SharedRegistry;
-use rand::Rng;
+use coinject_tokenomics::{NetworkMetrics, RewardCalculator};
 use rand::seq::SliceRandom;
+use rand::Rng;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -26,7 +26,10 @@ const FAILURE_PENALTY_TIME: Duration = Duration::from_secs(60);
 /// Mine header by finding nonce that meets difficulty target (blocking)
 /// This is a standalone function to run in spawn_blocking.
 /// Public so the EpochCoordinator can call it directly.
-pub fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<(BlockHeader, Hash)> {
+pub fn mine_header_blocking(
+    mut header: BlockHeader,
+    difficulty: u32,
+) -> Option<(BlockHeader, Hash)> {
     let target_prefix = "0".repeat(difficulty as usize);
     let start_time = Instant::now();
     let mut hashes = 0u64;
@@ -48,7 +51,10 @@ pub fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<
         if hash_hex.starts_with(&target_prefix) {
             let elapsed = start_time.elapsed().as_secs_f64();
             let hash_rate = hashes as f64 / elapsed;
-            println!("✅ Found nonce {} after {} hashes ({:.2} H/s)", nonce, hashes, hash_rate);
+            println!(
+                "✅ Found nonce {} after {} hashes ({:.2} H/s)",
+                nonce, hashes, hash_rate
+            );
             println!("   Block hash: {}", hash_hex);
             return Some((header, hash));
         }
@@ -57,8 +63,12 @@ pub fn mine_header_blocking(mut header: BlockHeader, difficulty: u32) -> Option<
         if nonce % 1_000_000 == 0 && nonce > 0 {
             let elapsed = start_time.elapsed().as_secs_f64();
             let hash_rate = hashes as f64 / elapsed;
-            println!("⛏️  Mining... {} hashes ({:.2} H/s) | Latest: {}...",
-                hashes, hash_rate, &hash_hex[..16]);
+            println!(
+                "⛏️  Mining... {} hashes ({:.2} H/s) | Latest: {}...",
+                hashes,
+                hash_rate,
+                &hash_hex[..16]
+            );
         }
     }
 
@@ -78,9 +88,21 @@ pub fn solve_problem_blocking(problem: ProblemType) -> Option<(Solution, Duratio
         ProblemType::SAT { variables, clauses } => {
             let timeout = Duration::from_secs(30);
             if *variables <= 32 {
-                solve_sat_brute_force_blocking(*variables, clauses, &mut memory_used, start_time, timeout)
+                solve_sat_brute_force_blocking(
+                    *variables,
+                    clauses,
+                    &mut memory_used,
+                    start_time,
+                    timeout,
+                )
             } else {
-                solve_sat_with_timeout_blocking(*variables, clauses, &mut memory_used, timeout, start_time)
+                solve_sat_with_timeout_blocking(
+                    *variables,
+                    clauses,
+                    &mut memory_used,
+                    timeout,
+                    start_time,
+                )
             }
         }
         ProblemType::TSP { cities, distances } => {
@@ -102,8 +124,8 @@ fn solve_subset_sum_blocking(numbers: &[i64], target: i64, memory: &mut usize) -
         return None;
     }
 
-    let offset = sum.abs() as usize;
-    let range = (2 * offset + 1) as usize;
+    let offset = sum.unsigned_abs() as usize;
+    let range = 2 * offset + 1;
     let mut dp = vec![vec![false; range]; n + 1];
     *memory += dp.len() * dp[0].len();
 
@@ -111,11 +133,11 @@ fn solve_subset_sum_blocking(numbers: &[i64], target: i64, memory: &mut usize) -
 
     for i in 1..=n {
         for j in 0..range {
-            dp[i][j] = dp[i-1][j];
-            let num = numbers[i-1];
+            dp[i][j] = dp[i - 1][j];
+            let num = numbers[i - 1];
             let prev_idx = j as i64 - num;
             if prev_idx >= 0 && prev_idx < range as i64 {
-                dp[i][j] |= dp[i-1][prev_idx as usize];
+                dp[i][j] |= dp[i - 1][prev_idx as usize];
             }
         }
     }
@@ -131,11 +153,11 @@ fn solve_subset_sum_blocking(numbers: &[i64], target: i64, memory: &mut usize) -
         if curr_sum == 0 {
             break;
         }
-        let num = numbers[i-1];
+        let num = numbers[i - 1];
         if curr_sum >= num {
             let prev_idx = (offset as i64 + curr_sum - num) as usize;
-            if prev_idx < range && dp[i-1][prev_idx] {
-                indices.push(i-1);
+            if prev_idx < range && dp[i - 1][prev_idx] {
+                indices.push(i - 1);
                 curr_sum -= num;
             }
         }
@@ -163,8 +185,8 @@ fn solve_sat_brute_force_blocking(
         }
 
         let mut assignment = vec![false; variables];
-        for j in 0..variables.min(32) {
-            assignment[j] = (assignment_bits >> j) & 1 == 1;
+        for (j, slot) in assignment.iter_mut().enumerate().take(variables.min(32)) {
+            *slot = (assignment_bits >> j) & 1 == 1;
         }
 
         // Check if this assignment satisfies all clauses
@@ -266,7 +288,11 @@ fn solve_sat_with_timeout_blocking(
 }
 
 /// TSP solver (blocking standalone)
-fn solve_tsp_blocking(cities: usize, distances: &[Vec<u64>], memory: &mut usize) -> Option<Solution> {
+fn solve_tsp_blocking(
+    cities: usize,
+    distances: &[Vec<u64>],
+    memory: &mut usize,
+) -> Option<Solution> {
     if cities == 0 {
         return None;
     }
@@ -376,7 +402,7 @@ impl Miner {
             difficulty_adjuster: Arc::new(RwLock::new(DifficultyAdjuster::new())),
         }
     }
-    
+
     /// Set network metrics for empirical difficulty adjustment and work score calculation
     /// This enables full compliance with empirical/self-referential/dimensionless principles
     pub async fn set_network_metrics(&mut self, network_metrics: Arc<RwLock<NetworkMetrics>>) {
@@ -406,9 +432,9 @@ impl Miner {
     /// RUNTIME INTEGRATION: Uses dimensional complexity |ψ(τ)| to modulate difficulty
     /// DETERMINISM: Seeded by parent hash + height to ensure all nodes generate the same problem
     pub async fn generate_problem(&self, block_height: u64, prev_hash: Hash) -> ProblemType {
-        use coinject_core::{TAU_C, ConsensusState};
-        use rand::SeedableRng;
+        use coinject_core::{ConsensusState, TAU_C};
         use rand::rngs::StdRng;
+        use rand::SeedableRng;
 
         // Create deterministic seed from parent hash + height
         // This ensures all nodes generate the SAME problem for a given (prev_hash, height) pair
@@ -449,9 +475,7 @@ impl Miner {
                     let adjuster = self.difficulty_adjuster.read().await;
                     adjuster.size_for_problem_type("SubsetSum")
                 };
-                let numbers: Vec<i64> = (0..problem_size)
-                    .map(|_| rng.gen_range(1..1000))
-                    .collect();
+                let numbers: Vec<i64> = (0..problem_size).map(|_| rng.gen_range(1..1000)).collect();
 
                 // Randomly select which numbers to include in the solution
                 // This guarantees the problem is solvable
@@ -477,9 +501,8 @@ impl Miner {
                 let num_clauses = variables * 3; // 3-SAT ratio
 
                 // Generate a random satisfying assignment first (our "hidden solution")
-                let satisfying_assignment: Vec<bool> = (0..variables)
-                    .map(|_| rng.gen_bool(0.5))
-                    .collect();
+                let satisfying_assignment: Vec<bool> =
+                    (0..variables).map(|_| rng.gen_bool(0.5)).collect();
 
                 use rand::seq::SliceRandom;
                 let clauses: Vec<Clause> = (0..num_clauses)
@@ -488,7 +511,9 @@ impl Miner {
                         let mut selected_vars: Vec<usize> = (0..variables).collect();
                         selected_vars.shuffle(&mut rng);
 
-                        let literals: Vec<i32> = selected_vars.iter().take(3)
+                        let literals: Vec<i32> = selected_vars
+                            .iter()
+                            .take(3)
                             .map(|&var_idx| {
                                 let var = (var_idx as i32) + 1;
                                 let assignment_value = satisfying_assignment[var_idx];
@@ -497,9 +522,15 @@ impl Miner {
                                 // 30% chance: Create opposite literal (not satisfied by this variable)
                                 // This ensures at least one literal per clause is satisfied
                                 if rng.gen_bool(0.7) {
-                                    if assignment_value { var } else { -var }
+                                    if assignment_value {
+                                        var
+                                    } else {
+                                        -var
+                                    }
+                                } else if assignment_value {
+                                    -var
                                 } else {
-                                    if assignment_value { -var } else { var }
+                                    var
                                 }
                             })
                             .collect();
@@ -521,7 +552,7 @@ impl Miner {
                 };
                 let mut distances = vec![vec![0u64; cities]; cities];
                 for i in 0..cities {
-                    for j in i+1..cities {
+                    for j in i + 1..cities {
                         let dist = rng.gen_range(1..100);
                         distances[i][j] = dist;
                         distances[j][i] = dist;
@@ -549,9 +580,21 @@ impl Miner {
                 // For larger problems, use DPLL with timeout
                 let timeout = Duration::from_secs(30); // Increase timeout for larger problems
                 if *variables <= 32 {
-                    self.solve_sat_brute_force(*variables, &clauses, &mut memory_used, start_time, timeout)
+                    self.solve_sat_brute_force(
+                        *variables,
+                        clauses,
+                        &mut memory_used,
+                        start_time,
+                        timeout,
+                    )
                 } else {
-                    self.solve_sat_with_timeout(*variables, &clauses, &mut memory_used, timeout, start_time)
+                    self.solve_sat_with_timeout(
+                        *variables,
+                        clauses,
+                        &mut memory_used,
+                        timeout,
+                        start_time,
+                    )
                 }
             }
             ProblemType::TSP { cities, distances } => {
@@ -566,7 +609,12 @@ impl Miner {
     }
 
     /// Subset sum solver using dynamic programming
-    fn solve_subset_sum(&self, numbers: &[i64], target: i64, memory: &mut usize) -> Option<Solution> {
+    fn solve_subset_sum(
+        &self,
+        numbers: &[i64],
+        target: i64,
+        memory: &mut usize,
+    ) -> Option<Solution> {
         let n = numbers.len();
         let sum: i64 = numbers.iter().sum();
 
@@ -575,8 +623,8 @@ impl Miner {
         }
 
         // DP table
-        let offset = sum.abs() as usize;
-        let range = (2 * offset + 1) as usize;
+        let offset = sum.unsigned_abs() as usize;
+        let range = 2 * offset + 1;
         let mut dp = vec![vec![false; range]; n + 1];
         *memory += dp.len() * dp[0].len();
 
@@ -584,11 +632,11 @@ impl Miner {
 
         for i in 1..=n {
             for j in 0..range {
-                dp[i][j] = dp[i-1][j];
-                let num = numbers[i-1];
+                dp[i][j] = dp[i - 1][j];
+                let num = numbers[i - 1];
                 let prev_idx = j as i64 - num;
                 if prev_idx >= 0 && prev_idx < range as i64 {
-                    dp[i][j] |= dp[i-1][prev_idx as usize];
+                    dp[i][j] |= dp[i - 1][prev_idx as usize];
                 }
             }
         }
@@ -605,11 +653,11 @@ impl Miner {
             if curr_sum == 0 {
                 break;
             }
-            let num = numbers[i-1];
+            let num = numbers[i - 1];
             if curr_sum >= num {
                 let prev_idx = (offset as i64 + curr_sum - num) as usize;
-                if prev_idx < range && dp[i-1][prev_idx] {
-                    indices.push(i-1);
+                if prev_idx < range && dp[i - 1][prev_idx] {
+                    indices.push(i - 1);
                     curr_sum -= num;
                 }
             }
@@ -628,7 +676,7 @@ impl Miner {
         timeout: Duration,
     ) -> Option<Solution> {
         *memory += variables * 8;
-        
+
         // Brute force: try all 2^variables assignments
         // Cap at 2^32 for safety (4.3 billion possibilities)
         let max_assignments = 1u64 << variables.min(32);
@@ -636,12 +684,12 @@ impl Miner {
             if start_time.elapsed() > timeout {
                 break;
             }
-            
+
             let mut assignment = vec![false; variables];
             for j in 0..variables.min(32) {
                 assignment[j] = (i >> j) & 1 == 1;
             }
-            
+
             // Check if this assignment satisfies all clauses
             let satisfied = clauses.iter().all(|clause| {
                 clause.literals.iter().any(|&literal| {
@@ -653,23 +701,29 @@ impl Miner {
                     }
                 })
             });
-            
+
             if satisfied {
                 return Some(Solution::SAT(assignment));
             }
         }
-        
+
         None
     }
 
     /// SAT solver using random search (legacy, not used)
     #[allow(dead_code)]
-    fn solve_sat(&self, variables: usize, clauses: &[Clause], memory: &mut usize) -> Option<Solution> {
+    fn solve_sat(
+        &self,
+        variables: usize,
+        clauses: &[Clause],
+        memory: &mut usize,
+    ) -> Option<Solution> {
         // Simple randomized search (not full DPLL for simplicity)
         *memory += variables * 8;
 
         let mut rng = rand::thread_rng();
-        for _ in 0..1000 { // Try 1000 random assignments
+        for _ in 0..1000 {
+            // Try 1000 random assignments
             let assignment: Vec<bool> = (0..variables).map(|_| rng.gen_bool(0.5)).collect();
 
             let satisfied = clauses.iter().all(|clause| {
@@ -705,7 +759,7 @@ impl Miner {
 
         // DPLL recursive solver - simplified and corrected implementation
         let mut assignment = vec![None; variables]; // None = unassigned, Some(true/false) = assigned
-        
+
         fn is_clause_satisfied(clause: &Clause, assignment: &[Option<bool>]) -> bool {
             clause.literals.iter().any(|&literal| {
                 let var_idx = (literal.abs() - 1) as usize;
@@ -717,7 +771,7 @@ impl Miner {
                 false
             })
         }
-        
+
         fn dpll_solve(
             clauses: &[Clause],
             assignment: &mut [Option<bool>],
@@ -736,37 +790,35 @@ impl Miner {
                     if is_clause_satisfied(clause, assignment) {
                         continue;
                     }
-                    
+
                     // Count unassigned and assigned literals
                     let mut unassigned_literal: Option<(usize, bool)> = None;
                     let mut has_satisfied = false;
-                    
+
                     for &literal in &clause.literals {
                         let var_idx = (literal.abs() - 1) as usize;
                         if var_idx >= assignment.len() {
                             continue;
                         }
-                        
+
                         if let Some(value) = assignment[var_idx] {
                             if (literal > 0) == value {
                                 has_satisfied = true;
                                 break;
                             }
+                        } else if unassigned_literal.is_none() {
+                            unassigned_literal = Some((var_idx, literal > 0));
                         } else {
-                            if unassigned_literal.is_none() {
-                                unassigned_literal = Some((var_idx, literal > 0));
-                            } else {
-                                // More than one unassigned - not a unit clause
-                                unassigned_literal = None;
-                                break;
-                            }
+                            // More than one unassigned - not a unit clause
+                            unassigned_literal = None;
+                            break;
                         }
                     }
-                    
+
                     if has_satisfied {
                         continue;
                     }
-                    
+
                     if let Some((var_idx, value)) = unassigned_literal {
                         // Unit clause found - assign the literal to satisfy the clause
                         assignment[var_idx] = Some(value);
@@ -776,14 +828,17 @@ impl Miner {
                         return false;
                     }
                 }
-                
+
                 if !propagated {
                     break;
                 }
             }
 
             // Check if all clauses are satisfied
-            if clauses.iter().all(|clause| is_clause_satisfied(clause, assignment)) {
+            if clauses
+                .iter()
+                .all(|clause| is_clause_satisfied(clause, assignment))
+            {
                 return true;
             }
 
@@ -794,13 +849,13 @@ impl Miner {
                 if dpll_solve(clauses, assignment, start_time, timeout) {
                     return true;
                 }
-                
+
                 // Try assigning false
                 assignment[var_idx] = Some(false);
                 if dpll_solve(clauses, assignment, start_time, timeout) {
                     return true;
                 }
-                
+
                 // Backtrack
                 assignment[var_idx] = None;
                 false
@@ -811,19 +866,21 @@ impl Miner {
         }
 
         if dpll_solve(clauses, &mut assignment, start_time, timeout) {
-            let solution: Vec<bool> = assignment.iter()
-                .map(|&a| a.unwrap_or(false))
-                .collect();
+            let solution: Vec<bool> = assignment.iter().map(|&a| a.unwrap_or(false)).collect();
             Some(Solution::SAT(solution))
         } else {
             if start_time.elapsed() > timeout {
-                println!("⏱️  SAT solver timeout after {:.2}s ({} vars, {} clauses)", 
-                    start_time.elapsed().as_secs_f64(), variables, clauses.len());
+                println!(
+                    "⏱️  SAT solver timeout after {:.2}s ({} vars, {} clauses)",
+                    start_time.elapsed().as_secs_f64(),
+                    variables,
+                    clauses.len()
+                );
             } else {
                 // Debug: Check if problem is actually satisfiable by trying the known solution
                 // (This is only for debugging - in production we'd remove this)
                 println!("❌ SAT solver failed to find solution ({} vars, {} clauses) - checking satisfiability...", variables, clauses.len());
-                
+
                 // Try brute force check on small problems
                 if variables <= 32 {
                     let mut test_assignment = vec![false; variables];
@@ -844,8 +901,10 @@ impl Miner {
                         });
                         if satisfied {
                             found = true;
-                            println!("⚠️  Problem IS satisfiable but DPLL failed! Assignment: {:?}", 
-                                test_assignment.iter().take(10).collect::<Vec<_>>());
+                            println!(
+                                "⚠️  Problem IS satisfiable but DPLL failed! Assignment: {:?}",
+                                test_assignment.iter().take(10).collect::<Vec<_>>()
+                            );
                             break;
                         }
                     }
@@ -859,7 +918,12 @@ impl Miner {
     }
 
     /// TSP solver using nearest neighbor heuristic
-    fn solve_tsp(&self, cities: usize, distances: &[Vec<u64>], memory: &mut usize) -> Option<Solution> {
+    fn solve_tsp(
+        &self,
+        cities: usize,
+        distances: &[Vec<u64>],
+        memory: &mut usize,
+    ) -> Option<Solution> {
         if cities == 0 {
             return None;
         }
@@ -928,9 +992,11 @@ impl Miner {
             // 2. Solve the problem and measure performance
             // Use spawn_blocking to avoid starving the tokio runtime
             let problem_clone = problem.clone();
-            let solve_result = tokio::task::spawn_blocking(move || {
-                solve_problem_blocking(problem_clone)
-            }).await.ok().flatten();
+            let solve_result =
+                tokio::task::spawn_blocking(move || solve_problem_blocking(problem_clone))
+                    .await
+                    .ok()
+                    .flatten();
 
             if let Some(result) = solve_result {
                 break (problem, result);
@@ -983,7 +1049,10 @@ impl Miner {
         // This ensures problems cannot be pre-computed before parent block is mined
         let epoch_salt = prev_hash; // Use parent block hash as epoch salt
         let commitment = Commitment::create(&problem, &solution, &epoch_salt);
-        println!("Commitment created: {:?} (epoch_salt from parent: {:?})", commitment.hash, prev_hash);
+        println!(
+            "Commitment created: {:?} (epoch_salt from parent: {:?})",
+            commitment.hash, prev_hash
+        );
 
         // 6. Calculate PoUW transparency metrics
         let solve_time_us = solve_time.as_micros() as u64;
@@ -1012,7 +1081,7 @@ impl Miner {
         let timestamp = if height == 1 {
             // Block 1: Use deterministic timestamp (genesis + 1 second)
             // This ensures all nodes generate the same block 1 hash if they mine it
-            1735689601i64  // Jan 1, 2025 00:00:01 UTC
+            1735689601i64 // Jan 1, 2025 00:00:01 UTC
         } else {
             // Subsequent blocks: Use current time, but ensure it's >= parent + 1
             // Note: We don't have parent block here, so we use current time
@@ -1022,17 +1091,26 @@ impl Miner {
         // M1.1 DEBUG: Log mined timestamp vs current time
         let now_ts = unix_now_secs() as i64;
         let delta = now_ts - timestamp;
-        println!("⏱️  [MINER] height={} mined_ts={} now_ts={} delta={}s", height, timestamp, now_ts, delta);
+        println!(
+            "⏱️  [MINER] height={} mined_ts={} now_ts={} delta={}s",
+            height, timestamp, now_ts, delta
+        );
 
         let transactions_root = Self::merkle_root(&transactions);
         let solutions_root = Hash::new(&bincode::serialize(&solution).unwrap_or_default());
 
         // Determine block version based on golden activation height
         let block_version = self.config.block_version_for_height(height);
-        println!("[BLOCK] Producing block version={} ({}) at height={}", 
+        println!(
+            "[BLOCK] Producing block version={} ({}) at height={}",
             block_version,
-            if block_version >= 2 { "golden-enhanced" } else { "standard" },
-            height);
+            if block_version >= 2 {
+                "golden-enhanced"
+            } else {
+                "standard"
+            },
+            height
+        );
 
         let header = BlockHeader {
             version: block_version,
@@ -1057,9 +1135,11 @@ impl Miner {
         // 8. Mine the header (find nonce that meets difficulty)
         // Use spawn_blocking to avoid starving the tokio runtime
         let difficulty = self.difficulty;
-        let (mined_header, header_hash) = tokio::task::spawn_blocking(move || {
-            mine_header_blocking(header, difficulty)
-        }).await.ok().flatten()?;
+        let (mined_header, header_hash) =
+            tokio::task::spawn_blocking(move || mine_header_blocking(header, difficulty))
+                .await
+                .ok()
+                .flatten()?;
         let header = mined_header; // Use the mined header with correct nonce
         println!("Header mined: {:?}", header_hash);
 
@@ -1110,7 +1190,10 @@ impl Miner {
             if hash_hex.starts_with(&target_prefix) {
                 let elapsed = start_time.elapsed().as_secs_f64();
                 let hash_rate = hashes as f64 / elapsed;
-                println!("✅ Found nonce {} after {} hashes ({:.2} H/s)", nonce, hashes, hash_rate);
+                println!(
+                    "✅ Found nonce {} after {} hashes ({:.2} H/s)",
+                    nonce, hashes, hash_rate
+                );
                 println!("   Block hash: {}", hash_hex);
                 return Some(hash);
             }
@@ -1119,8 +1202,12 @@ impl Miner {
             if nonce % 1_000_000 == 0 && nonce > 0 {
                 let elapsed = start_time.elapsed().as_secs_f64();
                 let hash_rate = hashes as f64 / elapsed;
-                println!("⛏️  Mining... {} hashes ({:.2} H/s) | Latest: {}...",
-                    hashes, hash_rate, &hash_hex[..16]);
+                println!(
+                    "⛏️  Mining... {} hashes ({:.2} H/s) | Latest: {}...",
+                    hashes,
+                    hash_rate,
+                    &hash_hex[..16]
+                );
             }
         }
 

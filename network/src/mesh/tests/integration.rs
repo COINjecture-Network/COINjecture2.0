@@ -206,10 +206,7 @@ async fn test_broadcast_reaches_all_peers() {
         .filter(|(_, p)| matches!(p, Payload::ConsensusSalt { epoch: 99, .. }))
         .collect();
 
-    assert!(
-        !salt_msgs.is_empty(),
-        "Node B should receive the broadcast"
-    );
+    assert!(!salt_msgs.is_empty(), "Node B should receive the broadcast");
     assert_eq!(salt_msgs.len(), 1, "Should receive exactly once");
 
     // Verify it came from A

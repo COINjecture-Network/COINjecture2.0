@@ -24,7 +24,7 @@ use coinject_consensus::{
     CoordinatorCommand, CoordinatorConfig, CoordinatorEvent, EpochCoordinator, SolutionCommit,
 };
 use coinject_core::{Hash, ProblemType, Solution};
-use coinject_network::mesh::bridge::{BridgeCommand, BridgeEvent, BridgeState, run_bridge};
+use coinject_network::mesh::bridge::{run_bridge, BridgeCommand, BridgeEvent, BridgeState};
 use coinject_network::mesh::config::NetworkConfig;
 use coinject_network::NetworkService;
 
@@ -43,10 +43,7 @@ struct ChainNode {
 impl ChainNode {
     /// Phase 1: Start the mesh network and bridge, but NOT the coordinator.
     /// Returns a pre-node that can be upgraded to a full ChainNode once peers are connected.
-    async fn start_mesh(
-        listen_addr: &str,
-        seeds: Vec<std::net::SocketAddr>,
-    ) -> PreNode {
+    async fn start_mesh(listen_addr: &str, seeds: Vec<std::net::SocketAddr>) -> PreNode {
         let listen: std::net::SocketAddr = listen_addr.parse().unwrap();
         let data_dir = tempfile::tempdir().unwrap();
 
@@ -78,7 +75,14 @@ impl ChainNode {
         // Spawn bridge
         let bridge_state_clone = Arc::clone(&bridge_state);
         tokio::spawn(async move {
-            run_bridge(bridge_cmd_rx, bridge_event_tx, mesh_cmd_tx, mesh_event_rx, bridge_state_clone).await;
+            run_bridge(
+                bridge_cmd_rx,
+                bridge_event_tx,
+                mesh_cmd_tx,
+                mesh_event_rx,
+                bridge_state_clone,
+            )
+            .await;
         });
 
         PreNode {
@@ -102,18 +106,19 @@ impl PreNode {
     /// Phase 2: Start the coordinator and wire everything up.
     /// Call this only after all mesh peers are connected.
     fn start_coordinator(self, coord_config: CoordinatorConfig) -> ChainNode {
-        let PreNode { mesh_service, node_id, bridge_cmd_tx, mut bridge_event_rx } = self;
+        let PreNode {
+            mesh_service,
+            node_id,
+            bridge_cmd_tx,
+            mut bridge_event_rx,
+        } = self;
 
         // Coordinator channels
         let (coord_cmd_tx, coord_cmd_rx) = mpsc::unbounded_channel::<CoordinatorCommand>();
         let (coord_event_tx, mut coord_event_rx) = mpsc::unbounded_channel::<CoordinatorEvent>();
 
-        let (coordinator, _shared_state) = EpochCoordinator::new(
-            node_id,
-            coord_config,
-            0,
-            Hash::from_bytes([0; 32]),
-        );
+        let (coordinator, _shared_state) =
+            EpochCoordinator::new(node_id, coord_config, 0, Hash::from_bytes([0; 32]));
 
         // Spawn coordinator
         tokio::spawn(async move {
@@ -142,7 +147,11 @@ impl PreNode {
                             salt: *salt,
                         });
                     }
-                    CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score } => {
+                    CoordinatorEvent::BroadcastCommit {
+                        epoch,
+                        solution_hash,
+                        work_score,
+                    } => {
                         let _ = bridge_cmd_for_coord.send(BridgeCommand::BroadcastCommit {
                             epoch: *epoch,
                             solution_hash: *solution_hash,
@@ -176,7 +185,8 @@ impl PreNode {
                         let block_hash = block.header.hash();
                         let height = block.header.height;
                         tracing::info!(
-                            epoch, height,
+                            epoch,
+                            height,
                             hash = hex::encode(&block_hash.as_bytes()[..4]),
                             node = hex::encode(&coord_node_id[..4]),
                             "BlockProduced: storing locally + broadcasting"
@@ -204,14 +214,12 @@ impl PreNode {
             while let Some(event) = bridge_event_rx.recv().await {
                 match event {
                     BridgeEvent::PeerConnected { peer_id, .. } => {
-                        let _ = coord_cmd_for_bridge.send(CoordinatorCommand::PeerJoined {
-                            node_id: peer_id.0,
-                        });
+                        let _ = coord_cmd_for_bridge
+                            .send(CoordinatorCommand::PeerJoined { node_id: peer_id.0 });
                     }
                     BridgeEvent::PeerDisconnected { peer_id, .. } => {
-                        let _ = coord_cmd_for_bridge.send(CoordinatorCommand::PeerLeft {
-                            node_id: peer_id.0,
-                        });
+                        let _ = coord_cmd_for_bridge
+                            .send(CoordinatorCommand::PeerLeft { node_id: peer_id.0 });
                     }
                     BridgeEvent::ConsensusSaltReceived { epoch, salt, from } => {
                         let _ = coord_cmd_for_bridge.send(CoordinatorCommand::SaltReceived {
@@ -280,14 +288,20 @@ impl ChainNode {
 
     /// Count BlockProduced events.
     async fn blocks_produced(&self) -> usize {
-        self.events.read().await.iter()
+        self.events
+            .read()
+            .await
+            .iter()
             .filter(|e| matches!(e, CoordinatorEvent::BlockProduced { .. }))
             .count()
     }
 
     /// Count EpochSealed events.
     async fn epochs_sealed(&self) -> usize {
-        self.events.read().await.iter()
+        self.events
+            .read()
+            .await
+            .iter()
             .filter(|e| matches!(e, CoordinatorEvent::EpochSealed { .. }))
             .count()
     }
@@ -322,20 +336,11 @@ async fn test_three_node_chain_agreement() {
     // ── Phase 1: Start mesh networks (no coordinators yet) ──
     // Full mesh: A←B, A←C, B←C so every pair is directly connected.
     // This ensures commit broadcasts reach all nodes (mesh doesn't gossip-relay).
-    let pre_a = ChainNode::start_mesh(
-        &format!("127.0.0.1:{}", port_a),
-        vec![],
-    ).await;
+    let pre_a = ChainNode::start_mesh(&format!("127.0.0.1:{}", port_a), vec![]).await;
 
-    let pre_b = ChainNode::start_mesh(
-        &format!("127.0.0.1:{}", port_b),
-        vec![addr_a],
-    ).await;
+    let pre_b = ChainNode::start_mesh(&format!("127.0.0.1:{}", port_b), vec![addr_a]).await;
 
-    let pre_c = ChainNode::start_mesh(
-        &format!("127.0.0.1:{}", port_c),
-        vec![addr_a, addr_b],
-    ).await;
+    let pre_c = ChainNode::start_mesh(&format!("127.0.0.1:{}", port_c), vec![addr_a, addr_b]).await;
 
     println!("Node A: {}", short_id(&pre_a.node_id));
     println!("Node B: {}", short_id(&pre_b.node_id));
@@ -353,7 +358,7 @@ async fn test_three_node_chain_agreement() {
         commit_duration: Duration::from_secs(1),
         seal_duration: Duration::from_millis(500),
         stall_timeout: Duration::from_secs(10),
-        quorum_threshold: 0.5,  // 2 of 3 is enough
+        quorum_threshold: 0.5, // 2 of 3 is enough
         max_consecutive_stalls: 5,
         failover_depth: 3,
     };
@@ -372,7 +377,10 @@ async fn test_three_node_chain_agreement() {
         let b_heights = node_b.stored_heights().await;
         let c_heights = node_c.stored_heights().await;
 
-        let max_height = a_heights.last().copied().unwrap_or(0)
+        let max_height = a_heights
+            .last()
+            .copied()
+            .unwrap_or(0)
             .max(b_heights.last().copied().unwrap_or(0))
             .max(c_heights.last().copied().unwrap_or(0));
 
@@ -393,9 +401,18 @@ async fn test_three_node_chain_agreement() {
             let c_produced = node_c.blocks_produced().await;
 
             println!("\nTimeout! Chain state:");
-            println!("  A heights: {:?}, sealed: {}, produced: {}", a_heights, a_sealed, a_produced);
-            println!("  B heights: {:?}, sealed: {}, produced: {}", b_heights, b_sealed, b_produced);
-            println!("  C heights: {:?}, sealed: {}, produced: {}", c_heights, c_sealed, c_produced);
+            println!(
+                "  A heights: {:?}, sealed: {}, produced: {}",
+                a_heights, a_sealed, a_produced
+            );
+            println!(
+                "  B heights: {:?}, sealed: {}, produced: {}",
+                b_heights, b_sealed, b_produced
+            );
+            println!(
+                "  C heights: {:?}, sealed: {}, produced: {}",
+                c_heights, c_sealed, c_produced
+            );
 
             assert!(
                 a_heights.len().max(b_heights.len()).max(c_heights.len()) >= 1,
@@ -419,7 +436,8 @@ async fn test_three_node_chain_agreement() {
     let c_heights = node_c.stored_heights().await;
 
     // Find the common heights all nodes have
-    let mut common_heights: Vec<u64> = a_heights.iter()
+    let mut common_heights: Vec<u64> = a_heights
+        .iter()
         .filter(|h| b_heights.contains(h) && c_heights.contains(h))
         .copied()
         .collect();
@@ -432,7 +450,9 @@ async fn test_three_node_chain_agreement() {
     assert!(
         !common_heights.is_empty(),
         "All 3 nodes should have at least 1 common block height.\n  A: {:?}\n  B: {:?}\n  C: {:?}",
-        a_heights, b_heights, c_heights
+        a_heights,
+        b_heights,
+        c_heights
     );
 
     for height in &common_heights {
@@ -446,8 +466,15 @@ async fn test_three_node_chain_agreement() {
 
         println!(
             "  Height {}: A={} B={} C={} {}",
-            height, short_a, short_b, short_c,
-            if hash_a == hash_b && hash_b == hash_c { "AGREE" } else { "DISAGREE" }
+            height,
+            short_a,
+            short_b,
+            short_c,
+            if hash_a == hash_b && hash_b == hash_c {
+                "AGREE"
+            } else {
+                "DISAGREE"
+            }
         );
 
         assert_eq!(
@@ -463,7 +490,10 @@ async fn test_three_node_chain_agreement() {
     }
 
     println!("═══════════════════════════════════════");
-    println!("  {} heights verified — CONSENSUS PROVED", common_heights.len());
+    println!(
+        "  {} heights verified — CONSENSUS PROVED",
+        common_heights.len()
+    );
     println!("═══════════════════════════════════════\n");
 
     // Cleanup

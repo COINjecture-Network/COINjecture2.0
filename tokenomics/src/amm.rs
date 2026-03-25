@@ -46,10 +46,10 @@ impl LiquidityPool {
     ) -> Self {
         let initial_k = (amount_a as f64) * (amount_b as f64);
         let lp_tokens = ((amount_a as f64) * (amount_b as f64)).sqrt() as u128;
-        
+
         let mut lp_balances = HashMap::new();
         lp_balances.insert(provider, lp_tokens);
-        
+
         LiquidityPool {
             pool_id,
             token_a,
@@ -102,24 +102,24 @@ impl LiquidityPool {
         fee_rate: f64,
     ) -> SwapResult {
         let k = self.current_k(current_block, blocks_per_year);
-        
+
         // Apply fee
         let fee = ((amount_a_in as f64) * fee_rate) as u128;
         let amount_a_after_fee = amount_a_in - fee;
         self.cumulative_fees += fee;
-        
+
         // Calculate output: (x + Δx)(y - Δy) = k
         // Δy = y - k/(x + Δx)
         let new_reserve_a = self.reserve_a + amount_a_after_fee;
         let new_reserve_b = (k / (new_reserve_a as f64)) as u128;
         let amount_b_out = self.reserve_b.saturating_sub(new_reserve_b);
-        
+
         // Update reserves
         let old_price = self.price_a_in_b();
         self.reserve_a = new_reserve_a;
         self.reserve_b = new_reserve_b;
         let new_price = self.price_a_in_b();
-        
+
         SwapResult {
             amount_in: amount_a_in,
             amount_out: amount_b_out,
@@ -139,20 +139,20 @@ impl LiquidityPool {
         fee_rate: f64,
     ) -> SwapResult {
         let k = self.current_k(current_block, blocks_per_year);
-        
+
         let fee = ((amount_b_in as f64) * fee_rate) as u128;
         let amount_b_after_fee = amount_b_in - fee;
         self.cumulative_fees += fee;
-        
+
         let new_reserve_b = self.reserve_b + amount_b_after_fee;
         let new_reserve_a = (k / (new_reserve_b as f64)) as u128;
         let amount_a_out = self.reserve_a.saturating_sub(new_reserve_a);
-        
+
         let old_price = self.price_b_in_a();
         self.reserve_a = new_reserve_a;
         self.reserve_b = new_reserve_b;
         let new_price = self.price_b_in_a();
-        
+
         SwapResult {
             amount_in: amount_b_in,
             amount_out: amount_a_out,
@@ -180,13 +180,13 @@ impl LiquidityPool {
             let ratio = ratio_a.min(ratio_b);
             ((self.total_lp_tokens as f64) * ratio) as u128
         };
-        
+
         self.reserve_a += amount_a;
         self.reserve_b += amount_b;
         self.total_lp_tokens += lp_tokens;
-        
+
         *self.lp_balances.entry(provider).or_insert(0) += lp_tokens;
-        
+
         LiquidityResult {
             lp_tokens_received: lp_tokens,
             amount_a_deposited: amount_a,
@@ -205,17 +205,17 @@ impl LiquidityPool {
         if *balance < lp_tokens {
             return None;
         }
-        
+
         let share = (lp_tokens as f64) / (self.total_lp_tokens as f64);
         let amount_a = ((self.reserve_a as f64) * share) as u128;
         let amount_b = ((self.reserve_b as f64) * share) as u128;
-        
+
         self.reserve_a -= amount_a;
         self.reserve_b -= amount_b;
         self.total_lp_tokens -= lp_tokens;
-        
+
         *self.lp_balances.get_mut(&provider).unwrap() -= lp_tokens;
-        
+
         Some((amount_a, amount_b))
     }
 
@@ -229,8 +229,8 @@ impl LiquidityPool {
         blocks_per_year: u64,
     ) -> f64 {
         let _ = provider; // Could use for per-user tracking
-        let time_staked = (current_block.saturating_sub(stake_start_block) as f64) 
-            / (blocks_per_year as f64);
+        let time_staked =
+            (current_block.saturating_sub(stake_start_block) as f64) / (blocks_per_year as f64);
         1.0 - (-ETA * time_staked).exp()
     }
 }
@@ -286,7 +286,7 @@ impl AmmManager {
         pool_id[0] = token_a;
         pool_id[1] = token_b;
         pool_id[2..10].copy_from_slice(&current_block.to_le_bytes());
-        
+
         let pool = LiquidityPool::new(
             pool_id,
             token_a,
@@ -296,7 +296,7 @@ impl AmmManager {
             provider,
             current_block,
         );
-        
+
         self.pools.insert(pool_id, pool);
         pool_id
     }
@@ -318,9 +318,19 @@ impl AmmManager {
     ) -> Option<SwapResult> {
         let pool = self.pools.get_mut(pool_id)?;
         let result = if sell_a {
-            pool.swap_a_for_b(amount_in, current_block, self.blocks_per_year, self.fee_rate)
+            pool.swap_a_for_b(
+                amount_in,
+                current_block,
+                self.blocks_per_year,
+                self.fee_rate,
+            )
         } else {
-            pool.swap_b_for_a(amount_in, current_block, self.blocks_per_year, self.fee_rate)
+            pool.swap_b_for_a(
+                amount_in,
+                current_block,
+                self.blocks_per_year,
+                self.fee_rate,
+            )
         };
         Some(result)
     }
@@ -332,45 +342,36 @@ mod tests {
 
     #[test]
     fn test_k_decay() {
-        let pool = LiquidityPool::new(
-            [0; 32],
-            1, 2,
-            1_000_000,
-            1_000_000,
-            [1; 32],
-            0,
-        );
-        
+        let pool = LiquidityPool::new([0; 32], 1, 2, 1_000_000, 1_000_000, [1; 32], 0);
+
         let blocks_per_year = 100_000;
-        
+
         // At creation, k should be initial_k
         let k0 = pool.current_k(0, blocks_per_year);
         assert!((k0 - pool.initial_k).abs() < 1.0);
-        
+
         // After 1 year, k should decay to k₀ · e^(-η) ≈ k₀ × 0.4932
         let k1 = pool.current_k(blocks_per_year, blocks_per_year);
         let expected = pool.initial_k * (-ETA).exp();
         let ratio = k1 / expected;
-        assert!((ratio - 1.0).abs() < 0.01, "k1={}, expected={}", k1, expected);
+        assert!(
+            (ratio - 1.0).abs() < 0.01,
+            "k1={}, expected={}",
+            k1,
+            expected
+        );
     }
 
     #[test]
     fn test_swap_maintains_invariant() {
-        let mut pool = LiquidityPool::new(
-            [0; 32],
-            1, 2,
-            1_000_000,
-            1_000_000,
-            [1; 32],
-            0,
-        );
-        
+        let mut pool = LiquidityPool::new([0; 32], 1, 2, 1_000_000, 1_000_000, [1; 32], 0);
+
         let blocks_per_year = 100_000;
         let k_before = pool.current_k(0, blocks_per_year);
-        
+
         // Swap some A for B
         pool.swap_a_for_b(10_000, 0, blocks_per_year, 0.003);
-        
+
         // k should be maintained (approximately, due to fees)
         let actual_product = (pool.reserve_a as f64) * (pool.reserve_b as f64);
         // After fee extraction, product will be slightly higher than k
@@ -379,54 +380,46 @@ mod tests {
 
     #[test]
     fn test_impermanent_loss_protection() {
-        let pool = LiquidityPool::new(
-            [0; 32],
-            1, 2,
-            1_000_000,
-            1_000_000,
-            [1; 32],
-            0,
-        );
-        
+        let pool = LiquidityPool::new([0; 32], 1, 2, 1_000_000, 1_000_000, [1; 32], 0);
+
         let blocks_per_year = 100_000;
-        
+
         // At start, no protection
         let prot0 = pool.impermanent_loss_protection([1; 32], 0, 0, blocks_per_year);
         assert!(prot0 < 0.01);
-        
+
         // After 1 year, protection ≈ 50.68%
         let prot1 = pool.impermanent_loss_protection([1; 32], 0, blocks_per_year, blocks_per_year);
-        assert!(prot1 > 0.4 && prot1 < 0.6, "Protection after 1 year: {}", prot1);
-        
+        assert!(
+            prot1 > 0.4 && prot1 < 0.6,
+            "Protection after 1 year: {}",
+            prot1
+        );
+
         // After 5 years, protection approaches 100%
-        let prot5 = pool.impermanent_loss_protection([1; 32], 0, blocks_per_year * 5, blocks_per_year);
+        let prot5 =
+            pool.impermanent_loss_protection([1; 32], 0, blocks_per_year * 5, blocks_per_year);
         assert!(prot5 > 0.95, "Protection after 5 years: {}", prot5);
     }
 
     #[test]
     fn test_add_remove_liquidity() {
-        let mut pool = LiquidityPool::new(
-            [0; 32],
-            1, 2,
-            1_000_000,
-            1_000_000,
-            [1; 32],
-            0,
-        );
-        
+        let mut pool = LiquidityPool::new([0; 32], 1, 2, 1_000_000, 1_000_000, [1; 32], 0);
+
         let initial_lp = pool.total_lp_tokens;
-        
+
         // Add equal liquidity
         let result = pool.add_liquidity(500_000, 500_000, [2; 32]);
-        
+
         assert!(result.lp_tokens_received > 0);
         assert!(result.share_of_pool > 0.0 && result.share_of_pool < 1.0);
-        
+
         // Remove liquidity
-        let (a, b) = pool.remove_liquidity(result.lp_tokens_received, [2; 32]).unwrap();
-        
+        let (a, b) = pool
+            .remove_liquidity(result.lp_tokens_received, [2; 32])
+            .unwrap();
+
         assert!(a > 0 && b > 0);
         assert_eq!(pool.total_lp_tokens, initial_lp);
     }
 }
-

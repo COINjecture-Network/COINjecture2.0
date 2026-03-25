@@ -8,7 +8,7 @@ use coinject_core::{ETA, PHI}; // Import from core (single source of truth)
 use serde::{Deserialize, Serialize};
 
 /// Euler's number for STATISTICAL strategy premium
-pub const E: f64 = 2.718281828459045;
+pub const E: f64 = std::f64::consts::E;
 
 /// Aggregation strategy for bounty solutions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,9 +28,9 @@ impl AggregationStrategy {
     pub fn multiplier(&self) -> f64 {
         match self {
             AggregationStrategy::Any => 1.0,
-            AggregationStrategy::Best => PHI,        // Golden ratio
-            AggregationStrategy::Multiple => 2.0,    // Power of two
-            AggregationStrategy::Statistical => E,   // Euler's number
+            AggregationStrategy::Best => PHI,      // Golden ratio
+            AggregationStrategy::Multiple => 2.0,  // Power of two
+            AggregationStrategy::Statistical => E, // Euler's number
         }
     }
 
@@ -113,16 +113,14 @@ impl BountyPricer {
     ) -> BountyPrice {
         let asymmetry = metrics.asymmetry_score();
         let strategy_mult = strategy.multiplier();
-        
+
         // Raw price calculation
-        let raw_price = (self.base_reward as f64) 
-            * asymmetry 
-            * metrics.complexity_weight 
-            * strategy_mult;
-        
+        let raw_price =
+            (self.base_reward as f64) * asymmetry * metrics.complexity_weight * strategy_mult;
+
         let suggested = (raw_price as u128).max(self.min_bounty);
         let network_fee = ((suggested as f64) * self.network_fee_pct) as u128;
-        
+
         BountyPrice {
             suggested_bounty: suggested,
             network_fee,
@@ -158,7 +156,8 @@ impl BountyPricer {
         }
 
         // Quality-weighted distribution
-        quality_scores.iter()
+        quality_scores
+            .iter()
             .map(|q| ((total_bounty as f64) * (q / total_quality)) as u128)
             .collect()
     }
@@ -173,12 +172,12 @@ impl BountyPricer {
         if max_quality == 0.0 {
             return base_bounty;
         }
-        
+
         // Winner gets base bounty plus quality bonus
         // Bonus scales with how much better the solution is
         let quality_ratio = quality_score / max_quality;
         let bonus = ((base_bounty as f64) * (quality_ratio - 1.0).max(0.0) * ETA) as u128;
-        
+
         base_bounty + bonus
     }
 }
@@ -237,19 +236,19 @@ mod tests {
     #[test]
     fn test_asymmetry_calculation() {
         let metrics = ProblemMetrics {
-            solve_time_us: 1_000_000,   // 1 second
-            verify_time_us: 1_000,       // 1 millisecond
+            solve_time_us: 1_000_000,          // 1 second
+            verify_time_us: 1_000,             // 1 millisecond
             solve_memory_bytes: 1_000_000_000, // 1 GB
-            verify_memory_bytes: 1_000_000,     // 1 MB
+            verify_memory_bytes: 1_000_000,    // 1 MB
             complexity_weight: 1.0,
         };
-        
+
         let time_asym = metrics.time_asymmetry();
         assert_eq!(time_asym, 1000.0);
-        
+
         let space_asym = metrics.space_asymmetry();
         assert!((space_asym - 31.62).abs() < 0.1); // √1000
-        
+
         let total_asym = metrics.asymmetry_score();
         assert!(total_asym > 30000.0);
     }
@@ -257,7 +256,7 @@ mod tests {
     #[test]
     fn test_bounty_pricing() {
         let pricer = BountyPricer::new(1_000_000);
-        
+
         let simple_metrics = ProblemMetrics {
             solve_time_us: 10_000,
             verify_time_us: 1_000,
@@ -265,10 +264,10 @@ mod tests {
             verify_memory_bytes: 1_000_000,
             complexity_weight: 1.0,
         };
-        
+
         let any_price = pricer.calculate_price(&simple_metrics, AggregationStrategy::Any);
         let best_price = pricer.calculate_price(&simple_metrics, AggregationStrategy::Best);
-        
+
         // BEST should be ~1.618x more expensive
         let ratio = (best_price.suggested_bounty as f64) / (any_price.suggested_bounty as f64);
         assert!((ratio - PHI).abs() < 0.1);
@@ -277,16 +276,15 @@ mod tests {
     #[test]
     fn test_multiple_distribution() {
         let pricer = BountyPricer::new(1_000_000);
-        
+
         let quality_scores = vec![1.0, 0.8, 0.6];
         let rewards = pricer.distribute_multiple_rewards(1_000_000, 3, &quality_scores);
-        
+
         assert_eq!(rewards.len(), 3);
         assert!(rewards[0] > rewards[1]);
         assert!(rewards[1] > rewards[2]);
-        
+
         let total: u128 = rewards.iter().sum();
         assert!(total <= 1_000_000);
     }
 }
-

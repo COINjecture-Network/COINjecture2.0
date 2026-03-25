@@ -226,10 +226,7 @@ impl MerkleTree {
     pub fn new_with_golden_ordering(data: Vec<Vec<u8>>, genesis_hash: &Hash, epoch: u64) -> Self {
         // Sort leaves by golden_sort_key(index) for deterministic ordering
         // Uses pure integer arithmetic - consensus safe across all platforms
-        let mut indexed_data: Vec<(usize, Vec<u8>)> = data
-            .into_iter()
-            .enumerate()
-            .collect();
+        let mut indexed_data: Vec<(usize, Vec<u8>)> = data.into_iter().enumerate().collect();
 
         indexed_data.sort_by(|a, b| {
             let key_a = GoldenGenerator::golden_sort_key(a.0 as u64);
@@ -239,10 +236,7 @@ impl MerkleTree {
         });
 
         // Extract ordered data
-        let ordered_data: Vec<Vec<u8>> = indexed_data
-            .into_iter()
-            .map(|(_, d)| d)
-            .collect();
+        let ordered_data: Vec<Vec<u8>> = indexed_data.into_iter().map(|(_, d)| d).collect();
 
         // Build merkle tree with golden-enhanced hashing
         Self::new_with_golden(ordered_data, genesis_hash, epoch)
@@ -315,10 +309,7 @@ mod tests {
 
     #[test]
     fn test_golden_merkle_epoch_sensitivity() {
-        let data = vec![
-            b"tx1".to_vec(),
-            b"tx2".to_vec(),
-        ];
+        let data = vec![b"tx1".to_vec(), b"tx2".to_vec()];
         let genesis = Hash::new(b"genesis_block");
 
         let tree_epoch0 = MerkleTree::new_with_golden(data.clone(), &genesis, 0);
@@ -330,10 +321,7 @@ mod tests {
 
     #[test]
     fn test_golden_merkle_genesis_sensitivity() {
-        let data = vec![
-            b"tx1".to_vec(),
-            b"tx2".to_vec(),
-        ];
+        let data = vec![b"tx1".to_vec(), b"tx2".to_vec()];
         let genesis1 = Hash::new(b"genesis_block_1");
         let genesis2 = Hash::new(b"genesis_block_2");
         let epoch = 1;

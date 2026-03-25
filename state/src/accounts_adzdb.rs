@@ -10,7 +10,7 @@
 use coinject_core::{Address, Balance};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write, BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
@@ -49,9 +49,8 @@ impl AdzdbAccountState {
 
         // Create state subdirectory
         let state_dir = dir_path.join("adzdb_state");
-        fs::create_dir_all(&state_dir).map_err(|e| {
-            StateError::IoError(format!("Failed to create state directory: {}", e))
-        })?;
+        fs::create_dir_all(&state_dir)
+            .map_err(|e| StateError::IoError(format!("Failed to create state directory: {}", e)))?;
 
         let balances_path = state_dir.join("balances.dat");
         let nonces_path = state_dir.join("nonces.dat");
@@ -69,8 +68,11 @@ impl AdzdbAccountState {
             HashMap::new()
         };
 
-        println!("🗄️  ADZDB AccountState: {} balances, {} nonces loaded",
-            balances.len(), nonces.len());
+        println!(
+            "🗄️  ADZDB AccountState: {} balances, {} nonces loaded",
+            balances.len(),
+            nonces.len()
+        );
 
         Ok(AdzdbAccountState {
             path: state_dir,
@@ -81,32 +83,33 @@ impl AdzdbAccountState {
 
     /// Load balances from file
     fn load_balances(path: &Path) -> Result<HashMap<Address, Balance>, StateError> {
-        let file = File::open(path).map_err(|e| {
-            StateError::IoError(format!("Failed to open balances file: {}", e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| StateError::IoError(format!("Failed to open balances file: {}", e)))?;
         let mut reader = BufReader::new(file);
 
         // Read and verify header
         let mut magic = [0u8; 4];
-        reader.read_exact(&mut magic).map_err(|e| {
-            StateError::IoError(format!("Failed to read magic bytes: {}", e))
-        })?;
+        reader
+            .read_exact(&mut magic)
+            .map_err(|e| StateError::IoError(format!("Failed to read magic bytes: {}", e)))?;
 
         if &magic != STATE_MAGIC {
-            return Err(StateError::CorruptionError("Invalid magic bytes in balances file".to_string()));
+            return Err(StateError::CorruptionError(
+                "Invalid magic bytes in balances file".to_string(),
+            ));
         }
 
         let mut version_bytes = [0u8; 4];
-        reader.read_exact(&mut version_bytes).map_err(|e| {
-            StateError::IoError(format!("Failed to read version: {}", e))
-        })?;
+        reader
+            .read_exact(&mut version_bytes)
+            .map_err(|e| StateError::IoError(format!("Failed to read version: {}", e)))?;
         let _version = u32::from_le_bytes(version_bytes);
 
         // Read entry count
         let mut count_bytes = [0u8; 8];
-        reader.read_exact(&mut count_bytes).map_err(|e| {
-            StateError::IoError(format!("Failed to read entry count: {}", e))
-        })?;
+        reader
+            .read_exact(&mut count_bytes)
+            .map_err(|e| StateError::IoError(format!("Failed to read entry count: {}", e)))?;
         let count = u64::from_le_bytes(count_bytes);
 
         // Read entries: [32-byte address][16-byte balance (u128)]
@@ -115,12 +118,12 @@ impl AdzdbAccountState {
             let mut addr_bytes = [0u8; 32];
             let mut balance_bytes = [0u8; 16];
 
-            reader.read_exact(&mut addr_bytes).map_err(|e| {
-                StateError::IoError(format!("Failed to read address: {}", e))
-            })?;
-            reader.read_exact(&mut balance_bytes).map_err(|e| {
-                StateError::IoError(format!("Failed to read balance: {}", e))
-            })?;
+            reader
+                .read_exact(&mut addr_bytes)
+                .map_err(|e| StateError::IoError(format!("Failed to read address: {}", e)))?;
+            reader
+                .read_exact(&mut balance_bytes)
+                .map_err(|e| StateError::IoError(format!("Failed to read balance: {}", e)))?;
 
             let address = Address::from_bytes(addr_bytes);
             let balance = u128::from_le_bytes(balance_bytes);
@@ -132,32 +135,33 @@ impl AdzdbAccountState {
 
     /// Load nonces from file
     fn load_nonces(path: &Path) -> Result<HashMap<Address, u64>, StateError> {
-        let file = File::open(path).map_err(|e| {
-            StateError::IoError(format!("Failed to open nonces file: {}", e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| StateError::IoError(format!("Failed to open nonces file: {}", e)))?;
         let mut reader = BufReader::new(file);
 
         // Read and verify header
         let mut magic = [0u8; 4];
-        reader.read_exact(&mut magic).map_err(|e| {
-            StateError::IoError(format!("Failed to read magic bytes: {}", e))
-        })?;
+        reader
+            .read_exact(&mut magic)
+            .map_err(|e| StateError::IoError(format!("Failed to read magic bytes: {}", e)))?;
 
         if &magic != STATE_MAGIC {
-            return Err(StateError::CorruptionError("Invalid magic bytes in nonces file".to_string()));
+            return Err(StateError::CorruptionError(
+                "Invalid magic bytes in nonces file".to_string(),
+            ));
         }
 
         let mut version_bytes = [0u8; 4];
-        reader.read_exact(&mut version_bytes).map_err(|e| {
-            StateError::IoError(format!("Failed to read version: {}", e))
-        })?;
+        reader
+            .read_exact(&mut version_bytes)
+            .map_err(|e| StateError::IoError(format!("Failed to read version: {}", e)))?;
         let _version = u32::from_le_bytes(version_bytes);
 
         // Read entry count
         let mut count_bytes = [0u8; 8];
-        reader.read_exact(&mut count_bytes).map_err(|e| {
-            StateError::IoError(format!("Failed to read entry count: {}", e))
-        })?;
+        reader
+            .read_exact(&mut count_bytes)
+            .map_err(|e| StateError::IoError(format!("Failed to read entry count: {}", e)))?;
         let count = u64::from_le_bytes(count_bytes);
 
         // Read entries: [32-byte address][8-byte nonce (u64)]
@@ -166,12 +170,12 @@ impl AdzdbAccountState {
             let mut addr_bytes = [0u8; 32];
             let mut nonce_bytes = [0u8; 8];
 
-            reader.read_exact(&mut addr_bytes).map_err(|e| {
-                StateError::IoError(format!("Failed to read address: {}", e))
-            })?;
-            reader.read_exact(&mut nonce_bytes).map_err(|e| {
-                StateError::IoError(format!("Failed to read nonce: {}", e))
-            })?;
+            reader
+                .read_exact(&mut addr_bytes)
+                .map_err(|e| StateError::IoError(format!("Failed to read address: {}", e)))?;
+            reader
+                .read_exact(&mut nonce_bytes)
+                .map_err(|e| StateError::IoError(format!("Failed to read nonce: {}", e)))?;
 
             let address = Address::from_bytes(addr_bytes);
             let nonce = u64::from_le_bytes(nonce_bytes);
@@ -197,24 +201,24 @@ impl AdzdbAccountState {
             let mut writer = BufWriter::new(file);
 
             // Write header
-            writer.write_all(STATE_MAGIC).map_err(|e| {
-                StateError::IoError(format!("Failed to write magic bytes: {}", e))
-            })?;
-            writer.write_all(&STATE_VERSION.to_le_bytes()).map_err(|e| {
-                StateError::IoError(format!("Failed to write version: {}", e))
-            })?;
-            writer.write_all(&(balances.len() as u64).to_le_bytes()).map_err(|e| {
-                StateError::IoError(format!("Failed to write entry count: {}", e))
-            })?;
+            writer
+                .write_all(STATE_MAGIC)
+                .map_err(|e| StateError::IoError(format!("Failed to write magic bytes: {}", e)))?;
+            writer
+                .write_all(&STATE_VERSION.to_le_bytes())
+                .map_err(|e| StateError::IoError(format!("Failed to write version: {}", e)))?;
+            writer
+                .write_all(&(balances.len() as u64).to_le_bytes())
+                .map_err(|e| StateError::IoError(format!("Failed to write entry count: {}", e)))?;
 
             // Write entries
             for (address, balance) in balances.iter() {
-                writer.write_all(address.as_bytes()).map_err(|e| {
-                    StateError::IoError(format!("Failed to write address: {}", e))
-                })?;
-                writer.write_all(&balance.to_le_bytes()).map_err(|e| {
-                    StateError::IoError(format!("Failed to write balance: {}", e))
-                })?;
+                writer
+                    .write_all(address.as_bytes())
+                    .map_err(|e| StateError::IoError(format!("Failed to write address: {}", e)))?;
+                writer
+                    .write_all(&balance.to_le_bytes())
+                    .map_err(|e| StateError::IoError(format!("Failed to write balance: {}", e)))?;
             }
 
             writer.flush().map_err(|e| {
@@ -223,18 +227,18 @@ impl AdzdbAccountState {
         }
 
         // Atomic rename
-        fs::rename(&temp_path, &final_path).map_err(|e| {
-            StateError::IoError(format!("Failed to rename balances file: {}", e))
-        })?;
+        fs::rename(&temp_path, &final_path)
+            .map_err(|e| StateError::IoError(format!("Failed to rename balances file: {}", e)))?;
 
         Ok(())
     }
 
     /// Save nonces to file (atomic write via temp file + rename)
     fn save_nonces(&self) -> Result<(), StateError> {
-        let nonces = self.nonces.read().map_err(|_| {
-            StateError::LockError("Failed to acquire nonces read lock".to_string())
-        })?;
+        let nonces = self
+            .nonces
+            .read()
+            .map_err(|_| StateError::LockError("Failed to acquire nonces read lock".to_string()))?;
 
         let temp_path = self.path.join("nonces.dat.tmp");
         let final_path = self.path.join("nonces.dat");
@@ -246,35 +250,34 @@ impl AdzdbAccountState {
             let mut writer = BufWriter::new(file);
 
             // Write header
-            writer.write_all(STATE_MAGIC).map_err(|e| {
-                StateError::IoError(format!("Failed to write magic bytes: {}", e))
-            })?;
-            writer.write_all(&STATE_VERSION.to_le_bytes()).map_err(|e| {
-                StateError::IoError(format!("Failed to write version: {}", e))
-            })?;
-            writer.write_all(&(nonces.len() as u64).to_le_bytes()).map_err(|e| {
-                StateError::IoError(format!("Failed to write entry count: {}", e))
-            })?;
+            writer
+                .write_all(STATE_MAGIC)
+                .map_err(|e| StateError::IoError(format!("Failed to write magic bytes: {}", e)))?;
+            writer
+                .write_all(&STATE_VERSION.to_le_bytes())
+                .map_err(|e| StateError::IoError(format!("Failed to write version: {}", e)))?;
+            writer
+                .write_all(&(nonces.len() as u64).to_le_bytes())
+                .map_err(|e| StateError::IoError(format!("Failed to write entry count: {}", e)))?;
 
             // Write entries
             for (address, nonce) in nonces.iter() {
-                writer.write_all(address.as_bytes()).map_err(|e| {
-                    StateError::IoError(format!("Failed to write address: {}", e))
-                })?;
-                writer.write_all(&nonce.to_le_bytes()).map_err(|e| {
-                    StateError::IoError(format!("Failed to write nonce: {}", e))
-                })?;
+                writer
+                    .write_all(address.as_bytes())
+                    .map_err(|e| StateError::IoError(format!("Failed to write address: {}", e)))?;
+                writer
+                    .write_all(&nonce.to_le_bytes())
+                    .map_err(|e| StateError::IoError(format!("Failed to write nonce: {}", e)))?;
             }
 
-            writer.flush().map_err(|e| {
-                StateError::IoError(format!("Failed to flush nonces file: {}", e))
-            })?;
+            writer
+                .flush()
+                .map_err(|e| StateError::IoError(format!("Failed to flush nonces file: {}", e)))?;
         }
 
         // Atomic rename
-        fs::rename(&temp_path, &final_path).map_err(|e| {
-            StateError::IoError(format!("Failed to rename nonces file: {}", e))
-        })?;
+        fs::rename(&temp_path, &final_path)
+            .map_err(|e| StateError::IoError(format!("Failed to rename nonces file: {}", e)))?;
 
         Ok(())
     }

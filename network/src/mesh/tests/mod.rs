@@ -2,6 +2,6 @@
 // Mesh Network Tests
 // =============================================================================
 
-mod integration;
-mod gossip_tests;
 mod connection_tests;
+mod gossip_tests;
+mod integration;

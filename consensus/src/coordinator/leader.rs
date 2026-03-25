@@ -21,11 +21,7 @@ pub type NodeId = [u8; 32];
 /// Deterministic leader election for a given epoch.
 ///
 /// Returns `None` if the peer set is empty.
-pub fn elect_leader(
-    epoch: u64,
-    prev_hash: &Hash,
-    peers: &BTreeSet<NodeId>,
-) -> Option<NodeId> {
+pub fn elect_leader(epoch: u64, prev_hash: &Hash, peers: &BTreeSet<NodeId>) -> Option<NodeId> {
     if peers.is_empty() {
         return None;
     }
@@ -56,12 +52,7 @@ pub fn failover_candidates(
 }
 
 /// Check if a given node is the leader for this epoch.
-pub fn is_leader(
-    node_id: &NodeId,
-    epoch: u64,
-    prev_hash: &Hash,
-    peers: &BTreeSet<NodeId>,
-) -> bool {
+pub fn is_leader(node_id: &NodeId, epoch: u64, prev_hash: &Hash, peers: &BTreeSet<NodeId>) -> bool {
     elect_leader(epoch, prev_hash, peers)
         .map(|leader| &leader == node_id)
         .unwrap_or(false)
@@ -161,7 +152,11 @@ mod tests {
 
         // With 3 peers, max failover depth is 2 (excluding self)
         let candidates = failover_candidates(1, &prev_hash, &peers, 5);
-        assert_eq!(candidates.len(), 2, "failover depth capped at peer_count - 1");
+        assert_eq!(
+            candidates.len(),
+            2,
+            "failover depth capped at peer_count - 1"
+        );
     }
 
     #[test]

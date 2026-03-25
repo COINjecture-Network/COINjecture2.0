@@ -4,18 +4,21 @@
 // Peer connection management with node classification integration
 
 use crate::cpp::{
-    config::{NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_CONSECUTIVE_TIMEOUTS, PEER_QUALITY_THRESHOLD},
-    message::*,
+    config::{
+        NodeType, KEEPALIVE_INTERVAL, MAX_CONSECUTIVE_TIMEOUTS, PEER_QUALITY_THRESHOLD,
+        PEER_TIMEOUT,
+    },
     flow_control::FlowControl,
+    message::*,
 };
 use coinject_core::Hash;
-use tokio::net::TcpStream;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
-use tokio::time::{Instant, Duration};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::time::{Duration, Instant};
 
 /// Peer ID (32-byte hash of public key)
 pub type PeerId = [u8; 32];
@@ -93,7 +96,6 @@ pub struct Peer {
     pub connected_at: Instant,
 
     // === NEW FIELDS FOR CONNECTION STABILITY ===
-
     /// Consecutive read timeouts (resets on successful read)
     /// Used for forced disconnect after MAX_CONSECUTIVE_TIMEOUTS
     pub consecutive_timeouts: u32,
@@ -146,7 +148,10 @@ impl Peer {
             loop {
                 // Check for cancellation signal
                 if cancel_signal_clone.load(Ordering::Relaxed) {
-                    tracing::info!("[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully", peer_id_short);
+                    tracing::info!(
+                        "[CPP][CONN][WRITE_CANCEL] peer={} write task cancelled gracefully",
+                        peer_id_short
+                    );
                     break;
                 }
 
@@ -197,7 +202,10 @@ impl Peer {
                     }
                 }
             }
-            tracing::info!("[CPP][CONN][WRITE_EXIT] peer={} write task exiting", peer_id_short);
+            tracing::info!(
+                "[CPP][CONN][WRITE_EXIT] peer={} write task exiting",
+                peer_id_short
+            );
         });
 
         let now = Instant::now();
@@ -231,23 +239,24 @@ impl Peer {
 
         (peer, read_half)
     }
-    
+
     /// Send message to peer (non-blocking)
     pub fn send_message(&self, data: Vec<u8>) -> Result<(), String> {
-        self.send_tx.send(data)
+        self.send_tx
+            .send(data)
             .map_err(|e| format!("Failed to send message: {}", e))
     }
-    
+
     /// Check if peer is connected
     pub fn is_connected(&self) -> bool {
         self.state == PeerState::Connected
     }
-    
+
     /// Check if peer has timed out
     pub fn is_timed_out(&self) -> bool {
         self.last_seen.elapsed() > PEER_TIMEOUT
     }
-    
+
     /// Check if peer needs ping
     pub fn needs_ping(&self) -> bool {
         match self.last_ping {
@@ -255,7 +264,7 @@ impl Peer {
             None => true,
         }
     }
-    
+
     /// Update peer status
     pub fn update_status(&mut self, height: u64, hash: Hash, node_type: NodeType) {
         self.best_height = height;
@@ -263,41 +272,41 @@ impl Peer {
         self.node_type = node_type;
         self.last_seen = Instant::now();
     }
-    
+
     /// Record message sent
     pub fn on_message_sent(&mut self, bytes: usize) {
         self.messages_sent += 1;
         self.bytes_sent += bytes as u64;
         self.flow_control.on_send();
     }
-    
+
     /// Record message received
     pub fn on_message_received(&mut self, bytes: usize) {
         self.messages_received += 1;
         self.bytes_received += bytes as u64;
         self.last_seen = Instant::now();
     }
-    
+
     /// Record successful message delivery (ACK)
     pub fn on_ack(&mut self, rtt: Duration) {
         self.flow_control.on_ack(rtt);
         self.rtt_samples.push(rtt);
-        
+
         // Keep only last 10 samples
         if self.rtt_samples.len() > 10 {
             self.rtt_samples.remove(0);
         }
-        
+
         // Update quality based on RTT (dimensionless ratio)
         // quality = 1.0 - (avg_rtt / 1s)
         let avg_rtt = self.average_rtt();
         let rtt_quality = 1.0 - (avg_rtt.as_secs_f64() / 1.0).min(1.0);
-        
+
         // Exponential moving average
         self.quality = 0.9 * self.quality + 0.1 * rtt_quality;
-        self.quality = self.quality.max(0.1).min(1.0);
+        self.quality = self.quality.clamp(0.1, 1.0);
     }
-    
+
     /// Record timeout
     pub fn on_timeout(&mut self) {
         self.flow_control.on_timeout();
@@ -315,7 +324,12 @@ impl Peer {
     pub fn on_read_timeout(&mut self) -> bool {
         self.consecutive_timeouts += 1;
 
-        let peer_id_short: String = self.id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
+        let peer_id_short: String = self
+            .id
+            .iter()
+            .take(4)
+            .map(|b| format!("{:02x}", b))
+            .collect();
         let should_disconnect = self.consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS;
 
         if should_disconnect {
@@ -326,7 +340,9 @@ impl Peer {
         } else {
             tracing::warn!(
                 "[CPP][PEER][TIMEOUT] peer={} consecutive_timeouts={}/{}",
-                peer_id_short, self.consecutive_timeouts, MAX_CONSECUTIVE_TIMEOUTS
+                peer_id_short,
+                self.consecutive_timeouts,
+                MAX_CONSECUTIVE_TIMEOUTS
             );
         }
 
@@ -370,8 +386,16 @@ impl Peer {
     /// Gracefully shutdown the peer connection
     /// This signals the write task to stop and prevents resource leaks
     pub fn shutdown(&mut self) {
-        let peer_id_short: String = self.id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
-        tracing::info!("[CPP][PEER][SHUTDOWN] peer={} initiating shutdown", peer_id_short);
+        let peer_id_short: String = self
+            .id
+            .iter()
+            .take(4)
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        tracing::info!(
+            "[CPP][PEER][SHUTDOWN] peer={} initiating shutdown",
+            peer_id_short
+        );
 
         // Signal write task to stop
         self.write_task_cancel.store(true, Ordering::Relaxed);
@@ -385,33 +409,33 @@ impl Peer {
         if self.rtt_samples.is_empty() {
             return Duration::from_millis(100);
         }
-        
+
         let sum: Duration = self.rtt_samples.iter().sum();
         sum / self.rtt_samples.len() as u32
     }
-    
+
     /// Get uptime ratio (dimensionless)
     pub fn uptime_ratio(&self) -> f64 {
         let total_time = self.connected_at.elapsed();
         let active_time = total_time.saturating_sub(self.last_seen.elapsed());
-        
+
         if total_time.as_secs() == 0 {
             return 1.0;
         }
-        
+
         active_time.as_secs_f64() / total_time.as_secs_f64()
     }
-    
+
     /// Get message rate (messages per second)
     pub fn message_rate(&self) -> f64 {
         let elapsed = self.connected_at.elapsed().as_secs_f64();
         if elapsed == 0.0 {
             return 0.0;
         }
-        
+
         (self.messages_sent + self.messages_received) as f64 / elapsed
     }
-    
+
     /// Get bandwidth utilization (dimensionless ratio)
     /// Assumes 1 Gbps = 125 MB/s as reference
     pub fn bandwidth_ratio(&self) -> f64 {
@@ -419,15 +443,15 @@ impl Peer {
         if elapsed == 0.0 {
             return 0.0;
         }
-        
+
         let bytes_per_sec = (self.bytes_sent + self.bytes_received) as f64 / elapsed;
-        let reference_bandwidth = 125_000_000.0;  // 1 Gbps in bytes/sec
-        
+        let reference_bandwidth = 125_000_000.0; // 1 Gbps in bytes/sec
+
         (bytes_per_sec / reference_bandwidth).min(1.0)
     }
-    
+
     /// Calculate overall peer score (dimensionless, 0.0-1.0)
-    /// 
+    ///
     /// Combines:
     /// - Connection quality (40%)
     /// - Uptime ratio (30%)
@@ -438,24 +462,23 @@ impl Peer {
         let uptime_weight = 0.3;
         let rate_weight = 0.2;
         let bandwidth_weight = 0.1;
-        
+
         // Normalize message rate (assume 10 msg/s is "good")
         let rate_score = (self.message_rate() / 10.0).min(1.0);
-        
-        let score = 
-            self.quality * quality_weight +
-            self.uptime_ratio() * uptime_weight +
-            rate_score * rate_weight +
-            self.bandwidth_ratio() * bandwidth_weight;
-        
-        score.max(0.0).min(1.0)
+
+        let score = self.quality * quality_weight
+            + self.uptime_ratio() * uptime_weight
+            + rate_score * rate_weight
+            + self.bandwidth_ratio() * bandwidth_weight;
+
+        score.clamp(0.0, 1.0)
     }
-    
+
     /// Send ping to peer
     pub fn send_ping(&mut self) -> Result<(), String> {
-        use crate::cpp::protocol::MessageEnvelope;
         use crate::cpp::message::MessageType;
-        
+        use crate::cpp::protocol::MessageEnvelope;
+
         let nonce = rand::random::<u64>();
         let msg = PingMessage {
             timestamp: std::time::SystemTime::now()
@@ -464,21 +487,21 @@ impl Peer {
                 .unwrap_or(0),
             nonce,
         };
-        
+
         // Serialize and send via channel
         let envelope = MessageEnvelope::new(MessageType::Ping, &msg)
             .map_err(|e| format!("Failed to create ping envelope: {}", e))?;
         let data = envelope.encode();
-        
+
         self.send_message(data.clone())?;
-        
+
         self.last_ping = Some(Instant::now());
         self.pending_ping_nonce = Some(nonce);
         self.on_message_sent(data.len());
-        
+
         Ok(())
     }
-    
+
     /// Handle pong response
     pub fn on_pong(&mut self, nonce: u64) {
         if let Some(pending) = self.pending_ping_nonce {
@@ -491,7 +514,7 @@ impl Peer {
             }
         }
     }
-    
+
     /// Get peer statistics
     pub fn stats(&self) -> PeerStats {
         PeerStats {
@@ -540,43 +563,44 @@ pub struct PeerStats {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
-    
+
     fn create_test_peer_addr() -> SocketAddr {
         // Helper used only to demonstrate API shape in docs/tests
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 707)
     }
-    
+
     #[test]
     fn test_peer_score_calculation() {
         // Test that peer score is dimensionless and bounded [0, 1]
         // (Actual test would need a real peer instance)
-        
+
         let quality = 0.8;
         let uptime = 0.95;
-        let rate = 5.0 / 10.0;  // 5 msg/s normalized by 10 msg/s
+        let rate = 5.0 / 10.0; // 5 msg/s normalized by 10 msg/s
         let bandwidth = 0.1;
-        
-        let score: f64 = 
-            quality * 0.4 +
-            uptime * 0.3 +
-            rate * 0.2 +
-            bandwidth * 0.1;
-        
+
+        let score: f64 = quality * 0.4 + uptime * 0.3 + rate * 0.2 + bandwidth * 0.1;
+
         // Calculate expected: 0.8*0.4 + 0.95*0.3 + 0.5*0.2 + 0.1*0.1
         // = 0.32 + 0.285 + 0.1 + 0.01 = 0.715
         assert!(score >= 0.0 && score <= 1.0);
         let expected: f64 = 0.715;
-        assert!((score - expected).abs() < 0.01_f64, "Expected score ~{}, got {}", expected, score);
+        assert!(
+            (score - expected).abs() < 0.01_f64,
+            "Expected score ~{}, got {}",
+            expected,
+            score
+        );
     }
-    
+
     #[test]
     fn test_quality_decay() {
         let eta = std::f64::consts::FRAC_1_SQRT_2;
         let initial_quality = 1.0;
-        
+
         // After one timeout
         let quality_after_timeout = initial_quality * (1.0 - eta);
-        
+
         assert!(quality_after_timeout < initial_quality);
         assert!(quality_after_timeout > 0.0);
         assert!((quality_after_timeout - 0.293).abs() < 0.01);

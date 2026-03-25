@@ -6,9 +6,9 @@
 // Provides async read/write of WireMessage over a split TCP stream.
 // Rejects messages exceeding max_message_size at the framing layer.
 
+use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use std::net::SocketAddr;
 
 use super::error::NetworkError;
 use super::protocol::WireMessage;
@@ -115,7 +115,9 @@ mod tests {
         });
 
         let mut buf = Vec::new();
-        write_message(&mut buf, &msg, 16 * 1024 * 1024).await.unwrap();
+        write_message(&mut buf, &msg, 16 * 1024 * 1024)
+            .await
+            .unwrap();
 
         let mut cursor = std::io::Cursor::new(buf);
         let decoded = read_message(&mut cursor, 16 * 1024 * 1024)
@@ -176,9 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tcp_roundtrip() {
-        let listener = bind_listener("127.0.0.1:0".parse().unwrap())
-            .await
-            .unwrap();
+        let listener = bind_listener("127.0.0.1:0".parse().unwrap()).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let max_size = 16 * 1024 * 1024;
 
@@ -200,9 +200,7 @@ mod tests {
         });
 
         let client = tokio::spawn(async move {
-            let mut stream = dial(addr, std::time::Duration::from_secs(2))
-                .await
-                .unwrap();
+            let mut stream = dial(addr, std::time::Duration::from_secs(2)).await.unwrap();
             write_message(&mut stream, &msg_clone, max_size)
                 .await
                 .unwrap();

@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 /// COINjecture P2P port: 707 (η × 1000 ≈ 707)
-/// 
+///
 /// Named after the dimensionless equilibrium constant that governs
 /// critical damping in complex systems. This port is used for:
 /// - Block propagation between full nodes
@@ -16,7 +16,7 @@ use std::time::Duration;
 pub const CPP_PORT: u16 = 707;
 
 /// WebSocket RPC port: 8080 (standard HTTP alternative)
-/// 
+///
 /// Standard port for WebSocket connections, used for:
 /// - Light client mining (browser-based)
 /// - Wallet interactions
@@ -154,8 +154,8 @@ pub const SQRT_2: f64 = std::f64::consts::SQRT_2; // 1.4142135623730951
 
 /// Unified timeout constants for network and consensus layer alignment
 pub mod timeouts {
+    use super::{ETA, PEER_TIMEOUT};
     use std::time::Duration;
-    use super::{PEER_TIMEOUT, ETA};
 
     /// Base network peer timeout (90 seconds)
     /// This is the foundation for all derived timeouts
@@ -295,19 +295,19 @@ impl Default for CppConfig {
 pub enum NodeType {
     /// Full node (validates and stores all blocks)
     Full,
-    
+
     /// Archive node (stores full history, serves historical queries)
     Archive,
-    
+
     /// Validator node (participates in consensus)
     Validator,
-    
+
     /// Light client (headers only, minimal storage)
     Light,
-    
+
     /// Bounty node (specialized for problem marketplace)
     Bounty,
-    
+
     /// Oracle node (provides external data)
     Oracle,
 }
@@ -323,7 +323,7 @@ impl NodeType {
             NodeType::Oracle => 5,
         }
     }
-    
+
     pub fn from_u8(value: u8) -> Result<Self, String> {
         match value {
             0 => Ok(NodeType::Light),
@@ -340,20 +340,20 @@ impl NodeType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_equilibrium_constant() {
         // Verify η = 1/√2 ≈ 0.7071
         assert!((ETA - 0.7071).abs() < 0.0001);
         assert!((ETA * SQRT_2 - 1.0).abs() < 0.0001);
     }
-    
+
     #[test]
     fn test_port_configuration() {
         assert_eq!(CPP_PORT, 707);
         assert_eq!(WEBSOCKET_PORT, 8080);
     }
-    
+
     #[test]
     fn test_node_type_conversion() {
         for node_type in [

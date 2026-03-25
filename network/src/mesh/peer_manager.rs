@@ -152,8 +152,7 @@ impl PeerManager {
         self.peers
             .values()
             .filter(|p| {
-                p.state == ConnectionState::Dead
-                    && p.next_reconnect.map_or(true, |t| now >= t)
+                p.state == ConnectionState::Dead && p.next_reconnect.is_none_or(|t| now >= t)
             })
             .map(|p| (p.node_id, p.listen_addr))
             .collect()
@@ -296,12 +295,7 @@ mod tests {
     #[test]
     fn test_register_and_connected() {
         let local = make_id(0x00);
-        let mut pm = PeerManager::new(
-            local,
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-        );
+        let mut pm = PeerManager::new(local, Duration::from_secs(1), Duration::from_secs(60), 3);
 
         let peer1 = make_id(0x01);
         let addr: SocketAddr = "127.0.0.1:9001".parse().unwrap();
@@ -314,12 +308,7 @@ mod tests {
     #[test]
     fn test_mark_disconnected_schedules_reconnect() {
         let local = make_id(0x00);
-        let mut pm = PeerManager::new(
-            local,
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-        );
+        let mut pm = PeerManager::new(local, Duration::from_secs(1), Duration::from_secs(60), 3);
 
         let peer1 = make_id(0x01);
         let addr: SocketAddr = "127.0.0.1:9001".parse().unwrap();
@@ -335,19 +324,14 @@ mod tests {
     #[test]
     fn test_heartbeat_missed_threshold() {
         let local = make_id(0x00);
-        let mut pm = PeerManager::new(
-            local,
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-        );
+        let mut pm = PeerManager::new(local, Duration::from_secs(1), Duration::from_secs(60), 3);
 
         let peer1 = make_id(0x01);
         pm.register_peer(peer1, "127.0.0.1:9001".parse().unwrap(), vec![0; 32], true);
 
         assert!(!pm.heartbeat_missed(&peer1)); // 1 miss
         assert!(!pm.heartbeat_missed(&peer1)); // 2 misses
-        assert!(pm.heartbeat_missed(&peer1));  // 3 misses → dead
+        assert!(pm.heartbeat_missed(&peer1)); // 3 misses → dead
     }
 
     #[test]
@@ -366,12 +350,7 @@ mod tests {
     #[test]
     fn test_peer_exchange_ingest() {
         let local = make_id(0x00);
-        let mut pm = PeerManager::new(
-            local,
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-        );
+        let mut pm = PeerManager::new(local, Duration::from_secs(1), Duration::from_secs(60), 3);
 
         let exchange = vec![
             (make_id(0x01), "127.0.0.1:9001".parse().unwrap()),
@@ -387,12 +366,7 @@ mod tests {
     #[test]
     fn test_dont_register_self() {
         let local = make_id(0x00);
-        let mut pm = PeerManager::new(
-            local,
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-        );
+        let mut pm = PeerManager::new(local, Duration::from_secs(1), Duration::from_secs(60), 3);
 
         pm.register_peer(local, "127.0.0.1:9000".parse().unwrap(), vec![0; 32], true);
         assert_eq!(pm.connected_count(), 0);
@@ -401,19 +375,14 @@ mod tests {
     #[test]
     fn test_touch_resets_heartbeat_misses() {
         let local = make_id(0x00);
-        let mut pm = PeerManager::new(
-            local,
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-        );
+        let mut pm = PeerManager::new(local, Duration::from_secs(1), Duration::from_secs(60), 3);
 
         let peer1 = make_id(0x01);
         pm.register_peer(peer1, "127.0.0.1:9001".parse().unwrap(), vec![0; 32], true);
 
         pm.heartbeat_missed(&peer1); // 1 miss
         pm.heartbeat_missed(&peer1); // 2 misses
-        pm.touch(&peer1);            // Reset
+        pm.touch(&peer1); // Reset
 
         // Should need 3 more misses now
         assert!(!pm.heartbeat_missed(&peer1));

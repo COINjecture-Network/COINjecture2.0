@@ -222,12 +222,7 @@ mod tests {
             from_block: 0,
             to_block: Some(10),
         };
-        let envelope = create_envelope(
-            &kp,
-            RoutingMode::Direct { target: local_id },
-            payload,
-            10,
-        );
+        let envelope = create_envelope(&kp, RoutingMode::Direct { target: local_id }, payload, 10);
 
         let mut gossip = GossipEngine::new(100, std::time::Duration::from_secs(60));
         let mut keys = HashMap::new();

@@ -4,9 +4,9 @@
 // NOTE: Some fields are for future buffer optimization features
 #![allow(dead_code)]
 
-use serde::{Deserialize, Serialize, Serializer, Deserializer};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use std::collections::HashMap;
 
@@ -77,9 +77,9 @@ pub struct DatasetRecord {
     pub block_height: u64,
     pub timestamp: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub block_hash: Option<String>,          // NEW: Hash of this block
+    pub block_hash: Option<String>, // NEW: Hash of this block
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prev_block_hash: Option<String>,     // NEW: Hash of previous block (chain linkage)
+    pub prev_block_hash: Option<String>, // NEW: Hash of previous block (chain linkage)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submitter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,40 +93,43 @@ pub struct DatasetRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub solution_quality: Option<f64>,
     pub problem_complexity: f64,
-    #[serde(serialize_with = "serialize_u128_as_string", deserialize_with = "deserialize_u128_from_string")]
+    #[serde(
+        serialize_with = "serialize_u128_as_string",
+        deserialize_with = "deserialize_u128_from_string"
+    )]
     pub bounty: u128,
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TIMING METRICS - Solve/verify performance (microsecond precision)
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub solve_time_us: Option<u64>,          // NEW: Solve time in microseconds
+    pub solve_time_us: Option<u64>, // NEW: Solve time in microseconds
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify_time_us: Option<u64>,         // NEW: Verify time in microseconds
+    pub verify_time_us: Option<u64>, // NEW: Verify time in microseconds
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub block_time_seconds: Option<f64>,     // NEW: Time since previous block
+    pub block_time_seconds: Option<f64>, // NEW: Time since previous block
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mining_attempts: Option<u64>,        // NEW: Nonce attempts before success
+    pub mining_attempts: Option<u64>, // NEW: Nonce attempts before success
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ASYMMETRY METRICS - NP-hardness verification (solve >> verify)
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub time_asymmetry: Option<f64>,         // solve_time / verify_time
+    pub time_asymmetry: Option<f64>, // solve_time / verify_time
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub space_asymmetry: Option<f64>,        // solve_memory / verify_memory
+    pub space_asymmetry: Option<f64>, // solve_memory / verify_memory
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub energy_asymmetry: Option<f64>,       // solve_energy / verify_energy
+    pub energy_asymmetry: Option<f64>, // solve_energy / verify_energy
 
     // ═══════════════════════════════════════════════════════════════════════════
     // MEMORY METRICS - Space complexity tracking
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub solve_memory_bytes: Option<u64>,     // NEW: Memory used during solve
+    pub solve_memory_bytes: Option<u64>, // NEW: Memory used during solve
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify_memory_bytes: Option<u64>,    // NEW: Memory used during verify
+    pub verify_memory_bytes: Option<u64>, // NEW: Memory used during verify
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub peak_memory_bytes: Option<u64>,      // NEW: Peak memory during block
+    pub peak_memory_bytes: Option<u64>, // NEW: Peak memory during block
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ENERGY MEASUREMENTS - Power consumption tracking
@@ -146,55 +149,55 @@ pub struct DatasetRecord {
     // NETWORK METRICS - P2P network state at block time
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub peer_count: Option<u32>,             // NEW: Connected peers when block received
+    pub peer_count: Option<u32>, // NEW: Connected peers when block received
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub propagation_time_ms: Option<u64>,    // NEW: Time to receive block from network
+    pub propagation_time_ms: Option<u64>, // NEW: Time to receive block from network
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sync_lag_blocks: Option<i64>,        // NEW: Blocks behind network tip
+    pub sync_lag_blocks: Option<i64>, // NEW: Blocks behind network tip
 
     // ═══════════════════════════════════════════════════════════════════════════
     // DIFFICULTY & MINING METRICS
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub difficulty_target: Option<u32>,      // NEW: Leading zeros required
+    pub difficulty_target: Option<u32>, // NEW: Leading zeros required
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<u64>,                  // NEW: Winning nonce value
+    pub nonce: Option<u64>, // NEW: Winning nonce value
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash_rate_estimate: Option<f64>,     // NEW: Estimated H/s (nonce/solve_time)
+    pub hash_rate_estimate: Option<f64>, // NEW: Estimated H/s (nonce/solve_time)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CHAIN METRICS - Cumulative blockchain state
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub chain_work: Option<f64>,             // NEW: Cumulative work score
+    pub chain_work: Option<f64>, // NEW: Cumulative work score
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub transaction_count: Option<u32>,      // NEW: Transactions in this block
+    pub transaction_count: Option<u32>, // NEW: Transactions in this block
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub block_size_bytes: Option<u64>,       // NEW: Total block size
+    pub block_size_bytes: Option<u64>, // NEW: Total block size
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ECONOMIC METRICS - Tokenomics tracking
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub block_reward: Option<String>,        // NEW: Total coinbase reward (as string for u128)
+    pub block_reward: Option<String>, // NEW: Total coinbase reward (as string for u128)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_fees: Option<String>,          // NEW: Sum of transaction fees (as string)
+    pub total_fees: Option<String>, // NEW: Sum of transaction fees (as string)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pool_distributions: Option<Value>,   // NEW: Token distribution to each pool
+    pub pool_distributions: Option<Value>, // NEW: Token distribution to each pool
 
     // ═══════════════════════════════════════════════════════════════════════════
     // HARDWARE METRICS - Mining infrastructure transparency
     // ═══════════════════════════════════════════════════════════════════════════
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpu_model: Option<String>,           // NEW: CPU model string
+    pub cpu_model: Option<String>, // NEW: CPU model string
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpu_cores: Option<u32>,              // NEW: Number of CPU cores
+    pub cpu_cores: Option<u32>, // NEW: Number of CPU cores
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpu_threads: Option<u32>,            // NEW: Number of threads used
+    pub cpu_threads: Option<u32>, // NEW: Number of threads used
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ram_total_bytes: Option<u64>,        // NEW: Total system RAM
+    pub ram_total_bytes: Option<u64>, // NEW: Total system RAM
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub os_info: Option<String>,             // NEW: Operating system info
+    pub os_info: Option<String>, // NEW: Operating system info
 
     // ═══════════════════════════════════════════════════════════════════════════
     // METADATA & PROVENANCE
@@ -204,23 +207,27 @@ pub struct DatasetRecord {
     pub energy_measurement_method: String,
 
     // INSTITUTIONAL-GRADE DATA PROVENANCE (v3.0)
-    pub metrics_source: String,              // "block_header_actual", "node_measured", "estimated"
-    pub measurement_confidence: String,      // "very_high", "high", "medium", "low"
-    pub data_version: String,                // "v3.0" - institutional-grade comprehensive
+    pub metrics_source: String, // "block_header_actual", "node_measured", "estimated"
+    pub measurement_confidence: String, // "very_high", "high", "medium", "low"
+    pub data_version: String,   // "v3.0" - institutional-grade comprehensive
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub node_version: Option<String>,        // NEW: Node software version
+    pub node_version: Option<String>, // NEW: Node software version
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub node_id: Option<String>,             // NEW: PeerId of recording node
+    pub node_id: Option<String>, // NEW: PeerId of recording node
 }
 
 impl HuggingFaceClient {
     /// Create new Hugging Face client
     pub fn new(config: HuggingFaceConfig) -> Result<Self, ClientError> {
         if config.token.is_empty() {
-            return Err(ClientError::InvalidConfig("Hugging Face token is required".to_string()));
+            return Err(ClientError::InvalidConfig(
+                "Hugging Face token is required".to_string(),
+            ));
         }
         if config.dataset_prefix.is_empty() {
-            return Err(ClientError::InvalidConfig("Dataset prefix is required (e.g., 'COINjecture')".to_string()));
+            return Err(ClientError::InvalidConfig(
+                "Dataset prefix is required (e.g., 'COINjecture')".to_string(),
+            ));
         }
 
         let client = reqwest::Client::builder()
@@ -244,11 +251,11 @@ impl HuggingFaceClient {
     pub async fn push_record(&mut self, record: DatasetRecord) -> Result<(), ClientError> {
         let problem_type = record.problem_type.clone();
         let block_height = record.block_height;
-        let value = serde_json::to_value(&record)
-            .map_err(|e| ClientError::Serialization(e.to_string()))?;
+        let value =
+            serde_json::to_value(&record).map_err(|e| ClientError::Serialization(e.to_string()))?;
 
         // Get or create buffer for this problem type
-        let buffer = self.buffers.entry(problem_type.clone()).or_insert_with(Vec::new);
+        let buffer = self.buffers.entry(problem_type.clone()).or_default();
         buffer.push(value);
 
         // Track blocks since last flush - increment only when we see a new block
@@ -277,8 +284,10 @@ impl HuggingFaceClient {
             eprintln!("📊 Hugging Face: Buffered {} record (block {}, {} blocks since flush, {} total records)",
                 problem_type, block_height, self.blocks_since_flush, total_records);
         } else {
-            eprintln!("📊 Hugging Face: Buffered {} record (block {}, {} total records)",
-                problem_type, block_height, total_records);
+            eprintln!(
+                "📊 Hugging Face: Buffered {} record (block {}, {} total records)",
+                problem_type, block_height, total_records
+            );
         }
 
         // Check if we should flush based on block count (using blocking HTTP via spawn_blocking)
@@ -311,7 +320,11 @@ impl HuggingFaceClient {
             self.config.dataset_prefix.clone()
         } else {
             // Legacy: prefix only, append problem type
-            format!("{}/{}_Solutions", self.config.dataset_prefix, problem_type.trim())
+            format!(
+                "{}/{}_Solutions",
+                self.config.dataset_prefix,
+                problem_type.trim()
+            )
         };
 
         tracing::info!(
@@ -340,12 +353,24 @@ impl HuggingFaceClient {
         let content_base64 = STANDARD.encode(jsonl_content.as_bytes());
 
         // Hub API commit endpoint
-        let url = format!("{}/datasets/{}/commit/main", self.config.api_base, dataset_name);
+        let url = format!(
+            "{}/datasets/{}/commit/main",
+            self.config.api_base, dataset_name
+        );
 
-        eprintln!("📤 Hugging Face: Uploading {} {} records as {} to dataset {}",
-            buffer.len(), problem_type, path_in_repo, dataset_name);
+        eprintln!(
+            "📤 Hugging Face: Uploading {} {} records as {} to dataset {}",
+            buffer.len(),
+            problem_type,
+            path_in_repo,
+            dataset_name
+        );
         eprintln!("   URL: {}", url);
-        eprintln!("   Content length: {} bytes (base64: {} bytes)", jsonl_content.len(), content_base64.len());
+        eprintln!(
+            "   Content length: {} bytes (base64: {} bytes)",
+            jsonl_content.len(),
+            content_base64.len()
+        );
 
         // Create NDJSON payload
         let commit_message = format!("Add {} {} records", buffer.len(), problem_type);
@@ -368,10 +393,14 @@ impl HuggingFaceClient {
             serde_json::to_string(&file_operation).unwrap()
         );
 
-        eprintln!("📤 Hugging Face: NDJSON payload size: {} bytes", ndjson_payload.len());
+        eprintln!(
+            "📤 Hugging Face: NDJSON payload size: {} bytes",
+            ndjson_payload.len()
+        );
 
         // Make HTTP request
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.token))
             .header("Content-Type", "application/x-ndjson")
@@ -386,17 +415,24 @@ impl HuggingFaceClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            eprintln!("❌ Hugging Face API error: HTTP {} - {}", status, error_text);
-            return Err(ClientError::Api(format!(
-                "HTTP {}: {}",
-                status,
-                error_text
-            )));
+            eprintln!(
+                "❌ Hugging Face API error: HTTP {} - {}",
+                status, error_text
+            );
+            return Err(ClientError::Api(format!("HTTP {}: {}", status, error_text)));
         }
 
-        tracing::info!("Successfully pushed {} {} records to Hugging Face", buffer.len(), problem_type);
-        eprintln!("✅ Hugging Face: Successfully pushed {} {} records to dataset {}",
-            buffer.len(), problem_type, dataset_name);
+        tracing::info!(
+            "Successfully pushed {} {} records to Hugging Face",
+            buffer.len(),
+            problem_type
+        );
+        eprintln!(
+            "✅ Hugging Face: Successfully pushed {} {} records to dataset {}",
+            buffer.len(),
+            problem_type,
+            dataset_name
+        );
 
         // Clear the buffer after successful upload
         buffer.clear();
@@ -415,34 +451,34 @@ impl HuggingFaceClient {
 
         // Check if using unified dataset (dataset_prefix contains "/")
         let use_unified = self.config.dataset_prefix.contains('/');
-        
+
         if use_unified {
             // Combine all problem types into one unified dataset
             let mut all_records = Vec::new();
             let mut total_count = 0;
-            
+
             // Collect all records from all buffers
-            for (_problem_type, buffer) in &self.buffers {
+            for buffer in self.buffers.values() {
                 total_count += buffer.len();
                 for record in buffer {
                     all_records.push(record.clone());
                 }
             }
-            
+
             if all_records.is_empty() {
                 return Ok(());
             }
-            
+
             // Use unified dataset name
             let dataset_name = self.config.dataset_prefix.clone();
-            
+
             // Create JSONL content from all records
             let jsonl_content: String = all_records
                 .iter()
                 .map(|record| serde_json::to_string(record).unwrap_or_default())
                 .collect::<Vec<_>>()
                 .join("\n");
-            
+
             // Generate filename with timestamp
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -450,16 +486,19 @@ impl HuggingFaceClient {
                 .as_secs();
             let filename = format!("data_{}.jsonl", timestamp);
             let path_in_repo = format!("data/{}", filename);
-            
+
             // Base64 encode the content
             let content_base64 = STANDARD.encode(jsonl_content.as_bytes());
-            
+
             // Hub API commit endpoint
-            let url = format!("{}/datasets/{}/commit/main", self.config.api_base, dataset_name);
-            
+            let url = format!(
+                "{}/datasets/{}/commit/main",
+                self.config.api_base, dataset_name
+            );
+
             eprintln!("📤 Hugging Face: Uploading {} total records (all problem types) as {} to unified dataset {}",
                 total_count, path_in_repo, dataset_name);
-            
+
             // Create NDJSON payload
             let commit_message = format!("Add {} records (unified dataset)", total_count);
             let header_line = serde_json::json!({
@@ -474,33 +513,36 @@ impl HuggingFaceClient {
                     "encoding": "base64"
                 }
             });
-            
+
             let ndjson_payload = format!(
                 "{}\n{}",
                 serde_json::to_string(&header_line).unwrap(),
                 serde_json::to_string(&file_operation).unwrap()
             );
-            
+
             // Use blocking HTTP via spawn_blocking to avoid tokio LocalSet issues
             let token = self.config.token.clone();
             let url_clone = url.clone();
             let payload = ndjson_payload.clone();
             let record_count = total_count;
             let dataset = dataset_name.clone();
-            
+
             let upload_result = tokio::task::spawn_blocking(move || {
                 eprintln!("📤 Hugging Face: Starting blocking upload to {}", url_clone);
-                
+
                 // Use ureq for pure blocking HTTP
                 let response = ureq::post(&url_clone)
                     .set("Authorization", &format!("Bearer {}", token))
                     .set("Content-Type", "application/x-ndjson")
                     .send_string(&payload);
-                
+
                 match response {
                     Ok(resp) => {
                         if resp.status() >= 200 && resp.status() < 300 {
-                            eprintln!("✅ Hugging Face: Successfully pushed {} records to {}", record_count, dataset);
+                            eprintln!(
+                                "✅ Hugging Face: Successfully pushed {} records to {}",
+                                record_count, dataset
+                            );
                             Ok(())
                         } else {
                             let error_text = resp.into_string().unwrap_or_default();
@@ -513,12 +555,14 @@ impl HuggingFaceClient {
                         Err(format!("Network error: {}", e))
                     }
                 }
-            }).await.map_err(|e| ClientError::Network(format!("spawn_blocking error: {}", e)))?;
-            
+            })
+            .await
+            .map_err(|e| ClientError::Network(format!("spawn_blocking error: {}", e)))?;
+
             if let Err(e) = upload_result {
                 return Err(ClientError::Api(e));
             }
-            
+
             // Clear all buffers after successful upload
             self.buffers.clear();
         } else {
@@ -552,4 +596,3 @@ pub enum ClientError {
     #[error("Network error: {0}")]
     Network(String),
 }
-

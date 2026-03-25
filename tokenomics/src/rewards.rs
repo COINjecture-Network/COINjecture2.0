@@ -8,6 +8,12 @@ pub struct RewardCalculator {
     epoch_average_work: f64,
 }
 
+impl Default for RewardCalculator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RewardCalculator {
     pub fn new() -> Self {
         RewardCalculator {

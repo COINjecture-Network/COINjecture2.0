@@ -52,7 +52,7 @@ impl EmissionMetrics {
             target_supply,
         }
     }
-    
+
     /// Calculate |ψ(t)| - consensus magnitude (dimensionless)
     /// |ψ| = √(agreement² + normalized_hashrate²) / √2
     pub fn psi_magnitude(&self) -> f64 {
@@ -62,12 +62,12 @@ impl EmissionMetrics {
         } else {
             1.0
         };
-        
+
         // Combine agreement and hashrate into magnitude
         let raw = (self.consensus_agreement.powi(2) + normalized_hashrate.powi(2)).sqrt();
         raw / 2.0_f64.sqrt()
     }
-    
+
     /// Calculate supply-based halving epoch
     /// Halving occurs when supply reaches certain fractions of target
     /// This is self-referential - network decides halving based on its own supply
@@ -75,11 +75,11 @@ impl EmissionMetrics {
         if self.target_supply == 0 {
             return 0;
         }
-        
+
         // Halving schedule based on supply percentage
         // Each halving at: 50%, 75%, 87.5%, 93.75%... (approaches target asymptotically)
         let supply_ratio = self.circulating_supply as f64 / self.target_supply as f64;
-        
+
         if supply_ratio < 0.5 {
             0
         } else if supply_ratio < 0.75 {
@@ -97,7 +97,7 @@ impl EmissionMetrics {
             6
         }
     }
-    
+
     /// Update from network observations
     pub fn update_from_network(
         &mut self,
@@ -149,7 +149,7 @@ impl ConsensusState {
         } else {
             1.0
         };
-        
+
         // Combine agreement and hashrate into magnitude
         (self.agreement.powi(2) + normalized_hashrate.powi(2)).sqrt() / 2.0_f64.sqrt()
     }
@@ -176,14 +176,14 @@ impl EmissionCalculator {
             metrics: EmissionMetrics::bootstrap(target_supply),
         }
     }
-    
+
     /// Create with default parameters
     pub fn default_supply() -> Self {
         // Base emission: 50 tokens per block (with 6 decimals)
         // Target supply: 21M tokens
         Self::new(50_000_000, 21_000_000_000_000)
     }
-    
+
     /// Update metrics from network
     pub fn update_metrics(&mut self, metrics: EmissionMetrics) {
         self.metrics = metrics;
@@ -191,46 +191,43 @@ impl EmissionCalculator {
 
     /// Calculate emission rate with NO ARBITRARY CAPS
     /// emission = η · |ψ(t)| · base_emission / (2^halvings)
-    /// 
+    ///
     /// Bounds are derived from ψ itself:
     /// - Min: η² · ψ_min · base (when consensus is weak)
     /// - Max: φ · ψ_max · base (when consensus is strong)
     pub fn calculate_emission(&self, consensus: &ConsensusState) -> u128 {
         let psi = consensus.calculate_psi_magnitude(&self.metrics);
-        
+
         // Get halving epoch from supply ratio (self-referential)
         let halvings = self.metrics.calculate_halving_epoch();
-        
+
         // Core formula: emission_rate = η · |ψ(t)| · base_emission
         let raw_emission = (ETA * psi * self.base_emission as f64) as u128;
-        
+
         // Apply halving (mathematical operation, not arbitrary cap)
-        let halved = raw_emission >> halvings;
-        
         // Natural bounds from consensus strength (NOT arbitrary min/max)
         // These emerge from the mathematics of ψ:
         // - When ψ is low (weak consensus), emission naturally decreases
         // - When ψ is high (strong consensus), emission naturally increases
         // No artificial clamping needed - the formula self-regulates
-        
-        halved
+        raw_emission >> halvings
     }
-    
+
     /// Calculate emission bounds based on current network state
     /// Returns (min_possible, max_possible) for this epoch
     pub fn emission_bounds(&self) -> (u128, u128) {
         let halvings = self.metrics.calculate_halving_epoch();
         let halved_base = self.base_emission >> halvings;
-        
+
         // Minimum: when ψ = η² (very weak consensus)
         // η · η² · base = η³ · base ≈ 0.354 · base
         let min_emission = (ETA.powi(3) * halved_base as f64) as u128;
-        
+
         // Maximum: when ψ = 1 and hashrate is φ× median
         // η · √((1² + φ²)/2) · base ≈ η · 1.27 · base ≈ 0.90 · base
         let max_psi = ((1.0 + PHI.powi(2)) / 2.0).sqrt();
         let max_emission = (ETA * max_psi * halved_base as f64) as u128;
-        
+
         (min_emission, max_emission)
     }
 
@@ -238,7 +235,7 @@ impl EmissionCalculator {
     pub fn current_epoch(&self) -> u32 {
         self.metrics.calculate_halving_epoch()
     }
-    
+
     /// Get supply ratio (circulating / target)
     pub fn supply_ratio(&self) -> f64 {
         if self.metrics.target_supply == 0 {
@@ -246,7 +243,7 @@ impl EmissionCalculator {
         }
         self.metrics.circulating_supply as f64 / self.metrics.target_supply as f64
     }
-    
+
     /// Blocks until next halving estimate
     /// Based on current emission rate and remaining supply to threshold
     pub fn blocks_to_next_halving(&self, current_emission: u128) -> Option<u64> {
@@ -254,7 +251,7 @@ impl EmissionCalculator {
         if epoch >= 6 {
             return None; // In tail emission, no more halvings
         }
-        
+
         // Calculate supply threshold for next halving
         let next_threshold = match epoch {
             0 => 0.5,
@@ -265,12 +262,12 @@ impl EmissionCalculator {
             5 => 0.984375,
             _ => return None,
         };
-        
+
         let target_supply = (self.metrics.target_supply as f64 * next_threshold) as u128;
         let remaining = target_supply.saturating_sub(self.metrics.circulating_supply);
-        
+
         if current_emission > 0 {
-            Some((remaining / current_emission as u128) as u64)
+            Some((remaining / current_emission) as u64)
         } else {
             None
         }
@@ -281,7 +278,7 @@ impl EmissionCalculator {
         let current = self.calculate_emission(consensus);
         let psi = consensus.calculate_psi_magnitude(&self.metrics);
         let (min_bound, max_bound) = self.emission_bounds();
-        
+
         EmissionInfo {
             current_emission: current,
             base_emission: self.base_emission >> self.current_epoch(),
@@ -344,7 +341,7 @@ impl EmissionDistribution {
         let d4 = (-ETA * 3.0).exp(); // 0.120
         let d5 = (-ETA * 4.0).exp(); // 0.059
         let sum = d1 + d2 + d3 + d4 + d5;
-        
+
         EmissionDistribution {
             mining: ((total as f64) * (d1 / sum)) as u128,
             validators: ((total as f64) * (d2 / sum)) as u128,
@@ -353,7 +350,7 @@ impl EmissionDistribution {
             bounties: ((total as f64) * (d5 / sum)) as u128,
         }
     }
-    
+
     /// Get distribution ratios (dimensionless)
     pub fn ratios() -> [f64; 5] {
         let d1 = (-ETA * 0.0).exp();
@@ -362,8 +359,8 @@ impl EmissionDistribution {
         let d4 = (-ETA * 3.0).exp();
         let d5 = (-ETA * 4.0).exp();
         let sum = d1 + d2 + d3 + d4 + d5;
-        
-        [d1/sum, d2/sum, d3/sum, d4/sum, d5/sum]
+
+        [d1 / sum, d2 / sum, d3 / sum, d4 / sum, d5 / sum]
     }
 }
 
@@ -378,7 +375,7 @@ mod tests {
     #[test]
     fn test_emission_no_arbitrary_caps() {
         let calculator = EmissionCalculator::default_supply();
-        
+
         let consensus = ConsensusState {
             block_height: 100,
             psi_magnitude: 1.0,
@@ -386,39 +383,51 @@ mod tests {
             agreement: 1.0,
             hash_rate: 1.0,
         };
-        
+
         let emission = calculator.calculate_emission(&consensus);
-        
+
         // Emission should be positive and bounded only by mathematics
         assert!(emission > 0, "Emission should be positive");
-        
+
         // Check against mathematical bounds
         let (min_bound, max_bound) = calculator.emission_bounds();
-        assert!(emission >= min_bound, "Emission {} should be >= min bound {}", emission, min_bound);
-        assert!(emission <= max_bound, "Emission {} should be <= max bound {}", emission, max_bound);
+        assert!(
+            emission >= min_bound,
+            "Emission {} should be >= min bound {}",
+            emission,
+            min_bound
+        );
+        assert!(
+            emission <= max_bound,
+            "Emission {} should be <= max bound {}",
+            emission,
+            max_bound
+        );
     }
 
     #[test]
     fn test_supply_based_halving() {
         let mut calculator = EmissionCalculator::default_supply();
-        
+
         // At 0% supply - epoch 0
         calculator.metrics.circulating_supply = 0;
         assert_eq!(calculator.current_epoch(), 0);
-        
+
         // At 51% supply - epoch 1
-        calculator.metrics.circulating_supply = (calculator.metrics.target_supply as f64 * 0.51) as u128;
+        calculator.metrics.circulating_supply =
+            (calculator.metrics.target_supply as f64 * 0.51) as u128;
         assert_eq!(calculator.current_epoch(), 1);
-        
+
         // At 76% supply - epoch 2
-        calculator.metrics.circulating_supply = (calculator.metrics.target_supply as f64 * 0.76) as u128;
+        calculator.metrics.circulating_supply =
+            (calculator.metrics.target_supply as f64 * 0.76) as u128;
         assert_eq!(calculator.current_epoch(), 2);
     }
 
     #[test]
     fn test_psi_magnitude_dimensionless() {
         let metrics = EmissionMetrics::default();
-        
+
         let consensus = ConsensusState {
             block_height: 100,
             psi_magnitude: 0.0, // Will be calculated
@@ -426,9 +435,9 @@ mod tests {
             agreement: 0.9,
             hash_rate: 1.0,
         };
-        
+
         let psi = consensus.calculate_psi_magnitude(&metrics);
-        
+
         // ψ should be a dimensionless ratio between 0 and ~1.5
         assert!(psi > 0.0, "ψ should be positive");
         assert!(psi < 2.0, "ψ should be bounded: {}", psi);
@@ -437,7 +446,7 @@ mod tests {
     #[test]
     fn test_weak_consensus_reduces_emission() {
         let calculator = EmissionCalculator::default_supply();
-        
+
         let strong_consensus = ConsensusState {
             block_height: 100,
             psi_magnitude: 1.0,
@@ -445,7 +454,7 @@ mod tests {
             agreement: 0.95,
             hash_rate: 1.0,
         };
-        
+
         let weak_consensus = ConsensusState {
             block_height: 100,
             psi_magnitude: 0.5,
@@ -453,18 +462,22 @@ mod tests {
             agreement: 0.5,
             hash_rate: 0.5,
         };
-        
+
         let strong_emission = calculator.calculate_emission(&strong_consensus);
         let weak_emission = calculator.calculate_emission(&weak_consensus);
-        
-        assert!(strong_emission > weak_emission,
-            "Strong consensus should emit more: {} > {}", strong_emission, weak_emission);
+
+        assert!(
+            strong_emission > weak_emission,
+            "Strong consensus should emit more: {} > {}",
+            strong_emission,
+            weak_emission
+        );
     }
 
     #[test]
     fn test_halving_reduces_emission() {
         let mut calculator = EmissionCalculator::default_supply();
-        
+
         let consensus = ConsensusState {
             block_height: 100,
             psi_magnitude: 1.0,
@@ -472,29 +485,37 @@ mod tests {
             agreement: 1.0,
             hash_rate: 1.0,
         };
-        
+
         // Epoch 0
         calculator.metrics.circulating_supply = 0;
         let emission_0 = calculator.calculate_emission(&consensus);
-        
+
         // Epoch 1 (after first halving)
-        calculator.metrics.circulating_supply = (calculator.metrics.target_supply as f64 * 0.51) as u128;
+        calculator.metrics.circulating_supply =
+            (calculator.metrics.target_supply as f64 * 0.51) as u128;
         let emission_1 = calculator.calculate_emission(&consensus);
-        
+
         // Emission should roughly halve
         let ratio = emission_0 as f64 / emission_1 as f64;
-        assert!(ratio > 1.8 && ratio < 2.2,
-            "Halving should roughly halve emission: ratio = {}", ratio);
+        assert!(
+            ratio > 1.8 && ratio < 2.2,
+            "Halving should roughly halve emission: ratio = {}",
+            ratio
+        );
     }
 
     #[test]
     fn test_emission_distribution_ratios() {
         let ratios = EmissionDistribution::ratios();
-        
+
         // Ratios should sum to 1.0 (dimensionless)
         let sum: f64 = ratios.iter().sum();
-        assert!((sum - 1.0).abs() < 0.001, "Ratios should sum to 1.0: {}", sum);
-        
+        assert!(
+            (sum - 1.0).abs() < 0.001,
+            "Ratios should sum to 1.0: {}",
+            sum
+        );
+
         // Mining (D1) should get largest share
         assert!(ratios[0] > ratios[1], "Mining should get largest share");
     }
@@ -502,11 +523,11 @@ mod tests {
     #[test]
     fn test_network_derived_baseline() {
         let mut calculator = EmissionCalculator::default_supply();
-        
+
         // Update with network median
         calculator.metrics.median_hashrate = 500.0;
         calculator.metrics.current_hashrate = 600.0;
-        
+
         let consensus = ConsensusState {
             block_height: 100,
             psi_magnitude: 1.0,
@@ -514,9 +535,9 @@ mod tests {
             agreement: 0.9,
             hash_rate: 600.0,
         };
-        
+
         let psi = consensus.calculate_psi_magnitude(&calculator.metrics);
-        
+
         // With above-median hashrate, ψ should be > 1
         // normalized_hashrate = 600/500 = 1.2
         // ψ = sqrt(0.9² + 1.2²) / sqrt(2) ≈ 1.06

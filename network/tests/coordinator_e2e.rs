@@ -24,7 +24,7 @@ use coinject_consensus::{
     CoordinatorCommand, CoordinatorConfig, CoordinatorEvent, EpochCoordinator, SolutionCommit,
 };
 use coinject_core::Hash;
-use coinject_network::mesh::bridge::{BridgeCommand, BridgeEvent, BridgeState, run_bridge};
+use coinject_network::mesh::bridge::{run_bridge, BridgeCommand, BridgeEvent, BridgeState};
 use coinject_network::mesh::config::NetworkConfig;
 use coinject_network::NetworkService;
 
@@ -82,19 +82,22 @@ impl TestNode {
         // Spawn bridge
         let bridge_state_clone = Arc::clone(&bridge_state);
         tokio::spawn(async move {
-            run_bridge(bridge_cmd_rx, bridge_event_tx, mesh_cmd_tx, mesh_event_rx, bridge_state_clone).await;
+            run_bridge(
+                bridge_cmd_rx,
+                bridge_event_tx,
+                mesh_cmd_tx,
+                mesh_event_rx,
+                bridge_state_clone,
+            )
+            .await;
         });
 
         // Coordinator channels
         let (coord_cmd_tx, coord_cmd_rx) = mpsc::unbounded_channel::<CoordinatorCommand>();
         let (coord_event_tx, mut coord_event_rx) = mpsc::unbounded_channel::<CoordinatorEvent>();
 
-        let (coordinator, _shared_state) = EpochCoordinator::new(
-            node_id,
-            coord_config,
-            0,
-            Hash::from_bytes([0; 32]),
-        );
+        let (coordinator, _shared_state) =
+            EpochCoordinator::new(node_id, coord_config, 0, Hash::from_bytes([0; 32]));
 
         // Spawn coordinator
         tokio::spawn(async move {
@@ -117,7 +120,11 @@ impl TestNode {
                             salt: *salt,
                         });
                     }
-                    CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score } => {
+                    CoordinatorEvent::BroadcastCommit {
+                        epoch,
+                        solution_hash,
+                        work_score,
+                    } => {
                         let _ = bridge_cmd_for_coord.send(BridgeCommand::BroadcastCommit {
                             epoch: *epoch,
                             solution_hash: *solution_hash,
@@ -138,14 +145,12 @@ impl TestNode {
             while let Some(event) = bridge_event_rx.recv().await {
                 match event {
                     BridgeEvent::PeerConnected { peer_id, .. } => {
-                        let _ = coord_cmd_for_bridge.send(CoordinatorCommand::PeerJoined {
-                            node_id: peer_id.0,
-                        });
+                        let _ = coord_cmd_for_bridge
+                            .send(CoordinatorCommand::PeerJoined { node_id: peer_id.0 });
                     }
                     BridgeEvent::PeerDisconnected { peer_id, .. } => {
-                        let _ = coord_cmd_for_bridge.send(CoordinatorCommand::PeerLeft {
-                            node_id: peer_id.0,
-                        });
+                        let _ = coord_cmd_for_bridge
+                            .send(CoordinatorCommand::PeerLeft { node_id: peer_id.0 });
                     }
                     BridgeEvent::ConsensusSaltReceived { epoch, salt, from } => {
                         let _ = coord_cmd_for_bridge.send(CoordinatorCommand::SaltReceived {
@@ -189,33 +194,47 @@ impl TestNode {
         let mut hash = [0u8; 32];
         hash[..8].copy_from_slice(&work_score.to_le_bytes());
         hash[8..16].copy_from_slice(&self.node_id[..8]);
-        let _ = self.coord_cmd_tx.send(CoordinatorCommand::LocalSolutionReady {
-            epoch,
-            solution_hash: hash,
-            work_score,
-            problem: ProblemType::SubsetSum { numbers: vec![1, 2, 3, 4, 5], target: 9 },
-            solution: Solution::SubsetSum(vec![3, 4]),  // 4+5=9
-            solve_time: Duration::from_millis(100),
-        });
+        let _ = self
+            .coord_cmd_tx
+            .send(CoordinatorCommand::LocalSolutionReady {
+                epoch,
+                solution_hash: hash,
+                work_score,
+                problem: ProblemType::SubsetSum {
+                    numbers: vec![1, 2, 3, 4, 5],
+                    target: 9,
+                },
+                solution: Solution::SubsetSum(vec![3, 4]), // 4+5=9
+                solve_time: Duration::from_millis(100),
+            });
     }
 
     /// Count how many EpochStarted events have been received.
     async fn epoch_count(&self) -> usize {
-        self.events.read().await.iter()
+        self.events
+            .read()
+            .await
+            .iter()
             .filter(|e| matches!(e, CoordinatorEvent::EpochStarted { .. }))
             .count()
     }
 
     /// Count how many EpochSealed events have been received.
     async fn sealed_count(&self) -> usize {
-        self.events.read().await.iter()
+        self.events
+            .read()
+            .await
+            .iter()
             .filter(|e| matches!(e, CoordinatorEvent::EpochSealed { .. }))
             .count()
     }
 
     /// Get all epoch leaders.
     async fn leaders(&self) -> Vec<[u8; 32]> {
-        self.events.read().await.iter()
+        self.events
+            .read()
+            .await
+            .iter()
             .filter_map(|e| match e {
                 CoordinatorEvent::EpochStarted { leader, .. } => Some(*leader),
                 _ => None,
@@ -225,7 +244,10 @@ impl TestNode {
 
     /// Get the set of MinePhaseStarted epochs.
     async fn mine_epochs(&self) -> Vec<u64> {
-        self.events.read().await.iter()
+        self.events
+            .read()
+            .await
+            .iter()
             .filter_map(|e| match e {
                 CoordinatorEvent::MinePhaseStarted { epoch, .. } => Some(*epoch),
                 _ => None,
@@ -253,7 +275,9 @@ fn short_id(id: &[u8; 32]) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_three_node_epoch_progression() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("coordinator_e2e=debug,coinject_network::mesh=info,coinject_consensus=info")
+        .with_env_filter(
+            "coordinator_e2e=debug,coinject_network::mesh=info,coinject_consensus=info",
+        )
         .try_init();
 
     // Short phase durations for fast test
@@ -283,23 +307,21 @@ async fn test_three_node_epoch_progression() {
 
     let addr_a: std::net::SocketAddr = format!("127.0.0.1:{}", port_a).parse().unwrap();
 
-    let node_a = TestNode::start(
-        &format!("127.0.0.1:{}", port_a),
-        vec![],
-        config.clone(),
-    ).await;
+    let node_a = TestNode::start(&format!("127.0.0.1:{}", port_a), vec![], config.clone()).await;
 
     let node_b = TestNode::start(
         &format!("127.0.0.1:{}", port_b),
         vec![addr_a],
         config.clone(),
-    ).await;
+    )
+    .await;
 
     let node_c = TestNode::start(
         &format!("127.0.0.1:{}", port_c),
         vec![addr_a],
         config.clone(),
-    ).await;
+    )
+    .await;
 
     println!("Node A: {} on port {}", short_id(&node_a.node_id), port_a);
     println!("Node B: {} on port {}", short_id(&node_b.node_id), port_b);
@@ -318,7 +340,10 @@ async fn test_three_node_epoch_progression() {
         let c_epochs = node_c.epoch_count().await;
 
         if a_epochs >= 3 && b_epochs >= 3 && c_epochs >= 3 {
-            println!("All nodes reached 3+ epochs: A={}, B={}, C={}", a_epochs, b_epochs, c_epochs);
+            println!(
+                "All nodes reached 3+ epochs: A={}, B={}, C={}",
+                a_epochs, b_epochs, c_epochs
+            );
             break;
         }
 
@@ -328,7 +353,9 @@ async fn test_three_node_epoch_progression() {
             assert!(
                 a_epochs >= 2 && b_epochs >= 2 && c_epochs >= 2,
                 "All nodes should have started at least 2 epochs: A={}, B={}, C={}",
-                a_epochs, b_epochs, c_epochs
+                a_epochs,
+                b_epochs,
+                c_epochs
             );
             break;
         }
@@ -340,7 +367,10 @@ async fn test_three_node_epoch_progression() {
     let a_mines = node_a.mine_epochs().await;
     let b_mines = node_b.mine_epochs().await;
     let c_mines = node_c.mine_epochs().await;
-    println!("Mine phases: A={:?}, B={:?}, C={:?}", a_mines, b_mines, c_mines);
+    println!(
+        "Mine phases: A={:?}, B={:?}, C={:?}",
+        a_mines, b_mines, c_mines
+    );
 
     assert!(!a_mines.is_empty(), "Node A should have mine phases");
     assert!(!b_mines.is_empty(), "Node B should have mine phases");
@@ -348,11 +378,17 @@ async fn test_three_node_epoch_progression() {
 
     // Verify leader rotation — across 3+ epochs, should have at least 1 rotation
     let a_leaders = node_a.leaders().await;
-    println!("Leaders from A's view: {:?}", a_leaders.iter().map(short_id).collect::<Vec<_>>());
+    println!(
+        "Leaders from A's view: {:?}",
+        a_leaders.iter().map(short_id).collect::<Vec<_>>()
+    );
     let unique_leaders: BTreeSet<[u8; 32]> = a_leaders.iter().copied().collect();
     // With hash-based election and 3 epochs, expect at least 1 unique leader
     // (could be the same if hash happens to pick same index, but unlikely with 3 peers)
-    assert!(!unique_leaders.is_empty(), "should have elected at least 1 leader");
+    assert!(
+        !unique_leaders.is_empty(),
+        "should have elected at least 1 leader"
+    );
 
     // Cleanup
     node_a.shutdown().await;
@@ -382,17 +418,14 @@ async fn test_commit_propagation_through_mesh() {
     let port_b = 19201;
     let addr_a: std::net::SocketAddr = format!("127.0.0.1:{}", port_a).parse().unwrap();
 
-    let node_a = TestNode::start(
-        &format!("127.0.0.1:{}", port_a),
-        vec![],
-        config.clone(),
-    ).await;
+    let node_a = TestNode::start(&format!("127.0.0.1:{}", port_a), vec![], config.clone()).await;
 
     let node_b = TestNode::start(
         &format!("127.0.0.1:{}", port_b),
         vec![addr_a],
         config.clone(),
-    ).await;
+    )
+    .await;
 
     // Wait for mesh connection + epoch 1 mine phase to begin
     let deadline = time::Instant::now() + Duration::from_secs(10);
@@ -421,8 +454,12 @@ async fn test_commit_propagation_through_mesh() {
     let a_events = node_a.events.read().await;
     let b_events = node_b.events.read().await;
 
-    let a_has_commit = a_events.iter().any(|e| matches!(e, CoordinatorEvent::BroadcastCommit { .. }));
-    let b_has_commit = b_events.iter().any(|e| matches!(e, CoordinatorEvent::BroadcastCommit { .. }));
+    let a_has_commit = a_events
+        .iter()
+        .any(|e| matches!(e, CoordinatorEvent::BroadcastCommit { .. }));
+    let b_has_commit = b_events
+        .iter()
+        .any(|e| matches!(e, CoordinatorEvent::BroadcastCommit { .. }));
 
     println!("Node A broadcast commit: {}", a_has_commit);
     println!("Node B broadcast commit: {}", b_has_commit);
@@ -458,17 +495,14 @@ async fn test_salt_received_from_leader() {
     let port_b = 19301;
     let addr_a: std::net::SocketAddr = format!("127.0.0.1:{}", port_a).parse().unwrap();
 
-    let node_a = TestNode::start(
-        &format!("127.0.0.1:{}", port_a),
-        vec![],
-        config.clone(),
-    ).await;
+    let node_a = TestNode::start(&format!("127.0.0.1:{}", port_a), vec![], config.clone()).await;
 
     let node_b = TestNode::start(
         &format!("127.0.0.1:{}", port_b),
         vec![addr_a],
         config.clone(),
-    ).await;
+    )
+    .await;
 
     // Wait for 2 epochs to complete
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -477,8 +511,14 @@ async fn test_salt_received_from_leader() {
     let b_epochs = node_b.epoch_count().await;
 
     println!("Epochs: A={}, B={}", a_epochs, b_epochs);
-    assert!(a_epochs >= 2, "Node A should have started at least 2 epochs");
-    assert!(b_epochs >= 2, "Node B should have started at least 2 epochs");
+    assert!(
+        a_epochs >= 2,
+        "Node A should have started at least 2 epochs"
+    );
+    assert!(
+        b_epochs >= 2,
+        "Node B should have started at least 2 epochs"
+    );
 
     // Both nodes should have received mine phase events (salt was distributed)
     let a_mines = node_a.mine_epochs().await;

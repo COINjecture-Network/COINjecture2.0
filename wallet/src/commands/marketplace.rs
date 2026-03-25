@@ -26,7 +26,11 @@ pub async fn list_problems(client: &RpcClient) -> Result<()> {
             println!();
 
             for (i, problem) in problems.iter().enumerate() {
-                println!("{}. Problem #{}", i + 1, &problem.problem_id[0..16].dimmed());
+                println!(
+                    "{}. Problem #{}",
+                    i + 1,
+                    &problem.problem_id[0..16].dimmed()
+                );
                 println!("   Submitter:  {}", problem.submitter);
                 println!("   Bounty:     {} tokens", format_balance(problem.bounty));
                 println!("   Min Score:  {:.4}", problem.min_work_score);
@@ -56,7 +60,10 @@ pub async fn get_stats(client: &RpcClient) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&stats)?);
         }
         Err(e) => {
-            println!("{}", format!("❌ Failed to get marketplace stats: {}", e).red());
+            println!(
+                "{}",
+                format!("❌ Failed to get marketplace stats: {}", e).red()
+            );
         }
     }
 
@@ -86,7 +93,10 @@ pub async fn get_problem(problem_id: &str, client: &RpcClient) -> Result<()> {
             println!("{}", "Problem not found".yellow());
         }
         Err(e) => {
-            println!("{}", format!("❌ Failed to get problem details: {}", e).red());
+            println!(
+                "{}",
+                format!("❌ Failed to get problem details: {}", e).red()
+            );
         }
     }
 
@@ -94,13 +104,12 @@ pub async fn get_problem(problem_id: &str, client: &RpcClient) -> Result<()> {
 }
 
 /// Submit a new problem to marketplace (TODO: Implement problem creation)
-pub async fn submit_problem(
-    problem_type: &str,
-    bounty: u128,
-    _client: &RpcClient,
-) -> Result<()> {
+pub async fn submit_problem(problem_type: &str, bounty: u128, _client: &RpcClient) -> Result<()> {
     println!();
-    println!("{}", "⚠️  Problem Submission Not Yet Implemented".yellow().bold());
+    println!(
+        "{}",
+        "⚠️  Problem Submission Not Yet Implemented".yellow().bold()
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Problem Type: {}", problem_type);
     println!("Bounty:       {} tokens", format_balance(bounty));
@@ -120,14 +129,12 @@ pub async fn submit_problem(
 fn format_balance(balance: u128) -> String {
     let balance_str = balance.to_string();
     let mut result = String::new();
-    let mut count = 0;
 
-    for c in balance_str.chars().rev() {
+    for (count, c) in balance_str.chars().rev().enumerate() {
         if count > 0 && count % 3 == 0 {
             result.insert(0, ',');
         }
         result.insert(0, c);
-        count += 1;
     }
 
     result
@@ -135,7 +142,7 @@ fn format_balance(balance: u128) -> String {
 
 fn format_timestamp(timestamp: i64) -> String {
     use chrono::{DateTime, Utc};
-    let dt = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(|| Utc::now());
+    let dt = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 

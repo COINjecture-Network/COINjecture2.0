@@ -27,10 +27,8 @@ pub const PHI_INV: f64 = 0.618033988749894848204586834365638118;
 
 /// Golden ratio as 32-byte seed (SHA-256 of phi's decimal expansion)
 pub const GOLDEN_SEED: [u8; 32] = [
-    0x9e, 0x37, 0x79, 0xb9, 0x7f, 0x4a, 0x7c, 0x15,
-    0xf3, 0x9c, 0xc0, 0x60, 0x5c, 0xee, 0xdc, 0x83,
-    0x41, 0x08, 0x2c, 0x12, 0x4a, 0xfc, 0x05, 0x51,
-    0xc7, 0xab, 0x88, 0x26, 0x6e, 0xcf, 0x1f, 0x17,
+    0x9e, 0x37, 0x79, 0xb9, 0x7f, 0x4a, 0x7c, 0x15, 0xf3, 0x9c, 0xc0, 0x60, 0x5c, 0xee, 0xdc, 0x83,
+    0x41, 0x08, 0x2c, 0x12, 0x4a, 0xfc, 0x05, 0x51, 0xc7, 0xab, 0x88, 0x26, 0x6e, 0xcf, 0x1f, 0x17,
 ];
 
 /// Golden epoch duration (in blocks)
@@ -162,7 +160,11 @@ impl GoldenGenerator {
     /// Returns 0 if fractional part < 0.5, else 1
     pub fn coin_flip(&self, z: u64) -> u8 {
         let frac = Self::golden_fractional(z);
-        if frac < 0.5 { 0 } else { 1 }
+        if frac < 0.5 {
+            0
+        } else {
+            1
+        }
     }
 
     /// Compute fractional part of z*phi
@@ -329,7 +331,9 @@ mod tests {
     #[test]
     fn test_golden_sort_key_distribution() {
         // Verify keys are well-distributed (no obvious patterns)
-        let mut keys: Vec<u64> = (0..100).map(|i| GoldenGenerator::golden_sort_key(i)).collect();
+        let mut keys: Vec<u64> = (0..100)
+            .map(|i| GoldenGenerator::golden_sort_key(i))
+            .collect();
         let original = keys.clone();
         keys.sort();
 

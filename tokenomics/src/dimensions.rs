@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Dimension {
     pub index: u8,
-    pub scale: f64,          // D_n = e^(-ηt_n)
-    pub allocation: f64,     // Normalized percentage
-    pub lock_days: u64,      // Lock period in days
-    pub function: String,    // Economic function
+    pub scale: f64,       // D_n = e^(-ηt_n)
+    pub allocation: f64,  // Normalized percentage
+    pub lock_days: u64,   // Lock period in days
+    pub function: String, // Economic function
 }
 
 impl Dimension {

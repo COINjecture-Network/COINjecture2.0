@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // Mathematical constant η = 1/√2 (not arbitrary - from dimensional theory)
-const ETA: f64 = 0.7071067811865476;
+const ETA: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
 // =============================================================================
 // Problem Types
@@ -52,7 +52,7 @@ impl ProblemCategory {
     pub fn as_u8(&self) -> u8 {
         *self as u8
     }
-    
+
     pub fn from_u8(v: u8) -> Self {
         match v {
             0 => ProblemCategory::Sat3,
@@ -97,7 +97,7 @@ impl PricingMetrics {
             // H_n = e^(η * n) - mathematically derived
             solve_times.insert(category, (ETA * cat as f64).exp());
         }
-        
+
         PricingMetrics {
             solve_times,
             baseline_solve_time: 1.0,
@@ -105,7 +105,7 @@ impl PricingMetrics {
             network_age_blocks: network_age,
         }
     }
-    
+
     /// Update from network metrics oracle
     pub fn update_from_network(
         &mut self,
@@ -115,24 +115,24 @@ impl PricingMetrics {
     ) {
         self.median_fee = median_fee;
         self.network_age_blocks = network_age;
-        
+
         for (cat, ratio) in solve_time_ratios {
             self.solve_times.insert(*cat, *ratio);
         }
-        
+
         // Update baseline from SAT3
         if let Some(&baseline) = self.solve_times.get(&ProblemCategory::Sat3) {
             self.baseline_solve_time = baseline.max(0.001);
         }
     }
-    
+
     /// Get empirical hardness factor for a category
     /// H_factor = solve_time_category / solve_time_baseline
     pub fn hardness_factor(&self, category: ProblemCategory) -> f64 {
         let cat_time = self.solve_times.get(&category).copied().unwrap_or(1.0);
         cat_time / self.baseline_solve_time.max(0.001)
     }
-    
+
     /// Get base storage cost (network-derived)
     /// During bootstrap: grows logarithmically with network age
     /// After bootstrap: uses median fee
@@ -140,22 +140,22 @@ impl PricingMetrics {
         if self.median_fee > 0 {
             return self.median_fee;
         }
-        
+
         // Bootstrap pricing: cost grows with network maturity
         // C = η * ln(1 + block_height) * 1000
         let age_factor = (1.0 + self.network_age_blocks as f64).ln();
         (ETA * age_factor * 1000.0) as u128
     }
-    
+
     /// Size-adjusted hardness using empirical data
     /// Combines category hardness with problem size scaling
     pub fn size_adjusted_hardness(&self, category: ProblemCategory, problem_size: u64) -> f64 {
         let base_hardness = self.hardness_factor(category);
-        
+
         // Size scaling uses η for mathematical consistency
         // Larger problems are exponentially harder
         let size_factor = 1.0 + (problem_size as f64).ln() * ETA;
-        
+
         base_hardness * size_factor
     }
 }
@@ -206,7 +206,7 @@ impl CategoryMarket {
     /// Create new market for category
     pub fn new(category: ProblemCategory, metrics: &PricingMetrics) -> Self {
         let initial_price = Self::calculate_base_price(category, 50, metrics);
-        
+
         CategoryMarket {
             category,
             demand_active: 0,
@@ -222,10 +222,14 @@ impl CategoryMarket {
 
     /// Calculate base price using network-derived values
     /// P_base = C_network × H_empirical(category, size)
-    fn calculate_base_price(category: ProblemCategory, size: u64, metrics: &PricingMetrics) -> u128 {
+    fn calculate_base_price(
+        category: ProblemCategory,
+        size: u64,
+        metrics: &PricingMetrics,
+    ) -> u128 {
         let h_factor = metrics.size_adjusted_hardness(category, size);
         let c_base = metrics.base_cost();
-        
+
         ((c_base as f64) * h_factor) as u128
     }
 
@@ -234,7 +238,7 @@ impl CategoryMarket {
     /// where α = η (mathematical constant from dimensional theory)
     pub fn calculate_price(&self, problem_size: u64, metrics: &PricingMetrics) -> u128 {
         let base_price = Self::calculate_base_price(self.category, problem_size, metrics);
-        
+
         // Supply/demand ratio (dimensionless)
         let demand_supply_ratio = if self.supply_available > 0 {
             self.demand_active as f64 / self.supply_available as f64
@@ -247,11 +251,11 @@ impl CategoryMarket {
             // No demand, no supply - neutral pricing
             1.0
         };
-        
+
         // Apply formula with α = η (mathematical constant)
         // NO MIN/MAX CLAMPS - market self-regulates
         let multiplier = 1.0 + ETA * demand_supply_ratio;
-        
+
         ((base_price as f64) * multiplier) as u128
     }
 
@@ -280,7 +284,7 @@ impl CategoryMarket {
         self.total_volume += price;
         self.trade_count += 1;
         self.last_update_block = block;
-        
+
         // EMA smoothing factor = η (mathematical constant)
         self.price_ema = ETA * (price as f64) + (1.0 - ETA) * self.price_ema;
     }
@@ -289,7 +293,7 @@ impl CategoryMarket {
     pub fn update_price(&mut self, problem_size: u64, block: u64, metrics: &PricingMetrics) {
         let new_price = self.calculate_price(problem_size, metrics);
         self.current_price = new_price;
-        
+
         // Record in history
         self.price_history.push(PricePoint {
             block,
@@ -297,26 +301,26 @@ impl CategoryMarket {
             demand: self.demand_active,
             supply: self.supply_available,
         });
-        
+
         // Trim history to last 100 entries
         if self.price_history.len() > 100 {
             self.price_history.remove(0);
         }
-        
+
         self.last_update_block = block;
     }
 
     /// Get price statistics
     pub fn stats(&self) -> MarketStats {
         let avg_price = if !self.price_history.is_empty() {
-            self.price_history.iter().map(|p| p.price).sum::<u128>() 
+            self.price_history.iter().map(|p| p.price).sum::<u128>()
                 / self.price_history.len() as u128
         } else {
             self.current_price
         };
-        
+
         let volatility = self.calculate_volatility();
-        
+
         MarketStats {
             category: self.category,
             current_price: self.current_price,
@@ -340,18 +344,18 @@ impl CategoryMarket {
         if self.price_history.len() < 2 {
             return 0.0;
         }
-        
-        let prices: Vec<f64> = self.price_history.iter()
-            .map(|p| p.price as f64)
-            .collect();
-        
+
+        let prices: Vec<f64> = self.price_history.iter().map(|p| p.price as f64).collect();
+
         let mean = prices.iter().sum::<f64>() / prices.len() as f64;
-        let variance = prices.iter()
-            .map(|p| (p - mean).powi(2))
-            .sum::<f64>() / prices.len() as f64;
-        
+        let variance = prices.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / prices.len() as f64;
+
         let std_dev = variance.sqrt();
-        if mean > 0.0 { std_dev / mean } else { 0.0 }
+        if mean > 0.0 {
+            std_dev / mean
+        } else {
+            0.0
+        }
     }
 }
 
@@ -390,13 +394,13 @@ impl DataPricingEngine {
     pub fn new(network_age: u64) -> Self {
         let metrics = PricingMetrics::bootstrap(network_age);
         let mut markets = HashMap::new();
-        
+
         // Initialize markets for all categories
         for cat in 0..=9 {
             let category = ProblemCategory::from_u8(cat);
             markets.insert(category, CategoryMarket::new(category, &metrics));
         }
-        
+
         DataPricingEngine {
             markets,
             current_block: network_age,
@@ -408,17 +412,17 @@ impl DataPricingEngine {
     pub fn update_metrics(&mut self, metrics: PricingMetrics) {
         self.metrics = metrics;
     }
-    
+
     /// Update a single solve time observation
     pub fn record_solve_time(&mut self, category: ProblemCategory, solve_time: f64) {
         self.metrics.solve_times.insert(category, solve_time);
-        
+
         // Update baseline if SAT3
         if category == ProblemCategory::Sat3 {
             self.metrics.baseline_solve_time = solve_time.max(0.001);
         }
     }
-    
+
     /// Update median fee from network
     pub fn update_median_fee(&mut self, median_fee: u128) {
         self.metrics.median_fee = median_fee;
@@ -447,12 +451,12 @@ impl DataPricingEngine {
             .map(|m| m.calculate_price(problem_size, &self.metrics))
             .unwrap_or_else(|| self.metrics.base_cost())
     }
-    
+
     /// Get current hardness factor (empirical)
     pub fn get_hardness_factor(&self, category: ProblemCategory) -> f64 {
         self.metrics.hardness_factor(category)
     }
-    
+
     /// Get current base cost (network-derived)
     pub fn get_base_cost(&self) -> u128 {
         self.metrics.base_cost()
@@ -461,12 +465,12 @@ impl DataPricingEngine {
     /// Submit a buy order (increases demand)
     pub fn submit_buy_order(&mut self, category: ProblemCategory, problem_size: u64) -> BuyOrder {
         let price = self.get_price(category, problem_size);
-        
+
         if let Some(market) = self.markets.get_mut(&category) {
             market.add_demand(1);
             market.update_price(problem_size, self.current_block, &self.metrics);
         }
-        
+
         BuyOrder {
             category,
             problem_size,
@@ -486,20 +490,20 @@ impl DataPricingEngine {
 
     /// Execute a trade (matches buy order with solution)
     pub fn execute_trade(
-        &mut self, 
-        category: ProblemCategory, 
+        &mut self,
+        category: ProblemCategory,
         problem_size: u64,
         agreed_price: u128,
     ) -> TradeResult {
         let market_price = self.get_price(category, problem_size);
-        
+
         if let Some(market) = self.markets.get_mut(&category) {
             market.remove_demand(1);
             market.remove_supply(1);
             market.record_trade(agreed_price, self.current_block);
             market.update_price(problem_size, self.current_block, &self.metrics);
         }
-        
+
         TradeResult {
             category,
             market_price,
@@ -531,14 +535,14 @@ impl DataPricingEngine {
         let total_supply: u64 = self.markets.values().map(|m| m.supply_available).sum();
         let total_volume: u128 = self.markets.values().map(|m| m.total_volume).sum();
         let total_trades: u64 = self.markets.values().map(|m| m.trade_count).sum();
-        
+
         let avg_price: u128 = if !self.markets.is_empty() {
-            self.markets.values().map(|m| m.current_price).sum::<u128>() 
+            self.markets.values().map(|m| m.current_price).sum::<u128>()
                 / self.markets.len() as u128
         } else {
             0
         };
-        
+
         GlobalPricingStats {
             total_demand,
             total_supply,
@@ -619,43 +623,56 @@ mod tests {
         // During bootstrap, prices should be minimal but grow with network age
         let engine_young = DataPricingEngine::new(0);
         let engine_mature = DataPricingEngine::new(10000);
-        
+
         let price_young = engine_young.get_base_cost();
         let price_mature = engine_mature.get_base_cost();
-        
-        assert!(price_mature > price_young, 
-            "Mature network should have higher base cost: {} > {}", price_mature, price_young);
+
+        assert!(
+            price_mature > price_young,
+            "Mature network should have higher base cost: {} > {}",
+            price_mature,
+            price_young
+        );
     }
 
     #[test]
     fn test_hardness_factors_exponential() {
         let engine = DataPricingEngine::new(0);
-        
+
         // During bootstrap, hardness should follow exponential scaling
         let h_sat = engine.get_hardness_factor(ProblemCategory::Sat3);
         let h_tsp = engine.get_hardness_factor(ProblemCategory::Tsp);
-        
-        assert!(h_tsp > h_sat, "TSP should be harder than SAT3: {} > {}", h_tsp, h_sat);
-        
+
+        assert!(
+            h_tsp > h_sat,
+            "TSP should be harder than SAT3: {} > {}",
+            h_tsp,
+            h_sat
+        );
+
         // Ratio should follow e^(η * Δn)
         let expected_ratio = (ETA * 1.0).exp(); // TSP is category 1, SAT3 is category 0
         let actual_ratio = h_tsp / h_sat;
-        assert!((actual_ratio - expected_ratio).abs() < 0.1,
-            "Hardness ratio should follow exponential: {} vs {}", actual_ratio, expected_ratio);
+        assert!(
+            (actual_ratio - expected_ratio).abs() < 0.1,
+            "Hardness ratio should follow exponential: {} vs {}",
+            actual_ratio,
+            expected_ratio
+        );
     }
 
     #[test]
     fn test_no_artificial_caps() {
         let mut engine = DataPricingEngine::new(100);
-        
+
         // Create extreme demand
         if let Some(market) = engine.get_market_mut(ProblemCategory::Sat3) {
             market.add_demand(1000);
             // No supply
         }
-        
+
         let high_demand_price = engine.get_price(ProblemCategory::Sat3, 50);
-        
+
         // Price should be high but NOT capped at an arbitrary value
         // It should scale naturally with demand
         assert!(high_demand_price > engine.get_base_cost());
@@ -664,77 +681,113 @@ mod tests {
     #[test]
     fn test_demand_supply_impact() {
         let mut engine = DataPricingEngine::new(100);
-        
+
         let balanced_price = engine.get_price(ProblemCategory::Sat3, 50);
-        
+
         // Add demand
         if let Some(market) = engine.get_market_mut(ProblemCategory::Sat3) {
             market.add_demand(10);
         }
         let high_demand_price = engine.get_price(ProblemCategory::Sat3, 50);
-        
+
         // Add supply
         if let Some(market) = engine.get_market_mut(ProblemCategory::Sat3) {
             market.add_supply(20);
         }
         let high_supply_price = engine.get_price(ProblemCategory::Sat3, 50);
-        
-        assert!(high_demand_price > balanced_price,
-            "High demand should increase price: {} > {}", high_demand_price, balanced_price);
-        
-        assert!(high_supply_price < high_demand_price,
-            "More supply should decrease price: {} < {}", high_supply_price, high_demand_price);
+
+        assert!(
+            high_demand_price > balanced_price,
+            "High demand should increase price: {} > {}",
+            high_demand_price,
+            balanced_price
+        );
+
+        assert!(
+            high_supply_price < high_demand_price,
+            "More supply should decrease price: {} < {}",
+            high_supply_price,
+            high_demand_price
+        );
     }
 
     #[test]
     fn test_empirical_solve_time_update() {
         let mut engine = DataPricingEngine::new(100);
-        
+
         // Record empirical solve times
         engine.record_solve_time(ProblemCategory::Sat3, 1.0);
         engine.record_solve_time(ProblemCategory::Tsp, 5.0);
-        
+
         let h_sat = engine.get_hardness_factor(ProblemCategory::Sat3);
         let h_tsp = engine.get_hardness_factor(ProblemCategory::Tsp);
-        
+
         // TSP should be 5x harder based on actual solve times
-        assert!((h_tsp / h_sat - 5.0).abs() < 0.1,
-            "Empirical hardness should be 5x: {} / {} = {}", h_tsp, h_sat, h_tsp / h_sat);
+        assert!(
+            (h_tsp / h_sat - 5.0).abs() < 0.1,
+            "Empirical hardness should be 5x: {} / {} = {}",
+            h_tsp,
+            h_sat,
+            h_tsp / h_sat
+        );
     }
 
     #[test]
     fn test_median_fee_update() {
         let mut engine = DataPricingEngine::new(1000);
-        
+
         // Initially uses bootstrap pricing
         let bootstrap_cost = engine.get_base_cost();
-        
+
         // Update with network median
         engine.update_median_fee(50000);
-        
+
         let network_cost = engine.get_base_cost();
-        
-        assert_eq!(network_cost, 50000, 
-            "Should use network median when available: {}", network_cost);
+
+        assert_eq!(
+            network_cost, 50000,
+            "Should use network median when available: {}",
+            network_cost
+        );
     }
 
     #[test]
     fn test_volatility_dimensionless() {
-        let mut market = CategoryMarket::new(
-            ProblemCategory::Sat3,
-            &PricingMetrics::bootstrap(0)
-        );
-        
+        let mut market = CategoryMarket::new(ProblemCategory::Sat3, &PricingMetrics::bootstrap(0));
+
         // Record varying prices
-        market.price_history.push(PricePoint { block: 1, price: 100, demand: 1, supply: 1 });
-        market.price_history.push(PricePoint { block: 2, price: 120, demand: 1, supply: 1 });
-        market.price_history.push(PricePoint { block: 3, price: 80, demand: 1, supply: 1 });
-        market.price_history.push(PricePoint { block: 4, price: 110, demand: 1, supply: 1 });
-        
+        market.price_history.push(PricePoint {
+            block: 1,
+            price: 100,
+            demand: 1,
+            supply: 1,
+        });
+        market.price_history.push(PricePoint {
+            block: 2,
+            price: 120,
+            demand: 1,
+            supply: 1,
+        });
+        market.price_history.push(PricePoint {
+            block: 3,
+            price: 80,
+            demand: 1,
+            supply: 1,
+        });
+        market.price_history.push(PricePoint {
+            block: 4,
+            price: 110,
+            demand: 1,
+            supply: 1,
+        });
+
         let volatility = market.calculate_volatility();
-        
+
         // Volatility should be a dimensionless ratio
-        assert!(volatility > 0.0 && volatility < 1.0,
-            "Volatility should be a ratio between 0 and 1: {}", volatility);
+        assert!(
+            volatility > 0.0 && volatility < 1.0,
+            "Volatility should be a ratio between 0 and 1: {}",
+            volatility
+        );
     }
 }

@@ -5,10 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ProblemType {
     /// Subset Sum: Given a set of integers, find subset that sums to target
-    SubsetSum {
-        numbers: Vec<i64>,
-        target: i64,
-    },
+    SubsetSum { numbers: Vec<i64>, target: i64 },
     /// SAT: Boolean satisfiability problem
     SAT {
         variables: usize,
@@ -20,10 +17,7 @@ pub enum ProblemType {
         distances: Vec<Vec<u64>>,
     },
     /// User-submitted custom problem
-    Custom {
-        problem_id: Hash,
-        data: Vec<u8>,
-    },
+    Custom { problem_id: Hash, data: Vec<u8> },
 }
 
 /// SAT clause (disjunction of literals)
@@ -60,13 +54,23 @@ impl Solution {
                 // Check if all clauses are satisfied
                 clauses.iter().all(|clause| {
                     clause.literals.iter().any(|&lit| {
-                        let var_idx = lit.abs() as usize - 1;
+                        let var_idx = lit.unsigned_abs() as usize - 1;
                         let value = assignment.get(var_idx).unwrap_or(&false);
-                        if lit > 0 { *value } else { !*value }
+                        if lit > 0 {
+                            *value
+                        } else {
+                            !*value
+                        }
                     })
                 })
             }
-            (Solution::TSP(tour), ProblemType::TSP { cities, distances: _ }) => {
+            (
+                Solution::TSP(tour),
+                ProblemType::TSP {
+                    cities,
+                    distances: _,
+                },
+            ) => {
                 // Verify tour visits all cities exactly once
                 tour.len() == *cities && {
                     let mut visited = vec![false; *cities];
@@ -89,7 +93,11 @@ impl Solution {
         match (self, problem) {
             (Solution::SubsetSum(_), ProblemType::SubsetSum { .. }) => {
                 // Exact solution gets 1.0
-                if self.verify(problem) { 1.0 } else { 0.0 }
+                if self.verify(problem) {
+                    1.0
+                } else {
+                    0.0
+                }
             }
             (Solution::TSP(tour), ProblemType::TSP { cities, distances }) => {
                 if !self.verify(problem) {
@@ -107,7 +115,11 @@ impl Solution {
             }
             (Solution::SAT(_), ProblemType::SAT { .. }) => {
                 // Exact solution gets 1.0
-                if self.verify(problem) { 1.0 } else { 0.0 }
+                if self.verify(problem) {
+                    1.0
+                } else {
+                    0.0
+                }
             }
             _ => 0.0,
         }

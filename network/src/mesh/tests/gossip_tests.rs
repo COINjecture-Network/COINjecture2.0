@@ -94,6 +94,10 @@ fn test_100k_message_dedup_performance() {
     for i in 0u32..100_000 {
         let mut id = [0u8; 32];
         id[..4].copy_from_slice(&i.to_be_bytes());
-        assert!(!engine.check_and_mark(&id), "message {} should be deduped", i);
+        assert!(
+            !engine.check_and_mark(&id),
+            "message {} should be deduped",
+            i
+        );
     }
 }

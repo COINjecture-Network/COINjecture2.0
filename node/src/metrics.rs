@@ -751,12 +751,7 @@ pub fn record_pool_swap(from_dimension: u8, to_dimension: u8, amount: u128) {
 }
 
 /// Update dimensional scale measurements
-pub fn update_dimensional_scales(
-    dimension: u8,
-    theoretical: f64,
-    observed: f64,
-    decay_rate: f64,
-) {
+pub fn update_dimensional_scales(dimension: u8, theoretical: f64, observed: f64, decay_rate: f64) {
     let dim_label = format!("D{}", dimension);
 
     DIMENSIONAL_SCALE
@@ -786,9 +781,7 @@ pub fn update_satoshi_constants(eta: f64, lambda: f64) {
 
 /// Record work score
 pub fn record_work_score(problem_type: &str, score: f64) {
-    WORK_SCORE
-        .with_label_values(&[problem_type])
-        .observe(score);
+    WORK_SCORE.with_label_values(&[problem_type]).observe(score);
 }
 
 /// Record problem submission
@@ -837,7 +830,7 @@ pub fn update_state_metrics(
 // Node Type Classification Metrics
 // =============================================================================
 
-use crate::node_types::{NodeType, NodeTypeStatus, ClassificationResult};
+use crate::node_types::{ClassificationResult, NodeType, NodeTypeStatus};
 
 /// Convert NodeType to numeric index for metrics
 fn node_type_to_index(node_type: NodeType) -> i64 {
@@ -873,7 +866,9 @@ pub fn update_node_type_scores(result: &ClassificationResult) {
             NodeType::Bounty => "bounty",
             NodeType::Oracle => "oracle",
         };
-        NODE_TYPE_SCORES.with_label_values(&[type_label]).set(*score);
+        NODE_TYPE_SCORES
+            .with_label_values(&[type_label])
+            .set(*score);
     }
 }
 

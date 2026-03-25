@@ -6,7 +6,6 @@
 
 use coinject_core::{Block, Hash};
 use coinject_state::AccountState;
-use serde_json;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -59,7 +58,7 @@ pub struct BlockValidator {
 impl BlockValidator {
     pub fn new(min_difficulty: u32) -> Self {
         BlockValidator {
-            min_work_score: 0.0,  // Allow all work scores (PoW hash is primary validation)
+            min_work_score: 0.0, // Allow all work scores (PoW hash is primary validation)
             min_difficulty,
             max_timestamp_drift: 120, // 2 minutes into future
             max_block_age: 7200,      // 2 hours old
@@ -98,7 +97,11 @@ impl BlockValidator {
             {
                 use std::fs::OpenOptions;
                 use std::io::Write;
-                                if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(crate::service::get_debug_log_path()) {
+                if let Ok(mut file) = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(crate::service::get_debug_log_path())
+                {
                     let log_entry = serde_json::json!({
                         "id": format!("log_{}_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(), block.header.height),
                         "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
@@ -125,7 +128,11 @@ impl BlockValidator {
         self.validate_timestamp(block.header.timestamp, skip_timestamp_age_check)?;
 
         // 4. Validate NP-hard solution
-        if !block.solution_reveal.solution.verify(&block.solution_reveal.problem) {
+        if !block
+            .solution_reveal
+            .solution
+            .verify(&block.solution_reveal.problem)
+        {
             return Err(ValidationError::InvalidSolution);
         }
 
@@ -143,7 +150,9 @@ impl BlockValidator {
 
         // 6. Validate work score
         if block.header.work_score < self.min_work_score {
-            return Err(ValidationError::InsufficientWorkScore(block.header.work_score));
+            return Err(ValidationError::InsufficientWorkScore(
+                block.header.work_score,
+            ));
         }
 
         // 7. Validate difficulty (block hash)
@@ -162,7 +171,11 @@ impl BlockValidator {
     }
 
     /// Validate block timestamp
-    fn validate_timestamp(&self, timestamp: i64, _skip_age_check: bool) -> Result<(), ValidationError> {
+    fn validate_timestamp(
+        &self,
+        timestamp: i64,
+        _skip_age_check: bool,
+    ) -> Result<(), ValidationError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -176,8 +189,10 @@ impl BlockValidator {
         // M0 FIX: REMOVED too old vs now rejection
         // Historical blocks are valid during sync
         let delta = now - timestamp;
-        println!("⏱️  [TIMESTAMP] block_ts={}, now_ts={}, delta={}s", timestamp, now, delta);
-
+        println!(
+            "⏱️  [TIMESTAMP] block_ts={}, now_ts={}, delta={}s",
+            timestamp, now, delta
+        );
 
         Ok(())
     }
@@ -188,10 +203,14 @@ impl BlockValidator {
         let hash_bincode = block.header.hash();
         let hash_bincode_hex = hex::encode(hash_bincode.as_bytes());
         let leading_zeros_bincode = hash_bincode_hex.chars().take_while(|&c| c == '0').count();
-        
-        println!("🔍 Difficulty check (bincode): hash={}... leading_zeros={}, required={}", 
-            &hash_bincode_hex[..16], leading_zeros_bincode, self.min_difficulty);
-        
+
+        println!(
+            "🔍 Difficulty check (bincode): hash={}... leading_zeros={}, required={}",
+            &hash_bincode_hex[..16],
+            leading_zeros_bincode,
+            self.min_difficulty
+        );
+
         if leading_zeros_bincode >= self.min_difficulty as usize {
             println!("✅ Block hash meets difficulty (bincode)");
             return Ok(());
@@ -201,21 +220,38 @@ impl BlockValidator {
         let hash_json = block.header.hash_from_json();
         let hash_json_hex = hex::encode(hash_json.as_bytes());
         let leading_zeros_json = hash_json_hex.chars().take_while(|&c| c == '0').count();
-        
+
         // Get the exact JSON bytes that were hashed (for debugging)
         let json_bytes = serde_json::to_vec(&block.header).unwrap_or_default();
         let json_string = String::from_utf8_lossy(&json_bytes);
-        
-        println!("🔍 Difficulty check (JSON): hash={}... leading_zeros={}, required={}", 
-            &hash_json_hex[..16], leading_zeros_json, self.min_difficulty);
+
+        println!(
+            "🔍 Difficulty check (JSON): hash={}... leading_zeros={}, required={}",
+            &hash_json_hex[..16],
+            leading_zeros_json,
+            self.min_difficulty
+        );
         println!("🔍 Full JSON hash: {}", hash_json_hex);
-        println!("📄 Header JSON (server hashed payload, {} bytes): {}", json_bytes.len(), json_string);
-        println!("📄 Header JSON bytes (first 200): {:?}", &json_bytes[..std::cmp::min(200, json_bytes.len())]);
-        
+        println!(
+            "📄 Header JSON (server hashed payload, {} bytes): {}",
+            json_bytes.len(),
+            json_string
+        );
+        println!(
+            "📄 Header JSON bytes (first 200): {:?}",
+            &json_bytes[..std::cmp::min(200, json_bytes.len())]
+        );
+
         if leading_zeros_json < self.min_difficulty as usize {
             println!("❌ Block hash does not meet difficulty (neither bincode nor JSON)");
-            println!("   Bincode hash: {} (leading_zeros={})", hash_bincode_hex, leading_zeros_bincode);
-            println!("   JSON hash: {} (leading_zeros={})", hash_json_hex, leading_zeros_json);
+            println!(
+                "   Bincode hash: {} (leading_zeros={})",
+                hash_bincode_hex, leading_zeros_bincode
+            );
+            println!(
+                "   JSON hash: {} (leading_zeros={})",
+                hash_json_hex, leading_zeros_json
+            );
             return Err(ValidationError::InsufficientDifficulty);
         }
 
@@ -343,11 +379,7 @@ impl BlockValidator {
     }
 
     /// Apply block to state (execute transactions)
-    pub fn apply_block(
-        &self,
-        block: &Block,
-        state: &AccountState,
-    ) -> Result<(), ValidationError> {
+    pub fn apply_block(&self, block: &Block, state: &AccountState) -> Result<(), ValidationError> {
         // Credit coinbase to miner
         let current_balance = state.get_balance(&block.header.miner);
         state
@@ -541,7 +573,13 @@ impl BlockValidator {
 
                     // Pattern match on channel operation type
                     match &channel_tx.channel_type {
-                        coinject_core::ChannelType::Open { participant_a, participant_b, deposit_a, deposit_b, .. } => {
+                        coinject_core::ChannelType::Open {
+                            participant_a,
+                            participant_b,
+                            deposit_a,
+                            deposit_b,
+                            ..
+                        } => {
                             // Verify both participants have sufficient deposits
                             let balance_a = state.get_balance(participant_a);
                             let balance_b = state.get_balance(participant_b);
@@ -575,13 +613,20 @@ impl BlockValidator {
                             // No balance changes needed
                             // TODO: Verify channel exists and signatures are valid
                         }
-                        coinject_core::ChannelType::CooperativeClose { final_balance_a: _, final_balance_b: _ } => {
+                        coinject_core::ChannelType::CooperativeClose {
+                            final_balance_a: _,
+                            final_balance_b: _,
+                        } => {
                             // TODO: Verify channel exists and signatures from both parties
                             // TODO: Credit final balances to participants
                             // Balances are u128 (Balance type), always non-negative
                             // TODO: Verify balances match channel capacity
                         }
-                        coinject_core::ChannelType::UnilateralClose { balance_a: _, balance_b: _, .. } => {
+                        coinject_core::ChannelType::UnilateralClose {
+                            balance_a: _,
+                            balance_b: _,
+                            ..
+                        } => {
                             // TODO: Verify channel exists and dispute proof
                             // TODO: Credit balances to participants after dispute period
                             // Balances are u128 (Balance type), always non-negative
@@ -735,7 +780,10 @@ impl BlockValidator {
                         _ => {
                             // Just deduct fee for other operations
                             state
-                                .set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                                .set_balance(
+                                    &marketplace_tx.from,
+                                    sender_balance - marketplace_tx.fee,
+                                )
                                 .map_err(|e| ValidationError::StateError(format!("{:?}", e)))?;
                         }
                     }

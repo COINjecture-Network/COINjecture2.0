@@ -9,14 +9,14 @@ use std::collections::HashMap;
 /// Allocation across 8 dimensions with time locks
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DimensionalAllocation {
-    pub immediate: Balance,           // D1: Immediate liquidity (56.1%)
-    pub short_term: Balance,          // D2: 7-day lock (48.6%)
-    pub bounty_pool: Balance,         // D3: 14-day lock (42.1%)
-    pub treasury: Balance,            // D4: 24-day lock (34.7%)
-    pub development: Balance,         // D5: 35-day lock (28.1%)
-    pub long_term: Balance,           // D6: 48-day lock (21.4%)
-    pub strategic: Balance,           // D7: 69-day lock (14.0%)
-    pub foundation: Balance,          // D8: 96-day lock (8.2%)
+    pub immediate: Balance,   // D1: Immediate liquidity (56.1%)
+    pub short_term: Balance,  // D2: 7-day lock (48.6%)
+    pub bounty_pool: Balance, // D3: 14-day lock (42.1%)
+    pub treasury: Balance,    // D4: 24-day lock (34.7%)
+    pub development: Balance, // D5: 35-day lock (28.1%)
+    pub long_term: Balance,   // D6: 48-day lock (21.4%)
+    pub strategic: Balance,   // D7: 69-day lock (14.0%)
+    pub foundation: Balance,  // D8: 96-day lock (8.2%)
 }
 
 impl DimensionalAllocation {

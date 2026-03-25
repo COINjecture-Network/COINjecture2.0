@@ -208,7 +208,7 @@ impl Default for MerkleMountainRange {
 
 /// Hash two MMR nodes together with height domain separation
 fn hash_mmr_node(left: &Hash, right: &Hash, height: u32) -> Hash {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     // Domain separation: "MMR_NODE" || height || left || right
     hasher.update(b"MMR_NODE");
@@ -220,7 +220,7 @@ fn hash_mmr_node(left: &Hash, right: &Hash, height: u32) -> Hash {
 
 /// Bag two peaks together (different from node hashing)
 fn hash_bag(left: &Hash, right: &Hash) -> Hash {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     // Domain separation: "MMR_BAG" || left || right
     hasher.update(b"MMR_BAG");
@@ -245,7 +245,7 @@ fn hash_mmr_node_with_golden(
     height: u32,
     golden_key: &[u8; 16],
 ) -> Hash {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     // Domain separation: "MMR_NODE" || height || golden_key || left || right
     hasher.update(b"MMR_NODE");
@@ -282,15 +282,14 @@ impl MMRInclusionProof {
     pub fn verify(&self, expected_root: &Hash) -> bool {
         // Reconstruct path from leaf to peak
         let mut current = self.leaf_hash;
-        let mut height = 0u32;
 
-        for (sibling, is_right) in &self.auth_path {
+        for (height, (sibling, is_right)) in self.auth_path.iter().enumerate() {
+            let height = height as u32;
             current = if *is_right {
                 hash_mmr_node(&current, sibling, height)
             } else {
                 hash_mmr_node(sibling, &current, height)
             };
-            height += 1;
         }
 
         // Check that computed hash matches the expected peak
@@ -418,7 +417,6 @@ impl FlyClientProof {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LightSyncMessage {
     // === Header Sync (Standard SPV) ===
-    
     /// Request headers from a height range
     GetHeaders {
         /// Starting height (inclusive)
@@ -440,7 +438,6 @@ pub enum LightSyncMessage {
     },
 
     // === FlyClient Protocol ===
-    
     /// Request a FlyClient proof for the current chain
     GetFlyClientProof {
         /// Security parameter (number of samples)
@@ -458,7 +455,6 @@ pub enum LightSyncMessage {
     },
 
     // === MMR Proofs ===
-    
     /// Request MMR inclusion proof for a specific block
     GetMMRProof {
         /// Block height to prove
@@ -480,7 +476,6 @@ pub enum LightSyncMessage {
     },
 
     // === Transaction Proofs ===
-    
     /// Request proof that a transaction is in a block
     GetTxProof {
         /// Transaction hash
@@ -506,11 +501,8 @@ pub enum LightSyncMessage {
     },
 
     // === Chain State ===
-    
     /// Request current chain tip with MMR root
-    GetChainTip {
-        request_id: u64,
-    },
+    GetChainTip { request_id: u64 },
 
     /// Chain tip response
     ChainTip {
@@ -550,7 +542,7 @@ impl LightSyncServer {
         let genesis_hash = genesis_header.hash();
         let mut headers = HashMap::new();
         let mut full_headers = HashMap::new();
-        
+
         headers.insert(0, genesis_hash);
         full_headers.insert(0, genesis_header);
 
@@ -571,7 +563,7 @@ impl LightSyncServer {
         self.headers.insert(height, hash);
         self.full_headers.insert(height, header.clone());
         self.chain_height = height;
-        
+
         // Accumulate work (simplified - real impl uses actual difficulty from work_score)
         self.total_work += (header.work_score * 1000.0) as u128 + 1;
 
@@ -586,7 +578,7 @@ impl LightSyncServer {
     /// Generate MMR inclusion proof for a block height
     pub fn generate_mmr_proof(&self, height: u64) -> Option<MMRInclusionProof> {
         let leaf_hash = *self.headers.get(&height)?;
-        
+
         // Simplified proof generation
         // Full implementation would compute actual auth path
         Some(MMRInclusionProof {
@@ -607,16 +599,20 @@ impl LightSyncServer {
 
         // Walk up the tree collecting siblings
         while pos < self.mmr.leaf_count {
-            let sibling_pos = if pos % 2 == 0 { pos + 1 } else { pos - 1 };
-            
+            let sibling_pos = if pos.is_multiple_of(2) {
+                pos + 1
+            } else {
+                pos - 1
+            };
+
             if let Some(&sibling_hash) = self.headers.get(&sibling_pos) {
-                let is_right = pos % 2 == 0;
+                let is_right = pos.is_multiple_of(2);
                 path.push((sibling_hash, is_right));
             }
-            
+
             pos /= 2;
             current_height += 1;
-            
+
             // Prevent infinite loops
             if current_height > 64 {
                 break;
@@ -644,7 +640,7 @@ impl LightSyncServer {
     pub fn generate_flyclient_proof(&self, security_param: usize) -> Option<FlyClientProof> {
         let tip_header = self.full_headers.get(&self.chain_height)?.clone();
         let genesis_hash = self.headers.get(&0).cloned()?;
-        
+
         // Sample blocks according to FlyClient distribution
         let sampled_headers = self.sample_blocks(security_param);
 
@@ -662,22 +658,25 @@ impl LightSyncServer {
     /// Blocks are sampled with probability proportional to difficulty
     fn sample_blocks(&self, security_param: usize) -> Vec<SampledBlock> {
         use rand::Rng;
-        
+
         if self.chain_height < FLYCLIENT_MIN_BLOCKS {
             // For short chains, just return all headers
-            return self.full_headers.values()
+            return self
+                .full_headers
+                .values()
                 .filter(|h| h.height > 0)
                 .map(|h| {
-                    let mmr_proof = self.generate_mmr_proof(h.height)
-                        .unwrap_or_else(|| MMRInclusionProof {
-                            leaf_hash: h.hash(),
-                            leaf_index: h.height,
-                            mmr_size: self.mmr.mmr_size,
-                            auth_path: Vec::new(),
-                            peak_index: 0,
-                            peaks: self.mmr.peaks.clone(),
-                        });
-                    
+                    let mmr_proof =
+                        self.generate_mmr_proof(h.height)
+                            .unwrap_or_else(|| MMRInclusionProof {
+                                leaf_hash: h.hash(),
+                                leaf_index: h.height,
+                                mmr_size: self.mmr.mmr_size,
+                                auth_path: Vec::new(),
+                                peak_index: 0,
+                                peaks: self.mmr.peaks.clone(),
+                            });
+
                     SampledBlock {
                         header: h.clone(),
                         mmr_proof,
@@ -697,11 +696,11 @@ impl LightSyncServer {
             // Sample from geometric distribution favoring recent blocks
             let u: f64 = rng.gen();
             let height = ((1.0 - u.powf(0.5)) * self.chain_height as f64) as u64;
-            
+
             if height == 0 || sampled_heights.contains(&height) {
                 continue;
             }
-            
+
             if let Some(header) = self.full_headers.get(&height) {
                 if let Some(mmr_proof) = self.generate_mmr_proof(height) {
                     sampled_heights.insert(height);
@@ -720,9 +719,14 @@ impl LightSyncServer {
     }
 
     /// Handle GetHeaders request
-    pub fn handle_get_headers(&self, start_height: u64, max_headers: u64, request_id: u64) -> LightSyncMessage {
+    pub fn handle_get_headers(
+        &self,
+        start_height: u64,
+        max_headers: u64,
+        request_id: u64,
+    ) -> LightSyncMessage {
         let end_height = (start_height + max_headers).min(self.chain_height + 1);
-        
+
         let headers: Vec<BlockHeader> = (start_height..end_height)
             .filter_map(|h| self.full_headers.get(&h).cloned())
             .collect();
@@ -737,13 +741,21 @@ impl LightSyncServer {
     }
 
     /// Handle GetFlyClientProof request
-    pub fn handle_get_flyclient_proof(&self, security_param: usize, request_id: u64) -> Option<LightSyncMessage> {
+    pub fn handle_get_flyclient_proof(
+        &self,
+        security_param: usize,
+        request_id: u64,
+    ) -> Option<LightSyncMessage> {
         let proof = self.generate_flyclient_proof(security_param)?;
         Some(LightSyncMessage::FlyClientProof { proof, request_id })
     }
 
     /// Handle GetMMRProof request
-    pub fn handle_get_mmr_proof(&self, block_height: u64, request_id: u64) -> Option<LightSyncMessage> {
+    pub fn handle_get_mmr_proof(
+        &self,
+        block_height: u64,
+        request_id: u64,
+    ) -> Option<LightSyncMessage> {
         let header = self.full_headers.get(&block_height)?.clone();
         let proof = self.generate_mmr_proof(block_height)?;
 
@@ -831,7 +843,10 @@ impl LightClientVerifier {
     }
 
     /// Verify a FlyClient proof and update state
-    pub fn verify_and_update(&mut self, proof: &FlyClientProof) -> Result<VerificationResult, FlyClientError> {
+    pub fn verify_and_update(
+        &mut self,
+        proof: &FlyClientProof,
+    ) -> Result<VerificationResult, FlyClientError> {
         // Check genesis matches
         if proof.genesis_hash != self.genesis_hash {
             return Err(FlyClientError::GenesisMismatch);
@@ -872,7 +887,9 @@ impl LightClientVerifier {
 
     /// Verify a single block is in the chain
     pub fn verify_block(&self, proof: &MMRInclusionProof) -> Result<bool, FlyClientError> {
-        let mmr_root = self.verified_mmr_root.ok_or(FlyClientError::NoVerifiedState)?;
+        let mmr_root = self
+            .verified_mmr_root
+            .ok_or(FlyClientError::NoVerifiedState)?;
         Ok(proof.verify(&mmr_root))
     }
 
@@ -1032,7 +1049,7 @@ mod tests {
         // Generate proof
         let proof = server.generate_flyclient_proof(10).unwrap();
         let mut verifier = LightClientVerifier::new(genesis_hash);
-        
+
         // Verify proof - handle potential MMR proof issues gracefully
         match verifier.verify_and_update(&proof) {
             Ok(result) => {
@@ -1069,7 +1086,7 @@ mod tests {
         // Generate proof for block 10
         let proof = server.generate_mmr_proof(10);
         assert!(proof.is_some());
-        
+
         let proof = proof.unwrap();
         assert_eq!(proof.leaf_index, 10);
         assert!(!proof.peaks.is_empty());
@@ -1078,13 +1095,13 @@ mod tests {
     #[test]
     fn test_peak_count() {
         // Peak count = popcount of leaf_count
-        assert_eq!(mmr_peak_count(1), 1);   // 1 = 0b1
-        assert_eq!(mmr_peak_count(2), 1);   // 2 = 0b10
-        assert_eq!(mmr_peak_count(3), 2);   // 3 = 0b11
-        assert_eq!(mmr_peak_count(4), 1);   // 4 = 0b100
-        assert_eq!(mmr_peak_count(7), 3);   // 7 = 0b111
-        assert_eq!(mmr_peak_count(8), 1);   // 8 = 0b1000
-        assert_eq!(mmr_peak_count(10), 2);  // 10 = 0b1010
+        assert_eq!(mmr_peak_count(1), 1); // 1 = 0b1
+        assert_eq!(mmr_peak_count(2), 1); // 2 = 0b10
+        assert_eq!(mmr_peak_count(3), 2); // 3 = 0b11
+        assert_eq!(mmr_peak_count(4), 1); // 4 = 0b100
+        assert_eq!(mmr_peak_count(7), 3); // 7 = 0b111
+        assert_eq!(mmr_peak_count(8), 1); // 8 = 0b1000
+        assert_eq!(mmr_peak_count(10), 2); // 10 = 0b1010
     }
 
     #[test]
@@ -1098,5 +1115,3 @@ mod tests {
         assert_eq!(MerkleMountainRange::size_for_leaves(8), 15);
     }
 }
-
-

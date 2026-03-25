@@ -21,14 +21,14 @@ const TRUSTLINES_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("tr
 
 /// Eight dimensional economic scales for trustlines (time points in years)
 const TRUSTLINE_DIMENSIONAL_SCALES: [(u8, f64, &str); 8] = [
-    (1, 1.0, "Genesis"),           // D₁ = e^(-η·1)
-    (2, 2.0, "Coupling"),          // D₂ = e^(-η·2)
-    (3, 3.0, "First Harmonic"),    // D₃ = e^(-η·3)
-    (4, 3.819660, "Golden Ratio"), // D₄ = e^(-η·φ^(-1)·6)
-    (5, 6.0, "Half-Scale"),        // D₅ = e^(-η·6)
+    (1, 1.0, "Genesis"),            // D₁ = e^(-η·1)
+    (2, 2.0, "Coupling"),           // D₂ = e^(-η·2)
+    (3, 3.0, "First Harmonic"),     // D₃ = e^(-η·3)
+    (4, 3.819660, "Golden Ratio"),  // D₄ = e^(-η·φ^(-1)·6)
+    (5, 6.0, "Half-Scale"),         // D₅ = e^(-η·6)
     (6, 7.639320, "Second Golden"), // D₆ = e^(-η·φ^(-1)·12)
-    (7, 12.0, "Quarter-Scale"),    // D₇ = e^(-η·12)
-    (8, 16.309842, "Euler"),       // D₈ = e^(-η·e·6)
+    (7, 12.0, "Quarter-Scale"),     // D₇ = e^(-η·12)
+    (8, 16.309842, "Euler"),        // D₈ = e^(-η·e·6)
 ];
 
 /// TrustLine status
@@ -122,14 +122,22 @@ impl TrustLine {
     /// Get available credit for A to lend to B
     pub fn available_credit_a(&self) -> Balance {
         let effective_limit = self.effective_limit_a_to_b();
-        let used = if self.balance > 0 { self.balance as Balance } else { 0 };
+        let used = if self.balance > 0 {
+            self.balance as Balance
+        } else {
+            0
+        };
         effective_limit.saturating_sub(used)
     }
 
     /// Get available credit for B to lend to A
     pub fn available_credit_b(&self) -> Balance {
         let effective_limit = self.effective_limit_b_to_a();
-        let used = if self.balance < 0 { (-self.balance) as Balance } else { 0 };
+        let used = if self.balance < 0 {
+            (-self.balance) as Balance
+        } else {
+            0
+        };
         effective_limit.saturating_sub(used)
     }
 
@@ -338,11 +346,7 @@ impl TrustLineState {
     }
 
     /// Freeze trustline
-    pub fn freeze_trustline(
-        &self,
-        trustline_id: &Hash,
-        block_height: u64,
-    ) -> Result<(), String> {
+    pub fn freeze_trustline(&self, trustline_id: &Hash, block_height: u64) -> Result<(), String> {
         let mut trustline = self
             .get_trustline(trustline_id)
             .ok_or("TrustLine not found".to_string())?;
@@ -356,11 +360,7 @@ impl TrustLineState {
     }
 
     /// Close trustline (requires zero balance)
-    pub fn close_trustline(
-        &self,
-        trustline_id: &Hash,
-        block_height: u64,
-    ) -> Result<(), String> {
+    pub fn close_trustline(&self, trustline_id: &Hash, block_height: u64) -> Result<(), String> {
         let mut trustline = self
             .get_trustline(trustline_id)
             .ok_or("TrustLine not found".to_string())?;
@@ -386,7 +386,9 @@ impl TrustLineState {
                 for item in table.iter().ok().into_iter().flatten() {
                     if let Ok((_, value)) = item {
                         if let Ok(trustline) = bincode::deserialize::<TrustLine>(value.value()) {
-                            if trustline.is_participant(address) && trustline.status == TrustLineStatus::Active {
+                            if trustline.is_participant(address)
+                                && trustline.status == TrustLineStatus::Active
+                            {
                                 trustlines.push(trustline);
                             }
                         }
@@ -409,8 +411,10 @@ impl TrustLineState {
                 for item in table.iter().ok().into_iter().flatten() {
                     if let Ok((_, value)) = item {
                         if let Ok(trustline) = bincode::deserialize::<TrustLine>(value.value()) {
-                            if (trustline.account_a == *account_a && trustline.account_b == *account_b)
-                                || (trustline.account_a == *account_b && trustline.account_b == *account_a)
+                            if (trustline.account_a == *account_a
+                                && trustline.account_b == *account_b)
+                                || (trustline.account_a == *account_b
+                                    && trustline.account_b == *account_a)
                             {
                                 return Some(trustline);
                             }
@@ -431,7 +435,9 @@ impl TrustLineState {
                 for item in table.iter().ok().into_iter().flatten() {
                     if let Ok((_, value)) = item {
                         if let Ok(trustline) = bincode::deserialize::<TrustLine>(value.value()) {
-                            if trustline.dimensional_scale == dimension && trustline.status == TrustLineStatus::Active {
+                            if trustline.dimensional_scale == dimension
+                                && trustline.status == TrustLineStatus::Active
+                            {
                                 trustlines.push(trustline);
                             }
                         }

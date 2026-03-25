@@ -2,8 +2,8 @@
 // Tests the full lifecycle of private bounty submissions
 
 use coinject_core::{
-    Address, Balance, Hash, ProblemType, Solution,
-    SubmissionMode, ProblemReveal, WellformednessProof, ProblemParameters,
+    Address, Balance, Hash, ProblemParameters, ProblemReveal, ProblemType, Solution,
+    SubmissionMode, WellformednessProof,
 };
 use coinject_state::{MarketplaceState, ProblemStatus};
 use std::sync::Arc;
@@ -76,7 +76,10 @@ fn test_private_bounty_full_lifecycle() {
     assert_eq!(stored_problem.bounty, bounty);
     assert_eq!(stored_problem.status, ProblemStatus::Open);
     assert!(stored_problem.problem_reveal.is_none()); // Not revealed yet
-    assert!(matches!(stored_problem.submission_mode, SubmissionMode::Private { .. }));
+    assert!(matches!(
+        stored_problem.submission_mode,
+        SubmissionMode::Private { .. }
+    ));
 
     // 4. Attempt to submit solution before reveal (should fail)
     let solver = Address::from_bytes([2u8; 32]);
@@ -226,20 +229,20 @@ fn test_public_vs_private_modes() {
         .expect("Failed to submit private problem");
 
     // Verify public problem is immediately solvable
-    let public_submission = marketplace
-        .get_problem(&public_id)
-        .unwrap()
-        .unwrap();
+    let public_submission = marketplace.get_problem(&public_id).unwrap().unwrap();
 
-    assert!(matches!(public_submission.submission_mode, SubmissionMode::Public { .. }));
+    assert!(matches!(
+        public_submission.submission_mode,
+        SubmissionMode::Public { .. }
+    ));
 
     // Verify private problem requires reveal
-    let private_submission = marketplace
-        .get_problem(&private_id)
-        .unwrap()
-        .unwrap();
+    let private_submission = marketplace.get_problem(&private_id).unwrap().unwrap();
 
-    assert!(matches!(private_submission.submission_mode, SubmissionMode::Private { .. }));
+    assert!(matches!(
+        private_submission.submission_mode,
+        SubmissionMode::Private { .. }
+    ));
     assert!(private_submission.problem_reveal.is_none());
 }
 
@@ -393,7 +396,13 @@ fn test_public_subset_sum_mvp_flow() {
     let expiration_days = 7;
 
     let problem_id = marketplace
-        .submit_public_problem(problem.clone(), submitter, bounty, min_work_score, expiration_days)
+        .submit_public_problem(
+            problem.clone(),
+            submitter,
+            bounty,
+            min_work_score,
+            expiration_days,
+        )
         .expect("Failed to submit SubsetSum problem");
 
     println!("Problem ID: {:?}", problem_id);
@@ -469,7 +478,10 @@ fn test_invalid_solution_rejected() {
 
     // Invalid solution: indices [0, 1] -> 10+20=30 != 50
     let bad_solution = Solution::SubsetSum(vec![0, 1]);
-    assert!(!bad_solution.verify(&problem), "Bad solution should fail verification");
+    assert!(
+        !bad_solution.verify(&problem),
+        "Bad solution should fail verification"
+    );
 
     let result = marketplace.submit_solution(problem_id, solver, bad_solution);
     assert!(result.is_err(), "Invalid solution should be rejected");
@@ -506,7 +518,9 @@ fn test_multiple_subset_sum_problems() {
     }
 
     // Verify all problems are open
-    let open = marketplace.get_open_problems().expect("Failed to get open problems");
+    let open = marketplace
+        .get_open_problems()
+        .expect("Failed to get open problems");
     assert_eq!(open.len(), 3);
 
     // Verify total bounty pool

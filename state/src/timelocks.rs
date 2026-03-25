@@ -2,8 +2,8 @@
 // Funds locked until specific Unix timestamp
 
 use coinject_core::{Address, Balance, Hash};
-use serde::{Deserialize, Serialize};
 use redb::{Database, ReadableTable, TableDefinition};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 // Table definition for timelocks
@@ -50,15 +50,20 @@ impl TimeLockState {
         let value = bincode::serialize(&timelock)
             .map_err(|e| format!("Failed to serialize timelock: {}", e))?;
 
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| format!("Failed to begin write: {}", e))?;
         {
-            let mut table = write_txn.open_table(TIMELOCKS_TABLE)
+            let mut table = write_txn
+                .open_table(TIMELOCKS_TABLE)
                 .map_err(|e| format!("Failed to open table: {}", e))?;
-            table.insert(&key[..], value.as_slice())
+            table
+                .insert(&key[..], value.as_slice())
                 .map_err(|e| format!("Failed to insert timelock: {}", e))?;
         }
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| format!("Failed to commit: {}", e))?;
 
         Ok(())
@@ -78,15 +83,20 @@ impl TimeLockState {
     pub fn remove_timelock(&self, tx_hash: &Hash) -> Result<(), String> {
         let key = Self::make_key(tx_hash);
 
-        let write_txn = self.db.begin_write()
+        let write_txn = self
+            .db
+            .begin_write()
             .map_err(|e| format!("Failed to begin write: {}", e))?;
         {
-            let mut table = write_txn.open_table(TIMELOCKS_TABLE)
+            let mut table = write_txn
+                .open_table(TIMELOCKS_TABLE)
                 .map_err(|e| format!("Failed to open table: {}", e))?;
-            table.remove(&key[..])
+            table
+                .remove(&key[..])
                 .map_err(|e| format!("Failed to remove timelock: {}", e))?;
         }
-        write_txn.commit()
+        write_txn
+            .commit()
             .map_err(|e| format!("Failed to commit: {}", e))?;
 
         Ok(())

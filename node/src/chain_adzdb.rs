@@ -1,5 +1,5 @@
 //! ADZDB-backed Chain State Manager
-//! 
+//!
 //! Alternative to redb-based chain.rs, using the custom ADZDB database
 //! designed specifically for blockchain data.
 //!
@@ -7,12 +7,12 @@
 
 #![cfg(feature = "adzdb")]
 
+use adzdb::{Config as AdzConfig, Database as AdzDatabase, Error as AdzError};
 use coinject_core::{Block, BlockHeader, Hash};
-use adzdb::{Database as AdzDatabase, Config as AdzConfig, Error as AdzError};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 #[derive(Error, Debug)]
 pub enum ChainError {
@@ -52,20 +52,21 @@ impl AdzdbChainState {
         // If path is a file (like chain.db), use its parent directory
         // Otherwise use the path directly
         let base_path = if path.as_ref().is_file() {
-            path.as_ref().parent()
+            path.as_ref()
+                .parent()
                 .ok_or_else(|| ChainError::AdzdbError("Cannot get parent directory".to_string()))?
         } else {
             path.as_ref()
         };
-        
+
         let adzdb_path = base_path.join("adzdb");
         let config = AdzConfig::new(&adzdb_path);
-        
+
         let genesis_hash = genesis_block.header.hash();
-        
+
         // Create or open database
         let mut db = AdzDatabase::open_or_create(config)?;
-        
+
         // Check if genesis exists
         if db.contains_height(0) {
             // Verify genesis hash matches
@@ -79,7 +80,7 @@ impl AdzdbChainState {
             db.put(genesis_hash.as_bytes(), 0, &block_bytes)?;
             println!("🗄️  ADZDB: Stored genesis block");
         }
-        
+
         // Load best height and hash
         let best_height = db.latest_height();
         let best_hash_bytes = if best_height > 0 {
@@ -88,9 +89,13 @@ impl AdzdbChainState {
             *genesis_hash.as_bytes()
         };
         let best_hash = Hash::from_bytes(best_hash_bytes);
-        
-        println!("🗄️  ADZDB ChainState: height={}, entries={}", best_height, db.entry_count());
-        
+
+        println!(
+            "🗄️  ADZDB ChainState: height={}, entries={}",
+            best_height,
+            db.entry_count()
+        );
+
         Ok(AdzdbChainState {
             db: Arc::new(RwLock::new(db)),
             best_height: Arc::new(RwLock::new(best_height)),
@@ -106,7 +111,7 @@ impl AdzdbChainState {
 
         // Serialize block
         let block_bytes = bincode::serialize(block)?;
-        
+
         // Store in ADZDB
         {
             let mut db = self.db.write().await;
@@ -121,7 +126,10 @@ impl AdzdbChainState {
             *self.best_height.write().await = block_height;
             *self.best_hash.write().await = block_hash;
 
-            println!("🗄️  ADZDB: New best block height={} hash={:?}", block_height, block_hash);
+            println!(
+                "🗄️  ADZDB: New best block height={} hash={:?}",
+                block_height, block_hash
+            );
             return Ok(true);
         }
 
@@ -131,7 +139,7 @@ impl AdzdbChainState {
     /// Get block by hash (sync for compatibility with ChainState)
     pub fn get_block_by_hash(&self, hash: &Hash) -> Result<Option<Block>, ChainError> {
         let db = futures::executor::block_on(self.db.read());
-        
+
         match db.get(hash.as_bytes()) {
             Ok(bytes) => {
                 let block: Block = bincode::deserialize(&bytes)?;
@@ -147,7 +155,7 @@ impl AdzdbChainState {
         // Note: This is sync because it's called from sync contexts
         // In production, would use tokio::runtime::Handle
         let db = futures::executor::block_on(self.db.read());
-        
+
         match db.get_by_height(height) {
             Ok(bytes) => {
                 let block: Block = bincode::deserialize(&bytes)?;
@@ -201,7 +209,11 @@ impl AdzdbChainState {
     }
 
     /// Find common ancestor between current best chain and a target block
-    pub async fn find_common_ancestor(&self, target_hash: &Hash, target_height: u64) -> Result<Option<(Hash, u64)>, ChainError> {
+    pub async fn find_common_ancestor(
+        &self,
+        target_hash: &Hash,
+        target_height: u64,
+    ) -> Result<Option<(Hash, u64)>, ChainError> {
         let current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
 
@@ -255,7 +267,13 @@ impl AdzdbChainState {
     }
 
     /// Get chain path from start to end (sync for compatibility)
-    pub fn get_chain_path(&self, start_hash: &Hash, start_height: u64, end_hash: &Hash, end_height: u64) -> Result<Vec<Block>, ChainError> {
+    pub fn get_chain_path(
+        &self,
+        start_hash: &Hash,
+        start_height: u64,
+        end_hash: &Hash,
+        end_height: u64,
+    ) -> Result<Vec<Block>, ChainError> {
         if start_height > end_height {
             return Ok(Vec::new());
         }
@@ -276,7 +294,7 @@ impl AdzdbChainState {
         while current_height <= end_height {
             if let Some(block) = self.get_block_by_hash(&current_hash)? {
                 path.push(block.clone());
-                
+
                 if current_hash == *end_hash {
                     break;
                 }
@@ -309,11 +327,18 @@ impl AdzdbChainState {
 
     /// Reorganize chain to a new best block
     /// Returns (old_chain_blocks, new_chain_blocks) for state unwinding/reapplying
-    pub async fn prepare_reorganization(&self, new_best_hash: &Hash, new_best_height: u64) -> Result<(Vec<Block>, Vec<Block>), ChainError> {
+    pub async fn prepare_reorganization(
+        &self,
+        new_best_hash: &Hash,
+        new_best_height: u64,
+    ) -> Result<(Vec<Block>, Vec<Block>), ChainError> {
         let current_best_height = self.best_block_height().await;
 
         // Find common ancestor
-        let (_common_hash, common_height) = match self.find_common_ancestor(new_best_hash, new_best_height).await? {
+        let (_common_hash, common_height) = match self
+            .find_common_ancestor(new_best_hash, new_best_height)
+            .await?
+        {
             Some((hash, height)) => (hash, height),
             None => {
                 // No common ancestor found, can't reorganize
@@ -345,7 +370,11 @@ impl AdzdbChainState {
     }
 
     /// Update best chain to new block (after reorganization)
-    pub async fn update_best_chain(&self, new_best_hash: Hash, new_best_height: u64) -> Result<(), ChainError> {
+    pub async fn update_best_chain(
+        &self,
+        new_best_hash: Hash,
+        new_best_height: u64,
+    ) -> Result<(), ChainError> {
         *self.best_height.write().await = new_best_height;
         *self.best_hash.write().await = new_best_hash;
 
@@ -355,7 +384,10 @@ impl AdzdbChainState {
             db.sync()?;
         }
 
-        println!("🗄️  ADZDB: Chain reorganized to height={} hash={:?}", new_best_height, new_best_hash);
+        println!(
+            "🗄️  ADZDB: Chain reorganized to height={} hash={:?}",
+            new_best_height, new_best_hash
+        );
         Ok(())
     }
 
@@ -400,10 +432,7 @@ impl ChainBlockProvider {
     /// Create new block provider wrapping a ChainState
     pub fn new(chain: std::sync::Arc<AdzdbChainState>) -> Self {
         let best_height = chain.best_height_ref();
-        ChainBlockProvider {
-            chain,
-            best_height,
-        }
+        ChainBlockProvider { chain, best_height }
     }
 }
 
@@ -412,7 +441,10 @@ impl BlockProvider for ChainBlockProvider {
         match self.chain.get_block_by_height(height) {
             Ok(block) => block,
             Err(e) => {
-                eprintln!("[BlockProvider] Error fetching block at height {}: {}", height, e);
+                eprintln!(
+                    "[BlockProvider] Error fetching block at height {}: {}",
+                    height, e
+                );
                 None
             }
         }
@@ -421,9 +453,7 @@ impl BlockProvider for ChainBlockProvider {
     fn get_best_height(&self) -> u64 {
         // Use blocking read since BlockProvider is sync
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                *self.best_height.read().await
-            })
+            tokio::runtime::Handle::current().block_on(async { *self.best_height.read().await })
         })
     }
 }
@@ -462,4 +492,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
-
