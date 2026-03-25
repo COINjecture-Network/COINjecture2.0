@@ -3,7 +3,7 @@
 
 use coinject_core::{
     Address, Block, BlockHeader, Clause, CoinbaseTransaction, Commitment, Hash, ProblemType,
-    Solution, SolutionReveal, Transaction,
+    Solution, SolutionReveal, Transaction, unix_now_secs,
 };
 use coinject_tokenomics::{RewardCalculator, NetworkMetrics};
 use crate::{WorkScoreCalculator, DifficultyAdjuster};
@@ -11,7 +11,7 @@ use crate::problem_registry::SharedRegistry;
 use rand::Rng;
 use rand::seq::SliceRandom;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 const MAX_MINING_ATTEMPTS: usize = 5;
@@ -280,7 +280,8 @@ fn solve_tsp_blocking(cities: usize, distances: &[Vec<u64>], memory: &mut usize)
     visited[0] = true;
 
     while tour.len() < cities {
-        let current = *tour.last().unwrap();
+        // SAFETY: tour always has at least one element because we push(0) before the loop.
+        let current = *tour.last().expect("tour invariant: always non-empty after initial push");
         let mut best_next = None;
         let mut best_dist = u64::MAX;
 
@@ -420,7 +421,9 @@ impl Miner {
         }
 
         // Create seeded RNG - deterministic across all nodes
-        let seed = u64::from_le_bytes(seed_bytes[0..8].try_into().unwrap());
+        // SAFETY: seed_bytes is exactly 32 bytes; slicing to [0..8] always yields exactly 8 bytes.
+        let seed = u64::from_le_bytes(seed_bytes[0..8].try_into()
+            .expect("seed_bytes is [u8;32]; 8-byte slice always succeeds"));
         let mut rng = StdRng::seed_from_u64(seed);
 
         // Calculate dimensionless time τ = block_height / τ_c
@@ -1014,16 +1017,10 @@ impl Miner {
             // Subsequent blocks: Use current time, but ensure it's >= parent + 1
             // Note: We don't have parent block here, so we use current time
             // The validator will enforce timestamp ordering
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64
+            unix_now_secs() as i64
         };
         // M1.1 DEBUG: Log mined timestamp vs current time
-        let now_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now_ts = unix_now_secs() as i64;
         let delta = now_ts - timestamp;
         println!("⏱️  [MINER] height={} mined_ts={} now_ts={} delta={}s", height, timestamp, now_ts, delta);
 
@@ -1254,10 +1251,7 @@ pub fn build_block_from_solution(
     let timestamp = if height == 1 {
         1735689601i64
     } else {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64
+        unix_now_secs() as i64
     };
 
     // Merkle root

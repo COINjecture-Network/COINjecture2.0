@@ -248,7 +248,7 @@ impl Blockchain {
     }
 
     pub fn tip(&self) -> &Block {
-        self.blocks.last().unwrap()
+        self.blocks.last().expect("blockchain invariant: chain always contains at least the genesis block")
     }
 
     pub fn get_block(&self, height: BlockHeight) -> Option<&Block> {

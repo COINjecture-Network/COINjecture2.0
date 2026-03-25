@@ -436,7 +436,9 @@ impl DimensionalPoolState {
         while let Some(Ok((height, bytes))) = iter.next() {
             if let Ok(state) = bincode::deserialize::<ConsensusState>(bytes.value()) {
                 let h = height.value();
-                if latest.is_none() || h > latest.as_ref().unwrap().0 {
+                // SAFETY: we just checked `latest.is_none()` above, so if we reach the
+                // second condition `latest` is guaranteed to be `Some`.
+                if latest.is_none() || h > latest.as_ref().expect("checked is_none above").0 {
                     latest = Some((h, state));
                 }
             }

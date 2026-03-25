@@ -223,10 +223,7 @@ pub struct ProblemReveal {
 impl ProblemReveal {
     /// Create a new problem reveal
     pub fn new(problem: ProblemType, salt: [u8; 32]) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = crate::unix_now_secs_i64();
 
         ProblemReveal {
             problem,

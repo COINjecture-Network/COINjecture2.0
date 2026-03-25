@@ -2,7 +2,7 @@
 // Connects marketplace problems to mining rewards with D3 bounty pool
 
 use crate::marketplace::ProblemMarketplace;
-use coinject_core::{Address, Balance, Hash, ProblemType, Solution, WorkScore};
+use coinject_core::{unix_now_secs_i64, Address, Balance, Hash, ProblemType, Solution, WorkScore};
 use coinject_tokenomics::DimensionalDistributor;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -112,10 +112,7 @@ impl MiningIncentives {
 
     /// Calculate time urgency factor (higher near expiration)
     fn calculate_time_factor(&self, submitted_at: i64, expires_at: i64) -> f64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now_secs_i64();
 
         let total_time = expires_at - submitted_at;
         let elapsed = now - submitted_at;

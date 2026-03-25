@@ -200,7 +200,9 @@ impl GoldenGenerator {
     /// Generate deterministic f64 in range [0, 1)
     pub fn next_f64(&mut self) -> f64 {
         let bytes = self.next_bytes();
-        let bits = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        // SAFETY: next_bytes() always returns exactly 32 bytes; taking 8 of them never fails.
+        let bits = u64::from_le_bytes(bytes[0..8].try_into()
+            .expect("next_bytes always returns 32 bytes; 8-byte slice is always valid"));
         // Use 53 bits for f64 mantissa precision
         (bits >> 11) as f64 / (1u64 << 53) as f64
     }
@@ -208,7 +210,9 @@ impl GoldenGenerator {
     /// Generate deterministic u64
     pub fn next_u64(&mut self) -> u64 {
         let bytes = self.next_bytes();
-        u64::from_le_bytes(bytes[0..8].try_into().unwrap())
+        // SAFETY: next_bytes() always returns exactly 32 bytes; taking 8 of them never fails.
+        u64::from_le_bytes(bytes[0..8].try_into()
+            .expect("next_bytes always returns 32 bytes; 8-byte slice is always valid"))
     }
 }
 

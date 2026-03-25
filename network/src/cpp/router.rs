@@ -111,7 +111,7 @@ impl EquilibriumRouter {
         
         // Select peers with highest quality
         let mut peers: Vec<_> = self.peers.values().collect();
-        peers.sort_by(|a, b| b.quality.partial_cmp(&a.quality).unwrap());
+        peers.sort_by(|a, b| b.quality.total_cmp(&a.quality));
         
         peers.into_iter()
             .take(fanout)
@@ -171,7 +171,7 @@ impl EquilibriumRouter {
             let a_score = a.quality - a_tau;
             let b_score = b.quality - b_tau;
             
-            b_score.partial_cmp(&a_score).unwrap()
+            b_score.total_cmp(&a_score)
         });
         
         candidates.into_iter()

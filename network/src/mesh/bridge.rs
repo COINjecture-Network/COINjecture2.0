@@ -257,7 +257,7 @@ pub async fn run_bridge(
                         let s = state.read().await;
                         let _ = event_tx.send(BridgeEvent::PeerConnected {
                             peer_id,
-                            addr: "0.0.0.0:0".parse().unwrap(), // Will be enriched when mesh exposes addr
+                            addr: "0.0.0.0:0".parse().expect("static addr literal always parses"), // Will be enriched when mesh exposes addr
                             best_height: s.best_height,
                             best_hash: s.best_hash,
                         });

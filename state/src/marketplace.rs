@@ -1,7 +1,7 @@
 // Marketplace State Management with Database Persistence
 // Web4 PoUW marketplace integrated into blockchain state
 
-use coinject_core::{Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
+use coinject_core::{unix_now_secs_i64, Address, Balance, Hash, Solution, SubmissionMode, ProblemReveal};
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -124,10 +124,7 @@ impl MarketplaceState {
             return Err(MarketplaceError::DuplicateProblem);
         }
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now_secs_i64();
 
         let expires_at = now + (expiration_days as i64 * 86400);
 
@@ -185,10 +182,7 @@ impl MarketplaceState {
         }
 
         // Check expiration
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now_secs_i64();
 
         if now > submission.expires_at {
             submission.status = ProblemStatus::Expired;

@@ -29,7 +29,7 @@ lazy_static! {
         "Balance in each dimensional pool (tokens)",
         &["dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Locked liquidity per pool (not yet unlocked by U_n(τ))
     pub static ref POOL_LOCKED: GaugeVec = register_gauge_vec!(
@@ -37,7 +37,7 @@ lazy_static! {
         "Locked tokens in each dimensional pool",
         &["dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Unlocked liquidity per pool (available for withdrawal/yields)
     pub static ref POOL_UNLOCKED: GaugeVec = register_gauge_vec!(
@@ -45,7 +45,7 @@ lazy_static! {
         "Unlocked tokens in each dimensional pool",
         &["dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Unlock fraction per pool: U_n(τ) = 1 - e^(-η(τ - τ_n))
     pub static ref POOL_UNLOCK_FRACTION: GaugeVec = register_gauge_vec!(
@@ -53,7 +53,7 @@ lazy_static! {
         "Unlock fraction (0.0 to 1.0) for each pool",
         &["dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Yield rate per pool: r_n(τ) = η · e^(-ητ_n)
     pub static ref POOL_YIELD_RATE: GaugeVec = register_gauge_vec!(
@@ -61,7 +61,7 @@ lazy_static! {
         "Yield generation rate for each pool",
         &["dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Dimensional decay rates: D_n = e^(-η·τ_n)
     /// Should converge to η = 1/√2 ≈ 0.7071
@@ -70,7 +70,7 @@ lazy_static! {
         "Observed decay rate for each dimension",
         &["dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Pool coupling strength between dimensions
     /// Validates critical damping hypothesis
@@ -79,7 +79,7 @@ lazy_static! {
         "Coupling coefficient between dimensional pools",
         &["from_dimension", "to_dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Dimensional scale ratios (theoretical vs observed)
     pub static ref DIMENSIONAL_SCALE: GaugeVec = register_gauge_vec!(
@@ -87,7 +87,7 @@ lazy_static! {
         "Dimensional scale: D_n = exp(-eta * tau_n)",
         &["dimension", "type"]  // type: "theoretical" or "observed"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Pool swap volumes by dimension pair
     pub static ref POOL_SWAP_VOLUME: CounterVec = register_counter_vec!(
@@ -95,7 +95,7 @@ lazy_static! {
         "Total swap volume between dimensional pools (tokens)",
         &["from_dimension", "to_dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Pool liquidity depth
     pub static ref POOL_LIQUIDITY: GaugeVec = register_gauge_vec!(
@@ -103,7 +103,7 @@ lazy_static! {
         "Available liquidity in each pool (tokens)",
         &["dimension"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     // === CONSENSUS METRICS ===
     // Validate that consensus dynamics reflect dimensional coupling
@@ -113,14 +113,14 @@ lazy_static! {
         "coinject_block_height",
         "Current blockchain height"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Block production time (seconds between blocks)
     pub static ref BLOCK_TIME: Gauge = register_gauge!(
         "coinject_block_time_seconds",
         "Time between last two blocks (seconds)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Block production histogram
     pub static ref BLOCK_TIME_HISTOGRAM: HistogramVec = register_histogram_vec!(
@@ -129,7 +129,7 @@ lazy_static! {
         &["validator"],
         vec![0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Transaction count per block
     pub static ref BLOCK_TX_COUNT: IntGaugeVec = register_int_gauge_vec!(
@@ -137,14 +137,14 @@ lazy_static! {
         "Number of transactions in each block",
         &["block_hash"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Validator set size
     pub static ref VALIDATOR_COUNT: IntGauge = register_int_gauge!(
         "coinject_validator_count",
         "Number of active validators"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Consensus rounds per block
     pub static ref CONSENSUS_ROUNDS: HistogramVec = register_histogram_vec!(
@@ -153,7 +153,7 @@ lazy_static! {
         &["result"],  // "success" or "timeout"
         vec![1.0, 2.0, 3.0, 5.0, 10.0]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     // === PROOF OF USEFUL WORK (PoUW) METRICS ===
     // Validate that computational work translates to network value
@@ -165,7 +165,7 @@ lazy_static! {
         &["problem_type"],
         vec![1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Problems submitted by type
     pub static ref PROBLEMS_SUBMITTED: IntCounterVec = register_int_counter_vec!(
@@ -173,7 +173,7 @@ lazy_static! {
         "Total problems submitted to marketplace",
         &["problem_type"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Problems solved by type
     pub static ref PROBLEMS_SOLVED: IntCounterVec = register_int_counter_vec!(
@@ -181,21 +181,21 @@ lazy_static! {
         "Total problems solved in marketplace",
         &["problem_type"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Active marketplace bounties
     pub static ref ACTIVE_BOUNTIES: IntGauge = register_int_gauge!(
         "coinject_active_bounties",
         "Number of open problems with bounties"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Total bounty pool value
     pub static ref BOUNTY_POOL: Gauge = register_gauge!(
         "coinject_bounty_pool_tokens",
         "Total value of escrowed bounties (tokens)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Solution verification time
     pub static ref VERIFICATION_TIME: HistogramVec = register_histogram_vec!(
@@ -204,14 +204,14 @@ lazy_static! {
         &["problem_type"],
         vec![0.001, 0.01, 0.1, 1.0, 10.0]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Autonomous payout count (WEB4 feature!)
     pub static ref AUTONOMOUS_PAYOUTS: IntCounter = register_int_counter!(
         "coinject_autonomous_payouts_total",
         "Number of autonomous bounty payouts (WEB4 revolution)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     // === NETWORK METRICS ===
 
@@ -220,7 +220,7 @@ lazy_static! {
         "coinject_peer_count",
         "Number of connected peers"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Messages sent/received by type
     pub static ref NETWORK_MESSAGES: IntCounterVec = register_int_counter_vec!(
@@ -228,7 +228,7 @@ lazy_static! {
         "Network messages by type and direction",
         &["message_type", "direction"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Network bandwidth
     pub static ref NETWORK_BANDWIDTH: CounterVec = register_counter_vec!(
@@ -236,7 +236,7 @@ lazy_static! {
         "Network bandwidth usage",
         &["direction"]  // "inbound" or "outbound"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     // === STATE METRICS ===
 
@@ -245,28 +245,28 @@ lazy_static! {
         "coinject_total_supply_tokens",
         "Total token supply"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Active accounts
     pub static ref ACTIVE_ACCOUNTS: IntGauge = register_int_gauge!(
         "coinject_active_accounts",
         "Number of accounts with non-zero balance"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Mempool size
     pub static ref MEMPOOL_SIZE: IntGauge = register_int_gauge!(
         "coinject_mempool_size",
         "Number of pending transactions"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Transaction throughput
     pub static ref TX_THROUGHPUT: Gauge = register_gauge!(
         "coinject_tx_throughput_tps",
         "Transactions per second (rolling average)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     // === SATOSHI CONSTANT VALIDATION ===
     // Direct measurements of η = λ = 1/√2 ≈ 0.7071
@@ -276,42 +276,42 @@ lazy_static! {
         "coinject_measured_eta",
         "Empirically measured η from pool decay rates"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Measured lambda (λ) from coupling rates
     pub static ref MEASURED_LAMBDA: Gauge = register_gauge!(
         "coinject_measured_lambda",
         "Empirically measured λ from pool coupling"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Convergence confidence (R² from exponential fitting)
     pub static ref CONVERGENCE_CONFIDENCE: Gauge = register_gauge!(
         "coinject_convergence_confidence",
         "R² coefficient from exponential fitting (0.0-1.0)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Measured oracle delta (Viviani distance metric)
     pub static ref MEASURED_ORACLE_DELTA: Gauge = register_gauge!(
         "coinject_measured_oracle_delta",
         "Oracle delta computed from measured η and λ"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Eta convergence error |η_measured - η_theoretical|
     pub static ref ETA_CONVERGENCE_ERROR: Gauge = register_gauge!(
         "coinject_eta_convergence_error",
         "Absolute error between measured and theoretical η"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Lambda convergence error |λ_measured - λ_theoretical|
     pub static ref LAMBDA_CONVERGENCE_ERROR: Gauge = register_gauge!(
         "coinject_lambda_convergence_error",
         "Absolute error between measured and theoretical λ"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Unit circle constraint: |μ|² = η² + λ²
     /// Should equal 1.0 if theory is correct
@@ -319,7 +319,7 @@ lazy_static! {
         "coinject_unit_circle_constraint",
         "Validation of |mu|^2 = eta^2 + lambda^2 = 1"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Critical damping coefficient ζ = η/√2
     /// Should equal 1.0 for critical damping
@@ -327,7 +327,7 @@ lazy_static! {
         "coinject_damping_coefficient",
         "Damping coefficient zeta = eta/sqrt(2)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     // === CONSENSUS STATE METRICS (RUNTIME INTEGRATION) ===
     // Live tracking of τ, |ψ|, and θ from actual blockchain state
@@ -337,21 +337,21 @@ lazy_static! {
         "coinject_consensus_tau",
         "Dimensionless time tau = block_height / tau_c"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Complex wavefunction magnitude: |ψ(τ)| = e^(-ητ)
     pub static ref CONSENSUS_MAGNITUDE: Gauge = register_gauge!(
         "coinject_consensus_magnitude",
         "Wavefunction magnitude |psi(tau)| = exp(-eta*tau)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Complex wavefunction phase: θ(τ) = λτ
     pub static ref CONSENSUS_PHASE: Gauge = register_gauge!(
         "coinject_consensus_phase",
         "Wavefunction phase theta(tau) = lambda*tau (radians)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     // === NODE TYPE CLASSIFICATION METRICS ===
     // Dynamic behavioral classification of 6 specialized node types
@@ -361,77 +361,77 @@ lazy_static! {
         "coinject_node_type",
         "Current node type classification (0=Light, 1=Full, 2=Archive, 3=Validator, 4=Bounty, 5=Oracle)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Classification confidence (0.0 - 1.0)
     pub static ref NODE_TYPE_CONFIDENCE: Gauge = register_gauge!(
         "coinject_node_type_confidence",
         "Confidence score for node type classification"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Reward multiplier for current node type
     pub static ref NODE_REWARD_MULTIPLIER: Gauge = register_gauge!(
         "coinject_node_reward_multiplier",
         "Reward multiplier based on node type"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Storage ratio (blocks stored / chain height)
     pub static ref NODE_STORAGE_RATIO: Gauge = register_gauge!(
         "coinject_node_storage_ratio",
         "Ratio of blocks stored to total chain height"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Validation speed (blocks/second)
     pub static ref NODE_VALIDATION_SPEED: Gauge = register_gauge!(
         "coinject_node_validation_speed",
         "Block validation speed (blocks/second)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Solve rate (solutions/hour) for bounty nodes
     pub static ref NODE_SOLVE_RATE: Gauge = register_gauge!(
         "coinject_node_solve_rate",
         "Problem solving rate (solutions/hour)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Uptime ratio (0.0 - 1.0)
     pub static ref NODE_UPTIME_RATIO: Gauge = register_gauge!(
         "coinject_node_uptime_ratio",
         "Node uptime ratio (actual / expected)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Data served to peers (bytes)
     pub static ref NODE_DATA_SERVED: IntCounter = register_int_counter!(
         "coinject_node_data_served_bytes_total",
         "Total data served to peers (bytes)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Blocks propagated count
     pub static ref NODE_BLOCKS_PROPAGATED: IntCounter = register_int_counter!(
         "coinject_node_blocks_propagated_total",
         "Total blocks propagated to network"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Oracle feeds provided
     pub static ref NODE_ORACLE_FEEDS: IntCounter = register_int_counter!(
         "coinject_node_oracle_feeds_total",
         "Total oracle feeds provided"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Oracle accuracy (0.0 - 1.0)
     pub static ref NODE_ORACLE_ACCURACY: Gauge = register_gauge!(
         "coinject_node_oracle_accuracy",
         "Oracle data accuracy score"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Classification score by type
     pub static ref NODE_TYPE_SCORES: GaugeVec = register_gauge_vec!(
@@ -439,21 +439,21 @@ lazy_static! {
         "Classification score for each node type",
         &["node_type"]
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Headers synced (for Light nodes)
     pub static ref NODE_HEADERS_SYNCED: IntGauge = register_int_gauge!(
         "coinject_node_headers_synced",
         "Number of block headers synced (Light node metric)"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 
     /// Light client peer count (full nodes serving light clients)
     pub static ref LIGHT_CLIENT_PEERS: IntGauge = register_int_gauge!(
         "coinject_light_client_peers",
         "Number of full nodes serving this light client"
     )
-    .unwrap();
+    .expect("prometheus metric registration failed at startup");
 }
 
 /// Initialize all metrics

@@ -36,10 +36,46 @@ use service::CoinjectNode;
 use tokio::signal;
 use tracing_subscriber::EnvFilter;
 
+/// Install a panic hook that logs the panic location and backtrace via `tracing`
+/// before allowing the default behaviour (abort in release, unwind in debug).
+/// This ensures panics are always visible in structured logs rather than only
+/// on stderr, and gives operators a chance to correlate crashes with metrics.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let location = info.location().map_or_else(
+            || "unknown location".to_string(),
+            |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+        );
+
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_string()
+        };
+
+        // Log at ERROR level so the panic is captured by any tracing subscriber
+        // (file sink, Loki, etc.) before the process exits.
+        tracing::error!(
+            target: "coinject::panic",
+            location = %location,
+            message = %payload,
+            "NODE PANIC — initiating graceful shutdown"
+        );
+
+        // Flush logs before exiting — best-effort, ignore flush errors.
+        // The default panic handler will print to stderr and then abort/unwind.
+    }));
+}
+
 // Multi-threaded runtime for CPP protocol TCP connections
 // Worker threads handle concurrent peer I/O and mining tasks
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install panic hook first so any subsequent panic is logged.
+    install_panic_hook();
+
     // Initialize logging
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"));
@@ -73,15 +109,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut node = CoinjectNode::new(config).await?;
     node.start().await?;
 
-    // Wait for shutdown signal (Ctrl+C)
+    // Wait for shutdown signal (SIGINT / Ctrl-C, or SIGTERM from the OS / container runtime)
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
+
+        tokio::select! {
+            result = signal::ctrl_c() => {
+                match result {
+                    Ok(()) => {
+                        println!();
+                        tracing::info!("Received SIGINT (Ctrl-C) — shutting down gracefully");
+                    }
+                    Err(err) => {
+                        tracing::error!("Unable to listen for SIGINT: {}", err);
+                    }
+                }
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("Received SIGTERM — shutting down gracefully");
+            }
+        }
+        node.shutdown();
+    }
+
+    #[cfg(not(unix))]
     match signal::ctrl_c().await {
         Ok(()) => {
             println!();
-            println!("📡 Received shutdown signal (Ctrl+C)");
+            tracing::info!("Received shutdown signal (Ctrl-C)");
             node.shutdown();
         }
         Err(err) => {
-            eprintln!("Unable to listen for shutdown signal: {}", err);
+            tracing::error!("Unable to listen for shutdown signal: {}", err);
+            node.shutdown();
         }
     }
 

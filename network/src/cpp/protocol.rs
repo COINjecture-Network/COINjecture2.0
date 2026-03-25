@@ -117,7 +117,8 @@ impl MessageEnvelope {
         stream.read_exact(&mut header).await?;
         
         // Verify magic
-        let magic: [u8; 4] = header[0..4].try_into().unwrap();
+        // SAFETY: header is [u8;10]; slicing [0..4] always yields exactly 4 bytes.
+        let magic: [u8; 4] = header[0..4].try_into().expect("[u8;10] slice [0..4] always converts to [u8;4]");
         if magic != MAGIC {
             return Err(ProtocolError::InvalidMagic(magic));
         }
@@ -213,7 +214,8 @@ impl MessageCodec {
         read_half.read_exact(&mut header).await?;
         
         // Verify magic
-        let magic: [u8; 4] = header[0..4].try_into().unwrap();
+        // SAFETY: header is [u8;10]; slicing [0..4] always yields exactly 4 bytes.
+        let magic: [u8; 4] = header[0..4].try_into().expect("[u8;10] slice [0..4] always converts to [u8;4]");
         if magic != MAGIC {
             return Err(ProtocolError::InvalidMagic(magic));
         }
