@@ -737,7 +737,7 @@ mod tests {
         let mut engine = DataPricingEngine::new(1000);
 
         // Initially uses bootstrap pricing
-        let bootstrap_cost = engine.get_base_cost();
+        let _bootstrap_cost = engine.get_base_cost();
 
         // Update with network median
         engine.update_median_fee(50000);

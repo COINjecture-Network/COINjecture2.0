@@ -18,6 +18,7 @@ pub struct NodeCommit {
     pub solution_hash: [u8; 32],
     pub work_score: f64,
     pub signature: Vec<u8>,
+    pub public_key: [u8; 32],
 }
 
 /// Determines how a message is routed through the mesh.
@@ -216,6 +217,7 @@ mod tests {
                     solution_hash: [0x22; 32],
                     work_score: 150.0,
                     signature: vec![0x33; 64],
+                    public_key: [0x44; 32],
                 }],
             },
             Payload::BountySubmit {

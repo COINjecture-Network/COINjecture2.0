@@ -95,8 +95,8 @@ async fn test_three_node_mesh_formation() {
 
     // Node A: seed node (no seeds)
     let cfg_a = test_config(0, vec![]);
-    let (svc_a, mut rx_a) = NetworkService::start(cfg_a).await.unwrap();
-    let addr_a = svc_a.local_id().clone();
+    let (svc_a, _rx_a) = NetworkService::start(cfg_a).await.unwrap();
+    let _addr_a = *svc_a.local_id();
 
     // Get actual listen address — we used port 0, so OS assigned one.
     // We need to get the actual port. Unfortunately, our API doesn't expose it.
@@ -183,7 +183,7 @@ async fn test_broadcast_reaches_all_peers() {
     let (svc_b, mut rx_b) = NetworkService::start(cfg_b).await.unwrap();
 
     let id_a = *svc_a.local_id();
-    let id_b = *svc_b.local_id();
+    let _id_b = *svc_b.local_id();
 
     // Wait for connection
     wait_for_peers(&mut rx_a, 1, Duration::from_secs(10)).await;

@@ -192,6 +192,7 @@ pub mod timeouts {
     mod tests {
         use super::*;
 
+        #[allow(clippy::assertions_on_constants)]
         #[test]
         fn test_timeout_ratios() {
             // Network timeout should be 90s
@@ -343,8 +344,8 @@ mod tests {
 
     #[test]
     fn test_equilibrium_constant() {
-        // Verify η = 1/√2 ≈ 0.7071
-        assert!((ETA - 0.7071).abs() < 0.0001);
+        // Verify η = 1/√2
+        assert!((ETA - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.0001);
         assert!((ETA * SQRT_2 - 1.0).abs() < 0.0001);
     }
 

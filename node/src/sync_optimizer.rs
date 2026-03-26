@@ -127,7 +127,7 @@ mod tests {
     #[test]
     fn test_batch_size_starts_small() {
         let batch = compute_batch_size(0.0, 0);
-        assert!(batch >= MIN_BATCH_SIZE && batch <= MAX_BATCH_SIZE);
+        assert!((MIN_BATCH_SIZE..=MAX_BATCH_SIZE).contains(&batch));
         // Early sync should start with smaller batches
         assert!(batch < MAX_BATCH_SIZE / 2); // <512 for start
     }

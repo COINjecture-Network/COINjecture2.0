@@ -1,6 +1,6 @@
 // Chain State Manager
 // Block storage, best chain tracking, and chain reorganization
-#![allow(dead_code)]
+#![allow(dead_code, clippy::items_after_test_module, clippy::result_large_err)]
 
 use coinject_core::{Block, BlockHeader, Hash};
 use lru::LruCache;

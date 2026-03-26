@@ -5,6 +5,7 @@
 //!
 //! Enable with: --features adzdb
 
+#![allow(clippy::duplicated_attributes, dead_code)]
 #![cfg(feature = "adzdb")]
 
 use adzdb::{Config as AdzConfig, Database as AdzDatabase, Error as AdzError};

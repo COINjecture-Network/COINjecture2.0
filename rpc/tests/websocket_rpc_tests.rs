@@ -5,7 +5,6 @@ use coinject_rpc::websocket::{
     ClientId, MiningWork, RpcCommand, RpcEvent, RpcMessage, WebSocketRpc, WorkQueue,
 };
 use std::net::SocketAddr;
-use tokio::time::{timeout, Duration};
 
 #[tokio::test]
 async fn test_websocket_rpc_creation() {

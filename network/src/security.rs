@@ -5,7 +5,7 @@
 // per-type message size policy, and network security metrics.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ impl MessageSizePolicy {
     pub const BLOCK: usize         = 4   * 1_024 * 1_024;  //    4 MB
     pub const CONSENSUS: usize     = 64  * 1_024;          //   64 KB
     pub const HANDSHAKE: usize     = 4   * 1_024;          //    4 KB
-    pub const DEFAULT: usize       = 1   * 1_024 * 1_024;  //    1 MB
+    pub const DEFAULT: usize       = 1_024 * 1_024;         //    1 MB
 
     /// Returns the maximum allowed payload size for the given CPP message-type
     /// byte (the `msg_type` byte from the wire header).
@@ -69,7 +69,7 @@ impl MessageSizePolicy {
             // Transaction propagation
             0x21 => Self::TRANSACTION,
             // Mining work (contains txs, use BLOCK limit)
-            0x30 | 0x31 | 0x32 | 0x33 | 0x34 => Self::DEFAULT,
+            0x30..=0x34 => Self::DEFAULT,
             // Control messages are tiny
             0xF0 | 0xF1 | 0xFF => Self::HANDSHAKE,
             // Unknown — apply conservative default
@@ -654,6 +654,7 @@ mod tests {
 
     // --- MessageSizePolicy ---
 
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn test_message_size_policy() {
         // Transaction limit

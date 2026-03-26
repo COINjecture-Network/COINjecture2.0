@@ -11,6 +11,7 @@ use crate::results::TestResults;
 /// Snapshot of node health metrics.
 #[derive(Debug, Clone)]
 pub struct HealthSnapshot {
+    #[allow(dead_code)]
     pub ts: Instant,
     pub block_height: u64,
     pub mempool_size: u64,
@@ -25,6 +26,7 @@ pub struct NodeMonitor {
     rpc_url: String,
     client: reqwest::Client,
     snapshots: Vec<HealthSnapshot>,
+    #[allow(dead_code)]
     start: Instant,
 }
 

@@ -8,7 +8,6 @@ use coinject_network::cpp::{
     CppConfig, CppNetwork, NetworkCommand, NetworkEvent, NodeType as CppNodeType,
 };
 use std::net::SocketAddr;
-use tokio::time::{timeout, Duration};
 
 /// Helper to create a test block
 fn create_test_block(height: u64, prev_hash: Hash) -> Block {
@@ -83,7 +82,6 @@ async fn test_two_node_network_creation() {
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, peer_id2, genesis);
 
     // Both networks created successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -92,7 +90,7 @@ async fn test_network_broadcast_block() {
     let config = CppConfig::default();
     let peer_id = [1u8; 32];
 
-    let (_network, cmd_tx, mut event_rx) = CppNetwork::new(config, peer_id, genesis);
+    let (_network, cmd_tx, _event_rx) = CppNetwork::new(config, peer_id, genesis);
 
     // Create a test block
     let block = create_test_block(1, genesis);
@@ -104,7 +102,6 @@ async fn test_network_broadcast_block() {
 
     // Note: In a full implementation, we'd wait for the block to be received
     // For now, we just verify the command was sent successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -126,7 +123,6 @@ async fn test_network_update_chain_state() {
         .unwrap();
 
     // Command sent successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -150,7 +146,6 @@ async fn test_network_request_blocks() {
         .unwrap();
 
     // Command sent successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -184,5 +179,4 @@ async fn test_network_event_types() {
     let _event4 = NetworkEvent::BlockReceived { block, peer_id };
 
     // All events created successfully
-    assert!(true);
 }

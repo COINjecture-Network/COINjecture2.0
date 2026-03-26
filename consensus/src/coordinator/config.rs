@@ -109,6 +109,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_invalid_quorum() {
         let mut cfg = CoordinatorConfig::default();
         cfg.quorum_threshold = 0.0;
@@ -118,6 +119,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_invalid_mine_duration() {
         let mut cfg = CoordinatorConfig::default();
         cfg.mine_duration = Duration::ZERO;
@@ -125,6 +127,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_invalid_failover_depth() {
         let mut cfg = CoordinatorConfig::default();
         cfg.failover_depth = 0;

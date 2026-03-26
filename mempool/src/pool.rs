@@ -285,7 +285,7 @@ impl TransactionPool {
     pub fn add_batch(&mut self, txs: Vec<Transaction>) -> Vec<(Hash, Result<(), PoolError>)> {
         // Sort by fee descending so high-value txs are tried first
         let mut ordered = txs;
-        ordered.sort_by(|a, b| b.fee().cmp(&a.fee()));
+        ordered.sort_by_key(|t| std::cmp::Reverse(t.fee()));
 
         let mut results = Vec::with_capacity(ordered.len());
         for tx in ordered {

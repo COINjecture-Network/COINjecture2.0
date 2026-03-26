@@ -29,6 +29,7 @@ use coinject_network::mesh::config::NetworkConfig;
 use coinject_network::NetworkService;
 
 /// A lightweight test node that wires mesh + bridge + coordinator.
+#[allow(dead_code)]
 struct TestNode {
     /// Coordinator command sender (to feed commands from bridge events).
     coord_cmd_tx: mpsc::UnboundedSender<CoordinatorCommand>,
@@ -57,7 +58,7 @@ impl TestNode {
         let mesh_config = NetworkConfig {
             listen_addr: listen,
             seed_nodes: seeds,
-            data_dir: data_dir.into_path(),
+            data_dir: data_dir.keep(),
             ..Default::default()
         };
 
@@ -124,13 +125,16 @@ impl TestNode {
                         epoch,
                         solution_hash,
                         work_score,
+                        signature,
+                        public_key,
                     } => {
                         let _ = bridge_cmd_for_coord.send(BridgeCommand::BroadcastCommit {
                             epoch: *epoch,
                             solution_hash: *solution_hash,
                             node_id: coord_node_id,
                             work_score: *work_score,
-                            signature: Vec::new(),
+                            signature: signature.clone(),
+                            public_key: *public_key,
                         });
                     }
                     _ => {}
@@ -221,6 +225,7 @@ impl TestNode {
     }
 
     /// Count how many EpochSealed events have been received.
+    #[allow(dead_code)]
     async fn sealed_count(&self) -> usize {
         self.events
             .read()

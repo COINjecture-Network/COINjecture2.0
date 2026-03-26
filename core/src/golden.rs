@@ -289,7 +289,7 @@ mod tests {
         // {z*phi} should be uniformly distributed in [0,1)
         for z in 0..100u64 {
             let frac = GoldenGenerator::golden_fractional(z);
-            assert!(frac >= 0.0 && frac < 1.0);
+            assert!((0.0..1.0).contains(&frac));
         }
     }
 
@@ -332,7 +332,7 @@ mod tests {
     fn test_golden_sort_key_distribution() {
         // Verify keys are well-distributed (no obvious patterns)
         let mut keys: Vec<u64> = (0..100)
-            .map(|i| GoldenGenerator::golden_sort_key(i))
+            .map(GoldenGenerator::golden_sort_key)
             .collect();
         let original = keys.clone();
         keys.sort();

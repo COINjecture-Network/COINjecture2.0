@@ -8,8 +8,6 @@ use coinject_network::cpp::{
     CppConfig, CppNetwork, NetworkCommand, NetworkEvent, NodeType as CppNodeType,
 };
 use std::net::SocketAddr;
-use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
 
 /// Helper to create a test block
 fn create_test_block(height: u64, prev_hash: Hash) -> Block {
@@ -60,7 +58,7 @@ async fn test_network_broadcast_and_receive_block() {
     // Create network
     let config = CppConfig::default();
     let peer_id = [1u8; 32];
-    let (_network, cmd_tx, mut event_rx) = CppNetwork::new(config, peer_id, genesis);
+    let (_network, cmd_tx, _event_rx) = CppNetwork::new(config, peer_id, genesis);
 
     // Create and broadcast a block
     let block = create_test_block(1, genesis);
@@ -72,7 +70,7 @@ async fn test_network_broadcast_and_receive_block() {
 
     // Note: In a full test with actual peers, we'd receive BlockReceived events
     // For now, we verify the command was sent successfully
-    assert!(true);
+    // command sent successfully
 }
 
 #[tokio::test]
@@ -93,7 +91,7 @@ async fn test_network_chain_state_update() {
         .unwrap();
 
     // Command sent successfully
-    assert!(true);
+    // command sent successfully
 }
 
 #[tokio::test]
@@ -117,7 +115,7 @@ async fn test_network_request_blocks() {
         .unwrap();
 
     // Command sent successfully
-    assert!(true);
+    // command sent successfully
 }
 
 #[tokio::test]
@@ -127,7 +125,7 @@ async fn test_network_event_handling() {
     let addr: SocketAddr = "127.0.0.1:707".parse().unwrap();
 
     // Test that all event types can be created and handled
-    let events = vec![
+    let events = [
         NetworkEvent::PeerConnected {
             peer_id,
             addr,
@@ -221,7 +219,7 @@ async fn test_network_command_handling() {
         .unwrap();
 
     // All commands sent successfully
-    assert!(true);
+    // command sent successfully
 }
 
 #[tokio::test]
@@ -252,5 +250,5 @@ async fn test_network_multiple_peers() {
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, [2u8; 32], genesis);
 
     // Both networks created successfully
-    assert!(true);
+    // command sent successfully
 }

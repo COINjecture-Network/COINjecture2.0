@@ -2,6 +2,16 @@
 
 Last Updated: 2026-03-25
 
+## Mesh Pubkey Wiring, CI Lint Fix, Docker Smoke Test — Applied 2026-03-25
+
+Three improvements applied to the `remove-libp2p` branch:
+
+| # | Item | Severity | Files | Status |
+|---|------|----------|-------|--------|
+| A | Ed25519 `public_key` not threaded through mesh commit pipeline | High | `network/src/mesh/protocol.rs`, `consensus/src/coordinator/mod.rs`, `network/src/mesh/bridge.rs`, `node/src/service/mod.rs` | Fixed — `public_key: [u8; 32]` added to `NodeCommit`, `CoordinatorEvent::BroadcastCommit`, and `BridgeCommand::BroadcastCommit`; inbound receive now uses `commit.public_key` instead of `[0u8; 32]` |
+| B | `cargo clippy --all-targets --all-features -- -D warnings` produced 60+ errors | High | workspace-wide | Fixed — all clippy lints resolved: unused imports, `too_many_arguments`, `result_large_err`, `FRAC_1_SQRT_2` approximations, manual `contains` patterns, `assert!(true)` invocations, `items_after_test_module`, and more |
+| C | No Docker smoke test in CI — ship criteria unverifiable | Medium | `.github/workflows/ci.yml` | Fixed — added `smoke-test` job (Stage 6) that spins up a 4-node Docker testnet, waits 30 s, and health-checks all four RPC endpoints |
+
 ## CI / Test Parity Follow-Up — Applied 2026-03-25
 
 Follow-up fixes applied after the cross-validated audit to achieve CI/ship parity:

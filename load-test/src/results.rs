@@ -148,6 +148,7 @@ impl LatencyStats {
     pub fn p95(&self) -> f64 { self.percentile(0.95) }
     pub fn p99(&self) -> f64 { self.percentile(0.99) }
     pub fn max(&self) -> f64 { self.samples.iter().cloned().fold(0.0_f64, f64::max) }
+    #[allow(dead_code)]
     pub fn min(&self) -> f64 { self.samples.iter().cloned().fold(f64::MAX, f64::min) }
     pub fn mean(&self) -> f64 {
         if self.samples.is_empty() { return 0.0; }

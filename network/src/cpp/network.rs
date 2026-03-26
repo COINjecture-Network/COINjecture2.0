@@ -6,16 +6,14 @@ use crate::cpp::{
     config::{
         CppConfig, NodeType, PEER_TIMEOUT, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE,
         MESSAGE_READ_TIMEOUT, MIN_HEALTHY_PEERS,
-        SECURITY_RATE_BUCKET_CAPACITY, SECURITY_RATE_MSGS_PER_SEC,
         SECURITY_RATE_STRIKE_THRESHOLD, SECURITY_MALFORMED_STRIKE_THRESHOLD,
     },
     block_provider::{BlockProvider, EmptyBlockProvider},
     message::{
-        self, HelloMessage, HelloAckMessage, StatusMessage, GetBlocksMessage, BlocksMessage,
-        GetHeadersMessage, HeadersMessage, NewBlockMessage, NewTransactionMessage,
-        SubmitWorkMessage, WorkAcceptedMessage, WorkRejectedMessage, GetWorkMessage, WorkMessage,
-        PingMessage, PongMessage, DisconnectMessage, MessageType,
-        verify_hello_auth, sign_hello,
+        HelloMessage, HelloAckMessage, StatusMessage, GetBlocksMessage, BlocksMessage,
+        NewBlockMessage, NewTransactionMessage,
+        PingMessage, PongMessage, MessageType,
+        sign_hello,
     },
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     peer::{Peer, PeerState, PeerId},
@@ -27,7 +25,6 @@ use crate::cpp::{
 use crate::reputation::ReputationManager;
 use crate::security::{
     ConnectionLimiter, BanList, TokenBucket, EclipseGuard, NetworkSecurityMetrics,
-    DEFAULT_RATE_BUCKET_CAPACITY, DEFAULT_RATE_MSGS_PER_SEC,
 };
 use coinject_core::{Block, Transaction, Hash, BlockHeader};
 use ed25519_dalek::SigningKey;
@@ -217,6 +214,7 @@ pub struct CppNetwork {
     flock_state: Arc<RwLock<FlockState>>,
 
     /// Seen-message deduplication cache (hash, timestamp) — max 5000 entries, 60s TTL
+    #[allow(clippy::type_complexity)]
     seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
 
     // =========================================================================
@@ -574,7 +572,7 @@ impl CppNetwork {
     // =========================================================================
     
     /// Handle incoming connection
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     async fn handle_incoming_connection(
         mut stream: TcpStream,
         addr: SocketAddr,
@@ -721,7 +719,7 @@ impl CppNetwork {
             let peers_guard = peers.read().await;
             if let Some(peer) = peers_guard.get(&peer_id) {
                 let mut router_guard = router.write().await;
-                router_guard.add_peer(PeerInfo::from(&*peer));
+                router_guard.add_peer(PeerInfo::from(peer));
             }
         }
 
@@ -793,7 +791,7 @@ impl CppNetwork {
     /// 2. Processes each message through the handler
     /// 3. Handles timeouts and disconnections
     /// 4. Updates peer state and metrics
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     async fn peer_message_loop(
         peer_id: PeerId,
         mut read_half: tokio::io::ReadHalf<TcpStream>,
@@ -1009,6 +1007,7 @@ impl CppNetwork {
     }
 
     /// Handle incoming message from peer
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     async fn handle_peer_message(
         peer_id: PeerId,
         envelope: MessageEnvelope,
@@ -1096,7 +1095,7 @@ impl CppNetwork {
         tracing::debug!("[CPP][HANDSHAKE] Received Hello message");
 
         let hello: HelloMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Validate genesis hash
         if hello.genesis_hash != chain_state.genesis_hash {
@@ -1266,7 +1265,7 @@ impl CppNetwork {
         
         tracing::debug!("[CPP][BOOTNODE] Received HelloAck from {}, validating...", addr);
         let hello_ack: HelloAckMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
         
         // Validate genesis hash
         if hello_ack.genesis_hash != state.genesis_hash {
@@ -1321,7 +1320,7 @@ impl CppNetwork {
             let peers_guard = self.peers.read().await;
             if let Some(peer) = peers_guard.get(&peer_id) {
                 let mut router = self.router.write().await;
-                router.add_peer(PeerInfo::from(&*peer));
+                router.add_peer(PeerInfo::from(peer));
             }
         }
 
@@ -1493,7 +1492,7 @@ impl CppNetwork {
         _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let status: StatusMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         let node_type = NodeType::from_u8(status.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
@@ -1541,7 +1540,7 @@ impl CppNetwork {
         block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let get_blocks: GetBlocksMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
         
         let peer_id_short: String = peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
         
@@ -1571,13 +1570,13 @@ impl CppNetwork {
         let peers_guard = peers.read().await;
         if let Some(peer) = peers_guard.get(&peer_id) {
             let envelope = MessageEnvelope::new(MessageType::Blocks, &blocks_msg)
-                .map_err(|e| NetworkError::Protocol(e))?;
+                .map_err(NetworkError::Protocol)?;
             let data = envelope.encode();
             
             tracing::info!("[CPP][SYNC] Sending Blocks response: peer={} frame_len={} bytes", peer_id_short, data.len());
             
             peer.send_message(data.clone())
-                .map_err(|e| NetworkError::InvalidHandshake(e))?;
+                .map_err(NetworkError::InvalidHandshake)?;
             
             drop(peers_guard);
             
@@ -1601,7 +1600,7 @@ impl CppNetwork {
         _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
         let blocks_msg: BlocksMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Remove fulfilled request from pending
         {
@@ -1621,6 +1620,7 @@ impl CppNetwork {
     
     /// Check if a message has been seen before (deduplication)
     /// Returns true if already seen, false if new (and adds to cache)
+    #[allow(clippy::type_complexity)]
     async fn check_seen(
         seen_messages: &Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
         payload: &[u8],
@@ -1652,6 +1652,7 @@ impl CppNetwork {
     }
 
     /// Handle NewBlock announcement from peer
+    #[allow(clippy::type_complexity)]
     async fn handle_new_block(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
@@ -1665,7 +1666,7 @@ impl CppNetwork {
         }
 
         let new_block: NewBlockMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Send BlockReceived event
         let _ = event_tx.send(NetworkEvent::BlockReceived {
@@ -1677,6 +1678,7 @@ impl CppNetwork {
     }
 
     /// Handle NewTransaction announcement from peer
+    #[allow(clippy::type_complexity)]
     async fn handle_new_transaction(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
@@ -1690,7 +1692,7 @@ impl CppNetwork {
         }
 
         let new_tx: NewTransactionMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Send TransactionReceived event
         let _ = event_tx.send(NetworkEvent::TransactionReceived {
@@ -1708,7 +1710,7 @@ impl CppNetwork {
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
     ) -> Result<(), NetworkError> {
         let ping: PingMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
         
         // Send Pong response
         let peers_guard = peers.read().await;
@@ -1719,11 +1721,11 @@ impl CppNetwork {
             };
             
             let envelope = MessageEnvelope::new(MessageType::Pong, &pong)
-                .map_err(|e| NetworkError::Protocol(e))?;
+                .map_err(NetworkError::Protocol)?;
             let data = envelope.encode();
             
             peer.send_message(data.clone())
-                .map_err(|e| NetworkError::InvalidHandshake(e))?;
+                .map_err(NetworkError::InvalidHandshake)?;
             
             drop(peers_guard);
             
@@ -1744,7 +1746,7 @@ impl CppNetwork {
         peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
     ) -> Result<(), NetworkError> {
         let _pong: PongMessage = envelope.deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Update RTT and flow control
         let mut peers_guard = peers.write().await;
@@ -1790,7 +1792,7 @@ impl CppNetwork {
 
                     // Serialize message
                     let envelope = MessageEnvelope::new(MessageType::NewBlock, &new_block_msg)
-                        .map_err(|e| NetworkError::Protocol(e))?;
+                        .map_err(NetworkError::Protocol)?;
                     let data = envelope.encode();
 
                     // Send via channel
@@ -1835,7 +1837,7 @@ impl CppNetwork {
 
                     // Serialize message
                     let envelope = MessageEnvelope::new(MessageType::NewTransaction, &new_tx_msg)
-                        .map_err(|e| NetworkError::Protocol(e))?;
+                        .map_err(NetworkError::Protocol)?;
                     let data = envelope.encode();
 
                     // Send via channel
@@ -1901,11 +1903,11 @@ impl CppNetwork {
         
         // Serialize and send message
         let envelope = MessageEnvelope::new(MessageType::GetBlocks, &get_blocks)
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
         let data = envelope.encode();
         
         peer.send_message(data.clone())
-            .map_err(|e| NetworkError::InvalidHandshake(e))?;
+            .map_err(NetworkError::InvalidHandshake)?;
         
         drop(peers);
         
@@ -2115,7 +2117,7 @@ impl CppNetwork {
 
         let median_height = if peer_heights.is_empty() {
             return;
-        } else if peer_heights.len() % 2 == 0 {
+        } else if peer_heights.len().is_multiple_of(2) {
             let mid = peer_heights.len() / 2;
             (peer_heights[mid - 1] + peer_heights[mid]) / 2
         } else {

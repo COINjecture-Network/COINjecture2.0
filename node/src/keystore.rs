@@ -96,6 +96,7 @@ impl std::fmt::Debug for ValidatorKey {
     }
 }
 
+#[allow(dead_code)]
 impl ValidatorKey {
     /// Generate a fresh random validator key.
     pub fn generate() -> Self {

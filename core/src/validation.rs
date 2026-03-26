@@ -265,6 +265,7 @@ pub fn validate_string_field(s: &str) -> Result<(), ValidationError> {
 /// - `solution_quality` is in [0.0, 1.0]
 /// - `complexity_weight` and `energy_estimate_joules` are finite and non-negative
 /// - `tx_count` ≤ MAX_BLOCK_TRANSACTIONS
+#[allow(clippy::too_many_arguments)]
 pub fn validate_block_header_fields(
     version: u32,
     timestamp: Timestamp,
@@ -305,7 +306,7 @@ pub fn validate_block_header_fields(
     }
 
     // Solution quality: in [0.0, 1.0]
-    if !solution_quality.is_finite() || solution_quality < 0.0 || solution_quality > 1.0 {
+    if !(0.0..=1.0).contains(&solution_quality) {
         return Err(ValidationError::InvalidSolutionQuality(solution_quality));
     }
 

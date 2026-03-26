@@ -677,6 +677,7 @@ impl LightClientSync {
 // =============================================================================
 
 /// Server component for Full/Archive nodes to serve Light clients
+#[allow(clippy::type_complexity)]
 pub struct HeaderServer {
     /// Function to get header by height (provided by chain)
     get_header_fn: Box<dyn Fn(u64) -> Option<BlockHeader> + Send + Sync>,

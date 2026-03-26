@@ -172,6 +172,6 @@ fn build_mock_transfer_hex(nonce: u64, amount: u64) -> String {
     bytes.extend_from_slice(&nonce.to_le_bytes());
     bytes.extend_from_slice(&amount.to_le_bytes());
     // Pad to 64 bytes with nonce-derived pseudo-randomness
-    bytes.extend_from_slice(&blake3::hash(&nonce.to_le_bytes()).as_bytes()[..48]);
+    bytes.extend_from_slice(&blake3::hash(&nonce.to_le_bytes()).as_bytes()[..32]);
     hex::encode(bytes)
 }

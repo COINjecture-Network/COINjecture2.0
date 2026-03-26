@@ -35,14 +35,11 @@ use coinject_huggingface::{
     DualFeedStreamer, StreamerConfig,
 };
 use tracing::{debug, info, warn, error};
-use rand;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
-use blake3;
-use hex;
 
 /// Get the debug log path from DATA_DIR environment variable
 pub fn get_debug_log_path() -> std::path::PathBuf {
@@ -159,7 +156,10 @@ impl CoinjectNode {
         if let Some(parent) = chain_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        #[cfg(not(feature = "adzdb"))]
         let chain = Arc::new(ChainState::new(chain_db_path, &genesis, config.block_cache_size)?);
+        #[cfg(feature = "adzdb")]
+        let chain = Arc::new(ChainState::new(chain_db_path, &genesis)?);
         let best_height = chain.best_block_height().await;
         info!(best_height, "blockchain state initialized");
 
@@ -1264,7 +1264,7 @@ impl CoinjectNode {
                                         coinject_network::MeshBridgeCommand::BroadcastConsensusSalt { epoch, salt }
                                     );
                                 }
-                                coinject_consensus::CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score } => {
+                                coinject_consensus::CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score, signature, public_key } => {
                                     tracing::info!(epoch, "coordinator: broadcasting commit via mesh");
                                     let _ = bridge_cmd_for_coord.send(
                                         coinject_network::MeshBridgeCommand::BroadcastCommit {
@@ -1272,7 +1272,8 @@ impl CoinjectNode {
                                             solution_hash,
                                             node_id: coord_node_id,
                                             work_score,
-                                            signature: Vec::new(),
+                                            signature,
+                                            public_key,
                                         }
                                     );
                                 }
@@ -1486,11 +1487,7 @@ impl CoinjectNode {
                                                     solution_hash: commit.solution_hash,
                                                     work_score: commit.work_score,
                                                     signature: commit.signature,
-                                                    // Migration default: network peers that have not yet
-                                                    // upgraded to include their public key send all-zeros.
-                                                    // The commit collector accepts these during the transition
-                                                    // window (all-zero pubkey bypasses signature verification).
-                                                    public_key: [0u8; 32],
+                                                    public_key: commit.public_key,
                                                 },
                                             }
                                         );

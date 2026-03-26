@@ -367,7 +367,7 @@ fn test_router_fanout_formula() {
         );
 
         // Sanity: fanout should always be >= 1 and <= n
-        assert!(selected.len() >= 1, "n={}: fanout must be >= 1", n);
+        assert!(!selected.is_empty(), "n={}: fanout must be >= 1", n);
         assert!(selected.len() <= n, "n={}: fanout must be <= n", n);
 
         // Verify all selected peers are valid

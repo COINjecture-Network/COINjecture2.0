@@ -146,6 +146,7 @@ fn create_test_block(genesis: &Block) -> Block {
 }
 
 /// Wait for PeerConnected event on a mesh event receiver.
+#[allow(dead_code)]
 async fn wait_for_mesh_peer(
     rx: &mut mpsc::UnboundedReceiver<NetworkEvent>,
     timeout_dur: Duration,

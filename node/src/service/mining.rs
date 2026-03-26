@@ -1,6 +1,6 @@
 // Mining Loop
 // PoUW mining coordination and HuggingFace marketplace upload
-#![allow(dead_code)]
+#![allow(dead_code, clippy::too_many_arguments)]
 
 use super::*;
 use tracing::{trace, debug, info, warn, error};
@@ -244,9 +244,9 @@ impl CoinjectNode {
                             if let Some(status) = dimensional_pool_state.test_conjecture() {
                                 debug!(
                                     eta_converged = status.eta_convergence,
-                                    eta_error = (metrics.measured_eta - 0.707107).abs(),
+                                    eta_error = (metrics.measured_eta - std::f64::consts::FRAC_1_SQRT_2).abs(),
                                     lambda_converged = status.lambda_convergence,
-                                    lambda_error = (metrics.measured_lambda - 0.707107).abs(),
+                                    lambda_error = (metrics.measured_lambda - std::f64::consts::FRAC_1_SQRT_2).abs(),
                                     oracle_aligned = status.oracle_alignment,
                                     oracle_delta_error = (metrics.measured_oracle_delta - 0.231).abs(),
                                     "conjecture status"

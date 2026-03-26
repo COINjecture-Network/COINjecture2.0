@@ -376,6 +376,7 @@ pub fn spawn_write_loop(
 
 /// Complete connection setup: split stream, spawn read/write loops, and notify
 /// the event loop via a ConnectionEvent::Connected carrying the write_tx.
+#[allow(clippy::too_many_arguments)]
 pub fn finalize_connection(
     peer_id: NodeId,
     listen_addr: SocketAddr,

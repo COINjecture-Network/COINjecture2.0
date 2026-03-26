@@ -7,17 +7,15 @@ use coinject_core::{
     Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, SolutionReveal,
 };
 use coinject_network::cpp::{
-    config::{CppConfig, NodeType, MAGIC, VERSION},
+    config::{NodeType, MAGIC, VERSION},
     message::*,
-    peer::{Peer, PeerId, PeerState},
+    peer::PeerId,
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     router::EquilibriumRouter,
 };
 use coinject_network::reputation::{FaultType, ReputationManager};
-use std::net::SocketAddr;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, Duration};
 
 // =============================================================================
 // Test Helpers
@@ -177,7 +175,7 @@ async fn test_cpp_handshake_genesis_mismatch() {
     let correct_genesis = create_test_genesis_hash();
     let wrong_genesis = Hash::from_bytes([0xFFu8; 32]);
     let peer1_id = create_test_peer_id(1);
-    let peer2_id = create_test_peer_id(2);
+    let _peer2_id = create_test_peer_id(2);
 
     let server_task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -329,7 +327,7 @@ async fn test_cpp_block_broadcast_multiple_peers() {
     let selected = router.select_broadcast_peers();
 
     // Should select √n × η peers (for n=3: √3 × 0.707 ≈ 1.22 → 2 peers)
-    assert!(selected.len() >= 1 && selected.len() <= 3);
+    assert!(!selected.is_empty() && selected.len() <= 3);
 
     // Verify selected peers are valid
     for peer_id in &selected {

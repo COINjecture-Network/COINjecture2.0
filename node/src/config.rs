@@ -22,18 +22,13 @@ use std::path::PathBuf;
 // =============================================================================
 
 /// Block pruning strategy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum PruningMode {
     /// Keep all blocks forever (archive node behaviour, default)
+    #[default]
     Archive,
     /// Keep only the most recent N blocks (saves disk space)
     Full,
-}
-
-impl Default for PruningMode {
-    fn default() -> Self {
-        PruningMode::Archive
-    }
 }
 
 impl std::fmt::Display for PruningMode {
@@ -62,11 +57,12 @@ pub fn version_name(version: u32) -> &'static str {
 }
 
 /// Node type preference (actual classification is based on behavior)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum NodeTypePreference {
     /// Header-only sync for mobile/embedded devices (minimal storage)
     Light,
     /// Full validation with standard storage (default)
+    #[default]
     Full,
     /// Complete historical data preservation (2TB+ storage)
     Archive,
@@ -76,12 +72,6 @@ pub enum NodeTypePreference {
     Bounty,
     /// External data feeds and cross-chain bridges
     Oracle,
-}
-
-impl Default for NodeTypePreference {
-    fn default() -> Self {
-        NodeTypePreference::Full
-    }
 }
 
 impl std::fmt::Display for NodeTypePreference {

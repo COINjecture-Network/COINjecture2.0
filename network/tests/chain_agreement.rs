@@ -32,6 +32,7 @@ use coinject_network::NetworkService;
 type ChainStore = Arc<RwLock<HashMap<u64, Hash>>>;
 
 /// A test node with full block production and storage wiring.
+#[allow(dead_code)]
 struct ChainNode {
     coord_cmd_tx: mpsc::UnboundedSender<CoordinatorCommand>,
     node_id: [u8; 32],
@@ -50,7 +51,7 @@ impl ChainNode {
         let mesh_config = NetworkConfig {
             listen_addr: listen,
             seed_nodes: seeds,
-            data_dir: data_dir.into_path(),
+            data_dir: data_dir.keep(),
             ..Default::default()
         };
 
@@ -151,13 +152,16 @@ impl PreNode {
                         epoch,
                         solution_hash,
                         work_score,
+                        signature,
+                        public_key,
                     } => {
                         let _ = bridge_cmd_for_coord.send(BridgeCommand::BroadcastCommit {
                             epoch: *epoch,
                             solution_hash: *solution_hash,
                             node_id: coord_node_id,
                             work_score: *work_score,
-                            signature: Vec::new(),
+                            signature: signature.clone(),
+                            public_key: *public_key,
                         });
                     }
                     CoordinatorEvent::MinePhaseStarted { epoch, .. } => {

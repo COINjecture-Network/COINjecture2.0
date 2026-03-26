@@ -5,7 +5,6 @@ use coinject_network::cpp::{
     CppConfig, CppNetwork, NetworkCommand, NetworkEvent, NodeType as CppNodeType,
 };
 use std::net::SocketAddr;
-use tokio::time::{timeout, Duration};
 
 /// Helper to create a test block
 fn create_test_block(height: u64, prev_hash: Hash) -> Block {
@@ -60,7 +59,6 @@ async fn test_cpp_network_creation() {
     let (_network, _cmd_tx, _event_rx) = CppNetwork::new(config, peer_id, genesis);
 
     // Network created successfully (can't access private field)
-    assert!(true);
 }
 
 #[tokio::test]

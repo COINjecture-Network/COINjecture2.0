@@ -261,3 +261,62 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ─── Stage 6: Docker Smoke Test ─────────────────────────────────────────────
+  smoke-test:
+    name: Docker Smoke Test (4-node testnet)
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull latest image
+        run: |
+          IMAGE=ghcr.io/${{ github.repository }}:latest
+          docker pull "$IMAGE"
+
+      - name: Start 4-node testnet
+        run: |
+          IMAGE=ghcr.io/${{ github.repository }}:latest
+          docker network create coinject-testnet
+          # Node 1 — bootstrap (seed node, no peers)
+          docker run -d --name node1 \
+            --network coinject-testnet \
+            -p 8546:8545 \
+            -e P2P_LISTEN=0.0.0.0:30333 \
+            -e RPC_LISTEN=0.0.0.0:8545 \
+            "$IMAGE"
+          # Nodes 2-4 — connect to node1
+          for i in 2 3 4; do
+            docker run -d --name "node${i}" \
+              --network coinject-testnet \
+              -p "$((8546 + i - 1)):8545" \
+              -e P2P_LISTEN=0.0.0.0:30333 \
+              -e RPC_LISTEN=0.0.0.0:8545 \
+              -e BOOTSTRAP_PEERS=node1:30333 \
+              "$IMAGE"
+          done
+
+      - name: Wait for nodes to start
+        run: sleep 30
+
+      - name: Health check — all 4 nodes respond
+        run: |
+          for port in 8546 8547 8548 8549; do
+            echo "Checking node on port $port ..."
+            curl -sf --retry 5 --retry-delay 3 \
+              -X POST "http://localhost:${port}" \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","method":"coinject_getInfo","params":[],"id":1}' \
+              | grep -q '"result"' \
+              || { echo "Node on port $port failed health check"; exit 1; }
+          done
+          echo "All 4 nodes healthy"
+
+      - name: Cleanup testnet
+        if: always()
+        run: |
+          docker stop node1 node2 node3 node4 2>/dev/null || true
+          docker rm   node1 node2 node3 node4 2>/dev/null || true
+          docker network rm coinject-testnet 2>/dev/null || true

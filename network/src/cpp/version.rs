@@ -63,7 +63,7 @@ impl ProtocolVersion {
 
     /// Whether this version is within the supported range.
     pub fn is_supported(v: u8) -> bool {
-        v >= MIN_SUPPORTED_VERSION && v <= CURRENT_PROTOCOL_VERSION
+        (MIN_SUPPORTED_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&v)
     }
 
     /// Returns the feature flags enabled for this version.

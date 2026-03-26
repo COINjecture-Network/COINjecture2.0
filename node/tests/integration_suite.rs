@@ -1,6 +1,8 @@
 // =============================================================================
 // Phase 9 — Integration Testing Suite
 // =============================================================================
+// Note: This test suite uses the redb-based chain, not adzdb.
+#![cfg(not(feature = "adzdb"))]
 //
 // 10 integration test scenarios:
 //   1.  Multi-node test harness       — spin up 2-4 in-process nodes
@@ -33,7 +35,6 @@ use coinject_state::{
     AccountState, ChannelState, EscrowState, MarketplaceState, TimeLockState,
 };
 use redb::Database;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,6 +50,7 @@ struct TestNode {
     chain: Arc<ChainState>,
     state: Arc<AccountState>,
     tx_pool: Arc<RwLock<TransactionPool>>,
+    #[allow(dead_code)]
     genesis: Block,
     genesis_hash: Hash,
     /// Keep tempdir alive for the lifetime of the node.
@@ -940,7 +942,7 @@ async fn test_10_stress_transactions() {
         state.set_balance(&addr, 1_000_000).unwrap();
 
         let tx = make_transfer(&kp, recipient, 1_000, 10, 1);
-        let h = pool.add(tx).expect(&format!("add tx {}", i));
+        let h = pool.add(tx).unwrap_or_else(|_| panic!("add tx {}", i));
         tx_hashes.push(h);
     }
 
