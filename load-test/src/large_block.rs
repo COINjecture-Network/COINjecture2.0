@@ -12,10 +12,7 @@ use tracing::{info, warn};
 
 use crate::results::TestResults;
 
-pub async fn run_large_block_test(
-    rpc_url: &str,
-    tx_count: u64,
-) -> TestResults {
+pub async fn run_large_block_test(rpc_url: &str, tx_count: u64) -> TestResults {
     let mut results = TestResults::new("large-block");
     results.metric("config.tx_count", tx_count as f64, "txs");
 
@@ -35,7 +32,11 @@ pub async fn run_large_block_test(
     results.metric("fill.elapsed_secs", fill_elapsed, "s");
 
     if accepted == 0 {
-        results.finish(false, "Failed to submit any transactions to mempool".to_string(), fill_elapsed);
+        results.finish(
+            false,
+            "Failed to submit any transactions to mempool".to_string(),
+            fill_elapsed,
+        );
         return results;
     }
 
@@ -74,14 +75,19 @@ pub async fn run_large_block_test(
     }
 
     // Step 4: Inspect the mined block
-    let (txs_in_block, block_size_bytes) = inspect_block(&client, rpc_url, height_after).await
+    let (txs_in_block, block_size_bytes) = inspect_block(&client, rpc_url, height_after)
+        .await
         .unwrap_or((0, 0));
 
     results.metric("block.txs_included", txs_in_block as f64, "txs");
     results.metric("block.size_bytes", block_size_bytes as f64, "bytes");
     results.metric("block.size_kb", block_size_bytes as f64 / 1024.0, "KB");
 
-    let utilization = if tx_count > 0 { txs_in_block as f64 / tx_count.min(1000) as f64 * 100.0 } else { 0.0 };
+    let utilization = if tx_count > 0 {
+        txs_in_block as f64 / tx_count.min(1000) as f64 * 100.0
+    } else {
+        0.0
+    };
     results.metric("block.mempool_utilization_pct", utilization, "%");
 
     let elapsed = start.elapsed().as_secs_f64();
@@ -96,15 +102,13 @@ pub async fn run_large_block_test(
         elapsed,
     );
 
-    info!("large-block: complete — block {height_after} txs={txs_in_block} size={block_size_bytes}B");
+    info!(
+        "large-block: complete — block {height_after} txs={txs_in_block} size={block_size_bytes}B"
+    );
     results
 }
 
-async fn fill_mempool(
-    client: &reqwest::Client,
-    rpc_url: &str,
-    count: u64,
-) -> (u64, f64) {
+async fn fill_mempool(client: &reqwest::Client, rpc_url: &str, count: u64) -> (u64, f64) {
     let start = Instant::now();
     let mut accepted = 0u64;
 
@@ -139,15 +143,12 @@ async fn get_block_height(client: &reqwest::Client, rpc_url: &str) -> Option<u64
     });
     let resp = client.post(rpc_url).json(&body).send().await.ok()?;
     let json: serde_json::Value = resp.json().await.ok()?;
-    json["result"].as_u64()
+    json["result"]
+        .as_u64()
         .or_else(|| json["result"].as_str()?.parse().ok())
 }
 
-async fn inspect_block(
-    client: &reqwest::Client,
-    rpc_url: &str,
-    height: u64,
-) -> Option<(u64, u64)> {
+async fn inspect_block(client: &reqwest::Client, rpc_url: &str, height: u64) -> Option<(u64, u64)> {
     let body = serde_json::json!({
         "jsonrpc": "2.0", "id": 1,
         "method": "chain_getBlockByNumber", "params": [height]
@@ -156,10 +157,15 @@ async fn inspect_block(
     let json: serde_json::Value = resp.json().await.ok()?;
 
     let block = json.get("result")?;
-    let txs = block["transactions"].as_array().map(|a| a.len() as u64).unwrap_or(0);
+    let txs = block["transactions"]
+        .as_array()
+        .map(|a| a.len() as u64)
+        .unwrap_or(0);
 
     // Estimate block size from JSON serialization
-    let size = serde_json::to_string(block).map(|s| s.len() as u64).unwrap_or(0);
+    let size = serde_json::to_string(block)
+        .map(|s| s.len() as u64)
+        .unwrap_or(0);
 
     Some((txs, size))
 }

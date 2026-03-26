@@ -43,9 +43,7 @@ fn bench_work_score_batch(c: &mut Criterion) {
         b.iter(|| {
             inputs
                 .iter()
-                .map(|(st, vt, q)| {
-                    calc.calculate(black_box(*st), black_box(*vt), black_box(*q))
-                })
+                .map(|(st, vt, q)| calc.calculate(black_box(*st), black_box(*vt), black_box(*q)))
                 .sum::<f64>()
         });
     });

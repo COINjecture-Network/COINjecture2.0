@@ -53,7 +53,11 @@ fn test_doubling_solve_time_adds_one_bit() {
     let base = calc.calculate(Duration::from_secs(1), Duration::from_millis(1), 1.0);
     let doubled = calc.calculate(Duration::from_secs(2), Duration::from_millis(1), 1.0);
     // log2(2x) = log2(x) + 1
-    assert!((doubled - base - 1.0).abs() < 0.01, "diff = {}", doubled - base);
+    assert!(
+        (doubled - base - 1.0).abs() < 0.01,
+        "diff = {}",
+        doubled - base
+    );
 }
 
 #[test]
@@ -124,7 +128,10 @@ fn test_slow_solve_times_decrease_size() {
         adj.record_solve_time(Duration::from_secs(60)); // very slow
     }
     let new_size = adj.adjust_difficulty();
-    assert!(new_size < original, "Slow solve times must decrease problem size");
+    assert!(
+        new_size < original,
+        "Slow solve times must decrease problem size"
+    );
 }
 
 #[test]
@@ -173,7 +180,10 @@ fn test_stats_reports_recovery_mode_after_penalty() {
     let mut adj = DifficultyAdjuster::new();
     adj.penalize_failure();
     let stats = adj.stats();
-    assert!(stats.in_recovery_mode, "Must be in recovery mode after a penalty");
+    assert!(
+        stats.in_recovery_mode,
+        "Must be in recovery mode after a penalty"
+    );
 }
 
 #[test]
@@ -183,7 +193,10 @@ fn test_size_for_problem_type_sat_smaller_than_base() {
     let sat_size = adj.size_for_problem_type("SAT");
     let subset_size = adj.size_for_problem_type("SubsetSum");
     // SAT uses 0.75× ratio, SubsetSum is 1× capped at 50
-    assert!(sat_size <= subset_size, "SAT size should be <= SubsetSum size");
+    assert!(
+        sat_size <= subset_size,
+        "SAT size should be <= SubsetSum size"
+    );
     assert!(sat_size <= base);
 }
 

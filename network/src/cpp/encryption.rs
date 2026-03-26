@@ -42,10 +42,10 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 use rand::rngs::OsRng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -94,10 +94,7 @@ impl PeerAuthToken {
     const SIZE: usize = 128;
 
     /// Build a token from the local ephemeral X25519 key and static signing key.
-    fn new(
-        ephemeral_pub: &X25519PublicKey,
-        signing_key: &SigningKey,
-    ) -> Self {
+    fn new(ephemeral_pub: &X25519PublicKey, signing_key: &SigningKey) -> Self {
         let ephemeral_x25519_pubkey = *ephemeral_pub.as_bytes();
         let ed25519_pubkey = signing_key.verifying_key().to_bytes();
 
@@ -130,7 +127,11 @@ impl PeerAuthToken {
         ephemeral_x25519_pubkey.copy_from_slice(&bytes[..32]);
         ed25519_pubkey.copy_from_slice(&bytes[32..64]);
         ed25519_signature.copy_from_slice(&bytes[64..128]);
-        PeerAuthToken { ephemeral_x25519_pubkey, ed25519_pubkey, ed25519_signature }
+        PeerAuthToken {
+            ephemeral_x25519_pubkey,
+            ed25519_pubkey,
+            ed25519_signature,
+        }
     }
 
     /// Verify that the token's signature is valid.
@@ -144,8 +145,9 @@ impl PeerAuthToken {
         msg.extend_from_slice(AUTH_DOMAIN);
 
         let signature = Signature::from_bytes(&self.ed25519_signature);
-        verifying_key.verify(&msg, &signature)
-            .map_err(|e| EncryptionError::AuthFailed(format!("Signature verification failed: {}", e)))
+        verifying_key.verify(&msg, &signature).map_err(|e| {
+            EncryptionError::AuthFailed(format!("Signature verification failed: {}", e))
+        })
     }
 }
 
@@ -224,8 +226,11 @@ pub async fn perform_handshake_initiator(
     let dh_secret = ephemeral_secret.diffie_hellman(&peer_ephem_pub);
 
     // Derive session keys (initiator side)
-    let (init_send_key, resp_send_key) =
-        derive_session_keys(dh_secret.as_bytes(), ephemeral_pub.as_bytes(), &peer_token.ephemeral_x25519_pubkey);
+    let (init_send_key, resp_send_key) = derive_session_keys(
+        dh_secret.as_bytes(),
+        ephemeral_pub.as_bytes(),
+        &peer_token.ephemeral_x25519_pubkey,
+    );
 
     // Derive authenticated peer ID
     let authenticated_peer_id = *blake3::hash(&peer_token.ed25519_pubkey).as_bytes();
@@ -268,8 +273,11 @@ pub async fn perform_handshake_responder(
     let dh_secret = ephemeral_secret.diffie_hellman(&init_ephem_pub);
 
     // Derive session keys (responder side — keys are swapped relative to initiator)
-    let (init_send_key, resp_send_key) =
-        derive_session_keys(dh_secret.as_bytes(), &init_token.ephemeral_x25519_pubkey, ephemeral_pub.as_bytes());
+    let (init_send_key, resp_send_key) = derive_session_keys(
+        dh_secret.as_bytes(),
+        &init_token.ephemeral_x25519_pubkey,
+        ephemeral_pub.as_bytes(),
+    );
 
     let authenticated_peer_id = *blake3::hash(&init_token.ed25519_pubkey).as_bytes();
 
@@ -317,7 +325,8 @@ impl SessionCipher {
         let cipher = ChaCha20Poly1305::new_from_slice(&self.key)
             .expect("ChaCha20Poly1305 key length is always 32");
         let nonce = Self::make_nonce(counter);
-        let ciphertext = cipher.encrypt(&nonce, plaintext)
+        let ciphertext = cipher
+            .encrypt(&nonce, plaintext)
             .map_err(|_| EncryptionError::DecryptionFailed)?;
 
         // Frame layout: counter(8 LE) || ciphertext_len(4 LE) || ciphertext
@@ -332,11 +341,16 @@ impl SessionCipher {
     /// Decrypt a frame that was previously encrypted with the paired cipher.
     ///
     /// Returns the plaintext.
-    pub fn decrypt_frame(&mut self, counter: u64, ciphertext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+    pub fn decrypt_frame(
+        &mut self,
+        counter: u64,
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
         let cipher = ChaCha20Poly1305::new_from_slice(&self.key)
             .expect("ChaCha20Poly1305 key length is always 32");
         let nonce = Self::make_nonce(counter);
-        cipher.decrypt(&nonce, ciphertext)
+        cipher
+            .decrypt(&nonce, ciphertext)
             .map_err(|_| EncryptionError::DecryptionFailed)
     }
 
@@ -369,7 +383,8 @@ pub async fn read_encrypted_frame(
     const MAX_ENCRYPTED_FRAME: usize = 4 * 1_024 * 1_024 + 64;
     if ciphertext_len > MAX_ENCRYPTED_FRAME {
         return Err(EncryptionError::AuthFailed(format!(
-            "Encrypted frame too large: {} bytes", ciphertext_len
+            "Encrypted frame too large: {} bytes",
+            ciphertext_len
         )));
     }
 
@@ -514,7 +529,7 @@ mod tests {
         // and Initiator's recv == resp_send_key
         assert_eq!(i_send, r_send); // Both see the same initiator_send_key
         assert_eq!(i_recv, r_recv); // Both see the same responder_send_key
-        // But initiator sends with i_send and receives with i_recv (= resp_send),
-        // whereas responder sends with resp_send and receives with init_send.
+                                    // But initiator sends with i_send and receives with i_recv (= resp_send),
+                                    // whereas responder sends with resp_send and receives with init_send.
     }
 }

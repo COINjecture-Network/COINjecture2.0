@@ -1,6 +1,15 @@
 # Current Issues and Status
 
-Last Updated: 2026-03-25
+Last Updated: 2026-03-26
+
+## CI Green + Frontend Polish — Applied 2026-03-26
+
+| # | Item | Severity | Files | Status |
+|---|------|----------|-------|--------|
+| G1 | Three consecutive CI lint failures (clippy -D warnings) | High | workspace-wide | Fixed — `cargo fmt --all` (trailing whitespace in `node/src/service/mod.rs`, formatting diffs across 20+ files); duplicate `pub mod chain_adzdb` in `node/src/lib.rs` removed; missing `_block_cache_size` arg in adzdb-gated `ChainState::new` call added; `needless_return` in `node/tests/integration_suite.rs` removed |
+| G2 | Web wallet has no testnet warning | Medium | `web/coinjecture-evolved-main/src/pages/Wallet.tsx` | Fixed — prominent yellow banner added after `<Navigation />`, `pt-24` changed to `pt-8` on container, testnet warning added to "Create New Account" dialog |
+| G3 | Frontend README is default Lovable scaffold | Low | `web/coinjecture-evolved-main/README.md` | Fixed — replaced with project README covering stack, routes table, dev setup, RPC config, and testnet notice |
+| G4 | `.env` and `.env.production` tracked in git (contain RPC URLs) | Medium | `web/coinjecture-evolved-main/.env`, `.env.production`, `.gitignore` | Fixed — both files removed from git index (`git rm --cached`); `.env`, `.env.local`, `.env.production`, `.env.*.local` added to `.gitignore`; `.env.example` retained as template |
 
 ## Mesh Pubkey Wiring, CI Lint Fix, Docker Smoke Test — Applied 2026-03-25
 

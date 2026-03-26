@@ -305,7 +305,9 @@ pub fn validate_block_header_fields(
 
     // Time asymmetry: finite
     if !time_asymmetry_ratio.is_finite() {
-        return Err(ValidationError::NonFiniteTimeAsymmetry(time_asymmetry_ratio));
+        return Err(ValidationError::NonFiniteTimeAsymmetry(
+            time_asymmetry_ratio,
+        ));
     }
 
     // Solution quality: in [0.0, 1.0]
@@ -320,7 +322,9 @@ pub fn validate_block_header_fields(
 
     // Energy estimate: finite and non-negative
     if !energy_estimate_joules.is_finite() || energy_estimate_joules < 0.0 {
-        return Err(ValidationError::InvalidNonNegativeFloat(energy_estimate_joules));
+        return Err(ValidationError::InvalidNonNegativeFloat(
+            energy_estimate_joules,
+        ));
     }
 
     // Transaction count
@@ -343,9 +347,7 @@ pub fn validate_get_blocks_range(from_height: u64, to_height: u64) -> Result<(),
             to: to_height,
         });
     }
-    let range = to_height
-        .saturating_sub(from_height)
-        .saturating_add(1);
+    let range = to_height.saturating_sub(from_height).saturating_add(1);
     if range > MAX_BLOCKS_PER_REQUEST {
         return Err(ValidationError::BlockRequestRangeExceeded(range));
     }
@@ -529,7 +531,10 @@ mod tests {
 
     #[test]
     fn amount_zero_rejected() {
-        assert!(matches!(validate_amount(0), Err(ValidationError::ZeroAmount)));
+        assert!(matches!(
+            validate_amount(0),
+            Err(ValidationError::ZeroAmount)
+        ));
     }
 
     #[test]
@@ -644,9 +649,7 @@ mod tests {
     // ---- block header fields ----
 
     fn valid_header_call(tx_count: usize, now: i64) -> Result<(), ValidationError> {
-        validate_block_header_fields(
-            1, now, 1.5, 100.0, 0.8, 10.0, 50.0, tx_count, now,
-        )
+        validate_block_header_fields(1, now, 1.5, 100.0, 0.8, 10.0, 50.0, tx_count, now)
     }
 
     #[test]
@@ -778,7 +781,11 @@ mod tests {
     #[test]
     fn node_type_byte_valid_range() {
         for i in 0u8..=5 {
-            assert!(validate_node_type_byte(i).is_ok(), "byte {} should be valid", i);
+            assert!(
+                validate_node_type_byte(i).is_ok(),
+                "byte {} should be valid",
+                i
+            );
         }
     }
 
@@ -838,12 +845,18 @@ mod tests {
 
     #[test]
     fn port_zero_rejected() {
-        assert!(matches!(validate_port(0), Err(ValidationError::InvalidPort(0))));
+        assert!(matches!(
+            validate_port(0),
+            Err(ValidationError::InvalidPort(0))
+        ));
     }
 
     #[test]
     fn port_over_max_rejected() {
-        assert!(matches!(validate_port(65536), Err(ValidationError::InvalidPort(65536))));
+        assert!(matches!(
+            validate_port(65536),
+            Err(ValidationError::InvalidPort(65536))
+        ));
     }
 
     #[test]

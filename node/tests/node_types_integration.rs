@@ -785,8 +785,7 @@ mod flyclient_tests {
 
         // Use dimensionless security parameter (relative to chain length)
         let chain_length1 = server.chain_height() + 1;
-        let security_param1 = ((chain_length1 as f64).log2().ceil() as usize)
-            .clamp(10, 50);
+        let security_param1 = ((chain_length1 as f64).log2().ceil() as usize).clamp(10, 50);
 
         // Verify first proof
         let proof1 = server.generate_flyclient_proof(security_param1);
@@ -806,8 +805,7 @@ mod flyclient_tests {
 
         // Use updated dimensionless security parameter for extended chain
         let chain_length2 = server.chain_height() + 1;
-        let security_param2 = ((chain_length2 as f64).log2().ceil() as usize)
-            .clamp(10, 50);
+        let security_param2 = ((chain_length2 as f64).log2().ceil() as usize).clamp(10, 50);
 
         // Verify extended proof
         let proof2 = server.generate_flyclient_proof(security_param2);
@@ -1024,8 +1022,7 @@ mod e2e_tests {
 
         // Full node generates FlyClient proof with dimensionless security parameter
         let chain_length = 100;
-        let security_param = ((chain_length as f64).log2().ceil() as usize)
-            .clamp(10, 50);
+        let security_param = ((chain_length as f64).log2().ceil() as usize).clamp(10, 50);
         let proof_bytes = full_node.generate_flyclient_proof(security_param).await;
 
         if let Some(bytes) = proof_bytes {

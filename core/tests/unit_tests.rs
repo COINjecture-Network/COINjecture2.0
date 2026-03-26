@@ -102,7 +102,10 @@ fn test_sign_then_verify_succeeds() {
     let kp = KeyPair::generate();
     let msg = b"this is the signing payload";
     let sig = kp.sign(msg);
-    assert!(kp.public_key().verify(msg, &sig), "Fresh signature must verify");
+    assert!(
+        kp.public_key().verify(msg, &sig),
+        "Fresh signature must verify"
+    );
 }
 
 #[test]
@@ -299,14 +302,28 @@ fn test_zero_amount_transfer_is_invalid() {
 #[test]
 fn test_transaction_fee_accessor() {
     let kp = KeyPair::generate();
-    let tx = Transaction::new_transfer(kp.address(), Address::from_bytes([1u8; 32]), 500, 1234, 1, &kp);
+    let tx = Transaction::new_transfer(
+        kp.address(),
+        Address::from_bytes([1u8; 32]),
+        500,
+        1234,
+        1,
+        &kp,
+    );
     assert_eq!(tx.fee(), 1234);
 }
 
 #[test]
 fn test_transaction_nonce_accessor() {
     let kp = KeyPair::generate();
-    let tx = Transaction::new_transfer(kp.address(), Address::from_bytes([1u8; 32]), 500, 1000, 42, &kp);
+    let tx = Transaction::new_transfer(
+        kp.address(),
+        Address::from_bytes([1u8; 32]),
+        500,
+        1000,
+        42,
+        &kp,
+    );
     assert_eq!(tx.nonce(), 42);
 }
 

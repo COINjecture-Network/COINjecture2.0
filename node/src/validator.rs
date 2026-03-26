@@ -27,7 +27,9 @@ pub enum ValidationError {
     FutureTimestamp,
     #[error("Invalid timestamp: block is too old")]
     TooOldTimestamp,
-    #[error("Invalid timestamp: block timestamp {block_ts} not after parent timestamp {parent_ts}")]
+    #[error(
+        "Invalid timestamp: block timestamp {block_ts} not after parent timestamp {parent_ts}"
+    )]
     TimestampNotAfterParent { block_ts: i64, parent_ts: i64 },
     #[error("Invalid block sequence: height {actual} does not follow parent height {parent}")]
     InvalidSequence { actual: u64, parent: u64 },
@@ -311,10 +313,7 @@ impl BlockValidator {
     /// Note: the coinbase transaction is exempt (it is always first, outside
     /// this list) and genesis blocks with no transactions trivially satisfy
     /// this rule.
-    pub fn validate_transaction_ordering(
-        &self,
-        block: &Block,
-    ) -> Result<(), ValidationError> {
+    pub fn validate_transaction_ordering(&self, block: &Block) -> Result<(), ValidationError> {
         if block.transactions.len() < 2 {
             return Ok(()); // 0 or 1 transactions are trivially ordered.
         }

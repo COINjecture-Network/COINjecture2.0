@@ -3,9 +3,9 @@
 // =============================================================================
 // Message definitions for the CPP protocol
 
-use coinject_core::{Block, Transaction, Hash, BlockHeader};
-use serde::{Deserialize, Serialize};
 use crate::cpp::flock::FlockStateCompact;
+use coinject_core::{Block, BlockHeader, Hash, Transaction};
+use serde::{Deserialize, Serialize};
 // blake3 and ed25519_dalek used in authentication helpers below
 
 /// Message type identifier
@@ -17,7 +17,7 @@ pub enum MessageType {
     Hello = 0x01,
     /// Handshake acknowledgment
     HelloAck = 0x02,
-    
+
     // === SYNC ===
     /// Peer status update (height, hash, node type)
     Status = 0x10,
@@ -29,13 +29,13 @@ pub enum MessageType {
     GetHeaders = 0x13,
     /// Header response
     Headers = 0x14,
-    
+
     // === PROPAGATION ===
     /// Newly mined block announcement
     NewBlock = 0x20,
     /// New transaction announcement
     NewTransaction = 0x21,
-    
+
     // === LIGHT CLIENT MINING ===
     /// Light client submits proof-of-work
     SubmitWork = 0x30,
@@ -47,7 +47,7 @@ pub enum MessageType {
     GetWork = 0x33,
     /// Mining work template response
     Work = 0x34,
-    
+
     // === CONTROL ===
     /// Keep-alive ping
     Ping = 0xF0,
@@ -80,7 +80,7 @@ impl MessageType {
             _ => Err(format!("Unknown message type: 0x{:02X}", value)),
         }
     }
-    
+
     /// Get message priority based on dimensional scale
     pub fn priority(&self) -> MessagePriority {
         match self {
@@ -92,7 +92,9 @@ impl MessageType {
             MessageType::Blocks => MessagePriority::D5_Background,
             MessageType::GetHeaders => MessagePriority::D6_Bulk,
             MessageType::Headers => MessagePriority::D7_Archive,
-            MessageType::SubmitWork | MessageType::WorkAccepted | MessageType::WorkRejected => MessagePriority::D2_High,
+            MessageType::SubmitWork | MessageType::WorkAccepted | MessageType::WorkRejected => {
+                MessagePriority::D2_High
+            }
             MessageType::GetWork | MessageType::Work => MessagePriority::D3_Normal,
             MessageType::Ping | MessageType::Pong => MessagePriority::D8_Historical,
             MessageType::Disconnect => MessagePriority::D1_Critical,
@@ -107,14 +109,14 @@ impl MessageType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(non_camel_case_types)]
 pub enum MessagePriority {
-    D1_Critical = 1,      // τ = 0.00, scale = 1.000 (immediate)
-    D2_High = 2,          // τ = 0.20, scale = 0.867
-    D3_Normal = 3,        // τ = 0.41, scale = 0.750
-    D4_Low = 4,           // τ = 0.68, scale = 0.618 (φ⁻¹)
-    D5_Background = 5,    // τ = 0.98, scale = 0.500 (2⁻¹)
-    D6_Bulk = 6,          // τ = 1.36, scale = 0.382 (φ⁻²)
-    D7_Archive = 7,       // τ = 1.96, scale = 0.250 (2⁻²)
-    D8_Historical = 8,    // τ = 2.72, scale = 0.146 (e⁻¹)
+    D1_Critical = 1,   // τ = 0.00, scale = 1.000 (immediate)
+    D2_High = 2,       // τ = 0.20, scale = 0.867
+    D3_Normal = 3,     // τ = 0.41, scale = 0.750
+    D4_Low = 4,        // τ = 0.68, scale = 0.618 (φ⁻¹)
+    D5_Background = 5, // τ = 0.98, scale = 0.500 (2⁻¹)
+    D6_Bulk = 6,       // τ = 1.36, scale = 0.382 (φ⁻²)
+    D7_Archive = 7,    // τ = 1.96, scale = 0.250 (2⁻²)
+    D8_Historical = 8, // τ = 2.72, scale = 0.146 (e⁻¹)
 }
 
 impl MessagePriority {
@@ -124,7 +126,7 @@ impl MessagePriority {
         let eta = std::f64::consts::FRAC_1_SQRT_2;
         (-eta * tau).exp()
     }
-    
+
     /// Get the tau value for this priority
     pub fn tau(&self) -> f64 {
         match self {
@@ -168,7 +170,8 @@ mod serde_sig64 {
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<[u8; 64], A::Error> {
                 let mut arr = [0u8; 64];
                 for (i, slot) in arr.iter_mut().enumerate() {
-                    *slot = seq.next_element()?
+                    *slot = seq
+                        .next_element()?
                         .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
                 }
                 Ok(arr)
@@ -178,15 +181,17 @@ mod serde_sig64 {
     }
 }
 
-fn default_sig() -> [u8; 64] { [0u8; 64] }
+fn default_sig() -> [u8; 64] {
+    [0u8; 64]
+}
 
 // =============================================================================
 // Message-level validation
 // =============================================================================
 
 use coinject_core::validation::{
-    validate_node_type_byte, validate_reason_string,
-    validate_get_blocks_range, validate_get_headers,
+    validate_get_blocks_range, validate_get_headers, validate_node_type_byte,
+    validate_reason_string,
 };
 
 // === MESSAGE PAYLOADS ===
@@ -230,8 +235,7 @@ pub struct HelloMessage {
 impl HelloMessage {
     /// Validate structural constraints of a received HelloMessage.
     pub fn validate(&self) -> Result<(), String> {
-        validate_node_type_byte(self.node_type)
-            .map_err(|e| e.to_string())?;
+        validate_node_type_byte(self.node_type).map_err(|e| e.to_string())?;
         // Peer ID must not be all-zeros (would collide with default)
         if self.peer_id == [0u8; 32] {
             return Err("peer_id must not be all-zeros".to_string());
@@ -319,7 +323,7 @@ pub fn verify_hello_auth(
     connection_nonce: u64,
     peer_id: &[u8; 32],
 ) -> Result<(), String> {
-    use ed25519_dalek::{Verifier, VerifyingKey, Signature};
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
     // All-zeros means unauthenticated (legacy/dev mode) — caller decides whether to allow
     if *ed25519_pubkey == [0u8; 32] {
@@ -332,7 +336,8 @@ pub fn verify_hello_auth(
     let challenge = hello_challenge(genesis_hash, timestamp, connection_nonce, peer_id);
     let signature = Signature::from_bytes(auth_signature);
 
-    verifying_key.verify(&challenge, &signature)
+    verifying_key
+        .verify(&challenge, &signature)
         .map_err(|e| format!("Signature verification failed: {}", e))?;
 
     // Also verify peer_id matches BLAKE3(ed25519_pubkey)
@@ -340,7 +345,8 @@ pub fn verify_hello_auth(
     if derived_peer_id != *peer_id {
         return Err(format!(
             "peer_id mismatch: claimed {:?} but derived from pubkey {:?}",
-            &peer_id[..4], &derived_peer_id[..4]
+            &peer_id[..4],
+            &derived_peer_id[..4]
         ));
     }
 
@@ -350,8 +356,7 @@ pub fn verify_hello_auth(
 impl HelloAckMessage {
     /// Validate structural constraints of a received HelloAckMessage.
     pub fn validate(&self) -> Result<(), String> {
-        validate_node_type_byte(self.node_type)
-            .map_err(|e| e.to_string())?;
+        validate_node_type_byte(self.node_type).map_err(|e| e.to_string())?;
         if self.peer_id == [0u8; 32] {
             return Err("peer_id must not be all-zeros".to_string());
         }
@@ -378,8 +383,7 @@ pub struct StatusMessage {
 impl StatusMessage {
     /// Validate structural constraints of a received StatusMessage.
     pub fn validate(&self) -> Result<(), String> {
-        validate_node_type_byte(self.node_type)
-            .map_err(|e| e.to_string())
+        validate_node_type_byte(self.node_type).map_err(|e| e.to_string())
     }
 }
 
@@ -397,8 +401,7 @@ pub struct GetBlocksMessage {
 impl GetBlocksMessage {
     /// Validate the height range requested.
     pub fn validate(&self) -> Result<(), String> {
-        validate_get_blocks_range(self.from_height, self.to_height)
-            .map_err(|e| e.to_string())
+        validate_get_blocks_range(self.from_height, self.to_height).map_err(|e| e.to_string())
     }
 }
 
@@ -440,8 +443,7 @@ pub struct GetHeadersMessage {
 impl GetHeadersMessage {
     /// Validate the max_headers field.
     pub fn validate(&self) -> Result<(), String> {
-        validate_get_headers(self.max_headers)
-            .map_err(|e| e.to_string())
+        validate_get_headers(self.max_headers).map_err(|e| e.to_string())
     }
 }
 
@@ -500,8 +502,7 @@ pub struct WorkRejectedMessage {
 impl WorkRejectedMessage {
     /// Validate the rejection reason string length.
     pub fn validate(&self) -> Result<(), String> {
-        validate_reason_string(&self.reason)
-            .map_err(|e| e.to_string())
+        validate_reason_string(&self.reason).map_err(|e| e.to_string())
     }
 }
 
@@ -551,8 +552,7 @@ pub struct DisconnectMessage {
 impl DisconnectMessage {
     /// Validate the reason string length.
     pub fn validate(&self) -> Result<(), String> {
-        validate_reason_string(&self.reason)
-            .map_err(|e| e.to_string())
+        validate_reason_string(&self.reason).map_err(|e| e.to_string())
     }
 }
 
@@ -578,7 +578,10 @@ mod tests {
         };
         assert!(valid.validate().is_ok());
 
-        let invalid_type = HelloMessage { node_type: 99, ..valid.clone() };
+        let invalid_type = HelloMessage {
+            node_type: 99,
+            ..valid.clone()
+        };
         assert!(invalid_type.validate().is_err());
     }
 
@@ -601,32 +604,56 @@ mod tests {
 
     #[test]
     fn get_blocks_range_validated() {
-        let valid = GetBlocksMessage { from_height: 10, to_height: 20, request_id: 1 };
+        let valid = GetBlocksMessage {
+            from_height: 10,
+            to_height: 20,
+            request_id: 1,
+        };
         assert!(valid.validate().is_ok());
 
-        let inverted = GetBlocksMessage { from_height: 50, to_height: 10, request_id: 1 };
+        let inverted = GetBlocksMessage {
+            from_height: 50,
+            to_height: 10,
+            request_id: 1,
+        };
         assert!(inverted.validate().is_err());
 
         // Exceeds limit (513 blocks)
-        let too_big = GetBlocksMessage { from_height: 0, to_height: 512, request_id: 1 };
+        let too_big = GetBlocksMessage {
+            from_height: 0,
+            to_height: 512,
+            request_id: 1,
+        };
         assert!(too_big.validate().is_err());
     }
 
     #[test]
     fn get_headers_validated() {
-        let valid = GetHeadersMessage { from_height: 0, max_headers: 100, request_id: 1 };
+        let valid = GetHeadersMessage {
+            from_height: 0,
+            max_headers: 100,
+            request_id: 1,
+        };
         assert!(valid.validate().is_ok());
 
-        let too_many = GetHeadersMessage { from_height: 0, max_headers: 9999, request_id: 1 };
+        let too_many = GetHeadersMessage {
+            from_height: 0,
+            max_headers: 9999,
+            request_id: 1,
+        };
         assert!(too_many.validate().is_err());
     }
 
     #[test]
     fn disconnect_reason_length_validated() {
-        let ok = DisconnectMessage { reason: "normal".to_string() };
+        let ok = DisconnectMessage {
+            reason: "normal".to_string(),
+        };
         assert!(ok.validate().is_ok());
 
-        let too_long = DisconnectMessage { reason: "x".repeat(300) };
+        let too_long = DisconnectMessage {
+            reason: "x".repeat(300),
+        };
         assert!(too_long.validate().is_err());
     }
 
@@ -659,26 +686,29 @@ mod tests {
             MessageType::Pong,
             MessageType::Disconnect,
         ];
-        
+
         for msg_type in types {
             let byte = msg_type as u8;
             let recovered = MessageType::from_u8(byte).unwrap();
             assert_eq!(msg_type, recovered);
         }
     }
-    
+
     #[test]
     fn test_message_priorities() {
         // NewBlock should have highest priority
-        assert_eq!(MessageType::NewBlock.priority(), MessagePriority::D1_Critical);
-        
+        assert_eq!(
+            MessageType::NewBlock.priority(),
+            MessagePriority::D1_Critical
+        );
+
         // Ping should have lowest priority
         assert_eq!(MessageType::Ping.priority(), MessagePriority::D8_Historical);
-        
+
         // Verify priority ordering
         assert!(MessagePriority::D1_Critical < MessagePriority::D8_Historical);
     }
-    
+
     #[test]
     fn test_dimensional_scales() {
         // D1 should be 1.0 (e^0)
@@ -713,7 +743,8 @@ mod tests {
             auth_signature: [0u8; 64],
         };
         let bytes = bincode::serialize(&msg).expect("HelloMessage must serialize");
-        let recovered: HelloMessage = bincode::deserialize(&bytes).expect("HelloMessage must deserialize");
+        let recovered: HelloMessage =
+            bincode::deserialize(&bytes).expect("HelloMessage must deserialize");
         assert_eq!(recovered.version, msg.version);
         assert_eq!(recovered.peer_id, msg.peer_id);
         assert_eq!(recovered.best_height, msg.best_height);
@@ -724,13 +755,19 @@ mod tests {
 
     #[test]
     fn test_ping_pong_bincode_roundtrip() {
-        let ping = PingMessage { timestamp: 123_456, nonce: 7_890 };
+        let ping = PingMessage {
+            timestamp: 123_456,
+            nonce: 7_890,
+        };
         let bytes = bincode::serialize(&ping).unwrap();
         let recovered: PingMessage = bincode::deserialize(&bytes).unwrap();
         assert_eq!(recovered.timestamp, ping.timestamp);
         assert_eq!(recovered.nonce, ping.nonce);
 
-        let pong = PongMessage { timestamp: 123_456, nonce: 7_890 };
+        let pong = PongMessage {
+            timestamp: 123_456,
+            nonce: 7_890,
+        };
         let bytes = bincode::serialize(&pong).unwrap();
         let recovered: PongMessage = bincode::deserialize(&bytes).unwrap();
         assert_eq!(recovered.nonce, pong.nonce);
@@ -738,7 +775,11 @@ mod tests {
 
     #[test]
     fn test_get_blocks_message_roundtrip() {
-        let msg = GetBlocksMessage { from_height: 10, to_height: 50, request_id: 42 };
+        let msg = GetBlocksMessage {
+            from_height: 10,
+            to_height: 50,
+            request_id: 42,
+        };
         let bytes = bincode::serialize(&msg).unwrap();
         let recovered: GetBlocksMessage = bincode::deserialize(&bytes).unwrap();
         assert_eq!(recovered.from_height, 10);
@@ -748,7 +789,9 @@ mod tests {
 
     #[test]
     fn test_disconnect_message_roundtrip() {
-        let msg = DisconnectMessage { reason: "too many peers".to_string() };
+        let msg = DisconnectMessage {
+            reason: "too many peers".to_string(),
+        };
         let bytes = bincode::serialize(&msg).unwrap();
         let recovered: DisconnectMessage = bincode::deserialize(&bytes).unwrap();
         assert_eq!(recovered.reason, msg.reason);
@@ -799,7 +842,12 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for mt in &all_types {
             let byte = *mt as u8;
-            assert!(seen.insert(byte), "Duplicate byte value 0x{:02X} for {:?}", byte, mt);
+            assert!(
+                seen.insert(byte),
+                "Duplicate byte value 0x{:02X} for {:?}",
+                byte,
+                mt
+            );
         }
     }
 

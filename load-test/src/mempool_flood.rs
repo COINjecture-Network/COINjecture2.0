@@ -7,17 +7,13 @@
 //   2. Fee market behavior under congestion
 //   3. Node stability when mempool is saturated
 
-use std::time::{Duration, Instant};
 use futures::future::join_all;
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
-use crate::results::{TestResults, LatencyStats};
+use crate::results::{LatencyStats, TestResults};
 
-pub async fn run_mempool_flood(
-    rpc_url: &str,
-    tx_count: u64,
-    concurrency: usize,
-) -> TestResults {
+pub async fn run_mempool_flood(rpc_url: &str, tx_count: u64, concurrency: usize) -> TestResults {
     let mut results = TestResults::new("mempool-flood");
     results.metric("config.tx_count", tx_count as f64, "txs");
     results.metric("config.concurrency", concurrency as f64, "workers");
@@ -28,7 +24,7 @@ pub async fn run_mempool_flood(
         reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
             .build()
-            .unwrap()
+            .unwrap(),
     );
 
     let rpc = std::sync::Arc::new(rpc_url.to_string());
@@ -40,8 +36,11 @@ pub async fn run_mempool_flood(
 
     for worker_id in 0..concurrency {
         let offset = (worker_id * batch_size) as u64;
-        let count = batch_size.min((tx_count as usize).saturating_sub(worker_id * batch_size)) as u64;
-        if count == 0 { break; }
+        let count =
+            batch_size.min((tx_count as usize).saturating_sub(worker_id * batch_size)) as u64;
+        if count == 0 {
+            break;
+        }
 
         let client = client.clone();
         let rpc = rpc.clone();
@@ -64,7 +63,9 @@ pub async fn run_mempool_flood(
                 accepted += acc;
                 rejected_capacity += cap;
                 rejected_other += other;
-                for l in lat { latency.record(l); }
+                for l in lat {
+                    latency.record(l);
+                }
             }
             Err(e) => {
                 warn!("worker panicked: {e}");
@@ -80,8 +81,15 @@ pub async fn run_mempool_flood(
     results.metric("mempool.rejected_capacity", rejected_capacity as f64, "txs");
     results.metric("mempool.rejected_other", rejected_other as f64, "txs");
     results.metric("mempool.total_submitted", total as f64, "txs");
-    results.metric("mempool.acceptance_rate",
-        if total > 0 { accepted as f64 / total as f64 * 100.0 } else { 0.0 }, "%");
+    results.metric(
+        "mempool.acceptance_rate",
+        if total > 0 {
+            accepted as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        },
+        "%",
+    );
 
     latency.apply_to_results(&mut results, "submit.latency");
 
@@ -147,7 +155,8 @@ async fn flood_worker(
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
                     if let Some(err) = json.get("error") {
                         let code = err["code"].as_i64().unwrap_or(-1);
-                        if code == -32603 { // Internal error — likely mempool full
+                        if code == -32603 {
+                            // Internal error — likely mempool full
                             rejected_capacity += 1;
                         } else {
                             rejected_other += 1;

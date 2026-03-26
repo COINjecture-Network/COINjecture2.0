@@ -49,7 +49,11 @@ pub struct AdzdbChainState {
 
 impl AdzdbChainState {
     /// Create or open chain state database using ADZDB
-    pub fn new<P: AsRef<Path>>(path: P, genesis_block: &Block, _block_cache_size: usize) -> Result<Self, ChainError> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        genesis_block: &Block,
+        _block_cache_size: usize,
+    ) -> Result<Self, ChainError> {
         // If path is a file (like chain.db), use its parent directory
         // Otherwise use the path directly
         let base_path = if path.as_ref().is_file() {

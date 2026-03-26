@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-
 // Table definitions for redb (using fixed-size arrays for hash keys, strings for metadata keys)
 const BLOCKS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("blocks");
 const METADATA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
@@ -670,7 +669,11 @@ impl ChainState {
             }
         }
 
-        tracing::info!("Pruned {} blocks (heights 1..{})", pruned_count, prune_below);
+        tracing::info!(
+            "Pruned {} blocks (heights 1..{})",
+            pruned_count,
+            prune_below
+        );
         Ok(pruned_count)
     }
 
@@ -681,15 +684,15 @@ impl ChainState {
     /// run this when no writes are in flight (e.g. node is idle).
     pub fn backup(&self, dest_dir: &Path) -> Result<(), ChainError> {
         std::fs::create_dir_all(dest_dir).map_err(|e| {
-            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
-                redb::StorageError::Io(e),
-            ))
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(redb::StorageError::Io(
+                e,
+            )))
         })?;
         let backup_path = dest_dir.join("chain.db.bak");
         std::fs::copy(&self.db_path, &backup_path).map_err(|e| {
-            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
-                redb::StorageError::Io(e),
-            ))
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(redb::StorageError::Io(
+                e,
+            )))
         })?;
         tracing::info!("Chain database backed up to {:?}", backup_path);
         Ok(())
@@ -720,9 +723,9 @@ impl ChainState {
     /// Return the on-disk size of the chain database file in bytes.
     pub fn db_file_size(&self) -> Result<u64, ChainError> {
         let meta = std::fs::metadata(&self.db_path).map_err(|e| {
-            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
-                redb::StorageError::Io(e),
-            ))
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(redb::StorageError::Io(
+                e,
+            )))
         })?;
         Ok(meta.len())
     }
@@ -734,19 +737,23 @@ impl ChainState {
     /// block height so receivers can validate integrity.
     pub async fn export_snapshot(&self, dest_dir: &Path) -> Result<PathBuf, ChainError> {
         std::fs::create_dir_all(dest_dir).map_err(|e| {
-            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
-                redb::StorageError::Io(e),
-            ))
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(redb::StorageError::Io(
+                e,
+            )))
         })?;
         let height = self.best_block_height().await;
         let snap_name = format!("chain-snapshot-{}.db", height);
         let snap_path = dest_dir.join(&snap_name);
         std::fs::copy(&self.db_path, &snap_path).map_err(|e| {
-            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(
-                redb::StorageError::Io(e),
-            ))
+            ChainError::DatabaseCreationError(redb::DatabaseError::Storage(redb::StorageError::Io(
+                e,
+            )))
         })?;
-        tracing::info!("Chain snapshot exported to {:?} (height {})", snap_path, height);
+        tracing::info!(
+            "Chain snapshot exported to {:?} (height {})",
+            snap_path,
+            height
+        );
         Ok(snap_path)
     }
 }

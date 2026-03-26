@@ -203,8 +203,11 @@ impl GoldenGenerator {
     pub fn next_f64(&mut self) -> f64 {
         let bytes = self.next_bytes();
         // SAFETY: next_bytes() always returns exactly 32 bytes; taking 8 of them never fails.
-        let bits = u64::from_le_bytes(bytes[0..8].try_into()
-            .expect("next_bytes always returns 32 bytes; 8-byte slice is always valid"));
+        let bits = u64::from_le_bytes(
+            bytes[0..8]
+                .try_into()
+                .expect("next_bytes always returns 32 bytes; 8-byte slice is always valid"),
+        );
         // Use 53 bits for f64 mantissa precision
         (bits >> 11) as f64 / (1u64 << 53) as f64
     }
@@ -213,8 +216,11 @@ impl GoldenGenerator {
     pub fn next_u64(&mut self) -> u64 {
         let bytes = self.next_bytes();
         // SAFETY: next_bytes() always returns exactly 32 bytes; taking 8 of them never fails.
-        u64::from_le_bytes(bytes[0..8].try_into()
-            .expect("next_bytes always returns 32 bytes; 8-byte slice is always valid"))
+        u64::from_le_bytes(
+            bytes[0..8]
+                .try_into()
+                .expect("next_bytes always returns 32 bytes; 8-byte slice is always valid"),
+        )
     }
 }
 
@@ -331,9 +337,7 @@ mod tests {
     #[test]
     fn test_golden_sort_key_distribution() {
         // Verify keys are well-distributed (no obvious patterns)
-        let mut keys: Vec<u64> = (0..100)
-            .map(GoldenGenerator::golden_sort_key)
-            .collect();
+        let mut keys: Vec<u64> = (0..100).map(GoldenGenerator::golden_sort_key).collect();
         let original = keys.clone();
         keys.sort();
 

@@ -4,16 +4,18 @@
 // NOTE: Some error codes are prepared for future RPC methods
 #![allow(dead_code)]
 
+use crate::middleware::{AuditLogLayer, SecurityConfig, SecurityGateLayer};
+use crate::tls::TlsConfig;
 use coinject_core::{
-    Address, Balance, Block, BlockHeader, Hash, Transaction,
-    ProblemType, SubmissionMode, ProblemReveal, WellformednessProof, ProblemParameters,
+    Address, Balance, Block, BlockHeader, Hash, ProblemParameters, ProblemReveal, ProblemType,
+    SubmissionMode, Transaction, WellformednessProof,
 };
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
-use coinject_state::{MarketplaceStats, ProblemSubmission};
 use coinject_state::{
-    AccountState, TimeLockState, TimeLock, EscrowState, Escrow,
-    ChannelState, Channel, MarketplaceState
+    AccountState, Channel, ChannelState, Escrow, EscrowState, MarketplaceState, TimeLock,
+    TimeLockState,
 };
+use coinject_state::{MarketplaceStats, ProblemSubmission};
 use jsonrpsee::{
     core::{async_trait, RpcResult},
     proc_macros::rpc,
@@ -25,11 +27,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tower::ServiceBuilder;
 use tower::timeout::TimeoutLayer;
-use tower_http::cors::{CorsLayer, Any};
-use crate::middleware::{AuditLogLayer, SecurityGateLayer, SecurityConfig};
-use crate::tls::TlsConfig;
+use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
 
 /// Trait for reading blockchain data (allows node to provide chain state without circular dependency)
 pub trait BlockchainReader: Send + Sync {
@@ -486,12 +486,12 @@ impl RpcServerImpl {
                     ProblemType::SubsetSum { numbers, .. } => {
                         Some(format!("SubsetSum({})", numbers.len()))
                     }
-                    ProblemType::SAT { variables, clauses } => {
-                        Some(format!("SAT(vars={}, clauses={})", variables, clauses.len()))
-                    }
-                    ProblemType::TSP { cities, .. } => {
-                        Some(format!("TSP(cities={})", cities))
-                    }
+                    ProblemType::SAT { variables, clauses } => Some(format!(
+                        "SAT(vars={}, clauses={})",
+                        variables,
+                        clauses.len()
+                    )),
+                    ProblemType::TSP { cities, .. } => Some(format!("TSP(cities={})", cities)),
                     ProblemType::Custom { .. } => Some("Custom".to_string()),
                 };
                 let size = match problem {
@@ -567,14 +567,29 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Check if it's JSON format (from web wallet) or hex-encoded bincode (from CLI)
         let tx: Transaction = if tx_hex.trim().starts_with('{') {
             // JSON format (from web wallet)
-            serde_json::from_str(&tx_hex)
-                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("JSON deserialize error: {}", e), None::<()>))?
+            serde_json::from_str(&tx_hex).map_err(|e| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    format!("JSON deserialize error: {}", e),
+                    None::<()>,
+                )
+            })?
         } else {
             // Hex-encoded bincode format (from CLI wallet)
-            let tx_bytes = hex::decode(tx_hex.trim_start_matches("0x"))
-                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Hex decode error: {}", e), None::<()>))?;
-            bincode::deserialize(&tx_bytes)
-                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Bincode deserialize error: {}", e), None::<()>))?
+            let tx_bytes = hex::decode(tx_hex.trim_start_matches("0x")).map_err(|e| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    format!("Hex decode error: {}", e),
+                    None::<()>,
+                )
+            })?;
+            bincode::deserialize(&tx_bytes).map_err(|e| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    format!("Bincode deserialize error: {}", e),
+                    None::<()>,
+                )
+            })?
         };
 
         // Basic validation
@@ -592,7 +607,11 @@ impl CoinjectRpcServer for RpcServerImpl {
             Ok(hash) => {
                 let pool_size = pool.len();
                 drop(pool);
-                println!("✅ Transaction added to pool! Hash: {}, Pool size: {}", hex::encode(hash.as_bytes()), pool_size);
+                println!(
+                    "✅ Transaction added to pool! Hash: {}, Pool size: {}",
+                    hex::encode(hash.as_bytes()),
+                    pool_size
+                );
                 Ok(hex::encode(hash.as_bytes()))
             }
             Err(e) => {
@@ -660,7 +679,10 @@ impl CoinjectRpcServer for RpcServerImpl {
         let peer_count = *self.state.peer_count.read().await;
 
         // Calculate cumulative work from chain (sum of work scores)
-        let total_work = self.state.blockchain.calculate_chain_work(best_height)
+        let total_work = self
+            .state
+            .blockchain
+            .calculate_chain_work(best_height)
             .unwrap_or(0);
 
         // Check if syncing (simplified: syncing if we have peers but recent blocks are slow)
@@ -678,7 +700,10 @@ impl CoinjectRpcServer for RpcServerImpl {
     }
 
     async fn get_open_problems(&self) -> RpcResult<Vec<ProblemInfo>> {
-        let problems = self.state.marketplace_state.get_open_problems()
+        let problems = self
+            .state
+            .marketplace_state
+            .get_open_problems()
             .map_err(Self::internal_error)?;
         Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
     }
@@ -686,13 +711,18 @@ impl CoinjectRpcServer for RpcServerImpl {
     async fn get_problem(&self, problem_id: String) -> RpcResult<Option<ProblemInfo>> {
         Self::validate_str_len(&problem_id, 256, "problem_id")?;
         let hash = self.parse_hash(&problem_id)?;
-        let problem = self.state.marketplace_state.get_problem(&hash)
+        let problem = self
+            .state
+            .marketplace_state
+            .get_problem(&hash)
             .map_err(Self::internal_error)?;
         Ok(problem.map(|p| self.problem_to_info(&p)))
     }
 
     async fn get_marketplace_stats(&self) -> RpcResult<MarketplaceStats> {
-        self.state.marketplace_state.get_stats()
+        self.state
+            .marketplace_state
+            .get_stats()
             .map_err(Self::internal_error)
     }
 
@@ -703,13 +733,25 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&params.vk_hash, 256, "vk_hash")?;
         Self::validate_str_len(&params.problem_type, 256, "problem_type")?;
         if params.size > 100_000 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "size exceeds maximum of 100000", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "size exceeds maximum of 100000",
+                None::<()>,
+            ));
         }
         if params.complexity_estimate < 0.0 || params.complexity_estimate > 1e15 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "complexity_estimate out of range", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "complexity_estimate out of range",
+                None::<()>,
+            ));
         }
         if params.expiration_days == 0 || params.expiration_days > 365 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "expiration_days must be 1-365", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "expiration_days must be 1-365",
+                None::<()>,
+            ));
         }
 
         // Parse commitment hash
@@ -754,14 +796,17 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Submit to marketplace state (using placeholder address - in production this would come from authenticated session)
         let submitter = Address::from_bytes([0u8; 32]); // TODO: Get from authenticated user session
 
-        let problem_id = self.state.marketplace_state.submit_problem(
-            submission_mode,
-            submitter,
-            params.bounty,
-            params.min_work_score,
-            params.expiration_days,
-        )
-        .map_err(Self::internal_error)?;
+        let problem_id = self
+            .state
+            .marketplace_state
+            .submit_problem(
+                submission_mode,
+                submitter,
+                params.bounty,
+                params.min_work_score,
+                params.expiration_days,
+            )
+            .map_err(Self::internal_error)?;
 
         Ok(hex::encode(problem_id.as_bytes()))
     }
@@ -772,15 +817,24 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&params.salt, 256, "salt")?;
         // problem JSON limit: 1 MB
         if params.problem.len() > 1024 * 1024 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "problem JSON exceeds 1 MB", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "problem JSON exceeds 1 MB",
+                None::<()>,
+            ));
         }
 
         // Parse problem ID
         let problem_id = self.parse_hash(&params.problem_id)?;
 
         // Parse problem (deserialize from JSON)
-        let problem: ProblemType = serde_json::from_str(&params.problem)
-            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Invalid problem JSON: {}", e), None::<()>))?;
+        let problem: ProblemType = serde_json::from_str(&params.problem).map_err(|e| {
+            ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                format!("Invalid problem JSON: {}", e),
+                None::<()>,
+            )
+        })?;
 
         // Parse salt
         let salt_bytes = hex::decode(params.salt.trim_start_matches("0x"))
@@ -801,7 +855,9 @@ impl CoinjectRpcServer for RpcServerImpl {
         let reveal = ProblemReveal::new(problem, salt);
 
         // Submit reveal to marketplace state
-        self.state.marketplace_state.reveal_problem(problem_id, reveal)
+        self.state
+            .marketplace_state
+            .reveal_problem(problem_id, reveal)
             .map_err(Self::internal_error)?;
 
         Ok(true)
@@ -811,7 +867,11 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Input validation
         Self::validate_str_len(&params.submitter, 256, "submitter")?;
         if params.numbers.len() > 10_000 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "numbers array exceeds maximum of 10000 elements", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "numbers array exceeds maximum of 10000 elements",
+                None::<()>,
+            ));
         }
 
         // Parse submitter address
@@ -852,7 +912,10 @@ impl CoinjectRpcServer for RpcServerImpl {
         if balance < params.bounty {
             return Err(ErrorObjectOwned::owned(
                 INVALID_PARAMS,
-                format!("Insufficient balance: have {}, need {}", balance, params.bounty),
+                format!(
+                    "Insufficient balance: have {}, need {}",
+                    balance, params.bounty
+                ),
                 None::<()>,
             ));
         }
@@ -867,18 +930,23 @@ impl CoinjectRpcServer for RpcServerImpl {
         };
 
         // Submit to marketplace state
-        let problem_id = self.state.marketplace_state.submit_public_problem(
-            problem,
-            submitter,
-            bounty,
-            params.min_work_score,
-            params.expiration_days,
-        )
-        .map_err(Self::internal_error)?;
+        let problem_id = self
+            .state
+            .marketplace_state
+            .submit_public_problem(
+                problem,
+                submitter,
+                bounty,
+                params.min_work_score,
+                params.expiration_days,
+            )
+            .map_err(Self::internal_error)?;
 
         // Deduct bounty from submitter's balance (escrow)
         let new_balance = balance - bounty;
-        self.state.account_state.set_balance(&submitter, new_balance)
+        self.state
+            .account_state
+            .set_balance(&submitter, new_balance)
             .map_err(Self::internal_error)?;
 
         tracing::info!(problem_id = %hex::encode(problem_id.as_bytes()), bounty, "subset_sum_submitted");
@@ -891,7 +959,11 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&params.solver, 256, "solver")?;
         Self::validate_str_len(&params.problem_id, 256, "problem_id")?;
         if params.selected_indices.len() > 10_000 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "selected_indices exceeds 10000 elements", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "selected_indices exceeds 10000 elements",
+                None::<()>,
+            ));
         }
 
         // Parse solver address
@@ -904,17 +976,24 @@ impl CoinjectRpcServer for RpcServerImpl {
         let solution = coinject_core::Solution::SubsetSum(params.selected_indices);
 
         // Submit solution to marketplace state (validates and updates status)
-        self.state.marketplace_state.submit_solution(problem_id, solver, solution)
+        self.state
+            .marketplace_state
+            .submit_solution(problem_id, solver, solution)
             .map_err(Self::internal_error)?;
 
         // Claim bounty and credit solver
-        let (solver_addr, bounty) = self.state.marketplace_state.claim_bounty(problem_id)
+        let (solver_addr, bounty) = self
+            .state
+            .marketplace_state
+            .claim_bounty(problem_id)
             .map_err(Self::internal_error)?;
 
         // Credit solver's account with bounty
         let current_balance = self.state.account_state.get_balance(&solver_addr);
         let new_balance = current_balance + bounty;
-        self.state.account_state.set_balance(&solver_addr, new_balance)
+        self.state
+            .account_state
+            .set_balance(&solver_addr, new_balance)
             .map_err(Self::internal_error)?;
 
         tracing::info!(solver = %hex::encode(solver_addr.as_bytes()), bounty, "solution_accepted");
@@ -926,48 +1005,72 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&recipient, 256, "recipient")?;
         let addr = self.parse_address(&recipient)?;
         let timelocks = self.state.timelock_state.get_timelocks_for_recipient(&addr);
-        Ok(timelocks.into_iter().map(|tl| self.timelock_to_info(&tl)).collect())
+        Ok(timelocks
+            .into_iter()
+            .map(|tl| self.timelock_to_info(&tl))
+            .collect())
     }
 
     async fn get_unlocked_timelocks(&self) -> RpcResult<Vec<TimeLockInfo>> {
         let timelocks = self.state.timelock_state.get_unlocked_timelocks();
-        Ok(timelocks.into_iter().map(|tl| self.timelock_to_info(&tl)).collect())
+        Ok(timelocks
+            .into_iter()
+            .map(|tl| self.timelock_to_info(&tl))
+            .collect())
     }
 
     async fn get_escrows_by_sender(&self, sender: String) -> RpcResult<Vec<EscrowInfo>> {
         Self::validate_str_len(&sender, 256, "sender")?;
         let addr = self.parse_address(&sender)?;
         let escrows = self.state.escrow_state.get_escrows_by_sender(&addr);
-        Ok(escrows.into_iter().map(|e| self.escrow_to_info(&e)).collect())
+        Ok(escrows
+            .into_iter()
+            .map(|e| self.escrow_to_info(&e))
+            .collect())
     }
 
     async fn get_escrows_by_recipient(&self, recipient: String) -> RpcResult<Vec<EscrowInfo>> {
         Self::validate_str_len(&recipient, 256, "recipient")?;
         let addr = self.parse_address(&recipient)?;
         let escrows = self.state.escrow_state.get_escrows_by_recipient(&addr);
-        Ok(escrows.into_iter().map(|e| self.escrow_to_info(&e)).collect())
+        Ok(escrows
+            .into_iter()
+            .map(|e| self.escrow_to_info(&e))
+            .collect())
     }
 
     async fn get_active_escrows(&self) -> RpcResult<Vec<EscrowInfo>> {
         let escrows = self.state.escrow_state.get_active_escrows();
-        Ok(escrows.into_iter().map(|e| self.escrow_to_info(&e)).collect())
+        Ok(escrows
+            .into_iter()
+            .map(|e| self.escrow_to_info(&e))
+            .collect())
     }
 
     async fn get_channels_by_address(&self, address: String) -> RpcResult<Vec<ChannelInfo>> {
         Self::validate_str_len(&address, 256, "address")?;
         let addr = self.parse_address(&address)?;
         let channels = self.state.channel_state.get_channels_for_address(&addr);
-        Ok(channels.into_iter().map(|c| self.channel_to_info(&c)).collect())
+        Ok(channels
+            .into_iter()
+            .map(|c| self.channel_to_info(&c))
+            .collect())
     }
 
     async fn get_open_channels(&self) -> RpcResult<Vec<ChannelInfo>> {
         let channels = self.state.channel_state.get_open_channels();
-        Ok(channels.into_iter().map(|c| self.channel_to_info(&c)).collect())
+        Ok(channels
+            .into_iter()
+            .map(|c| self.channel_to_info(&c))
+            .collect())
     }
 
     async fn get_disputed_channels(&self) -> RpcResult<Vec<ChannelInfo>> {
         let channels = self.state.channel_state.get_disputed_channels();
-        Ok(channels.into_iter().map(|c| self.channel_to_info(&c)).collect())
+        Ok(channels
+            .into_iter()
+            .map(|c| self.channel_to_info(&c))
+            .collect())
     }
 
     async fn faucet_request_tokens(&self, address: String) -> RpcResult<FaucetResponse> {
@@ -980,7 +1083,9 @@ impl CoinjectRpcServer for RpcServerImpl {
                     success: false,
                     amount: None,
                     new_balance: None,
-                    message: "Faucet is not enabled on this node. Use --enable-faucet flag to enable.".to_string(),
+                    message:
+                        "Faucet is not enabled on this node. Use --enable-faucet flag to enable."
+                            .to_string(),
                     cooldown_remaining: None,
                 });
             }
@@ -1040,9 +1145,13 @@ impl CoinjectRpcServer for RpcServerImpl {
     async fn get_network_info(&self) -> RpcResult<NetworkInfo> {
         let peer_count = *self.state.peer_count.read().await;
         let listen_addresses = self.state.listen_addresses.read().await.clone();
-        
-        let peer_id = self.state.local_peer_id.clone().unwrap_or_else(|| "unknown".to_string());
-        
+
+        let peer_id = self
+            .state
+            .local_peer_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+
         // Generate a bootnode address hint for operators
         let bootnode_hint = if !listen_addresses.is_empty() {
             format!("{}/p2p/{}", listen_addresses[0], peer_id)
@@ -1059,9 +1168,15 @@ impl CoinjectRpcServer for RpcServerImpl {
     }
 
     async fn submit_block(&self, block: Block) -> RpcResult<String> {
-        println!("📥 RPC: Received block submission for height {}", block.header.height);
-        
-        let handler = self.state.block_submission_handler.as_ref()
+        println!(
+            "📥 RPC: Received block submission for height {}",
+            block.header.height
+        );
+
+        let handler = self
+            .state
+            .block_submission_handler
+            .as_ref()
             .ok_or_else(|| {
                 ErrorObjectOwned::owned(
                     INTERNAL_ERROR,
@@ -1140,7 +1255,11 @@ impl RpcServer {
             })
         });
 
-        Ok(RpcServer { handle, addr, tls_task })
+        Ok(RpcServer {
+            handle,
+            addr,
+            tls_task,
+        })
     }
 
     /// Get the listening address

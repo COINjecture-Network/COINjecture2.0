@@ -8,11 +8,11 @@
 //   3. Graceful rejection when MAX_PEERS is reached
 //   4. Memory stability while many connections are open
 
-use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
-use tokio::io::AsyncWriteExt;
 use futures::future::join_all;
-use tracing::{info, warn, debug};
+use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tracing::{debug, info, warn};
 
 use crate::results::TestResults;
 
@@ -23,11 +23,7 @@ const VERSION: u8 = 2;
 /// Hello message type
 const MSG_TYPE_HELLO: u8 = 0x01;
 
-pub async fn run_network_stress(
-    target: &str,
-    num_peers: usize,
-    duration_secs: u64,
-) -> TestResults {
+pub async fn run_network_stress(target: &str, num_peers: usize, duration_secs: u64) -> TestResults {
     let mut results = TestResults::new("network-stress");
     results.metric("config.simulated_peers", num_peers as f64, "peers");
     results.metric("config.duration_secs", duration_secs as f64, "s");
@@ -57,10 +53,16 @@ pub async fn run_network_stress(
         match r {
             Ok(PeerOutcome::Connected { got_hello_ack }) => {
                 connected += 1;
-                if got_hello_ack { hello_ack_count += 1; }
+                if got_hello_ack {
+                    hello_ack_count += 1;
+                }
             }
-            Ok(PeerOutcome::Rejected) => { rejected += 1; }
-            Ok(PeerOutcome::Timeout) => { timeout_count += 1; }
+            Ok(PeerOutcome::Rejected) => {
+                rejected += 1;
+            }
+            Ok(PeerOutcome::Timeout) => {
+                timeout_count += 1;
+            }
             Err(e) => {
                 warn!("peer task panicked: {e}");
                 rejected += 1;
@@ -111,14 +113,12 @@ async fn connect_simulated_peer(
     hold_secs: u64,
 ) -> PeerOutcome {
     let connect_timeout = Duration::from_secs(5);
-    let stream = match tokio::time::timeout(
-        connect_timeout,
-        TcpStream::connect(target.as_ref()),
-    ).await {
-        Ok(Ok(s)) => s,
-        Ok(Err(_)) => return PeerOutcome::Rejected,
-        Err(_) => return PeerOutcome::Timeout,
-    };
+    let stream =
+        match tokio::time::timeout(connect_timeout, TcpStream::connect(target.as_ref())).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(_)) => return PeerOutcome::Rejected,
+            Err(_) => return PeerOutcome::Timeout,
+        };
 
     debug!("peer {peer_id}: connected");
 
@@ -140,7 +140,9 @@ async fn connect_simulated_peer(
     tokio::time::sleep(Duration::from_secs(hold_secs)).await;
     let _ = stream.shutdown().await;
 
-    PeerOutcome::Connected { got_hello_ack: got_ack }
+    PeerOutcome::Connected {
+        got_hello_ack: got_ack,
+    }
 }
 
 /// Build a minimal CPP Hello message envelope.
@@ -152,12 +154,12 @@ fn build_hello_message(peer_id: u64) -> Vec<u8> {
     // bincode-encoded HelloMessage (approximate layout)
     // version(1) + peer_id(32) + best_height(8) + best_hash(32) + genesis_hash(32) + node_type(1) + timestamp(8) + nonce(8)
     let mut payload = Vec::with_capacity(122);
-    payload.push(VERSION);          // version
+    payload.push(VERSION); // version
     payload.extend_from_slice(&peer_id_bytes); // peer_id
     payload.extend_from_slice(&0u64.to_le_bytes()); // best_height
     payload.extend_from_slice(&[0u8; 32]); // best_hash
     payload.extend_from_slice(&[0u8; 32]); // genesis_hash
-    payload.push(1u8);              // node_type: Full
+    payload.push(1u8); // node_type: Full
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -182,10 +184,7 @@ fn build_hello_message(peer_id: u64) -> Vec<u8> {
 async fn wait_for_hello_ack(stream: &mut TcpStream) -> bool {
     use tokio::io::AsyncReadExt;
     let mut header = [0u8; 10];
-    match tokio::time::timeout(
-        Duration::from_secs(5),
-        stream.read_exact(&mut header),
-    ).await {
+    match tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut header)).await {
         Ok(Ok(_)) => header[5] == 0x02, // HelloAck type
         _ => false,
     }

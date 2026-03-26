@@ -239,11 +239,11 @@ mod tests {
 
     #[test]
     fn test_isqrt_non_perfect() {
-        assert_eq!(isqrt(2), 1);   // floor(√2) = 1
+        assert_eq!(isqrt(2), 1); // floor(√2) = 1
         assert_eq!(isqrt(3), 1);
         assert_eq!(isqrt(5), 2);
-        assert_eq!(isqrt(10), 3);  // floor(√10) = 3
-        assert_eq!(isqrt(99), 9);  // floor(√99) = 9
+        assert_eq!(isqrt(10), 3); // floor(√10) = 3
+        assert_eq!(isqrt(99), 9); // floor(√99) = 9
     }
 
     #[test]
@@ -296,7 +296,11 @@ mod tests {
         // log₂(10_000) ≈ 13.29
         let score = log2_ratio(10_000_000, 1_000).unwrap();
         let bits = to_f64(score);
-        assert!(bits > 13.0 && bits < 13.5, "log₂(10000) ≈ 13.29, got {:.4}", bits);
+        assert!(
+            bits > 13.0 && bits < 13.5,
+            "log₂(10000) ≈ 13.29, got {:.4}",
+            bits
+        );
     }
 
     #[test]
@@ -328,7 +332,11 @@ mod tests {
         let original = std::f64::consts::PI;
         let fixed = from_f64_lossy(original);
         let back = to_f64(fixed);
-        assert!((back - original).abs() < 0.000_002, "roundtrip error: {}", (back - original).abs());
+        assert!(
+            (back - original).abs() < 0.000_002,
+            "roundtrip error: {}",
+            (back - original).abs()
+        );
     }
 
     #[test]

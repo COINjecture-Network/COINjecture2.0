@@ -16,7 +16,10 @@ pub async fn new_account(name: Option<String>) -> Result<()> {
     println!("Address:     {}", account.address);
     println!("Public Key:  {}", account.public_key.dimmed());
     println!();
-    println!("{}", "🔐 Private key encrypted at rest (AES-256-GCM).".green());
+    println!(
+        "{}",
+        "🔐 Private key encrypted at rest (AES-256-GCM).".green()
+    );
     println!("   Use 'coinject-wallet account export' to view the key.");
     println!();
     println!("Account saved to keystore at: ~/.coinject/wallets/");
@@ -35,7 +38,12 @@ pub async fn list_accounts() -> Result<()> {
         return Ok(());
     }
 
-    println!("{}", format!("Found {} account(s)", accounts.len()).green().bold());
+    println!(
+        "{}",
+        format!("Found {} account(s)", accounts.len())
+            .green()
+            .bold()
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
@@ -125,7 +133,10 @@ pub async fn export_account(name_or_address: &str) -> Result<()> {
                 Err(e) => println!("{}", format!("❌ Failed to decrypt key: {}", e).red()),
             }
             println!();
-            println!("{}", "⚠️  Never share this key with anyone!".yellow().bold());
+            println!(
+                "{}",
+                "⚠️  Never share this key with anyone!".yellow().bold()
+            );
         }
         Err(e) => {
             println!("{}", format!("❌ Account not found: {}", e).red());
@@ -164,8 +175,7 @@ pub async fn import_account(private_key: &str, name: Option<String>) -> Result<(
 
 fn format_timestamp(timestamp: i64) -> String {
     use chrono::{DateTime, Utc};
-    let dt = DateTime::<Utc>::from_timestamp(timestamp, 0)
-        .unwrap_or_else(Utc::now);
+    let dt = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 

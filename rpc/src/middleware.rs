@@ -266,7 +266,9 @@ where
 {
     type Response = Response<RpcBoxBody>;
     type Error = BoxError;
-    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+    type Future = std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>,
+    >;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx).map_err(Into::into)
@@ -370,7 +372,10 @@ where
                 HeaderValue::from_static("nosniff"),
             );
             h.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-            h.insert("X-XSS-Protection", HeaderValue::from_static("1; mode=block"));
+            h.insert(
+                "X-XSS-Protection",
+                HeaderValue::from_static("1; mode=block"),
+            );
             h.insert(
                 "Strict-Transport-Security",
                 HeaderValue::from_static("max-age=31536000; includeSubDomains"),

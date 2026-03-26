@@ -56,8 +56,8 @@
 //!
 //! COMPLIANCE: Empirical ✓ | Self-referential ✓ | Dimensionless ✓
 
-use coinject_core::{ProblemType, Solution, WorkScore};
 use coinject_core::fixed_point::{self, Fixed64};
+use coinject_core::{ProblemType, Solution, WorkScore};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -387,7 +387,11 @@ mod tests {
         // log₂(10_000) ≈ 13.29
         let score = calc.calculate_deterministic(10_000_000, 1_000, 10_000);
         let bits = coinject_core::fixed_point::to_f64(score);
-        assert!(bits > 13.0 && bits < 13.5, "expected ~13.29 bits, got {:.4}", bits);
+        assert!(
+            bits > 13.0 && bits < 13.5,
+            "expected ~13.29 bits, got {:.4}",
+            bits
+        );
     }
 
     #[test]

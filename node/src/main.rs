@@ -13,7 +13,6 @@
 // CRITICAL: Nodes are classified EMPIRICALLY based on behavior, NOT self-declaration
 
 mod chain;
-mod sync_optimizer;
 #[cfg(feature = "adzdb")]
 mod chain_adzdb;
 mod config;
@@ -30,6 +29,7 @@ pub mod node_manager;
 pub mod node_types;
 mod peer_consensus;
 mod service;
+mod sync_optimizer;
 mod validator;
 
 use config::NodeConfig;
@@ -78,8 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_panic_hook();
 
     // Initialize logging
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -114,8 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate())
-            .expect("failed to register SIGTERM handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
 
         tokio::select! {
             result = signal::ctrl_c() => {
@@ -159,7 +158,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_banner(config: &NodeConfig) {
-    println!(r#"
+    println!(
+        r#"
     ╔═══════════════════════════════════════════════════════════════╗
     ║                                                               ║
     ║         ██████╗ ██████╗ ██╗███╗   ██╗     ██╗███████╗ ██████╗████████╗██╗   ██╗██████╗ ███████╗    ║
@@ -173,11 +173,12 @@ fn print_banner(config: &NodeConfig) {
     ║                    η = 1/√2 Tokenomics Engine                ║
     ║                                                               ║
     ╚═══════════════════════════════════════════════════════════════╝
-    "#);
+    "#
+    );
     println!("    Version: {}", env!("CARGO_PKG_VERSION"));
     println!("    Repository: {}", env!("CARGO_PKG_REPOSITORY"));
     println!();
-    
+
     // Display node type information
     let target_type = config.target_node_type();
     let (icon, mode_name) = match target_type {
@@ -188,17 +189,21 @@ fn print_banner(config: &NodeConfig) {
         node_types::NodeType::Bounty => ("🎯", "BOUNTY"),
         node_types::NodeType::Oracle => ("🔮", "ORACLE"),
     };
-    
+
     println!("    ┌─────────────────────────────────────────────────────────────┐");
-    println!("    │ {} Node Type: {:<10} │ Reward Multiplier: {:.3}x       │", 
-             icon, mode_name, target_type.reward_multiplier());
+    println!(
+        "    │ {} Node Type: {:<10} │ Reward Multiplier: {:.3}x       │",
+        icon,
+        mode_name,
+        target_type.reward_multiplier()
+    );
     println!("    │ {} │", target_type.description());
     println!("    │                                                             │");
     println!("    │ ℹ️  Actual classification determined by BEHAVIOR, not config │");
     println!("    │    (storage ratio, validation speed, solve rate, uptime)   │");
     println!("    └─────────────────────────────────────────────────────────────┘");
     println!();
-    
+
     // Display hardware requirements
     let hw = target_type.hardware_requirements();
     println!("    Hardware Requirements for {} node:", mode_name);
@@ -207,7 +212,7 @@ fn print_banner(config: &NodeConfig) {
     println!("    • Bandwidth: {} Mbps minimum", hw.min_bandwidth_mbps);
     println!("    • CPU Cores: {} minimum", hw.min_cpu_cores);
     println!();
-    
+
     // Display stake requirement
     let stake = target_type.min_stake();
     if stake > 0 {

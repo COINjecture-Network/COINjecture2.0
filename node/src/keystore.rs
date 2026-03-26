@@ -127,8 +127,8 @@ impl ValidatorKey {
 
     /// Load and decrypt a validator key using an explicit `password`.
     pub fn load_with_password<P: AsRef<Path>>(path: P, password: &str) -> Result<Self, String> {
-        let data = fs::read(path.as_ref())
-            .map_err(|e| format!("Failed to read keystore: {}", e))?;
+        let data =
+            fs::read(path.as_ref()).map_err(|e| format!("Failed to read keystore: {}", e))?;
         decrypt_validator_key(&data, password)
     }
 
@@ -142,7 +142,11 @@ impl ValidatorKey {
     }
 
     /// Encrypt and write this validator key using an explicit `password`.
-    pub fn save_with_password<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<(), String> {
+    pub fn save_with_password<P: AsRef<Path>>(
+        &self,
+        path: P,
+        password: &str,
+    ) -> Result<(), String> {
         let encrypted = encrypt_validator_key(self, password)?;
 
         if let Some(parent) = path.as_ref().parent() {
@@ -240,12 +244,10 @@ fn decrypt_validator_key(data: &[u8], password: &str) -> Result<ValidatorKey, St
     }
 
     if &data[0..MAGIC_END] != KEYSTORE_MAGIC {
-        return Err(
-            "Invalid keystore magic. \
+        return Err("Invalid keystore magic. \
              This file may be an unencrypted legacy key. \
              Regenerate with: coinject keygen"
-                .to_string(),
-        );
+            .to_string());
     }
 
     if data[VERSION_OFFSET] != KEYSTORE_VERSION {
@@ -297,8 +299,13 @@ fn decrypt_validator_key(data: &[u8], password: &str) -> Result<ValidatorKey, St
 
 /// Derive a symmetric key from `password` and `salt` using argon2id.
 fn derive_key(password: &str, salt: &[u8], key_out: &mut [u8]) -> Result<(), String> {
-    let params = Params::new(ARGON2_MEM_KIB, ARGON2_ITERATIONS, ARGON2_PARALLELISM, Some(key_out.len()))
-        .map_err(|e| format!("Invalid argon2 parameters: {}", e))?;
+    let params = Params::new(
+        ARGON2_MEM_KIB,
+        ARGON2_ITERATIONS,
+        ARGON2_PARALLELISM,
+        Some(key_out.len()),
+    )
+    .map_err(|e| format!("Invalid argon2 parameters: {}", e))?;
 
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     argon2
@@ -355,10 +362,7 @@ impl ValidatorKeystore {
     /// Load or create a validator key using an explicit `password`.
     pub fn get_or_create_with_password(&self, password: &str) -> Result<ValidatorKey, String> {
         if self.key_file.exists() {
-            println!(
-                "= Loading validator key from: {}",
-                self.key_file.display()
-            );
+            println!("= Loading validator key from: {}", self.key_file.display());
             ValidatorKey::load_with_password(&self.key_file, password)
         } else {
             println!("= Generating new validator key (encrypted)…");
@@ -382,8 +386,8 @@ impl ValidatorKeystore {
         secret_key_hex: &str,
         password: &str,
     ) -> Result<ValidatorKey, String> {
-        let secret_bytes = hex::decode(secret_key_hex)
-            .map_err(|e| format!("Invalid hex: {}", e))?;
+        let secret_bytes =
+            hex::decode(secret_key_hex).map_err(|e| format!("Invalid hex: {}", e))?;
 
         if secret_bytes.len() != 32 {
             return Err(format!(
@@ -538,7 +542,10 @@ mod tests {
     fn test_debug_redacts_secret() {
         let key = ValidatorKey::generate();
         let debug_str = format!("{:?}", key);
-        assert!(debug_str.contains("REDACTED"), "secret_key must be redacted");
+        assert!(
+            debug_str.contains("REDACTED"),
+            "secret_key must be redacted"
+        );
         assert!(!debug_str.contains(&hex::encode(key.signing_key().to_bytes())));
     }
 }

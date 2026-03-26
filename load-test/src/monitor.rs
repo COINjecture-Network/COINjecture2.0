@@ -91,7 +91,9 @@ impl NodeMonitor {
     /// Detect memory leaks: returns true if memory grew by more than `threshold_pct` (0.0–1.0)
     /// over the monitoring period.
     pub fn memory_leaked(&self, threshold_pct: f64) -> bool {
-        let non_zero: Vec<u64> = self.snapshots.iter()
+        let non_zero: Vec<u64> = self
+            .snapshots
+            .iter()
             .map(|s| s.memory_rss_bytes)
             .filter(|&m| m > 0)
             .collect();
@@ -101,14 +103,18 @@ impl NodeMonitor {
         }
 
         let first = *non_zero.first().unwrap() as f64;
-        let last  = *non_zero.last().unwrap() as f64;
+        let last = *non_zero.last().unwrap() as f64;
 
         (last - first) / first > threshold_pct
     }
 
     /// Peak memory usage seen during the test.
     pub fn peak_memory_bytes(&self) -> u64 {
-        self.snapshots.iter().map(|s| s.memory_rss_bytes).max().unwrap_or(0)
+        self.snapshots
+            .iter()
+            .map(|s| s.memory_rss_bytes)
+            .max()
+            .unwrap_or(0)
     }
 
     /// Final block height (last snapshot).
@@ -118,14 +124,22 @@ impl NodeMonitor {
 
     /// Apply collected metrics to a TestResults struct.
     pub fn apply_to_results(&self, results: &mut TestResults) {
-        results.metric("monitor.peak_memory_mb",
-            self.peak_memory_bytes() as f64 / (1024.0 * 1024.0), "MB");
-        results.metric("monitor.final_height",
-            self.final_height() as f64, "blocks");
-        results.metric("monitor.snapshots_taken",
-            self.snapshots.len() as f64, "samples");
-        results.metric("monitor.outage_count",
-            self.snapshots.iter().filter(|s| !s.rpc_ok).count() as f64, "events");
+        results.metric(
+            "monitor.peak_memory_mb",
+            self.peak_memory_bytes() as f64 / (1024.0 * 1024.0),
+            "MB",
+        );
+        results.metric("monitor.final_height", self.final_height() as f64, "blocks");
+        results.metric(
+            "monitor.snapshots_taken",
+            self.snapshots.len() as f64,
+            "samples",
+        );
+        results.metric(
+            "monitor.outage_count",
+            self.snapshots.iter().filter(|s| !s.rpc_ok).count() as f64,
+            "events",
+        );
 
         if self.memory_leaked(0.50) {
             results.note("WARNING: process memory grew >50% — possible memory leak");
@@ -143,7 +157,8 @@ impl NodeMonitor {
             "params": []
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(&self.rpc_url)
             .json(&body)
             .send()
@@ -151,7 +166,9 @@ impl NodeMonitor {
             .ok()?;
 
         let json: serde_json::Value = resp.json().await.ok()?;
-        json["result"].as_u64().or_else(|| json["result"].as_str()?.parse().ok())
+        json["result"]
+            .as_u64()
+            .or_else(|| json["result"].as_str()?.parse().ok())
     }
 }
 
@@ -169,7 +186,9 @@ pub async fn run_monitor_background(
         monitor.poll().await;
         let remaining = deadline.saturating_duration_since(Instant::now());
         let sleep_dur = Duration::from_secs(interval_secs).min(remaining);
-        if sleep_dur.is_zero() { break; }
+        if sleep_dur.is_zero() {
+            break;
+        }
         sleep(sleep_dur).await;
     }
 

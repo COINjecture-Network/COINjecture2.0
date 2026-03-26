@@ -7,33 +7,29 @@
 //   2. Response latency under contention
 //   3. Correct error responses (not panics)
 
-use std::time::{Duration, Instant};
 use futures::future::join_all;
-use tracing::{info, warn, debug};
+use std::time::{Duration, Instant};
+use tracing::{debug, info, warn};
 
-use crate::results::{TestResults, LatencyStats};
+use crate::results::{LatencyStats, TestResults};
 
 /// All RPC methods to test with their expected parameters.
 const RPC_ENDPOINTS: &[(&str, &str)] = &[
-    ("chain_getBlockNumber",    r#"[]"#),
-    ("chain_getBlockHash",      r#"[0]"#),
-    ("chain_getBlock",          r#"[]"#),
-    ("chain_getBestBlock",      r#"[]"#),
-    ("net_peerCount",           r#"[]"#),
-    ("net_version",             r#"[]"#),
-    ("system_health",           r#"[]"#),
-    ("system_name",             r#"[]"#),
-    ("system_version",          r#"[]"#),
-    ("mempool_size",            r#"[]"#),
-    ("mempool_pendingTxs",      r#"[]"#),
-    ("rpc_methods",             r#"[]"#),
+    ("chain_getBlockNumber", r#"[]"#),
+    ("chain_getBlockHash", r#"[0]"#),
+    ("chain_getBlock", r#"[]"#),
+    ("chain_getBestBlock", r#"[]"#),
+    ("net_peerCount", r#"[]"#),
+    ("net_version", r#"[]"#),
+    ("system_health", r#"[]"#),
+    ("system_name", r#"[]"#),
+    ("system_version", r#"[]"#),
+    ("mempool_size", r#"[]"#),
+    ("mempool_pendingTxs", r#"[]"#),
+    ("rpc_methods", r#"[]"#),
 ];
 
-pub async fn run_rpc_blast(
-    rpc_url: &str,
-    concurrency: usize,
-    duration_secs: u64,
-) -> TestResults {
+pub async fn run_rpc_blast(rpc_url: &str, concurrency: usize, duration_secs: u64) -> TestResults {
     let mut results = TestResults::new("rpc-blast");
     results.metric("config.concurrency", concurrency as f64, "workers");
     results.metric("config.duration_secs", duration_secs as f64, "s");
@@ -46,7 +42,7 @@ pub async fn run_rpc_blast(
             .timeout(Duration::from_secs(5))
             .pool_max_idle_per_host(concurrency)
             .build()
-            .unwrap()
+            .unwrap(),
     );
 
     let rpc = std::sync::Arc::new(rpc_url.to_string());
@@ -80,7 +76,9 @@ pub async fn run_rpc_blast(
                 for (m, c) in method_ok {
                     *per_method_ok.entry(m).or_default() += c;
                 }
-                for l in lats { latency.record(l); }
+                for l in lats {
+                    latency.record(l);
+                }
             }
             Err(e) => {
                 warn!("rpc worker panicked: {e}");
@@ -96,7 +94,11 @@ pub async fn run_rpc_blast(
 
     let total = total_ok + total_err;
     let rps = total_ok as f64 / elapsed;
-    let error_rate = if total > 0 { total_err as f64 / total as f64 * 100.0 } else { 0.0 };
+    let error_rate = if total > 0 {
+        total_err as f64 / total as f64 * 100.0
+    } else {
+        0.0
+    };
 
     results.metric("rpc.total_requests", total as f64, "reqs");
     results.metric("rpc.successful", total_ok as f64, "reqs");
@@ -115,9 +117,7 @@ pub async fn run_rpc_blast(
 
     results.finish(
         passed,
-        format!(
-            "{total} requests in {elapsed:.1}s — {rps:.0} req/s, {error_rate:.1}% errors"
-        ),
+        format!("{total} requests in {elapsed:.1}s — {rps:.0} req/s, {error_rate:.1}% errors"),
         elapsed,
     );
 
@@ -142,7 +142,8 @@ async fn rpc_worker(
         let (method, params_str) = RPC_ENDPOINTS[method_idx];
         method_idx = (method_idx + 1) % RPC_ENDPOINTS.len();
 
-        let params: serde_json::Value = serde_json::from_str(params_str).unwrap_or(serde_json::json!([]));
+        let params: serde_json::Value =
+            serde_json::from_str(params_str).unwrap_or(serde_json::json!([]));
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": ok,

@@ -13,7 +13,7 @@
 #![allow(dead_code)]
 
 use clap::{Parser, ValueEnum};
-use coinject_core::{BLOCK_VERSION_STANDARD, BLOCK_VERSION_GOLDEN};
+use coinject_core::{BLOCK_VERSION_GOLDEN, BLOCK_VERSION_STANDARD};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -97,25 +97,24 @@ pub struct NodeConfig {
     // ==========================================================================
     // NODE TYPE CONFIGURATION
     // ==========================================================================
-    
     /// Target node type (preference, actual type is determined by behavior)
     /// Options: light, full, archive, validator, bounty, oracle
     #[arg(long, value_enum, default_value = "full")]
     pub node_type: NodeTypePreference,
-    
+
     /// Run in headers-only mode (Light node sync)
     /// Only downloads and validates block headers, not full blocks
     #[arg(long)]
     pub headers_only: bool,
-    
+
     /// Enable bounty hunting mode (actively solve NP-problems)
     #[arg(long)]
     pub bounty_hunter: bool,
-    
+
     /// Enable oracle mode (provide external data feeds)
     #[arg(long)]
     pub oracle_mode: bool,
-    
+
     /// Oracle data sources (URLs for external feeds)
     #[arg(long)]
     pub oracle_sources: Vec<String>,
@@ -123,7 +122,6 @@ pub struct NodeConfig {
     // ==========================================================================
     // STANDARD CONFIGURATION
     // ==========================================================================
-
     /// Run in development mode (auto-mining, no peers)
     #[arg(long)]
     pub dev: bool,
@@ -208,7 +206,6 @@ pub struct NodeConfig {
     // ==========================================================================
     // DATABASE CONFIGURATION
     // ==========================================================================
-
     /// Database page cache size in megabytes (default: 64)
     /// Larger caches improve read performance at the cost of RAM usage.
     #[arg(long, default_value = "64")]
@@ -230,7 +227,6 @@ pub struct NodeConfig {
     // ==========================================================================
     // CACHE CONFIGURATION
     // ==========================================================================
-
     /// Number of recent blocks to keep in the in-memory block cache (default: 512)
     #[arg(long, default_value = "512")]
     pub block_cache_size: usize,
@@ -242,7 +238,6 @@ pub struct NodeConfig {
     // ==========================================================================
     // NETWORK CONNECTIVITY
     // ==========================================================================
-
     /// [DEPRECATED: libp2p only] External address to advertise. Not used in CPP mode.
     #[arg(long)]
     pub external_addr: Option<String>,
@@ -258,7 +253,6 @@ pub struct NodeConfig {
     // ==========================================================================
     // MESH NETWORK CONFIGURATION
     // ==========================================================================
-
     /// Enable mesh network layer (P2P gossip transport alongside CPP)
     #[arg(long)]
     pub enable_mesh: bool,
@@ -274,7 +268,6 @@ pub struct NodeConfig {
     // ==========================================================================
     // BLOCK VERSION CONFIGURATION
     // ==========================================================================
-
     /// Minimum block version to accept (1=standard, 2=golden-enhanced)
     /// Blocks below this version will be rejected with clear logging
     #[arg(long, default_value = "1")]
@@ -293,7 +286,6 @@ pub struct NodeConfig {
     // ==========================================================================
     // GOLDEN ACTIVATION (height-based upgrade)
     // ==========================================================================
-
     /// Block height at which golden-enhanced features activate
     /// Before this height: produce v1 (standard) blocks
     /// At/after this height: produce v2 (golden-enhanced) blocks
@@ -322,31 +314,31 @@ impl NodeConfig {
     pub fn chain_db_path(&self) -> PathBuf {
         self.data_dir.join("chain.db")
     }
-    
+
     /// Check if this node is configured for header-only mode (Light node)
     pub fn is_light_mode(&self) -> bool {
         self.headers_only || matches!(self.node_type, NodeTypePreference::Light)
     }
-    
+
     /// Check if this node is configured for archive mode
     pub fn is_archive_mode(&self) -> bool {
         matches!(self.node_type, NodeTypePreference::Archive)
     }
-    
+
     /// Check if bounty hunting is enabled
     pub fn is_bounty_hunter(&self) -> bool {
         self.bounty_hunter || matches!(self.node_type, NodeTypePreference::Bounty)
     }
-    
+
     /// Check if oracle mode is enabled
     pub fn is_oracle_mode(&self) -> bool {
         self.oracle_mode || matches!(self.node_type, NodeTypePreference::Oracle)
     }
-    
+
     /// Get the target node type for classification
     pub fn target_node_type(&self) -> crate::node_types::NodeType {
         use crate::node_types::NodeType;
-        
+
         // Override based on specific flags
         if self.headers_only {
             return NodeType::Light;
@@ -357,7 +349,7 @@ impl NodeConfig {
         if self.oracle_mode {
             return NodeType::Oracle;
         }
-        
+
         // Map preference to node type
         match self.node_type {
             NodeTypePreference::Light => NodeType::Light,
@@ -368,10 +360,12 @@ impl NodeConfig {
             NodeTypePreference::Oracle => NodeType::Oracle,
         }
     }
-    
+
     /// Get storage requirements for the target node type (in GB)
     pub fn storage_requirement_gb(&self) -> u32 {
-        self.target_node_type().hardware_requirements().min_storage_gb
+        self.target_node_type()
+            .hardware_requirements()
+            .min_storage_gb
     }
 
     // =========================================================================
@@ -445,7 +439,9 @@ impl NodeConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        use coinject_core::validation::{validate_socket_addr_str, validate_port, validate_file_path};
+        use coinject_core::validation::{
+            validate_file_path, validate_port, validate_socket_addr_str,
+        };
 
         // Validate miner address format if provided
         if let Some(ref addr) = self.miner_address {
@@ -503,8 +499,7 @@ impl NodeConfig {
 
         // Validate data_dir path (no traversal)
         let data_dir_str = self.data_dir.to_string_lossy();
-        validate_file_path(&data_dir_str)
-            .map_err(|e| format!("Invalid data_dir: {}", e))?;
+        validate_file_path(&data_dir_str).map_err(|e| format!("Invalid data_dir: {}", e))?;
 
         // Validate oracle sources if oracle mode enabled
         if self.is_oracle_mode() && self.oracle_sources.is_empty() {
@@ -515,19 +510,25 @@ impl NodeConfig {
         for bootnode in &self.bootnodes {
             let parts: Vec<&str> = bootnode.rsplitn(2, ':').collect();
             if parts.len() != 2 {
-                return Err(format!("Invalid bootnode address '{}': expected host:port format", bootnode));
+                return Err(format!(
+                    "Invalid bootnode address '{}': expected host:port format",
+                    bootnode
+                ));
             }
             let port_str = parts[0];
-            let port: u32 = port_str.parse().map_err(|_| {
-                format!("Invalid port in bootnode address '{}'", bootnode)
-            })?;
+            let port: u32 = port_str
+                .parse()
+                .map_err(|_| format!("Invalid port in bootnode address '{}'", bootnode))?;
             validate_port(port)
                 .map_err(|e| format!("Invalid port in bootnode '{}': {}", bootnode, e))?;
         }
 
         // Warn about conflicting settings
         if self.headers_only && self.mine {
-            return Err("Cannot mine in headers-only mode (Light nodes don't store full blocks)".to_string());
+            return Err(
+                "Cannot mine in headers-only mode (Light nodes don't store full blocks)"
+                    .to_string(),
+            );
         }
 
         // Validate block version configuration
@@ -572,7 +573,9 @@ impl NodeConfig {
             tracing::warn!("--disable-mdns is DEPRECATED (libp2p removed). mDNS no longer exists. This flag is ignored.");
         }
         if self.external_addr.is_some() {
-            tracing::warn!("--external-addr is DEPRECATED (libp2p removed). This flag is ignored in CPP mode.");
+            tracing::warn!(
+                "--external-addr is DEPRECATED (libp2p removed). This flag is ignored in CPP mode."
+            );
         }
         if self.allow_private_addrs {
             tracing::warn!("--allow-private-addrs is DEPRECATED (libp2p removed). This flag is ignored in CPP mode.");
@@ -596,7 +599,9 @@ mod tests {
             oracle_sources: vec![],
             dev: false,
             mine: false,
-            miner_address: Some("0000000000000000000000000000000000000000000000000000000000000001".to_string()),
+            miner_address: Some(
+                "0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            ),
             p2p_addr: "/ip4/0.0.0.0/tcp/30333".to_string(),
             rpc_addr: "127.0.0.1:9933".to_string(),
             cpp_p2p_addr: "0.0.0.0:707".to_string(),
@@ -695,21 +700,21 @@ mod tests {
         config.faucet_cooldown = 0;
         assert!(config.validate().is_err());
     }
-    
+
     #[test]
     fn test_node_type_light() {
         let mut config = test_config();
         config.node_type = NodeTypePreference::Light;
         assert!(config.is_light_mode());
     }
-    
+
     #[test]
     fn test_headers_only_implies_light() {
         let mut config = test_config();
         config.headers_only = true;
         assert!(config.is_light_mode());
     }
-    
+
     #[test]
     fn test_headers_only_cannot_mine() {
         let mut config = test_config();
@@ -717,14 +722,14 @@ mod tests {
         config.mine = true;
         assert!(config.validate().is_err());
     }
-    
+
     #[test]
     fn test_bounty_hunter_mode() {
         let mut config = test_config();
         config.bounty_hunter = true;
         assert!(config.is_bounty_hunter());
     }
-    
+
     #[test]
     fn test_oracle_mode() {
         let mut config = test_config();
@@ -824,7 +829,7 @@ mod tests {
         let mut config = test_config();
         config.golden_activation_height = 0;
         config.produce_block_version = 2;
-        
+
         assert_eq!(config.block_version_for_height(0), 2);
         assert_eq!(config.block_version_for_height(100), 2);
         assert!(config.is_golden_active(0));
@@ -834,13 +839,13 @@ mod tests {
     fn test_golden_activation_height_set() {
         let mut config = test_config();
         config.golden_activation_height = 1000;
-        
+
         // Before activation: v1
         assert_eq!(config.block_version_for_height(0), 1);
         assert_eq!(config.block_version_for_height(500), 1);
         assert_eq!(config.block_version_for_height(999), 1);
         assert!(!config.is_golden_active(999));
-        
+
         // At/after activation: v2
         assert_eq!(config.block_version_for_height(1000), 2);
         assert_eq!(config.block_version_for_height(1001), 2);

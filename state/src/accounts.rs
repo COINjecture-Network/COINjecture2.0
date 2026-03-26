@@ -462,13 +462,15 @@ mod tests {
         //  - alice sends 100 to bob (fee 10 to miner)
         //  - miner gets coinbase of 50
         let balance_changes = vec![
-            (alice, 890u128),  // 1000 - 100 - 10
-            (bob, 600u128),    // 500 + 100
-            (miner, 60u128),   // 0 + 10 (fee) + 50 (coinbase)
+            (alice, 890u128), // 1000 - 100 - 10
+            (bob, 600u128),   // 500 + 100
+            (miner, 60u128),  // 0 + 10 (fee) + 50 (coinbase)
         ];
         let nonce_increments = vec![alice];
 
-        state.apply_block_atomically(&balance_changes, &nonce_increments).unwrap();
+        state
+            .apply_block_atomically(&balance_changes, &nonce_increments)
+            .unwrap();
 
         assert_eq!(state.get_balance(&alice), 890);
         assert_eq!(state.get_balance(&bob), 600);

@@ -25,8 +25,8 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use argon2::{Algorithm, Argon2, Params, Version};
 use anyhow::{anyhow, Result};
+use argon2::{Algorithm, Argon2, Params, Version};
 use coinject_core::Address;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::{rngs::OsRng, RngCore};
@@ -105,9 +105,8 @@ impl Keystore {
         let verifying_key = signing_key.verifying_key();
         let address = derive_address(&verifying_key);
 
-        let account_name = name.unwrap_or_else(|| {
-            format!("account-{}", &hex::encode(address.as_bytes())[..8])
-        });
+        let account_name =
+            name.unwrap_or_else(|| format!("account-{}", &hex::encode(address.as_bytes())[..8]));
 
         let account = StoredAccount {
             name: account_name.clone(),
@@ -128,7 +127,11 @@ impl Keystore {
     /// Import an existing keypair from a hex-encoded private key.
     ///
     /// Password is read from `COINJECT_KEYSTORE_PASSWORD` env var.
-    pub fn import_keypair(&self, private_key_hex: &str, name: Option<String>) -> Result<StoredAccount> {
+    pub fn import_keypair(
+        &self,
+        private_key_hex: &str,
+        name: Option<String>,
+    ) -> Result<StoredAccount> {
         let password = wallet_password();
         self.import_keypair_with_password(private_key_hex, name, &password)
     }
@@ -140,11 +143,14 @@ impl Keystore {
         name: Option<String>,
         password: &str,
     ) -> Result<StoredAccount> {
-        let private_key_bytes = hex::decode(private_key_hex)
-            .map_err(|e| anyhow!("Invalid private key hex: {}", e))?;
+        let private_key_bytes =
+            hex::decode(private_key_hex).map_err(|e| anyhow!("Invalid private key hex: {}", e))?;
 
         if private_key_bytes.len() != 32 {
-            return Err(anyhow!("Private key must be 32 bytes, got {}", private_key_bytes.len()));
+            return Err(anyhow!(
+                "Private key must be 32 bytes, got {}",
+                private_key_bytes.len()
+            ));
         }
 
         let mut key_bytes = [0u8; 32];
@@ -154,9 +160,8 @@ impl Keystore {
         let verifying_key = signing_key.verifying_key();
         let address = derive_address(&verifying_key);
 
-        let account_name = name.unwrap_or_else(|| {
-            format!("imported-{}", &hex::encode(address.as_bytes())[..8])
-        });
+        let account_name =
+            name.unwrap_or_else(|| format!("imported-{}", &hex::encode(address.as_bytes())[..8]));
 
         let account = StoredAccount {
             name: account_name.clone(),
@@ -205,7 +210,10 @@ impl Keystore {
                 return Ok(account);
             }
         }
-        Err(anyhow!("Account '{}' not found in keystore", name_or_address))
+        Err(anyhow!(
+            "Account '{}' not found in keystore",
+            name_or_address
+        ))
     }
 
     // ─── Signing (requires password) ──────────────────────────────────────
@@ -349,19 +357,14 @@ fn encrypt_secret_key(secret_key: &[u8; 32], password: &str) -> Result<Vec<u8>, 
 /// Decrypt file bytes produced by [`encrypt_secret_key`].
 fn decrypt_secret_key(data: &[u8], password: &str) -> Result<[u8; 32], String> {
     if data.len() < MIN_KEY_FILE_SIZE {
-        return Err(format!(
-            "Key file too small ({} bytes)",
-            data.len()
-        ));
+        return Err(format!("Key file too small ({} bytes)", data.len()));
     }
 
     if &data[0..4] != WALLET_KEY_MAGIC {
-        return Err(
-            "Invalid wallet key file magic. \
+        return Err("Invalid wallet key file magic. \
              Private keys may have been stored in a legacy plaintext format. \
              Re-import your key with: coinject-wallet import"
-                .to_string(),
-        );
+            .to_string());
     }
 
     if data[4] != WALLET_KEY_VERSION {
@@ -398,8 +401,13 @@ fn decrypt_secret_key(data: &[u8], password: &str) -> Result<[u8; 32], String> {
 
 /// Derive an AES key from `password` and `salt` using argon2id.
 fn derive_key(password: &str, salt: &[u8], key_out: &mut [u8]) -> Result<(), String> {
-    let params = Params::new(ARGON2_MEM_KIB, ARGON2_ITERATIONS, ARGON2_PARALLELISM, Some(key_out.len()))
-        .map_err(|e| format!("Invalid argon2 parameters: {}", e))?;
+    let params = Params::new(
+        ARGON2_MEM_KIB,
+        ARGON2_ITERATIONS,
+        ARGON2_PARALLELISM,
+        Some(key_out.len()),
+    )
+    .map_err(|e| format!("Invalid argon2 parameters: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     argon2
         .hash_password_into(password.as_bytes(), salt, key_out)
@@ -571,6 +579,10 @@ mod tests {
 
         let key_path = dir.path().join("frank.key");
         let bytes = fs::read(key_path).unwrap();
-        assert_eq!(&bytes[..4], WALLET_KEY_MAGIC, "Encrypted key file must start with CKWV");
+        assert_eq!(
+            &bytes[..4],
+            WALLET_KEY_MAGIC,
+            "Encrypted key file must start with CKWV"
+        );
     }
 }

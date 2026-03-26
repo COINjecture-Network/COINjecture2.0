@@ -8,9 +8,9 @@
 
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
-use crate::results::{TestResults, LatencyStats, ThroughputCounter};
+use crate::results::{LatencyStats, TestResults, ThroughputCounter};
 
 /// Run a transaction flood test.
 ///
@@ -69,13 +69,7 @@ pub async fn run_tx_flood(
         key_idx = (key_idx + 1) % num_keys;
 
         // Build and submit transaction
-        let submit_result = submit_transfer(
-            &client,
-            rpc_url,
-            &seed,
-            nonce,
-            amount,
-        ).await;
+        let submit_result = submit_transfer(&client, rpc_url, &seed, nonce, amount).await;
 
         let elapsed_ms = send_start.elapsed().as_secs_f64() * 1000.0;
         latency.record(elapsed_ms);
@@ -150,10 +144,7 @@ async fn submit_transfer(
         .await
         .map_err(|e| format!("http error: {e}"))?;
 
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("parse error: {e}"))?;
+    let json: serde_json::Value = resp.json().await.map_err(|e| format!("parse error: {e}"))?;
 
     if let Some(err) = json.get("error") {
         return Err(format!("rpc error: {err}"));

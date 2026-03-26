@@ -285,8 +285,14 @@ mod tests {
 
     #[test]
     fn test_connection_policy() {
-        assert_eq!(ConnectionPolicy::evaluate(0), ConnectionPolicy::Reject { remote_version: 0 });
-        assert_eq!(ConnectionPolicy::evaluate(1), ConnectionPolicy::AllowWithWarning { remote_version: 1 });
+        assert_eq!(
+            ConnectionPolicy::evaluate(0),
+            ConnectionPolicy::Reject { remote_version: 0 }
+        );
+        assert_eq!(
+            ConnectionPolicy::evaluate(1),
+            ConnectionPolicy::AllowWithWarning { remote_version: 1 }
+        );
         assert_eq!(ConnectionPolicy::evaluate(2), ConnectionPolicy::Allow);
     }
 

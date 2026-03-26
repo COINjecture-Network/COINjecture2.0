@@ -2,11 +2,11 @@
 //!
 //! Run with: `cargo bench -p coinject-core --bench block_bench`
 
+use coinject_core::crypto::KeyPair;
 use coinject_core::{
     Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, ProblemType, Solution,
     SolutionReveal, Transaction, BLOCK_VERSION_STANDARD,
 };
-use coinject_core::crypto::KeyPair;
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 
 fn zero_address() -> coinject_core::Address {
@@ -59,7 +59,10 @@ fn make_block(height: u64, tx_count: usize) -> Block {
         })
         .collect();
     let solution_reveal = SolutionReveal::new(
-        ProblemType::SAT { variables: 10, clauses: vec![] },
+        ProblemType::SAT {
+            variables: 10,
+            clauses: vec![],
+        },
         Solution::SAT(vec![true; 10]),
         zero_commitment(),
     );
@@ -87,13 +90,9 @@ fn bench_block_serialize(c: &mut Criterion) {
         let block = make_block(1, tx_count);
         let bytes = bincode::serialize(&block).unwrap();
         group.throughput(Throughput::Bytes(bytes.len() as u64));
-        group.bench_with_input(
-            format!("{}_txs", tx_count),
-            &block,
-            |b, blk| {
-                b.iter(|| bincode::serialize(black_box(blk)).unwrap());
-            },
-        );
+        group.bench_with_input(format!("{}_txs", tx_count), &block, |b, blk| {
+            b.iter(|| bincode::serialize(black_box(blk)).unwrap());
+        });
     }
     group.finish();
 }
@@ -104,13 +103,9 @@ fn bench_block_deserialize(c: &mut Criterion) {
         let block = make_block(1, tx_count);
         let bytes = bincode::serialize(&block).unwrap();
         group.throughput(Throughput::Bytes(bytes.len() as u64));
-        group.bench_with_input(
-            format!("{}_txs", tx_count),
-            &bytes,
-            |b, raw| {
-                b.iter(|| bincode::deserialize::<Block>(black_box(raw)).unwrap());
-            },
-        );
+        group.bench_with_input(format!("{}_txs", tx_count), &bytes, |b, raw| {
+            b.iter(|| bincode::deserialize::<Block>(black_box(raw)).unwrap());
+        });
     }
     group.finish();
 }

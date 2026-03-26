@@ -200,7 +200,9 @@ impl Block {
             self.header.energy_estimate_joules,
             self.transactions.len(),
             now,
-        ).is_err() {
+        )
+        .is_err()
+        {
             return false;
         }
 
@@ -261,7 +263,9 @@ impl Blockchain {
     }
 
     pub fn tip(&self) -> &Block {
-        self.blocks.last().expect("blockchain invariant: chain always contains at least the genesis block")
+        self.blocks
+            .last()
+            .expect("blockchain invariant: chain always contains at least the genesis block")
     }
 
     pub fn get_block(&self, height: BlockHeight) -> Option<&Block> {

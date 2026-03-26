@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::monitor::{NodeMonitor, run_monitor_background};
-use crate::results::{TestResults, PhaseResult};
+use crate::monitor::{run_monitor_background, NodeMonitor};
+use crate::results::{PhaseResult, TestResults};
 use std::collections::HashMap;
 
 // ─── Stability Test ───────────────────────────────────────────────────────────
@@ -27,7 +27,11 @@ pub async fn run_stability_test(
     let mut results = TestResults::new("stability");
     results.metric("config.duration_secs", duration_secs as f64, "s");
     results.metric("config.tps", tps as f64, "ops/s");
-    results.metric("config.sample_interval_secs", sample_interval_secs as f64, "s");
+    results.metric(
+        "config.sample_interval_secs",
+        sample_interval_secs as f64,
+        "s",
+    );
 
     info!("stability: starting {duration_secs}s test at {tps} TPS");
 
@@ -73,14 +77,24 @@ pub async fn run_stability_test(
         match client.post(rpc_url).json(&body).send().await {
             Ok(resp) => {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if json.get("error").is_none() { tx_ok += 1; } else { tx_err += 1; }
-                } else { tx_err += 1; }
+                    if json.get("error").is_none() {
+                        tx_ok += 1;
+                    } else {
+                        tx_err += 1;
+                    }
+                } else {
+                    tx_err += 1;
+                }
             }
-            Err(_) => { tx_err += 1; }
+            Err(_) => {
+                tx_err += 1;
+            }
         }
 
         let remaining = interval.saturating_sub(t0.elapsed());
-        if !remaining.is_zero() { sleep(remaining).await; }
+        if !remaining.is_zero() {
+            sleep(remaining).await;
+        }
     }
 
     // Phase 3: Post-load — collect final metrics
@@ -96,13 +110,17 @@ pub async fn run_stability_test(
     results.metric("tx.submitted_err", tx_err as f64, "txs");
 
     // Collect monitor results
-    let monitor = monitor_handle.await.unwrap_or_else(|_| NodeMonitor::new(rpc_url));
+    let monitor = monitor_handle
+        .await
+        .unwrap_or_else(|_| NodeMonitor::new(rpc_url));
     monitor.apply_to_results(&mut results);
 
     let elapsed = start.elapsed().as_secs_f64();
     let tx_error_rate = if tx_ok + tx_err > 0 {
         tx_err as f64 / (tx_ok + tx_err) as f64 * 100.0
-    } else { 0.0 };
+    } else {
+        0.0
+    };
 
     let passed = !monitor.had_outage()
         && !monitor.memory_leaked(1.0) // fail if memory grew > 100%
@@ -156,8 +174,15 @@ pub async fn run_recovery_test(
     });
 
     if pre_state.0 == 0 {
-        results.error("Node appears to be down before recovery test started".to_string(), 1);
-        results.finish(false, "Node not responsive before recovery test".to_string(), 0.1);
+        results.error(
+            "Node appears to be down before recovery test started".to_string(),
+            1,
+        );
+        results.finish(
+            false,
+            "Node not responsive before recovery test".to_string(),
+            0.1,
+        );
         results.phases = phases;
         return results;
     }
@@ -179,7 +204,9 @@ pub async fn run_recovery_test(
             Err(e) => warn!("recovery: restart command failed: {e}"),
         }
     } else {
-        results.note("No restart command provided — assuming manual restart or monitoring only".to_string());
+        results.note(
+            "No restart command provided — assuming manual restart or monitoring only".to_string(),
+        );
     }
 
     sleep(Duration::from_secs(restart_wait_secs)).await;
@@ -210,25 +237,37 @@ pub async fn run_recovery_test(
 
     results.metric("post.height", post_state.0 as f64, "blocks");
     results.metric("post.peers", post_state.2 as f64, "peers");
-    results.metric("recovery.height_delta",
-        post_state.0.saturating_sub(pre_state.0) as f64, "blocks");
+    results.metric(
+        "recovery.height_delta",
+        post_state.0.saturating_sub(pre_state.0) as f64,
+        "blocks",
+    );
 
     phases.push(PhaseResult {
         name: "post-restart".into(),
         passed: recovered,
         elapsed_secs: phase3_start.elapsed().as_secs_f64(),
         summary: if recovered {
-            format!("Node recovered at height {} (was {})", post_state.0, pre_state.0)
+            format!(
+                "Node recovered at height {} (was {})",
+                post_state.0, pre_state.0
+            )
         } else {
-            format!("Node did NOT recover — height {} < pre-crash {}", post_state.0, pre_state.0)
+            format!(
+                "Node did NOT recover — height {} < pre-crash {}",
+                post_state.0, pre_state.0
+            )
         },
         metrics: HashMap::new(),
     });
 
     if !recovered {
         results.error(
-            format!("Node height {} after restart is below pre-crash height {}",
-                post_state.0, pre_state.0), 1
+            format!(
+                "Node height {} after restart is below pre-crash height {}",
+                post_state.0, pre_state.0
+            ),
+            1,
         );
     }
 
@@ -238,9 +277,15 @@ pub async fn run_recovery_test(
     results.finish(
         recovered,
         if recovered {
-            format!("Node recovered successfully — height {}->{}", pre_state.0, post_state.0)
+            format!(
+                "Node recovered successfully — height {}->{}",
+                pre_state.0, post_state.0
+            )
         } else {
-            format!("Node recovery FAILED — height {}->{}", pre_state.0, post_state.0)
+            format!(
+                "Node recovery FAILED — height {}->{}",
+                pre_state.0, post_state.0
+            )
         },
         elapsed,
     );
@@ -252,11 +297,10 @@ pub async fn run_recovery_test(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Returns (block_height, mempool_size, peer_count).
-async fn measure_node_health(
-    client: &reqwest::Client,
-    rpc_url: &str,
-) -> (u64, u64, u32) {
-    let height = rpc_u64(client, rpc_url, "chain_getBlockNumber").await.unwrap_or(0);
+async fn measure_node_health(client: &reqwest::Client, rpc_url: &str) -> (u64, u64, u32) {
+    let height = rpc_u64(client, rpc_url, "chain_getBlockNumber")
+        .await
+        .unwrap_or(0);
     let mempool = rpc_u64(client, rpc_url, "mempool_size").await.unwrap_or(0);
     let peers = rpc_u64(client, rpc_url, "net_peerCount").await.unwrap_or(0) as u32;
     (height, mempool, peers)
@@ -269,7 +313,8 @@ async fn rpc_u64(client: &reqwest::Client, rpc_url: &str, method: &str) -> Optio
     });
     let resp = client.post(rpc_url).json(&body).send().await.ok()?;
     let json: serde_json::Value = resp.json().await.ok()?;
-    json["result"].as_u64()
+    json["result"]
+        .as_u64()
         .or_else(|| json["result"].as_str()?.parse().ok())
 }
 

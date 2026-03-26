@@ -15,9 +15,7 @@ use sha2::{Digest, Sha256};
 pub enum SubmissionMode {
     /// Public mode: Problem instance is fully visible on-chain
     /// Use case: Open problems, competitions, public bounties
-    Public {
-        problem: ProblemType,
-    },
+    Public { problem: ProblemType },
 
     /// Private mode: Only commitment to problem is visible
     /// Use case: Proprietary problems, sensitive optimization, private bounties
@@ -105,7 +103,8 @@ impl WellformednessProof {
             vk_hash: Self::get_verification_key_hash(),
             public_inputs: vec![
                 commitment.as_bytes().to_vec(),
-                bincode::serialize(&public_params).map_err(|_| PrivacyError::SerializationFailed)?,
+                bincode::serialize(&public_params)
+                    .map_err(|_| PrivacyError::SerializationFailed)?,
             ],
         };
 
@@ -191,8 +190,8 @@ impl WellformednessProof {
         commitment: &Hash,
         public_params: &ProblemParameters,
     ) -> Result<Vec<u8>, PrivacyError> {
-        let params_bytes = bincode::serialize(public_params)
-            .map_err(|_| PrivacyError::SerializationFailed)?;
+        let params_bytes =
+            bincode::serialize(public_params).map_err(|_| PrivacyError::SerializationFailed)?;
 
         let mut hasher = Sha256::new();
         hasher.update(b"COINJECT_TESTNET_PLACEHOLDER_V1");
@@ -295,7 +294,9 @@ impl SubmissionMode {
     pub fn commitment(&self) -> Option<&Hash> {
         match self {
             SubmissionMode::Public { .. } => None,
-            SubmissionMode::Private { problem_commitment, .. } => Some(problem_commitment),
+            SubmissionMode::Private {
+                problem_commitment, ..
+            } => Some(problem_commitment),
         }
     }
 
@@ -437,10 +438,10 @@ mod tests {
 
         // Craft a forged proof with correct public inputs but garbage proof bytes.
         let forged = WellformednessProof {
-            proof_bytes: vec![0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0,
-                              0, 0, 0, 0, 0, 0, 0, 0,
-                              0, 0, 0, 0, 0, 0, 0, 0,
-                              0, 0, 0, 0, 0, 0, 0, 0],
+            proof_bytes: vec![
+                0xde, 0xad, 0xbe, 0xef, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+            ],
             vk_hash: WellformednessProof::get_verification_key_hash(),
             public_inputs: vec![
                 commitment.as_bytes().to_vec(),

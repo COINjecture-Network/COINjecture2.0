@@ -247,7 +247,6 @@ pub struct CppConfig {
     // -----------------------------------------------------------------------
     // Security settings (Phase 5)
     // -----------------------------------------------------------------------
-
     /// Maximum inbound connections from a single IP.
     pub max_connections_per_ip: usize,
 

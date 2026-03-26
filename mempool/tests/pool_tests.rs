@@ -13,7 +13,14 @@ use coinject_mempool::{PoolConfig, PoolError, TransactionPool};
 /// Create a valid, signed Transfer transaction.
 fn make_tx(amount: u128, fee: u128, nonce: u64) -> Transaction {
     let kp = KeyPair::generate();
-    Transaction::new_transfer(kp.address(), Address::from_bytes([0xAB; 32]), amount, fee, nonce, &kp)
+    Transaction::new_transfer(
+        kp.address(),
+        Address::from_bytes([0xAB; 32]),
+        amount,
+        fee,
+        nonce,
+        &kp,
+    )
 }
 
 /// Create a pool with a small min_fee for most tests.
@@ -50,7 +57,14 @@ fn test_add_valid_transaction_succeeds() {
 fn test_add_returns_transaction_hash() {
     let mut pool = small_pool();
     let kp = KeyPair::generate();
-    let tx = Transaction::new_transfer(kp.address(), Address::from_bytes([1u8; 32]), 1_000, 2_000, 1, &kp);
+    let tx = Transaction::new_transfer(
+        kp.address(),
+        Address::from_bytes([1u8; 32]),
+        1_000,
+        2_000,
+        1,
+        &kp,
+    );
     let expected_hash = tx.hash();
     let returned_hash = pool.add(tx).unwrap();
     assert_eq!(expected_hash, returned_hash);
@@ -60,7 +74,8 @@ fn test_add_returns_transaction_hash() {
 fn test_multiple_transactions_all_added() {
     let mut pool = small_pool();
     for i in 1..=5 {
-        pool.add(make_tx(1_000, 1_000 * i as u128, i as u64)).unwrap();
+        pool.add(make_tx(1_000, 1_000 * i as u128, i as u64))
+            .unwrap();
     }
     assert_eq!(pool.len(), 5);
 }
@@ -73,11 +88,22 @@ fn test_multiple_transactions_all_added() {
 fn test_duplicate_transaction_rejected() {
     let mut pool = small_pool();
     let kp = KeyPair::generate();
-    let tx = Transaction::new_transfer(kp.address(), Address::from_bytes([1u8; 32]), 1_000, 2_000, 1, &kp);
+    let tx = Transaction::new_transfer(
+        kp.address(),
+        Address::from_bytes([1u8; 32]),
+        1_000,
+        2_000,
+        1,
+        &kp,
+    );
 
     pool.add(tx.clone()).unwrap();
     let err = pool.add(tx).unwrap_err();
-    assert_eq!(err, PoolError::DuplicateTransaction, "Second identical tx must be rejected");
+    assert_eq!(
+        err,
+        PoolError::DuplicateTransaction,
+        "Second identical tx must be rejected"
+    );
     assert_eq!(pool.len(), 1, "Pool size must not grow on duplicate");
 }
 
@@ -100,7 +126,11 @@ fn test_same_sender_different_nonce_both_accepted() {
 
 #[test]
 fn test_fee_below_minimum_rejected() {
-    let pool_config = PoolConfig { min_fee: 10_000, max_transactions: 100, max_size_bytes: 10 * 1024 * 1024 };
+    let pool_config = PoolConfig {
+        min_fee: 10_000,
+        max_transactions: 100,
+        max_size_bytes: 10 * 1024 * 1024,
+    };
     let mut pool = TransactionPool::with_config(pool_config);
     let tx = make_tx(5_000, 999, 1); // fee 999 < min_fee 10_000
     let err = pool.add(tx).unwrap_err();
@@ -110,7 +140,11 @@ fn test_fee_below_minimum_rejected() {
 #[test]
 fn test_fee_exactly_at_minimum_accepted() {
     let min = 5_000u128;
-    let pool_config = PoolConfig { min_fee: min, max_transactions: 100, max_size_bytes: 10 * 1024 * 1024 };
+    let pool_config = PoolConfig {
+        min_fee: min,
+        max_transactions: 100,
+        max_size_bytes: 10 * 1024 * 1024,
+    };
     let mut pool = TransactionPool::with_config(pool_config);
     let tx = make_tx(1_000, min, 1);
     assert!(pool.add(tx).is_ok());
@@ -168,7 +202,14 @@ fn test_get_top_n_larger_than_pool_returns_all() {
 fn test_contains_and_get_after_add() {
     let mut pool = small_pool();
     let kp = KeyPair::generate();
-    let tx = Transaction::new_transfer(kp.address(), Address::from_bytes([1u8; 32]), 1_000, 5_000, 1, &kp);
+    let tx = Transaction::new_transfer(
+        kp.address(),
+        Address::from_bytes([1u8; 32]),
+        1_000,
+        5_000,
+        1,
+        &kp,
+    );
     let h = pool.add(tx.clone()).unwrap();
 
     assert!(pool.contains(&h));
@@ -211,7 +252,11 @@ fn test_remove_batch_removes_all() {
 
 #[test]
 fn test_pool_full_rejects_low_fee_tx() {
-    let cfg = PoolConfig { max_transactions: 2, max_size_bytes: 10 * 1024 * 1024, min_fee: 1_000 };
+    let cfg = PoolConfig {
+        max_transactions: 2,
+        max_size_bytes: 10 * 1024 * 1024,
+        min_fee: 1_000,
+    };
     let mut pool = TransactionPool::with_config(cfg);
 
     pool.add(make_tx(1_000, 5_000, 1)).unwrap();
@@ -226,7 +271,11 @@ fn test_pool_full_rejects_low_fee_tx() {
 
 #[test]
 fn test_high_fee_evicts_lowest_when_pool_full() {
-    let cfg = PoolConfig { max_transactions: 2, max_size_bytes: 10 * 1024 * 1024, min_fee: 1_000 };
+    let cfg = PoolConfig {
+        max_transactions: 2,
+        max_size_bytes: 10 * 1024 * 1024,
+        min_fee: 1_000,
+    };
     let mut pool = TransactionPool::with_config(cfg);
 
     pool.add(make_tx(1_000, 2_000, 1)).unwrap();
@@ -234,7 +283,10 @@ fn test_high_fee_evicts_lowest_when_pool_full() {
 
     // A higher-fee transaction should evict the lowest (fee=2_000)
     let high = make_tx(1_000, 100_000, 3);
-    assert!(pool.add(high).is_ok(), "High-fee tx must evict the lowest and succeed");
+    assert!(
+        pool.add(high).is_ok(),
+        "High-fee tx must evict the lowest and succeed"
+    );
     assert_eq!(pool.len(), 2);
 
     // Remaining fees should be 3_000 and 100_000
@@ -242,7 +294,10 @@ fn test_high_fee_evicts_lowest_when_pool_full() {
     let fees: Vec<u128> = pending.iter().map(|t| t.fee()).collect();
     assert!(fees.contains(&100_000));
     assert!(fees.contains(&3_000));
-    assert!(!fees.contains(&2_000), "Lowest-fee tx must have been evicted");
+    assert!(
+        !fees.contains(&2_000),
+        "Lowest-fee tx must have been evicted"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +343,14 @@ fn test_stats_transactions_removed_increments_on_remove() {
 fn test_stats_rejected_increments_on_duplicate() {
     let mut pool = small_pool();
     let kp = KeyPair::generate();
-    let tx = Transaction::new_transfer(kp.address(), Address::from_bytes([1u8; 32]), 1_000, 5_000, 1, &kp);
+    let tx = Transaction::new_transfer(
+        kp.address(),
+        Address::from_bytes([1u8; 32]),
+        1_000,
+        5_000,
+        1,
+        &kp,
+    );
     pool.add(tx.clone()).unwrap();
     let _ = pool.add(tx);
     assert_eq!(pool.stats().transactions_rejected, 1);

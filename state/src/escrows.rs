@@ -337,7 +337,10 @@ impl EscrowState {
             .ok_or_else(|| "Escrow not found".to_string())?;
 
         if escrow.status != EscrowStatus::Active {
-            return Err(format!("Escrow is not active (status: {:?})", escrow.status));
+            return Err(format!(
+                "Escrow is not active (status: {:?})",
+                escrow.status
+            ));
         }
 
         // Derive the address the key claims to belong to and check eligibility.
@@ -347,7 +350,13 @@ impl EscrowState {
         }
 
         // Verify the ed25519 signature.
-        verify_escrow_auth(escrow_id, releaser_pubkey, signature, timestamp, ACTION_RELEASE)?;
+        verify_escrow_auth(
+            escrow_id,
+            releaser_pubkey,
+            signature,
+            timestamp,
+            ACTION_RELEASE,
+        )?;
 
         // All checks passed — update status.
         self.update_escrow_status(escrow_id, EscrowStatus::Released, Some(resolved_height))
@@ -370,7 +379,10 @@ impl EscrowState {
             .ok_or_else(|| "Escrow not found".to_string())?;
 
         if escrow.status != EscrowStatus::Active {
-            return Err(format!("Escrow is not active (status: {:?})", escrow.status));
+            return Err(format!(
+                "Escrow is not active (status: {:?})",
+                escrow.status
+            ));
         }
 
         let refunder_address = address_from_pubkey(refunder_pubkey);
@@ -378,7 +390,13 @@ impl EscrowState {
             return Err("Address is not authorized to refund this escrow".to_string());
         }
 
-        verify_escrow_auth(escrow_id, refunder_pubkey, signature, timestamp, ACTION_REFUND)?;
+        verify_escrow_auth(
+            escrow_id,
+            refunder_pubkey,
+            signature,
+            timestamp,
+            ACTION_REFUND,
+        )?;
 
         self.update_escrow_status(escrow_id, EscrowStatus::Refunded, Some(resolved_height))
     }
@@ -436,8 +454,7 @@ fn verify_escrow_auth(
     }
 
     // Parse the verifying key.
-    let vk = VerifyingKey::from_bytes(pubkey)
-        .map_err(|e| format!("Invalid public key: {}", e))?;
+    let vk = VerifyingKey::from_bytes(pubkey).map_err(|e| format!("Invalid public key: {}", e))?;
 
     let sig = Signature::from_bytes(signature);
     let msg = escrow_auth_message(escrow_id, action, timestamp);
@@ -488,11 +505,7 @@ mod tests {
     }
 
     /// Build an escrow whose releaser/refunder addresses are derived from `key`.
-    fn make_escrow_for_key(
-        escrow_id: Hash,
-        sk: &ed25519_dalek::SigningKey,
-        role: &str,
-    ) -> Escrow {
+    fn make_escrow_for_key(escrow_id: Hash, sk: &ed25519_dalek::SigningKey, role: &str) -> Escrow {
         let pk = sk.verifying_key().to_bytes();
         let addr = super::address_from_pubkey(&pk);
         let other = Address::from_bytes([0xAA; 32]);
@@ -548,7 +561,11 @@ mod tests {
         let sig_bytes: [u8; 64] = sig.to_bytes();
 
         let result = state.release_with_auth(&escrow_id, &pk, &sig_bytes, now, 42);
-        assert!(result.is_ok(), "Valid signature should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Valid signature should succeed: {:?}",
+            result
+        );
 
         let updated = state.get_escrow(&escrow_id).unwrap();
         assert_eq!(updated.status, EscrowStatus::Released);
@@ -577,7 +594,10 @@ mod tests {
         let sig_bytes: [u8; 64] = sig.to_bytes();
 
         let result = state.release_with_auth(&escrow_id, &pk, &sig_bytes, now, 42);
-        assert!(result.is_err(), "Signature for wrong action must be rejected");
+        assert!(
+            result.is_err(),
+            "Signature for wrong action must be rejected"
+        );
     }
 
     #[test]
@@ -603,7 +623,11 @@ mod tests {
         let sig_bytes: [u8; 64] = sig.to_bytes();
 
         let result = state.refund_with_auth(&escrow_id, &pk, &sig_bytes, now, 43);
-        assert!(result.is_ok(), "Valid refund after timeout should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Valid refund after timeout should succeed: {:?}",
+            result
+        );
     }
 
     #[test]

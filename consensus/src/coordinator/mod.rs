@@ -194,7 +194,14 @@ impl EpochCoordinator {
         chain_hash: Hash,
         miner_address: Address,
     ) -> (Self, Arc<RwLock<CoordinatorState>>) {
-        Self::with_signing_key(our_id, config, chain_height, chain_hash, miner_address, None)
+        Self::with_signing_key(
+            our_id,
+            config,
+            chain_height,
+            chain_hash,
+            miner_address,
+            None,
+        )
     }
 
     /// Create a coordinator with an ed25519 signing key for commit authentication.

@@ -72,7 +72,13 @@ export default function WalletPage() {
   return (
     <div className="min-h-screen">
       <Navigation />
-      <div className="pt-24 pb-20 container mx-auto px-6">
+      {/* Testnet Warning Banner */}
+      <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 px-6 py-3 text-center text-sm mt-16">
+        <span className="font-bold">⚠️ TESTNET ONLY</span> — This wallet is for demonstration purposes only.{" "}
+        Private keys are stored in your browser's localStorage and are <span className="font-bold">not secure</span>.{" "}
+        Do not use with real funds.
+      </div>
+      <div className="pt-8 pb-20 container mx-auto px-6">
         <div className="max-w-6xl mx-auto">
           <h1 className="text-4xl font-bold mb-8">Wallet</h1>
 
@@ -93,6 +99,7 @@ export default function WalletPage() {
                       <DialogTitle>Create New Account</DialogTitle>
                       <DialogDescription>
                         Generate a new Ed25519 keypair for your wallet
+                        <span className="block text-yellow-400 text-xs mt-1">⚠️ Testnet only — keys stored in localStorage</span>
                       </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4">

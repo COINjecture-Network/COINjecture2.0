@@ -3,7 +3,7 @@
 #![allow(dead_code, clippy::too_many_arguments)]
 
 use super::*;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 impl CoinjectNode {
     /// Process buffered blocks sequentially
@@ -51,7 +51,12 @@ impl CoinjectNode {
 
                     let validation_result = if extends_best_chain {
                         // Normal case: block extends our best chain
-                        validator.validate_block_with_options(&block, &best_hash, next_height, skip_age_check)
+                        validator.validate_block_with_options(
+                            &block,
+                            &best_hash,
+                            next_height,
+                            skip_age_check,
+                        )
                     } else {
                         // Fork case: check if we have the parent block
                         match chain.has_block(&block.header.prev_hash) {
@@ -65,7 +70,12 @@ impl CoinjectNode {
                                 );
 
                                 // Validate against its declared parent (not best_hash)
-                                validator.validate_block_with_options(&block, &block.header.prev_hash, next_height, skip_age_check)
+                                validator.validate_block_with_options(
+                                    &block,
+                                    &block.header.prev_hash,
+                                    next_height,
+                                    skip_age_check,
+                                )
                             }
                             Ok(false) => {
                                 // Parent missing - this is an orphan block from a fork chain
@@ -110,30 +120,57 @@ impl CoinjectNode {
                                     // to a race condition, so we check if it actually extends the chain.
                                     let current_best = chain.best_block_height().await;
                                     let current_best_hash = chain.best_block_hash().await;
-                                    
+
                                     // Block extends chain if: it's the next height AND prev_hash matches current best
-                                    let extends_chain = block.header.height == current_best + 1 && block.header.prev_hash == current_best_hash;
-                                    
+                                    let extends_chain = block.header.height == current_best + 1
+                                        && block.header.prev_hash == current_best_hash;
+
                                     if is_new_best || extends_chain {
                                         // RUNTIME INTEGRATION: Save consensus state for buffered blocks
-                                        use coinject_core::{TAU_C, ConsensusState};
+                                        use coinject_core::{ConsensusState, TAU_C};
                                         let tau = (block.header.height as f64) / TAU_C;
                                         let consensus_state = ConsensusState::at_tau(tau);
 
-                                        if let Err(e) = dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state) {
+                                        if let Err(e) = dimensional_pool_state.save_consensus_state(
+                                            block.header.height,
+                                            &consensus_state,
+                                        ) {
                                             warn!(block_height = block.header.height, error = %e, "failed to save consensus state");
                                         }
 
-                                        match Self::apply_block_transactions(&block, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state) {
+                                        match Self::apply_block_transactions(
+                                            &block,
+                                            state,
+                                            timelock_state,
+                                            escrow_state,
+                                            channel_state,
+                                            trustline_state,
+                                            dimensional_pool_state,
+                                            marketplace_state,
+                                        ) {
                                             Ok(applied_txs) => {
-                                                info!(block_height = next_height, tau = tau, "buffered block applied to chain");
+                                                info!(
+                                                    block_height = next_height,
+                                                    tau = tau,
+                                                    "buffered block applied to chain"
+                                                );
 
                                                 // If store_block didn't update best chain, manually update it
                                                 if !is_new_best && extends_chain {
-                                                    if let Err(e) = chain.update_best_chain(block.header.hash(), block.header.height).await {
+                                                    if let Err(e) = chain
+                                                        .update_best_chain(
+                                                            block.header.hash(),
+                                                            block.header.height,
+                                                        )
+                                                        .await
+                                                    {
                                                         warn!(block_height = block.header.height, error = %e, "failed to update best chain after buffered block");
                                                     } else {
-                                                        info!(block_height = block.header.height, prev_best = current_best, "best chain updated");
+                                                        info!(
+                                                            block_height = block.header.height,
+                                                            prev_best = current_best,
+                                                            "best chain updated"
+                                                        );
                                                     }
                                                 }
 
@@ -149,7 +186,13 @@ impl CoinjectNode {
                                                     let hf_sync_clone = Arc::clone(hf_sync);
                                                     let block_clone = block.clone();
                                                     tokio::spawn(async move {
-                                                        if let Err(e) = hf_sync_clone.push_consensus_block(&block_clone, false).await {
+                                                        if let Err(e) = hf_sync_clone
+                                                            .push_consensus_block(
+                                                                &block_clone,
+                                                                false,
+                                                            )
+                                                            .await
+                                                        {
                                                             warn!(error = %e, "failed to push consensus block to hugging face");
                                                         }
                                                     });
@@ -165,7 +208,11 @@ impl CoinjectNode {
                                     } else {
                                         // Block doesn't extend our chain - might be a fork, duplicate, or out of order
                                         // Skip it and continue processing (don't break, as there might be other sequential blocks)
-                                        warn!(block_height = next_height, best_height = current_best, "buffered block does not extend best chain, skipping");
+                                        warn!(
+                                            block_height = next_height,
+                                            best_height = current_best,
+                                            "buffered block does not extend best chain, skipping"
+                                        );
                                         // Continue loop to check for next sequential block
                                     }
                                 }
@@ -181,7 +228,10 @@ impl CoinjectNode {
                             // buffered before the previous block was applied. Remove it from buffer
                             // so it can be re-received with the correct prev_hash.
                             if e.to_string().contains("Invalid previous hash") {
-                                debug!(block_height = next_height, "removing invalid buffered block, will be re-requested");
+                                debug!(
+                                    block_height = next_height,
+                                    "removing invalid buffered block, will be re-requested"
+                                );
                                 // Block already removed from buffer above, so we can continue
                             }
                             // Don't break - continue to check for next sequential block
@@ -202,11 +252,15 @@ impl CoinjectNode {
                             let request_from = next_height;
                             // Request only the next missing block first, then expand if needed
                             let request_to = next_height;
-                            
-                            warn!(block_height = next_height, max_buffered = max_buffered_height, "missing block, requesting from peers");
-                            
+
+                            warn!(
+                                block_height = next_height,
+                                max_buffered = max_buffered_height,
+                                "missing block, requesting from peers"
+                            );
+
                             drop(buffer);
-                            
+
                             // Request missing block ONE AT A TIME if network_tx is available
                             if let Some(network_tx) = network_tx {
                                 if let Err(e) = network_tx.send(NetworkCommand::RequestBlocks {
@@ -216,7 +270,7 @@ impl CoinjectNode {
                                     error!(error = %e, "failed to request missing block");
                                 }
                             }
-                            
+
                             // Break and wait for block to arrive
                             // Will retry on next call to process_buffered_blocks
                             break;
@@ -249,7 +303,8 @@ impl CoinjectNode {
         let miner = block.header.miner;
         let reward = block.coinbase.reward;
         let current_balance = state.get_balance(&miner);
-        state.set_balance(&miner, current_balance + reward)
+        state
+            .set_balance(&miner, current_balance + reward)
             .map_err(|e| format!("Failed to set miner balance: {}", e))?;
 
         let mut applied_txs = Vec::new();
@@ -258,7 +313,17 @@ impl CoinjectNode {
         // Apply regular transactions
         for tx in &block.transactions {
             // Apply the transaction
-            match Self::apply_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height) {
+            match Self::apply_single_transaction(
+                tx,
+                state,
+                timelock_state,
+                escrow_state,
+                channel_state,
+                trustline_state,
+                dimensional_pool_state,
+                marketplace_state,
+                block_height,
+            ) {
                 Ok(()) => {
                     applied_txs.push(tx.hash());
                 }
@@ -296,7 +361,17 @@ impl CoinjectNode {
 
         // Unwind transactions in reverse order
         for tx in block.transactions.iter().rev() {
-            if let Err(e) = Self::unwind_single_transaction(tx, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, block_height) {
+            if let Err(e) = Self::unwind_single_transaction(
+                tx,
+                state,
+                timelock_state,
+                escrow_state,
+                channel_state,
+                trustline_state,
+                dimensional_pool_state,
+                marketplace_state,
+                block_height,
+            ) {
                 warn!(tx_hash = ?tx.hash(), error = %e, "failed to unwind transaction");
                 // Continue unwinding other transactions even if one fails
             }
@@ -307,12 +382,18 @@ impl CoinjectNode {
         let reward = block.coinbase.reward;
         let current_balance = state.get_balance(&miner);
         if current_balance >= reward {
-            state.set_balance(&miner, current_balance - reward)
+            state
+                .set_balance(&miner, current_balance - reward)
                 .map_err(|e| format!("Failed to unwind miner reward: {}", e))?;
         } else {
             // Miner balance insufficient - this shouldn't happen but handle gracefully
-            warn!(balance = current_balance, reward = reward, "miner balance below reward, setting to zero");
-            state.set_balance(&miner, 0)
+            warn!(
+                balance = current_balance,
+                reward = reward,
+                "miner balance below reward, setting to zero"
+            );
+            state
+                .set_balance(&miner, 0)
                 .map_err(|e| format!("Failed to set miner balance: {}", e))?;
         }
 
@@ -331,29 +412,36 @@ impl CoinjectNode {
         _marketplace_state: &Arc<MarketplaceState>,
         _block_height: u64,
     ) -> Result<(), String> {
-        use coinject_core::{EscrowType, ChannelType};
+        use coinject_core::{ChannelType, EscrowType};
         use coinject_state::EscrowStatus;
 
         match tx {
             coinject_core::Transaction::Transfer(transfer_tx) => {
                 // Reverse: credit sender, debit recipient, decrement nonce
                 let sender_balance = state.get_balance(&transfer_tx.from);
-                state.set_balance(&transfer_tx.from, sender_balance + transfer_tx.amount + transfer_tx.fee)
+                state
+                    .set_balance(
+                        &transfer_tx.from,
+                        sender_balance + transfer_tx.amount + transfer_tx.fee,
+                    )
                     .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
-                
+
                 let current_nonce = state.get_nonce(&transfer_tx.from);
                 if current_nonce > 0 {
-                    state.set_nonce(&transfer_tx.from, current_nonce - 1)
+                    state
+                        .set_nonce(&transfer_tx.from, current_nonce - 1)
                         .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
                 }
 
                 let recipient_balance = state.get_balance(&transfer_tx.to);
                 if recipient_balance >= transfer_tx.amount {
-                    state.set_balance(&transfer_tx.to, recipient_balance - transfer_tx.amount)
+                    state
+                        .set_balance(&transfer_tx.to, recipient_balance - transfer_tx.amount)
                         .map_err(|e| format!("Failed to unwind recipient balance: {}", e))?;
                 } else {
                     // Recipient balance insufficient - set to 0
-                    state.set_balance(&transfer_tx.to, 0)
+                    state
+                        .set_balance(&transfer_tx.to, 0)
                         .map_err(|e| format!("Failed to set recipient balance: {}", e))?;
                 }
 
@@ -363,12 +451,17 @@ impl CoinjectNode {
             coinject_core::Transaction::TimeLock(timelock_tx) => {
                 // Reverse: credit sender, remove timelock, decrement nonce
                 let sender_balance = state.get_balance(&timelock_tx.from);
-                state.set_balance(&timelock_tx.from, sender_balance + timelock_tx.amount + timelock_tx.fee)
+                state
+                    .set_balance(
+                        &timelock_tx.from,
+                        sender_balance + timelock_tx.amount + timelock_tx.fee,
+                    )
                     .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
-                
+
                 let current_nonce = state.get_nonce(&timelock_tx.from);
                 if current_nonce > 0 {
-                    state.set_nonce(&timelock_tx.from, current_nonce - 1)
+                    state
+                        .set_nonce(&timelock_tx.from, current_nonce - 1)
                         .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
                 }
 
@@ -384,12 +477,17 @@ impl CoinjectNode {
                         let sender_balance = state.get_balance(&escrow_tx.from);
                         // We need to get the escrow to know the amount
                         if let Some(escrow) = escrow_state.get_escrow(&escrow_tx.escrow_id) {
-                            state.set_balance(&escrow_tx.from, sender_balance + escrow.amount + escrow_tx.fee)
+                            state
+                                .set_balance(
+                                    &escrow_tx.from,
+                                    sender_balance + escrow.amount + escrow_tx.fee,
+                                )
                                 .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
-                            
+
                             let current_nonce = state.get_nonce(&escrow_tx.from);
                             if current_nonce > 0 {
-                                state.set_nonce(&escrow_tx.from, current_nonce - 1)
+                                state
+                                    .set_nonce(&escrow_tx.from, current_nonce - 1)
                                     .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
                             }
 
@@ -405,15 +503,26 @@ impl CoinjectNode {
                         if let Some(escrow) = escrow_state.get_escrow(&escrow_tx.escrow_id) {
                             let recipient_balance = state.get_balance(&escrow.recipient);
                             if recipient_balance >= escrow.amount {
-                                state.set_balance(&escrow.recipient, recipient_balance - escrow.amount)
-                                    .map_err(|e| format!("Failed to unwind recipient balance: {}", e))?;
+                                state
+                                    .set_balance(
+                                        &escrow.recipient,
+                                        recipient_balance - escrow.amount,
+                                    )
+                                    .map_err(|e| {
+                                        format!("Failed to unwind recipient balance: {}", e)
+                                    })?;
                             } else {
-                                state.set_balance(&escrow.recipient, 0)
-                                    .map_err(|e| format!("Failed to set recipient balance: {}", e))?;
+                                state.set_balance(&escrow.recipient, 0).map_err(|e| {
+                                    format!("Failed to set recipient balance: {}", e)
+                                })?;
                             }
 
                             // Restore escrow to active
-                            escrow_state.update_escrow_status(&escrow_tx.escrow_id, EscrowStatus::Active, None)?;
+                            escrow_state.update_escrow_status(
+                                &escrow_tx.escrow_id,
+                                EscrowStatus::Active,
+                                None,
+                            )?;
                         }
                         Ok(())
                     }
@@ -423,15 +532,23 @@ impl CoinjectNode {
                         if let Some(escrow) = escrow_state.get_escrow(&escrow_tx.escrow_id) {
                             let sender_balance = state.get_balance(&escrow.sender);
                             if sender_balance >= escrow.amount {
-                                state.set_balance(&escrow.sender, sender_balance - escrow.amount)
-                                    .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
+                                state
+                                    .set_balance(&escrow.sender, sender_balance - escrow.amount)
+                                    .map_err(|e| {
+                                        format!("Failed to unwind sender balance: {}", e)
+                                    })?;
                             } else {
-                                state.set_balance(&escrow.sender, 0)
+                                state
+                                    .set_balance(&escrow.sender, 0)
                                     .map_err(|e| format!("Failed to set sender balance: {}", e))?;
                             }
 
                             // Restore escrow to active
-                            escrow_state.update_escrow_status(&escrow_tx.escrow_id, EscrowStatus::Active, None)?;
+                            escrow_state.update_escrow_status(
+                                &escrow_tx.escrow_id,
+                                EscrowStatus::Active,
+                                None,
+                            )?;
                         }
                         Ok(())
                     }
@@ -440,16 +557,30 @@ impl CoinjectNode {
 
             coinject_core::Transaction::Channel(channel_tx) => {
                 match &channel_tx.channel_type {
-                    ChannelType::Open { participant_a, deposit_a, deposit_b, .. } => {
+                    ChannelType::Open {
+                        participant_a,
+                        deposit_a,
+                        deposit_b,
+                        ..
+                    } => {
                         // Reverse: credit initiator, remove channel, decrement nonce
-                        let initiator_deposit = if &channel_tx.from == participant_a { *deposit_a } else { *deposit_b };
+                        let initiator_deposit = if &channel_tx.from == participant_a {
+                            *deposit_a
+                        } else {
+                            *deposit_b
+                        };
                         let initiator_balance = state.get_balance(&channel_tx.from);
-                        state.set_balance(&channel_tx.from, initiator_balance + initiator_deposit + channel_tx.fee)
+                        state
+                            .set_balance(
+                                &channel_tx.from,
+                                initiator_balance + initiator_deposit + channel_tx.fee,
+                            )
                             .map_err(|e| format!("Failed to unwind initiator balance: {}", e))?;
-                        
+
                         let current_nonce = state.get_nonce(&channel_tx.from);
                         if current_nonce > 0 {
-                            state.set_nonce(&channel_tx.from, current_nonce - 1)
+                            state
+                                .set_nonce(&channel_tx.from, current_nonce - 1)
                                 .map_err(|e| format!("Failed to unwind initiator nonce: {}", e))?;
                         }
 
@@ -465,25 +596,42 @@ impl CoinjectNode {
                         Ok(())
                     }
 
-                    ChannelType::CooperativeClose { final_balance_a, final_balance_b } => {
+                    ChannelType::CooperativeClose {
+                        final_balance_a,
+                        final_balance_b,
+                    } => {
                         // Reverse: debit both participants, restore channel
                         if let Some(channel) = channel_state.get_channel(&channel_tx.channel_id) {
                             let balance_a = state.get_balance(&channel.participant_a);
                             if balance_a >= *final_balance_a {
-                                state.set_balance(&channel.participant_a, balance_a - *final_balance_a)
-                                    .map_err(|e| format!("Failed to unwind participant A balance: {}", e))?;
+                                state
+                                    .set_balance(
+                                        &channel.participant_a,
+                                        balance_a - *final_balance_a,
+                                    )
+                                    .map_err(|e| {
+                                        format!("Failed to unwind participant A balance: {}", e)
+                                    })?;
                             } else {
-                                state.set_balance(&channel.participant_a, 0)
-                                    .map_err(|e| format!("Failed to set participant A balance: {}", e))?;
+                                state.set_balance(&channel.participant_a, 0).map_err(|e| {
+                                    format!("Failed to set participant A balance: {}", e)
+                                })?;
                             }
 
                             let balance_b = state.get_balance(&channel.participant_b);
                             if balance_b >= *final_balance_b {
-                                state.set_balance(&channel.participant_b, balance_b - *final_balance_b)
-                                    .map_err(|e| format!("Failed to unwind participant B balance: {}", e))?;
+                                state
+                                    .set_balance(
+                                        &channel.participant_b,
+                                        balance_b - *final_balance_b,
+                                    )
+                                    .map_err(|e| {
+                                        format!("Failed to unwind participant B balance: {}", e)
+                                    })?;
                             } else {
-                                state.set_balance(&channel.participant_b, 0)
-                                    .map_err(|e| format!("Failed to set participant B balance: {}", e))?;
+                                state.set_balance(&channel.participant_b, 0).map_err(|e| {
+                                    format!("Failed to set participant B balance: {}", e)
+                                })?;
                             }
 
                             // Restore channel to open (approximate - we don't have exact previous state)
@@ -496,7 +644,9 @@ impl CoinjectNode {
                     ChannelType::UnilateralClose { .. } => {
                         // Reverse dispute - restore channel state
                         // This is complex and approximate
-                        warn!("cannot perfectly reverse unilateral close, state may be inconsistent");
+                        warn!(
+                            "cannot perfectly reverse unilateral close, state may be inconsistent"
+                        );
                         Ok(())
                     }
                 }
@@ -505,12 +655,14 @@ impl CoinjectNode {
             coinject_core::Transaction::TrustLine(trustline_tx) => {
                 // Reverse: credit fee, decrement nonce, reverse trustline operation
                 let sender_balance = state.get_balance(&trustline_tx.from);
-                state.set_balance(&trustline_tx.from, sender_balance + trustline_tx.fee)
+                state
+                    .set_balance(&trustline_tx.from, sender_balance + trustline_tx.fee)
                     .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
-                
+
                 let current_nonce = state.get_nonce(&trustline_tx.from);
                 if current_nonce > 0 {
-                    state.set_nonce(&trustline_tx.from, current_nonce - 1)
+                    state
+                        .set_nonce(&trustline_tx.from, current_nonce - 1)
                         .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
                 }
 
@@ -520,7 +672,9 @@ impl CoinjectNode {
                         // Remove trustline - note: perfect reversal requires delete method
                         warn!("trustline deletion requires delete_trustline method, state may be approximate");
                     }
-                    TrustLineType::UpdateLimits { .. } | TrustLineType::Freeze | TrustLineType::EvolvePhase { .. } => {
+                    TrustLineType::UpdateLimits { .. }
+                    | TrustLineType::Freeze
+                    | TrustLineType::EvolvePhase { .. } => {
                         // These are state changes - hard to reverse perfectly
                         // In practice, we'd need to store previous state
                         warn!("trustline state reversal is approximate");
@@ -536,12 +690,14 @@ impl CoinjectNode {
             coinject_core::Transaction::DimensionalPoolSwap(pool_swap_tx) => {
                 // Reverse: credit fee, decrement nonce, reverse swap
                 let sender_balance = state.get_balance(&pool_swap_tx.from);
-                state.set_balance(&pool_swap_tx.from, sender_balance + pool_swap_tx.fee)
+                state
+                    .set_balance(&pool_swap_tx.from, sender_balance + pool_swap_tx.fee)
                     .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
-                
+
                 let current_nonce = state.get_nonce(&pool_swap_tx.from);
                 if current_nonce > 0 {
-                    state.set_nonce(&pool_swap_tx.from, current_nonce - 1)
+                    state
+                        .set_nonce(&pool_swap_tx.from, current_nonce - 1)
                         .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
                 }
 
@@ -553,22 +709,28 @@ impl CoinjectNode {
 
             coinject_core::Transaction::Marketplace(marketplace_tx) => {
                 use coinject_core::MarketplaceOperation;
-                
+
                 // Reverse: credit fee, decrement nonce
                 let sender_balance = state.get_balance(&marketplace_tx.from);
-                state.set_balance(&marketplace_tx.from, sender_balance + marketplace_tx.fee)
+                state
+                    .set_balance(&marketplace_tx.from, sender_balance + marketplace_tx.fee)
                     .map_err(|e| format!("Failed to unwind sender balance: {}", e))?;
-                
+
                 let current_nonce = state.get_nonce(&marketplace_tx.from);
                 if current_nonce > 0 {
-                    state.set_nonce(&marketplace_tx.from, current_nonce - 1)
+                    state
+                        .set_nonce(&marketplace_tx.from, current_nonce - 1)
                         .map_err(|e| format!("Failed to unwind sender nonce: {}", e))?;
                 }
 
                 match &marketplace_tx.operation {
                     MarketplaceOperation::SubmitProblem { bounty, .. } => {
                         // Reverse: credit bounty back, remove problem
-                        state.set_balance(&marketplace_tx.from, sender_balance + marketplace_tx.fee + bounty)
+                        state
+                            .set_balance(
+                                &marketplace_tx.from,
+                                sender_balance + marketplace_tx.fee + bounty,
+                            )
                             .map_err(|e| format!("Failed to unwind problem submission: {}", e))?;
                         // Remove problem - would need problem_id
                         warn!("problem removal requires problem_id tracking");
@@ -606,8 +768,8 @@ impl CoinjectNode {
         marketplace_state: &Arc<MarketplaceState>,
         block_height: u64,
     ) -> Result<(), String> {
-        use coinject_core::{EscrowType, ChannelType};
-        use coinject_state::{Escrow, EscrowStatus, TimeLock, Channel, ChannelStatus};
+        use coinject_core::{ChannelType, EscrowType};
+        use coinject_state::{Channel, ChannelStatus, Escrow, EscrowStatus, TimeLock};
 
         // Pattern match on transaction type to maintain economic mathematics
         match tx {
@@ -615,19 +777,28 @@ impl CoinjectNode {
                 // Validate sender has sufficient balance
                 let sender_balance = state.get_balance(&transfer_tx.from);
                 if sender_balance < transfer_tx.amount + transfer_tx.fee {
-                    return Err(format!("Insufficient balance: has {}, needs {}",
-                        sender_balance, transfer_tx.amount + transfer_tx.fee));
+                    return Err(format!(
+                        "Insufficient balance: has {}, needs {}",
+                        sender_balance,
+                        transfer_tx.amount + transfer_tx.fee
+                    ));
                 }
 
                 // Deduct from sender
-                state.set_balance(&transfer_tx.from, sender_balance - transfer_tx.amount - transfer_tx.fee)
+                state
+                    .set_balance(
+                        &transfer_tx.from,
+                        sender_balance - transfer_tx.amount - transfer_tx.fee,
+                    )
                     .map_err(|e| format!("Failed to set sender balance: {}", e))?;
-                state.set_nonce(&transfer_tx.from, transfer_tx.nonce + 1)
+                state
+                    .set_nonce(&transfer_tx.from, transfer_tx.nonce + 1)
                     .map_err(|e| format!("Failed to set sender nonce: {}", e))?;
 
                 // Credit recipient
                 let recipient_balance = state.get_balance(&transfer_tx.to);
-                state.set_balance(&transfer_tx.to, recipient_balance + transfer_tx.amount)
+                state
+                    .set_balance(&transfer_tx.to, recipient_balance + transfer_tx.amount)
                     .map_err(|e| format!("Failed to set recipient balance: {}", e))?;
 
                 Ok(())
@@ -637,14 +808,22 @@ impl CoinjectNode {
                 // Validate sender has sufficient balance
                 let sender_balance = state.get_balance(&timelock_tx.from);
                 if sender_balance < timelock_tx.amount + timelock_tx.fee {
-                    return Err(format!("Insufficient balance for timelock: has {}, needs {}",
-                        sender_balance, timelock_tx.amount + timelock_tx.fee));
+                    return Err(format!(
+                        "Insufficient balance for timelock: has {}, needs {}",
+                        sender_balance,
+                        timelock_tx.amount + timelock_tx.fee
+                    ));
                 }
 
                 // Deduct from sender
-                state.set_balance(&timelock_tx.from, sender_balance - timelock_tx.amount - timelock_tx.fee)
+                state
+                    .set_balance(
+                        &timelock_tx.from,
+                        sender_balance - timelock_tx.amount - timelock_tx.fee,
+                    )
                     .map_err(|e| format!("Failed to set sender balance: {}", e))?;
-                state.set_nonce(&timelock_tx.from, timelock_tx.nonce + 1)
+                state
+                    .set_nonce(&timelock_tx.from, timelock_tx.nonce + 1)
                     .map_err(|e| format!("Failed to set sender nonce: {}", e))?;
 
                 // Create timelock entry
@@ -663,18 +842,29 @@ impl CoinjectNode {
 
             coinject_core::Transaction::Escrow(escrow_tx) => {
                 match &escrow_tx.escrow_type {
-                    EscrowType::Create { recipient, arbiter, amount, timeout, conditions_hash } => {
+                    EscrowType::Create {
+                        recipient,
+                        arbiter,
+                        amount,
+                        timeout,
+                        conditions_hash,
+                    } => {
                         // Validate sender has sufficient balance
                         let sender_balance = state.get_balance(&escrow_tx.from);
                         if sender_balance < amount + escrow_tx.fee {
-                            return Err(format!("Insufficient balance for escrow: has {}, needs {}",
-                                sender_balance, amount + escrow_tx.fee));
+                            return Err(format!(
+                                "Insufficient balance for escrow: has {}, needs {}",
+                                sender_balance,
+                                amount + escrow_tx.fee
+                            ));
                         }
 
                         // Deduct from sender
-                        state.set_balance(&escrow_tx.from, sender_balance - amount - escrow_tx.fee)
+                        state
+                            .set_balance(&escrow_tx.from, sender_balance - amount - escrow_tx.fee)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
-                        state.set_nonce(&escrow_tx.from, escrow_tx.nonce + 1)
+                        state
+                            .set_nonce(&escrow_tx.from, escrow_tx.nonce + 1)
                             .map_err(|e| format!("Failed to set sender nonce: {}", e))?;
 
                         // Create escrow entry
@@ -696,7 +886,8 @@ impl CoinjectNode {
                     }
 
                     EscrowType::Release => {
-                        let escrow = escrow_state.get_escrow(&escrow_tx.escrow_id)
+                        let escrow = escrow_state
+                            .get_escrow(&escrow_tx.escrow_id)
                             .ok_or("Escrow not found".to_string())?;
 
                         if !escrow_state.can_release(&escrow_tx.escrow_id, &escrow_tx.from) {
@@ -705,16 +896,22 @@ impl CoinjectNode {
 
                         // Credit recipient
                         let recipient_balance = state.get_balance(&escrow.recipient);
-                        state.set_balance(&escrow.recipient, recipient_balance + escrow.amount)
+                        state
+                            .set_balance(&escrow.recipient, recipient_balance + escrow.amount)
                             .map_err(|e| format!("Failed to set recipient balance: {}", e))?;
 
                         // Update escrow status
-                        escrow_state.update_escrow_status(&escrow_tx.escrow_id, EscrowStatus::Released, Some(block_height))?;
+                        escrow_state.update_escrow_status(
+                            &escrow_tx.escrow_id,
+                            EscrowStatus::Released,
+                            Some(block_height),
+                        )?;
                         Ok(())
                     }
 
                     EscrowType::Refund => {
-                        let escrow = escrow_state.get_escrow(&escrow_tx.escrow_id)
+                        let escrow = escrow_state
+                            .get_escrow(&escrow_tx.escrow_id)
                             .ok_or("Escrow not found".to_string())?;
 
                         if !escrow_state.can_refund(&escrow_tx.escrow_id, &escrow_tx.from) {
@@ -723,11 +920,16 @@ impl CoinjectNode {
 
                         // Credit sender (refund)
                         let sender_balance = state.get_balance(&escrow.sender);
-                        state.set_balance(&escrow.sender, sender_balance + escrow.amount)
+                        state
+                            .set_balance(&escrow.sender, sender_balance + escrow.amount)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
 
                         // Update escrow status
-                        escrow_state.update_escrow_status(&escrow_tx.escrow_id, EscrowStatus::Refunded, Some(block_height))?;
+                        escrow_state.update_escrow_status(
+                            &escrow_tx.escrow_id,
+                            EscrowStatus::Refunded,
+                            Some(block_height),
+                        )?;
                         Ok(())
                     }
                 }
@@ -735,20 +937,38 @@ impl CoinjectNode {
 
             coinject_core::Transaction::Channel(channel_tx) => {
                 match &channel_tx.channel_type {
-                    ChannelType::Open { participant_a, participant_b, deposit_a, deposit_b, timeout } => {
+                    ChannelType::Open {
+                        participant_a,
+                        participant_b,
+                        deposit_a,
+                        deposit_b,
+                        timeout,
+                    } => {
                         // Validate initiator has sufficient balance for their deposit
                         let initiator_balance = state.get_balance(&channel_tx.from);
-                        let initiator_deposit = if &channel_tx.from == participant_a { *deposit_a } else { *deposit_b };
+                        let initiator_deposit = if &channel_tx.from == participant_a {
+                            *deposit_a
+                        } else {
+                            *deposit_b
+                        };
 
                         if initiator_balance < initiator_deposit + channel_tx.fee {
-                            return Err(format!("Insufficient balance for channel: has {}, needs {}",
-                                initiator_balance, initiator_deposit + channel_tx.fee));
+                            return Err(format!(
+                                "Insufficient balance for channel: has {}, needs {}",
+                                initiator_balance,
+                                initiator_deposit + channel_tx.fee
+                            ));
                         }
 
                         // Deduct initiator's deposit
-                        state.set_balance(&channel_tx.from, initiator_balance - initiator_deposit - channel_tx.fee)
+                        state
+                            .set_balance(
+                                &channel_tx.from,
+                                initiator_balance - initiator_deposit - channel_tx.fee,
+                            )
                             .map_err(|e| format!("Failed to set initiator balance: {}", e))?;
-                        state.set_nonce(&channel_tx.from, channel_tx.nonce + 1)
+                        state
+                            .set_nonce(&channel_tx.from, channel_tx.nonce + 1)
                             .map_err(|e| format!("Failed to set initiator nonce: {}", e))?;
 
                         // Create channel entry
@@ -772,35 +992,66 @@ impl CoinjectNode {
                         Ok(())
                     }
 
-                    ChannelType::Update { sequence, balance_a, balance_b } => {
-                        channel_state.update_channel_state(&channel_tx.channel_id, *sequence, *balance_a, *balance_b)?;
+                    ChannelType::Update {
+                        sequence,
+                        balance_a,
+                        balance_b,
+                    } => {
+                        channel_state.update_channel_state(
+                            &channel_tx.channel_id,
+                            *sequence,
+                            *balance_a,
+                            *balance_b,
+                        )?;
                         Ok(())
                     }
 
-                    ChannelType::CooperativeClose { final_balance_a, final_balance_b } => {
-                        let channel = channel_state.get_channel(&channel_tx.channel_id)
+                    ChannelType::CooperativeClose {
+                        final_balance_a,
+                        final_balance_b,
+                    } => {
+                        let channel = channel_state
+                            .get_channel(&channel_tx.channel_id)
                             .ok_or("Channel not found".to_string())?;
 
                         // Credit both participants
                         let balance_a = state.get_balance(&channel.participant_a);
-                        state.set_balance(&channel.participant_a, balance_a + final_balance_a)
+                        state
+                            .set_balance(&channel.participant_a, balance_a + final_balance_a)
                             .map_err(|e| format!("Failed to set participant A balance: {}", e))?;
 
                         let balance_b = state.get_balance(&channel.participant_b);
-                        state.set_balance(&channel.participant_b, balance_b + final_balance_b)
+                        state
+                            .set_balance(&channel.participant_b, balance_b + final_balance_b)
                             .map_err(|e| format!("Failed to set participant B balance: {}", e))?;
 
                         // Close channel
-                        channel_state.close_cooperative(&channel_tx.channel_id, *final_balance_a, *final_balance_b, block_height)?;
+                        channel_state.close_cooperative(
+                            &channel_tx.channel_id,
+                            *final_balance_a,
+                            *final_balance_b,
+                            block_height,
+                        )?;
                         Ok(())
                     }
 
-                    ChannelType::UnilateralClose { sequence, balance_a, balance_b, .. } => {
-                        let _channel = channel_state.get_channel(&channel_tx.channel_id)
+                    ChannelType::UnilateralClose {
+                        sequence,
+                        balance_a,
+                        balance_b,
+                        ..
+                    } => {
+                        let _channel = channel_state
+                            .get_channel(&channel_tx.channel_id)
                             .ok_or("Channel not found".to_string())?;
 
                         // Start dispute
-                        channel_state.start_dispute(&channel_tx.channel_id, *sequence, *balance_a, *balance_b)?;
+                        channel_state.start_dispute(
+                            &channel_tx.channel_id,
+                            *sequence,
+                            *balance_a,
+                            *balance_b,
+                        )?;
                         Ok(())
                     }
                 }
@@ -814,14 +1065,18 @@ impl CoinjectNode {
                 // Validate sender has sufficient balance for fee
                 let sender_balance = state.get_balance(&trustline_tx.from);
                 if sender_balance < trustline_tx.fee {
-                    return Err(format!("Insufficient balance for trustline fee: has {}, needs {}",
-                        sender_balance, trustline_tx.fee));
+                    return Err(format!(
+                        "Insufficient balance for trustline fee: has {}, needs {}",
+                        sender_balance, trustline_tx.fee
+                    ));
                 }
 
                 // Deduct fee from sender and increment nonce
-                state.set_balance(&trustline_tx.from, sender_balance - trustline_tx.fee)
+                state
+                    .set_balance(&trustline_tx.from, sender_balance - trustline_tx.fee)
                     .map_err(|e| format!("Failed to set sender balance: {}", e))?;
-                state.set_nonce(&trustline_tx.from, trustline_tx.nonce + 1)
+                state
+                    .set_nonce(&trustline_tx.from, trustline_tx.nonce + 1)
                     .map_err(|e| format!("Failed to set sender nonce: {}", e))?;
 
                 // Apply trustline state operations based on transaction type
@@ -857,15 +1112,20 @@ impl CoinjectNode {
                         // Initialize Viviani oracle metrics
                         trustline.update_viviani_oracle();
 
-                        trustline_state.create_trustline(trustline)
+                        trustline_state
+                            .create_trustline(trustline)
                             .map_err(|e| format!("Failed to create trustline: {}", e))?;
 
                         Ok(())
                     }
 
-                    TrustLineType::UpdateLimits { limit_a_to_b, limit_b_to_a } => {
+                    TrustLineType::UpdateLimits {
+                        limit_a_to_b,
+                        limit_b_to_a,
+                    } => {
                         // Update credit limits on existing trustline
-                        let trustline = trustline_state.get_trustline(&trustline_tx.trustline_id)
+                        let trustline = trustline_state
+                            .get_trustline(&trustline_tx.trustline_id)
                             .ok_or_else(|| "TrustLine not found".to_string())?;
 
                         // Verify sender is authorized (must be account_a or account_b)
@@ -886,7 +1146,8 @@ impl CoinjectNode {
 
                     TrustLineType::Freeze => {
                         // Freeze trustline (prevents further transfers)
-                        let trustline = trustline_state.get_trustline(&trustline_tx.trustline_id)
+                        let trustline = trustline_state
+                            .get_trustline(&trustline_tx.trustline_id)
                             .ok_or_else(|| "TrustLine not found".to_string())?;
 
                         // Verify sender is authorized
@@ -894,13 +1155,15 @@ impl CoinjectNode {
                             return Err("Not authorized to freeze trustline".to_string());
                         }
 
-                        trustline_state.freeze_trustline(&trustline_tx.trustline_id, block_height)?;
+                        trustline_state
+                            .freeze_trustline(&trustline_tx.trustline_id, block_height)?;
                         Ok(())
                     }
 
                     TrustLineType::Close => {
                         // Close trustline (requires zero balance)
-                        let trustline = trustline_state.get_trustline(&trustline_tx.trustline_id)
+                        let trustline = trustline_state
+                            .get_trustline(&trustline_tx.trustline_id)
                             .ok_or_else(|| "TrustLine not found".to_string())?;
 
                         // Verify sender is authorized
@@ -909,13 +1172,15 @@ impl CoinjectNode {
                         }
 
                         // close_trustline already validates zero balance internally
-                        trustline_state.close_trustline(&trustline_tx.trustline_id, block_height)?;
+                        trustline_state
+                            .close_trustline(&trustline_tx.trustline_id, block_height)?;
                         Ok(())
                     }
 
                     TrustLineType::EvolvePhase { delta_tau } => {
                         // Evolve phase parameter: θ(τ) = λτ = τ/√2
-                        let trustline = trustline_state.get_trustline(&trustline_tx.trustline_id)
+                        let trustline = trustline_state
+                            .get_trustline(&trustline_tx.trustline_id)
                             .ok_or_else(|| "TrustLine not found".to_string())?;
 
                         // Verify sender is authorized
@@ -940,14 +1205,18 @@ impl CoinjectNode {
                 // Validate sender has sufficient balance for fee
                 let sender_balance = state.get_balance(&pool_swap_tx.from);
                 if sender_balance < pool_swap_tx.fee {
-                    return Err(format!("Insufficient balance for pool swap fee: has {}, needs {}",
-                        sender_balance, pool_swap_tx.fee));
+                    return Err(format!(
+                        "Insufficient balance for pool swap fee: has {}, needs {}",
+                        sender_balance, pool_swap_tx.fee
+                    ));
                 }
 
                 // Deduct fee from sender and increment nonce
-                state.set_balance(&pool_swap_tx.from, sender_balance - pool_swap_tx.fee)
+                state
+                    .set_balance(&pool_swap_tx.from, sender_balance - pool_swap_tx.fee)
                     .map_err(|e| format!("Failed to set sender balance: {}", e))?;
-                state.set_nonce(&pool_swap_tx.from, pool_swap_tx.nonce + 1)
+                state
+                    .set_nonce(&pool_swap_tx.from, pool_swap_tx.nonce + 1)
                     .map_err(|e| format!("Failed to set sender nonce: {}", e))?;
 
                 // Execute dimensional pool swap with exponential scaling
@@ -981,55 +1250,76 @@ impl CoinjectNode {
                 let sender_balance = state.get_balance(&marketplace_tx.from);
 
                 match &marketplace_tx.operation {
-                    MarketplaceOperation::SubmitProblem { problem, bounty, min_work_score, expiration_days } => {
+                    MarketplaceOperation::SubmitProblem {
+                        problem,
+                        bounty,
+                        min_work_score,
+                        expiration_days,
+                    } => {
                         // Need fee + bounty for escrow
                         let total_needed = marketplace_tx.fee + bounty;
                         if sender_balance < total_needed {
-                            return Err(format!("Insufficient balance for problem submission: has {}, needs {}",
-                                sender_balance, total_needed));
+                            return Err(format!(
+                                "Insufficient balance for problem submission: has {}, needs {}",
+                                sender_balance, total_needed
+                            ));
                         }
 
                         // Deduct fee + bounty (bounty goes to escrow)
-                        state.set_balance(&marketplace_tx.from, sender_balance - total_needed)
+                        state
+                            .set_balance(&marketplace_tx.from, sender_balance - total_needed)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
 
                         // Submit problem to marketplace state
-                        let problem_id = marketplace_state.submit_problem(
-                            coinject_core::SubmissionMode::Public { problem: problem.clone() },
-                            marketplace_tx.from,
-                            *bounty,
-                            *min_work_score,
-                            *expiration_days,
-                        ).map_err(|e| format!("Failed to submit problem: {}", e))?;
+                        let problem_id = marketplace_state
+                            .submit_problem(
+                                coinject_core::SubmissionMode::Public {
+                                    problem: problem.clone(),
+                                },
+                                marketplace_tx.from,
+                                *bounty,
+                                *min_work_score,
+                                *expiration_days,
+                            )
+                            .map_err(|e| format!("Failed to submit problem: {}", e))?;
 
                         info!(problem_id = ?problem_id, bounty = bounty, "problem submitted to marketplace");
                     }
-                    MarketplaceOperation::SubmitSolution { problem_id, solution } => {
+                    MarketplaceOperation::SubmitSolution {
+                        problem_id,
+                        solution,
+                    } => {
                         // AUTONOMOUS BOUNTY PAYOUT
                         // When a valid solution is submitted, automatically claim and payout the bounty
                         // This makes the marketplace truly self-executing - no manual claim needed!
 
                         // Just need fee
                         if sender_balance < marketplace_tx.fee {
-                            return Err(format!("Insufficient balance for marketplace fee: has {}, needs {}",
-                                sender_balance, marketplace_tx.fee));
+                            return Err(format!(
+                                "Insufficient balance for marketplace fee: has {}, needs {}",
+                                sender_balance, marketplace_tx.fee
+                            ));
                         }
 
                         // Deduct fee
-                        state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                        state
+                            .set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
 
                         // Submit solution to marketplace state (verifies and marks as solved)
-                        marketplace_state.submit_solution(*problem_id, marketplace_tx.from, solution.clone())
+                        marketplace_state
+                            .submit_solution(*problem_id, marketplace_tx.from, solution.clone())
                             .map_err(|e| format!("Failed to submit solution: {}", e))?;
 
                         // AUTONOMOUS PAYOUT: Immediately claim and release bounty to solver
-                        let (solver, bounty) = marketplace_state.claim_bounty(*problem_id)
+                        let (solver, bounty) = marketplace_state
+                            .claim_bounty(*problem_id)
                             .map_err(|e| format!("Failed to auto-claim bounty: {}", e))?;
 
                         // Credit bounty to solver atomically in the same block
                         let solver_balance = state.get_balance(&solver);
-                        state.set_balance(&solver, solver_balance + bounty)
+                        state
+                            .set_balance(&solver, solver_balance + bounty)
                             .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
 
                         info!(bounty = bounty, solver = ?solver, "solution accepted, bounty auto-paid");
@@ -1037,21 +1327,26 @@ impl CoinjectNode {
                     MarketplaceOperation::ClaimBounty { problem_id } => {
                         // Just need fee
                         if sender_balance < marketplace_tx.fee {
-                            return Err(format!("Insufficient balance for marketplace fee: has {}, needs {}",
-                                sender_balance, marketplace_tx.fee));
+                            return Err(format!(
+                                "Insufficient balance for marketplace fee: has {}, needs {}",
+                                sender_balance, marketplace_tx.fee
+                            ));
                         }
 
                         // Deduct fee
-                        state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                        state
+                            .set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
 
                         // Claim bounty from marketplace state
-                        let (solver, bounty) = marketplace_state.claim_bounty(*problem_id)
+                        let (solver, bounty) = marketplace_state
+                            .claim_bounty(*problem_id)
                             .map_err(|e| format!("Failed to claim bounty: {}", e))?;
 
                         // Credit bounty to solver
                         let solver_balance = state.get_balance(&solver);
-                        state.set_balance(&solver, solver_balance + bounty)
+                        state
+                            .set_balance(&solver, solver_balance + bounty)
                             .map_err(|e| format!("Failed to credit bounty to solver: {}", e))?;
 
                         info!(bounty = bounty, solver = ?solver, "bounty claimed");
@@ -1059,21 +1354,26 @@ impl CoinjectNode {
                     MarketplaceOperation::CancelProblem { problem_id } => {
                         // Just need fee
                         if sender_balance < marketplace_tx.fee {
-                            return Err(format!("Insufficient balance for marketplace fee: has {}, needs {}",
-                                sender_balance, marketplace_tx.fee));
+                            return Err(format!(
+                                "Insufficient balance for marketplace fee: has {}, needs {}",
+                                sender_balance, marketplace_tx.fee
+                            ));
                         }
 
                         // Deduct fee
-                        state.set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
+                        state
+                            .set_balance(&marketplace_tx.from, sender_balance - marketplace_tx.fee)
                             .map_err(|e| format!("Failed to set sender balance: {}", e))?;
 
                         // Cancel problem and refund bounty
-                        let bounty = marketplace_state.cancel_problem(*problem_id, marketplace_tx.from)
+                        let bounty = marketplace_state
+                            .cancel_problem(*problem_id, marketplace_tx.from)
                             .map_err(|e| format!("Failed to cancel problem: {}", e))?;
 
                         // Refund bounty to submitter
                         let submitter_balance = state.get_balance(&marketplace_tx.from);
-                        state.set_balance(&marketplace_tx.from, submitter_balance + bounty)
+                        state
+                            .set_balance(&marketplace_tx.from, submitter_balance + bounty)
                             .map_err(|e| format!("Failed to refund bounty to submitter: {}", e))?;
 
                         info!(bounty = bounty, "problem cancelled, bounty refunded");
@@ -1081,7 +1381,8 @@ impl CoinjectNode {
                 }
 
                 // Increment nonce
-                state.set_nonce(&marketplace_tx.from, marketplace_tx.nonce + 1)
+                state
+                    .set_nonce(&marketplace_tx.from, marketplace_tx.nonce + 1)
                     .map_err(|e| format!("Failed to set sender nonce: {}", e))?;
 
                 Ok(())

@@ -4,8 +4,8 @@
 use crate::problem_registry::SharedRegistry;
 use crate::{DifficultyAdjuster, WorkScoreCalculator};
 use coinject_core::{
-    Address, Block, BlockHeader, Clause, CoinbaseTransaction, Commitment, Hash, ProblemType,
-    Solution, SolutionReveal, Transaction, unix_now_secs,
+    unix_now_secs, Address, Block, BlockHeader, Clause, CoinbaseTransaction, Commitment, Hash,
+    ProblemType, Solution, SolutionReveal, Transaction,
 };
 use coinject_tokenomics::{NetworkMetrics, RewardCalculator};
 use rand::seq::SliceRandom;
@@ -307,7 +307,9 @@ fn solve_tsp_blocking(
 
     while tour.len() < cities {
         // SAFETY: tour always has at least one element because we push(0) before the loop.
-        let current = *tour.last().expect("tour invariant: always non-empty after initial push");
+        let current = *tour
+            .last()
+            .expect("tour invariant: always non-empty after initial push");
         let mut best_next = None;
         let mut best_dist = u64::MAX;
 
@@ -448,8 +450,11 @@ impl Miner {
 
         // Create seeded RNG - deterministic across all nodes
         // SAFETY: seed_bytes is exactly 32 bytes; slicing to [0..8] always yields exactly 8 bytes.
-        let seed = u64::from_le_bytes(seed_bytes[0..8].try_into()
-            .expect("seed_bytes is [u8;32]; 8-byte slice always succeeds"));
+        let seed = u64::from_le_bytes(
+            seed_bytes[0..8]
+                .try_into()
+                .expect("seed_bytes is [u8;32]; 8-byte slice always succeeds"),
+        );
         let mut rng = StdRng::seed_from_u64(seed);
 
         // Calculate dimensionless time τ = block_height / τ_c

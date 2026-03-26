@@ -48,11 +48,11 @@ pub const DEFAULT_RATE_MSGS_PER_SEC: f64 = 50.0;
 pub struct MessageSizePolicy;
 
 impl MessageSizePolicy {
-    pub const TRANSACTION: usize   = 256 * 1_024;          //  256 KB
-    pub const BLOCK: usize         = 4   * 1_024 * 1_024;  //    4 MB
-    pub const CONSENSUS: usize     = 64  * 1_024;          //   64 KB
-    pub const HANDSHAKE: usize     = 4   * 1_024;          //    4 KB
-    pub const DEFAULT: usize       = 1_024 * 1_024;         //    1 MB
+    pub const TRANSACTION: usize = 256 * 1_024; //  256 KB
+    pub const BLOCK: usize = 4 * 1_024 * 1_024; //    4 MB
+    pub const CONSENSUS: usize = 64 * 1_024; //   64 KB
+    pub const HANDSHAKE: usize = 4 * 1_024; //    4 KB
+    pub const DEFAULT: usize = 1_024 * 1_024; //    1 MB
 
     /// Returns the maximum allowed payload size for the given CPP message-type
     /// byte (the `msg_type` byte from the wire header).
@@ -95,17 +95,26 @@ pub struct ConnectionLimiter {
 
 #[derive(Debug, Clone)]
 pub enum ConnectionDenied {
-    TooManyFromIp { ip: IpAddr, current: usize, max: usize },
-    TotalCapacityReached { current: usize, max: usize },
+    TooManyFromIp {
+        ip: IpAddr,
+        current: usize,
+        max: usize,
+    },
+    TotalCapacityReached {
+        current: usize,
+        max: usize,
+    },
 }
 
 impl std::fmt::Display for ConnectionDenied {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TooManyFromIp { ip, current, max } =>
-                write!(f, "Too many connections from {} ({}/{})", ip, current, max),
-            Self::TotalCapacityReached { current, max } =>
-                write!(f, "Total connection capacity reached ({}/{})", current, max),
+            Self::TooManyFromIp { ip, current, max } => {
+                write!(f, "Too many connections from {} ({}/{})", ip, current, max)
+            }
+            Self::TotalCapacityReached { current, max } => {
+                write!(f, "Total connection capacity reached ({}/{})", current, max)
+            }
         }
     }
 }
@@ -224,36 +233,58 @@ impl BanList {
 
     pub fn ban_ip(&mut self, ip: IpAddr, reason: &str) {
         tracing::warn!("[SECURITY][BAN] Banning IP {} for {}", ip, reason);
-        self.banned_ips.insert(ip, BanEntry::new(reason, self.default_ban_duration));
+        self.banned_ips
+            .insert(ip, BanEntry::new(reason, self.default_ban_duration));
     }
 
     pub fn ban_ip_short(&mut self, ip: IpAddr, reason: &str) {
-        tracing::info!("[SECURITY][BAN_SHORT] Short-banning IP {} for {}", ip, reason);
-        self.banned_ips.insert(ip, BanEntry::new(reason, self.short_ban_duration));
+        tracing::info!(
+            "[SECURITY][BAN_SHORT] Short-banning IP {} for {}",
+            ip,
+            reason
+        );
+        self.banned_ips
+            .insert(ip, BanEntry::new(reason, self.short_ban_duration));
     }
 
     pub fn ban_peer(&mut self, peer_id: &[u8; 32], reason: &str) {
-        let id_hex: String = peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
+        let id_hex: String = peer_id
+            .iter()
+            .take(4)
+            .map(|b| format!("{:02x}", b))
+            .collect();
         tracing::warn!("[SECURITY][BAN] Banning peer {} for {}", id_hex, reason);
-        self.banned_peers.insert(*peer_id, BanEntry::new(reason, self.default_ban_duration));
+        self.banned_peers
+            .insert(*peer_id, BanEntry::new(reason, self.default_ban_duration));
     }
 
     pub fn ban_peer_short(&mut self, peer_id: &[u8; 32], reason: &str) {
-        let id_hex: String = peer_id.iter().take(4).map(|b| format!("{:02x}", b)).collect();
-        tracing::info!("[SECURITY][BAN_SHORT] Short-banning peer {} for {}", id_hex, reason);
-        self.banned_peers.insert(*peer_id, BanEntry::new(reason, self.short_ban_duration));
+        let id_hex: String = peer_id
+            .iter()
+            .take(4)
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        tracing::info!(
+            "[SECURITY][BAN_SHORT] Short-banning peer {} for {}",
+            id_hex,
+            reason
+        );
+        self.banned_peers
+            .insert(*peer_id, BanEntry::new(reason, self.short_ban_duration));
     }
 
     // -- Query operations --
 
     pub fn is_ip_banned(&self, ip: IpAddr) -> bool {
-        self.banned_ips.get(&ip)
+        self.banned_ips
+            .get(&ip)
             .map(|e| !e.is_expired())
             .unwrap_or(false)
     }
 
     pub fn is_peer_banned(&self, peer_id: &[u8; 32]) -> bool {
-        self.banned_peers.get(peer_id)
+        self.banned_peers
+            .get(peer_id)
             .map(|e| !e.is_expired())
             .unwrap_or(false)
     }
@@ -277,7 +308,10 @@ impl BanList {
     }
 
     pub fn banned_peer_count(&self) -> usize {
-        self.banned_peers.values().filter(|e| !e.is_expired()).count()
+        self.banned_peers
+            .values()
+            .filter(|e| !e.is_expired())
+            .count()
     }
 }
 
@@ -361,8 +395,8 @@ pub struct EclipseGuard {
 /// Subnet key: first two octets of IPv4, first four octets of IPv6
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubnetKey {
-    V4([u8; 2]),  // /16
-    V6([u8; 4]),  // /32
+    V4([u8; 2]), // /16
+    V6([u8; 4]), // /32
     Loopback,
 }
 
@@ -414,8 +448,12 @@ impl EclipseGuard {
         }
         let count = self.subnet_counts.entry(key).or_insert(0);
         if *count >= self.max_per_subnet {
-            tracing::warn!("[SECURITY][ECLIPSE] Rejecting peer from {:?}: subnet full ({}/{})",
-                key, count, self.max_per_subnet);
+            tracing::warn!(
+                "[SECURITY][ECLIPSE] Rejecting peer from {:?}: subnet full ({}/{})",
+                key,
+                count,
+                self.max_per_subnet
+            );
             return false;
         }
         *count += 1;
@@ -587,8 +625,11 @@ impl DnsSeedValidator {
         use std::collections::HashMap;
 
         if seed_results.len() < self.min_seed_agreement {
-            tracing::warn!("[SECURITY][DNS_SEED] Only {} seeds provided, need ≥ {}; using all addresses",
-                seed_results.len(), self.min_seed_agreement);
+            tracing::warn!(
+                "[SECURITY][DNS_SEED] Only {} seeds provided, need ≥ {}; using all addresses",
+                seed_results.len(),
+                self.min_seed_agreement
+            );
         }
 
         // Count how many seeds returned each address
@@ -615,7 +656,8 @@ impl DnsSeedValidator {
         let mut validated: Vec<std::net::SocketAddr> = Vec::new();
 
         // Sort by vote count descending for deterministic output
-        let mut candidates: Vec<_> = addr_counts.into_iter()
+        let mut candidates: Vec<_> = addr_counts
+            .into_iter()
             .filter(|(_, count)| *count >= threshold)
             .collect();
         candidates.sort_by(|a, b| b.1.cmp(&a.1));
@@ -626,8 +668,11 @@ impl DnsSeedValidator {
             }
         }
 
-        tracing::info!("[SECURITY][DNS_SEED] Validated {} peer addresses from {} seeds",
-            validated.len(), seed_results.len());
+        tracing::info!(
+            "[SECURITY][DNS_SEED] Validated {} peer addresses from {} seeds",
+            validated.len(),
+            seed_results.len()
+        );
 
         validated
     }
@@ -658,13 +703,28 @@ mod tests {
     #[test]
     fn test_message_size_policy() {
         // Transaction limit
-        assert_eq!(MessageSizePolicy::max_for_type(0x21), MessageSizePolicy::TRANSACTION);
+        assert_eq!(
+            MessageSizePolicy::max_for_type(0x21),
+            MessageSizePolicy::TRANSACTION
+        );
         // Block limit
-        assert_eq!(MessageSizePolicy::max_for_type(0x12), MessageSizePolicy::BLOCK);
-        assert_eq!(MessageSizePolicy::max_for_type(0x20), MessageSizePolicy::BLOCK);
+        assert_eq!(
+            MessageSizePolicy::max_for_type(0x12),
+            MessageSizePolicy::BLOCK
+        );
+        assert_eq!(
+            MessageSizePolicy::max_for_type(0x20),
+            MessageSizePolicy::BLOCK
+        );
         // Handshake limit
-        assert_eq!(MessageSizePolicy::max_for_type(0x01), MessageSizePolicy::HANDSHAKE);
-        assert_eq!(MessageSizePolicy::max_for_type(0xF0), MessageSizePolicy::HANDSHAKE);
+        assert_eq!(
+            MessageSizePolicy::max_for_type(0x01),
+            MessageSizePolicy::HANDSHAKE
+        );
+        assert_eq!(
+            MessageSizePolicy::max_for_type(0xF0),
+            MessageSizePolicy::HANDSHAKE
+        );
         // Sizes are in expected order
         assert!(MessageSizePolicy::BLOCK > MessageSizePolicy::TRANSACTION);
         assert!(MessageSizePolicy::TRANSACTION > MessageSizePolicy::CONSENSUS);
