@@ -77,10 +77,15 @@ impl TestNode {
                 .expect("ChainState::new"),
         );
 
-        let state_db = Arc::new(
-            Database::create(dir.path().join("state.db")).expect("state db"),
-        );
-        let state = Arc::new(AccountState::from_db(state_db));
+        #[cfg(not(feature = "adzdb"))]
+        let state = {
+            let state_db = Arc::new(
+                Database::create(dir.path().join("state.db")).expect("state db"),
+            );
+            Arc::new(AccountState::from_db(state_db))
+        };
+        #[cfg(feature = "adzdb")]
+        let state = Arc::new(AccountState::new(dir.path()).expect("AccountState::new"));
 
         let tx_pool = Arc::new(RwLock::new(TransactionPool::with_config(pool_cfg)));
 
@@ -340,6 +345,7 @@ async fn test_3_block_propagation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        require_encryption: false,
         ..CppConfig::default()
     };
     let cfg_b = CppConfig { ..cfg_a.clone() };
@@ -583,6 +589,7 @@ async fn test_6_peer_discovery() {
         max_peers: 20,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        require_encryption: false,
         ..CppConfig::default()
     };
 
@@ -640,10 +647,13 @@ async fn test_7_rpc_integration() {
     let dir = tempfile::tempdir().unwrap();
 
     // ── State objects ──────────────────────────────────────────────────────
-    let state_db = Arc::new(
-        Database::create(dir.path().join("state.db")).unwrap(),
-    );
-    let state = Arc::new(AccountState::from_db(Arc::clone(&state_db)));
+    #[cfg(not(feature = "adzdb"))]
+    let state = {
+        let state_db = Arc::new(Database::create(dir.path().join("state.db")).unwrap());
+        Arc::new(AccountState::from_db(Arc::clone(&state_db)))
+    };
+    #[cfg(feature = "adzdb")]
+    let state = Arc::new(AccountState::new(dir.path()).expect("AccountState::new"));
 
     let adv_db = Arc::new(
         Database::create(dir.path().join("adv.db")).unwrap(),
@@ -762,8 +772,13 @@ async fn test_8_mempool_sync() {
 
     // Create a funded sender.
     let dir = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::create(dir.path().join("s.db")).unwrap());
-    let state = AccountState::from_db(db);
+    #[cfg(not(feature = "adzdb"))]
+    let state = {
+        let db = Arc::new(Database::create(dir.path().join("s.db")).unwrap());
+        AccountState::from_db(db)
+    };
+    #[cfg(feature = "adzdb")]
+    let state = AccountState::new(dir.path()).expect("AccountState::new");
     let sender_kp = funded_keypair(&state, 500_000);
     let recipient_addr = Address::from_bytes([0x77u8; 32]);
 
@@ -794,6 +809,7 @@ async fn test_8_mempool_sync() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        require_encryption: false,
         ..CppConfig::default()
     };
     let (_net, cmd_tx, _evt_rx) = CppNetwork::new(cfg, [0x44u8; 32], genesis);
@@ -832,9 +848,16 @@ async fn test_8_mempool_sync() {
 async fn test_9_state_consistency() {
     // ── Setup 3 independent state stores ──────────────────────────────────
     fn make_state(dir: &TempDir, name: &str) -> Arc<AccountState> {
-        let db =
-            Arc::new(Database::create(dir.path().join(name)).expect("db"));
-        Arc::new(AccountState::from_db(db))
+        #[cfg(not(feature = "adzdb"))]
+        {
+            let db = Arc::new(Database::create(dir.path().join(name)).expect("db"));
+            return Arc::new(AccountState::from_db(db));
+        }
+        #[cfg(feature = "adzdb")]
+        Arc::new(
+            AccountState::new(dir.path().join(name.trim_end_matches(".db")))
+                .expect("AccountState::new"),
+        )
     }
 
     let dir = tempfile::tempdir().unwrap();
@@ -932,8 +955,13 @@ async fn test_10_stress_transactions() {
     let mut pool = TransactionPool::with_config(pool_cfg);
 
     let dir = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::create(dir.path().join("stress.db")).unwrap());
-    let state = AccountState::from_db(db);
+    #[cfg(not(feature = "adzdb"))]
+    let state = {
+        let db = Arc::new(Database::create(dir.path().join("stress.db")).unwrap());
+        AccountState::from_db(db)
+    };
+    #[cfg(feature = "adzdb")]
+    let state = AccountState::new(dir.path()).expect("AccountState::new");
 
     let recipient = Address::from_bytes([0xFFu8; 32]);
     let mut tx_hashes = Vec::with_capacity(N);

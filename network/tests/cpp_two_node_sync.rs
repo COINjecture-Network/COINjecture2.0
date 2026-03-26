@@ -63,6 +63,7 @@ async fn test_two_node_network_creation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        require_encryption: false,
         ..CppConfig::default()
     };
     let peer_id1 = [1u8; 32];
@@ -76,6 +77,7 @@ async fn test_two_node_network_creation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        require_encryption: false,
         ..CppConfig::default()
     };
     let peer_id2 = [2u8; 32];

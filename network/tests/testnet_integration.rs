@@ -32,7 +32,7 @@ fn test_config(port: u16) -> CppConfig {
         max_peers: 10,
         enable_websocket: false,
         node_type: NodeType::Full,
-        require_encryption: false, // tests don't configure signing keys
+        require_encryption: false, // disabled for unit tests
         ..CppConfig::default()
     }
 }

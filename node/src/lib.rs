@@ -23,3 +23,6 @@ pub mod chain;
 pub mod chain_adzdb;
 pub mod genesis;
 pub mod validator;
+
+#[cfg(feature = "adzdb")]
+pub mod chain_adzdb;

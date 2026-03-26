@@ -643,10 +643,12 @@ async fn test_protocol_invalid_version() {
     // Send message with invalid version
     let mut buf = Vec::new();
     buf.extend_from_slice(&MAGIC);
-    buf.push(0); // Invalid version (below MIN_SUPPORTED_VERSION=1; 99 would be accepted as future version)
+    buf.push(0); // Invalid version (0 < MIN_SUPPORTED_VERSION=1 → Reject)
     buf.push(MessageType::Hello as u8);
     buf.extend_from_slice(&0u32.to_be_bytes()); // Length
     client_stream.write_all(&buf).await.unwrap();
+    // Drop the stream to send EOF so the server's decode call can return.
+    drop(client_stream);
 
     server_task.await.unwrap();
 }
