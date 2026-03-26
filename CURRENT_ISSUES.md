@@ -44,6 +44,14 @@ The following 12 findings were identified and resolved in the audit pass on the 
 | 11 | Mobile SDK FFI functions missing Safety docs | Medium | `mobile-sdk/src/lib.rs` | Fixed — added `# Safety` docs to all `extern "C"` functions |
 | 12 | Dangerous `unwrap()` in network handshake | Medium | `network/src/cpp/network.rs` | Fixed — replaced with `unwrap_or_default()` |
 
+## ✅ Resolved Issues (2026-03-25 Audit Follow-up)
+
+| # | Finding | Severity | File(s) | Status |
+|---|---------|----------|---------|--------|
+| 13 | CI tests ran `--all-features` but ship builds use default features | Medium | `.github/workflows/ci.yml` | Fixed — split into `test` (default features) and `test-all-features` jobs, both gating docker |
+| 14 | Docker `latest` tag only pushed on `main`, not `remove-libp2p` | Low | `.github/workflows/ci.yml` | Fixed — `latest` tag now enabled on `main` or `remove-libp2p` |
+| 15 | Unsigned commit tests ran without `allow-unsigned-commits` feature | Medium | `consensus/src/coordinator/commit.rs` | Fixed — `make_unsigned_commit` helper and all tests that rely on unsigned commit acceptance gated behind `#[cfg(feature = "allow-unsigned-commits")]` |
+
 ## Testnet MVP Scope
 
 The following features are in-scope for the current testnet:

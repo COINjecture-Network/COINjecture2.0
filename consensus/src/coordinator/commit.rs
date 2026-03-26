@@ -239,6 +239,7 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
 
+    #[cfg(feature = "allow-unsigned-commits")]
     fn make_unsigned_commit(node_byte: u8, score: f64) -> SolutionCommit {
         let mut node_id = [0u8; 32];
         node_id[0] = node_byte;
@@ -296,6 +297,7 @@ mod tests {
         assert_eq!(collector.commit_count(), 1);
     }
 
+    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_reject_zero_score() {
         let mut collector = CommitCollector::new(1);

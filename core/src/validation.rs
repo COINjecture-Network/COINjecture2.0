@@ -193,10 +193,13 @@ pub fn checked_sub(a: Balance, b: Balance) -> Result<Balance, ValidationError> {
 pub fn validate_amount_and_fee(amount: Balance, fee: Balance) -> Result<(), ValidationError> {
     validate_amount(amount)?;
     validate_fee(fee)?;
-    // Ensure amount + fee does not overflow u128
-    amount
+    // Ensure amount + fee neither overflows u128 nor exceeds MAX_AMOUNT
+    let total = amount
         .checked_add(fee)
         .ok_or(ValidationError::AmountPlusFeeOverflow { amount, fee })?;
+    if total > MAX_AMOUNT {
+        return Err(ValidationError::AmountPlusFeeOverflow { amount, fee });
+    }
     Ok(())
 }
 

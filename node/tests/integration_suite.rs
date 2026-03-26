@@ -1,8 +1,11 @@
+// These tests use the redb-based AccountState (AccountState::from_db) and
+// ChainState APIs, which are not available when the `adzdb` feature is enabled.
+// The adzdb-specific tests live in node/src/chain_adzdb.rs.
+#![cfg(not(feature = "adzdb"))]
+
 // =============================================================================
 // Phase 9 — Integration Testing Suite
 // =============================================================================
-// Note: This test suite uses the redb-based chain, not adzdb.
-#![cfg(not(feature = "adzdb"))]
 //
 // 10 integration test scenarios:
 //   1.  Multi-node test harness       — spin up 2-4 in-process nodes
@@ -70,7 +73,7 @@ impl TestNode {
         let genesis_hash = genesis.header.hash();
 
         let chain = Arc::new(
-            ChainState::new(dir.path().join("chain.db"), &genesis, 128)
+            ChainState::new(dir.path().join("chain.db"), &genesis, 512)
                 .expect("ChainState::new"),
         );
 

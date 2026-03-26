@@ -47,10 +47,8 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -61,7 +59,6 @@ jobs:
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
-
       - name: Cache build artifacts
         uses: actions/cache@v4
         with:

@@ -29,5 +29,7 @@ hex.workspace = true
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+# Tests create unsigned commits via the bridge (NodeCommit has no public_key field yet),
+# so network integration tests always use allow-unsigned-commits.
 coinject-consensus = { path = "../consensus", features = ["allow-unsigned-commits"] }
 tempfile = "3"
