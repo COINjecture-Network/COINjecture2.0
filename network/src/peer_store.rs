@@ -3,6 +3,7 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -296,6 +297,17 @@ impl PeerStore {
     /// Get a specific peer.
     pub fn get(&self, addr: &str) -> Option<StoredPeer> {
         self.peers.get(addr).map(|r| r.value().clone())
+    }
+
+    /// Update a peer's public key after a successful Noise handshake.
+    pub fn update_public_key(&self, addr: &str, pubkey: &[u8; 32]) {
+        if let Some(mut peer) = self.peers.get_mut(addr) {
+            peer.public_key = Some(*pubkey);
+            // Derive peer_id from the noise public key (sha256[..20] hex)
+            let hash = sha2::Sha256::digest(pubkey);
+            peer.peer_id = Some(hex::encode(&hash[..20]));
+        }
+        self.flush();
     }
 
     /// Remove a peer.
