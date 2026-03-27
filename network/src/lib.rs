@@ -7,10 +7,14 @@
 // protocol inspired by XRPL's peer protocol design.
 
 // Active modules
-pub mod reputation; // Peer reputation tracking
-pub mod cpp;        // COINjecture P2P Protocol (CPP)
-pub mod mesh;       // P2P Mesh Networking Layer (discovery, gossip, direct messaging)
-pub mod security;   // Network security primitives (Phase 5)
+pub mod reputation;     // Peer reputation tracking
+pub mod cpp;            // COINjecture P2P Protocol (CPP)
+pub mod mesh;           // P2P Mesh Networking Layer (discovery, gossip, direct messaging)
+pub mod security;       // Network security primitives (Phase 5)
+pub mod peer_store;     // Persistent peer database with vetted/unvetted buckets
+pub mod pex;            // PEX (Peer Exchange) reactor for automatic peer discovery
+pub mod discovery;      // Cascading peer discovery (DB → DNS → hardcoded → manual)
+pub mod peer_scoring;   // Ban-score + reputation scoring
 
 // Core exports
 pub use reputation::*;

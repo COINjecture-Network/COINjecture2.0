@@ -615,13 +615,32 @@ cargo test --all -- --nocapture
   - [x] Adaptive difficulty adjustment
   - [x] Block validation and work score calculation
 
-- [x] **Networking (CPP)**
-  - [x] Custom TCP protocol on port 707
-  - [x] EquilibriumRouter with sqrt(n)*eta fanout
-  - [x] FlockState murmuration coordination (Reynolds rules)
-  - [x] blake3 message integrity
-  - [x] Window-based flow control
-  - [x] 8/8 integration tests passing
+- [x] **Networking (Custom P2P — CPP)**
+  - [x] Custom TCP Protocol (port 707) with Ed25519-authenticated handshakes
+  - [x] PEX Reactor (Tendermint-style peer exchange with rate limiting)
+  - [x] Cascading Peer Discovery (persistent DB → DNS seeds → hardcoded → manual)
+  - [x] Peer Scoring (ban-score + positive reputation with auto-promotion)
+  - [x] Persistent Peer Store with Sybil resistance (/16 subnet limits)
+  - [x] EquilibriumRouter with sqrt(n)*eta fanout + FlockState murmuration
+  - [x] Window-based flow control, blake3 message integrity
+
+- [x] **REST API (Axum)**
+  - [x] SIWB (Sign-In With BEANS) wallet authentication (CAIP-122)
+  - [x] Email signup/signin with wallet binding bridge
+  - [x] Marketplace endpoints (orders, trades, PoUW tasks)
+  - [x] SSE streaming (blocks, mempool, marketplace events)
+  - [x] Prometheus metrics, Governor rate limiting, CORS, JWT middleware
+
+- [x] **Database (Supabase/PostgreSQL)**
+  - [x] User-wallet bindings with custom JWT hooks
+  - [x] Marketplace schema (orders, trades, trading pairs)
+  - [x] PoUW task marketplace with assignments
+  - [x] Event-sourced reputation, Row-Level Security, partitioned trades
+
+- [x] **Frontend (Vite + React)**
+  - [x] Unified auth provider (wallet + email + wallet binding)
+  - [x] TanStack Query hooks with SSE cache invalidation
+  - [x] Wallet adapter with ConnectButton + peer dashboard
 
 - [x] **RPC Layer**
   - [x] JSON-RPC server (HTTP/WebSocket)
@@ -643,10 +662,11 @@ cargo test --all -- --nocapture
 
 ### Roadmap
 
-**Phase 1** (Current): Testnet with PoUW marketplace + dimensional pools + redb
-**Phase 2** (Q2 2026): Security audit + economic attack simulation
-**Phase 3** (Q3 2026): Mainnet preparation + institutional partnerships
-**Phase 4** (Q4 2026): Mainnet launch with live bounty marketplace
+**Phase 1** (Complete): Testnet with PoUW marketplace + dimensional pools + redb
+**Phase 2** (Complete): Production infrastructure — API server, auth, PEX, SSE streaming, marketplace DB
+**Phase 3** (Current): Noise_XX P2P encryption, matching engine, indexer service, production Docker + monitoring
+**Phase 4** (Q3 2026): Security audit + economic attack simulation + mainnet preparation
+**Phase 5** (Q4 2026): Mainnet launch with live bounty marketplace
 
 ---
 
@@ -674,17 +694,21 @@ COINjecture 2.0 (WEB4)
 │   ├── miner.rs       # NP-problem solving & mining logic
 │   └── work_score.rs  # Work score calculation
 │
-├── network/            # CPP P2P networking
-│   └── cpp/
-│       ├── network.rs         # Main event loop, peer management
-│       ├── peer.rs            # Peer struct, TCP write task
-│       ├── protocol.rs        # Wire protocol encoding/decoding
-│       ├── router.rs          # EquilibriumRouter (sqrt-n*eta fanout)
-│       ├── flock.rs           # FlockState murmuration coordination
-│       ├── message.rs         # 17 message types with dimensional priority
-│       ├── config.rs          # Constants (ETA, ports, timeouts)
-│       ├── flow_control.rs    # Window-based congestion control
-│       └── node_integration.rs # PeerSelector, NodeMetrics
+├── network/            # Custom TCP P2P networking (CPP)
+│   ├── cpp/
+│   │   ├── network.rs         # Main event loop, peer management
+│   │   ├── peer.rs            # Peer struct, TCP write task
+│   │   ├── protocol.rs        # Wire protocol encoding/decoding
+│   │   ├── router.rs          # EquilibriumRouter (sqrt-n*eta fanout)
+│   │   ├── flock.rs           # FlockState murmuration coordination
+│   │   ├── message.rs         # 19 message types with dimensional priority
+│   │   ├── config.rs          # Constants (ETA, ports, timeouts)
+│   │   ├── flow_control.rs    # Window-based congestion control
+│   │   └── node_integration.rs # PeerSelector, NodeMetrics
+│   ├── peer_store.rs  # Persistent peer DB (vetted/unvetted buckets, Sybil resistance)
+│   ├── pex.rs         # PEX reactor (Tendermint-style peer exchange)
+│   ├── discovery.rs   # Cascading discovery (DB → DNS → seeds → manual)
+│   └── peer_scoring.rs # Ban-score + reputation scoring
 │
 ├── mempool/            # Transaction pool
 │   ├── pool.rs        # Mempool logic
@@ -693,6 +717,16 @@ COINjecture 2.0 (WEB4)
 │
 ├── rpc/                # JSON-RPC server
 │   └── server.rs      # HTTP/WebSocket endpoints
+│
+├── api-server/         # Production REST API (Axum)
+│   ├── routes/        # Auth (SIWB + email), marketplace, peers, chain, SSE events
+│   ├── middleware/     # CORS, rate limiting, JWT auth, tracing
+│   ├── supabase.rs    # Supabase client for persistent marketplace DB
+│   ├── sse.rs         # Server-Sent Events broadcaster
+│   └── node_poller.rs # Background node RPC polling
+│
+├── supabase/           # Database migrations
+│   └── migrations/    # 7 migration files (auth, marketplace, tasks, reputation, RLS)
 │
 ├── tokenomics/         # Economic logic
 │   ├── dimensions.rs  # Dimensional math (eta, lambda, D_n)

@@ -48,6 +48,12 @@ pub enum MessageType {
     /// Mining work template response
     Work = 0x34,
     
+    // === PEER EXCHANGE (PEX) ===
+    /// Request peers from a connected node
+    PexRequest = 0xE0,
+    /// Response with known peers
+    PexResponse = 0xE1,
+
     // === CONTROL ===
     /// Keep-alive ping
     Ping = 0xF0,
@@ -74,6 +80,8 @@ impl MessageType {
             0x32 => Ok(MessageType::WorkRejected),
             0x33 => Ok(MessageType::GetWork),
             0x34 => Ok(MessageType::Work),
+            0xE0 => Ok(MessageType::PexRequest),
+            0xE1 => Ok(MessageType::PexResponse),
             0xF0 => Ok(MessageType::Ping),
             0xF1 => Ok(MessageType::Pong),
             0xFF => Ok(MessageType::Disconnect),
@@ -94,6 +102,7 @@ impl MessageType {
             MessageType::Headers => MessagePriority::D7_Archive,
             MessageType::SubmitWork | MessageType::WorkAccepted | MessageType::WorkRejected => MessagePriority::D2_High,
             MessageType::GetWork | MessageType::Work => MessagePriority::D3_Normal,
+            MessageType::PexRequest | MessageType::PexResponse => MessagePriority::D7_Archive,
             MessageType::Ping | MessageType::Pong => MessagePriority::D8_Historical,
             MessageType::Disconnect => MessagePriority::D1_Critical,
         }
@@ -554,6 +563,34 @@ impl DisconnectMessage {
         validate_reason_string(&self.reason)
             .map_err(|e| e.to_string())
     }
+}
+
+// =============================================================================
+// PEX (Peer Exchange) Messages
+// =============================================================================
+
+/// PEX request — "send me some peers you know about"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PexRequestMessage {
+    /// Maximum peers desired (0 = use server default)
+    pub max_peers: u16,
+}
+
+/// Individual peer entry in a PEX response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PexPeerEntry {
+    /// Address as "ip:port" string
+    pub address: String,
+    /// Ed25519 public key if known
+    pub public_key: Option<[u8; 32]>,
+    /// Unix timestamp of last known activity
+    pub last_seen: u64,
+}
+
+/// PEX response — "here are some peers I know"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PexResponseMessage {
+    pub peers: Vec<PexPeerEntry>,
 }
 
 #[cfg(test)]

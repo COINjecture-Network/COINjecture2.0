@@ -38,6 +38,7 @@ pub use message::{
     SubmitWorkMessage, WorkAcceptedMessage, WorkRejectedMessage,
     GetWorkMessage, WorkMessage,
     PingMessage, PongMessage, DisconnectMessage,
+    PexRequestMessage, PexResponseMessage, PexPeerEntry,
 };
 
 pub use flow_control::{FlowControl, FlowControlStats};

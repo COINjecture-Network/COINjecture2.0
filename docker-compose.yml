@@ -193,6 +193,27 @@ services:
       retries: 5
       start_period: 40s
 
+  # ── API Server ──────────────────────────────────────────────────────────────
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: coinject-api
+    ports:
+      - "3030:3030"
+      - "9094:9090"  # metrics
+    environment:
+      - COINJECTURE_API_HOST=0.0.0.0
+      - COINJECTURE_API_PORT=3030
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - RUST_LOG=info
+      - COINJECTURE_NETWORK=testnet
+    restart: unless-stopped
+    networks:
+      - coinject-rpc
+
 # ── Volumes ───────────────────────────────────────────────────────────────────
 # Named volumes — Docker manages path; coinject user (uid 10001) owns /data inside
 volumes:

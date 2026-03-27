@@ -1,0 +1,45 @@
+name: API Server CI
+
+on:
+  push:
+    paths:
+      - 'api-server/**'
+      - 'core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    paths:
+      - 'api-server/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: api-server
+      - name: Format check
+        run: cargo fmt -p coinjecture-api-server -- --check
+      - name: Clippy
+        run: cargo clippy -p coinjecture-api-server -- -D warnings
+      - name: Build
+        run: cargo build -p coinjecture-api-server
+      - name: Test
+        run: cargo test -p coinjecture-api-server
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit
+        run: |
+          cargo install cargo-audit
+          cargo audit
