@@ -13,6 +13,9 @@ export default {
       },
     },
     extend: {
+      fontFamily: {
+        brand: ["Syne", "Inter", "system-ui", "sans-serif"],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -53,6 +56,9 @@ export default {
           bg: "hsl(var(--terminal-bg))",
           text: "hsl(var(--terminal-text))",
         },
+        "accent-blue": "hsl(var(--accent-blue))",
+        "accent-purple": "hsl(var(--accent-purple))",
+        "accent-emerald": "hsl(var(--accent-emerald))",
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -76,10 +82,25 @@ export default {
             height: "0",
           },
         },
+        floatGentle: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-10px)" },
+        },
+        driftLeft: {
+          "0%, 100%": { transform: "translateX(0)" },
+          "50%": { transform: "translateX(-14px)" },
+        },
+        driftRight: {
+          "0%, 100%": { transform: "translateX(0)" },
+          "50%": { transform: "translateX(14px)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "float-gentle": "floatGentle 7s ease-in-out infinite",
+        "drift-left": "driftLeft 9s ease-in-out infinite",
+        "drift-right": "driftRight 9s ease-in-out infinite",
       },
     },
   },

@@ -105,7 +105,6 @@ pub async fn run_tls_proxy(
     tls_cfg: TlsConfig,
     backend_addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    #[allow(clippy::redundant_closure)]
     let server_config = build_server_config(&tls_cfg)
         .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e))?;
     let acceptor = TlsAcceptor::from(server_config);

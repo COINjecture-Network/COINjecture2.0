@@ -21,21 +21,21 @@ export const Navigation = () => {
   const selectedKeyPair = selectedAccount ? accounts[selectedAccount] : null;
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 glass-effect">
+    <nav className="fixed top-0 left-0 right-0 z-50 glass-navbar border-b border-border/40">
       <div className="container mx-auto px-6 py-4">
         <div className="flex items-center justify-between">
           <NavLink to="/" className="flex items-center gap-2">
-            <div className="text-2xl font-bold text-primary">COINjecture</div>
+            <div className="text-2xl font-brand font-extrabold text-primary tracking-tight">COINjecture</div>
             <span className="text-xs text-primary border border-primary px-2 py-0.5 rounded-full">$BEANS</span>
           </NavLink>
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center gap-6">
             <NavLink 
-              to="/terminal" 
+              to="/solver-lab" 
               className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
-              Terminal
+              Solver Lab
             </NavLink>
             <NavLink 
               to="/api" 
@@ -65,7 +65,7 @@ export const Navigation = () => {
             {selectedKeyPair ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="default" size="sm" className="glow-hover">
+                  <Button variant="default" size="sm" className="glow-hover gentle-animation">
                     <Wallet className="h-4 w-4 mr-2" />
                     {selectedAccount}
                   </Button>
@@ -87,7 +87,7 @@ export const Navigation = () => {
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : (
-              <Button variant="default" size="sm" className="glow-hover" onClick={() => navigate("/wallet")}>
+              <Button variant="default" size="sm" className="glow-hover gentle-animation" onClick={() => navigate("/wallet")}>
                 <Wallet className="h-4 w-4 mr-2" />
                 Connect Wallet
               </Button>
@@ -107,11 +107,11 @@ export const Navigation = () => {
         {isOpen && (
           <div className="md:hidden pt-4 pb-3 space-y-3 animate-fade-in">
             <NavLink 
-              to="/terminal" 
+              to="/solver-lab" 
               className="block text-sm text-muted-foreground hover:text-foreground transition-colors"
               onClick={() => setIsOpen(false)}
             >
-              Terminal
+              Solver Lab
             </NavLink>
             <NavLink 
               to="/api" 
@@ -146,7 +146,7 @@ export const Navigation = () => {
               <Button 
                 variant="default" 
                 size="sm" 
-                className="flex-1"
+                className="flex-1 gentle-animation"
                 onClick={() => {
                   navigate("/wallet");
                   setIsOpen(false);

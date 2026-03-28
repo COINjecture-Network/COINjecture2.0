@@ -14,7 +14,7 @@ export default function Whitepaper() {
           {/* Header */}
           <div className="text-center mb-12 animate-fade-in">
             <h1 className="text-5xl font-bold mb-4">
-              COINjecture Network
+              COINjecture <span className="text-primary">Network</span>
             </h1>
             <p className="text-xl text-primary mb-2">
               A Mathematics-Backed Peer-to-Peer Network

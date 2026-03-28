@@ -32,8 +32,6 @@ fn test_config(port: u16) -> CppConfig {
         max_peers: 10,
         enable_websocket: false,
         node_type: NodeType::Full,
-        require_encryption: false, // disabled for unit tests
-        ..CppConfig::default()
     }
 }
 
@@ -368,7 +366,7 @@ fn test_router_fanout_formula() {
         );
 
         // Sanity: fanout should always be >= 1 and <= n
-        assert!(!selected.is_empty(), "n={}: fanout must be >= 1", n);
+        assert!(selected.len() >= 1, "n={}: fanout must be >= 1", n);
         assert!(selected.len() <= n, "n={}: fanout must be <= n", n);
 
         // Verify all selected peers are valid

@@ -26,6 +26,11 @@ lru.workspace = true
 tokio-util.workspace = true
 thiserror.workspace = true
 hex.workspace = true
+serde_json.workspace = true
+dashmap = "6"
+
+# Noise Protocol Framework for formally-compliant encrypted transport
+snow = "0.9"
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

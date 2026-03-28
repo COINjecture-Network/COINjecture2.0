@@ -193,13 +193,10 @@ pub fn checked_sub(a: Balance, b: Balance) -> Result<Balance, ValidationError> {
 pub fn validate_amount_and_fee(amount: Balance, fee: Balance) -> Result<(), ValidationError> {
     validate_amount(amount)?;
     validate_fee(fee)?;
-    // Ensure amount + fee neither overflows u128 nor exceeds MAX_AMOUNT
-    let total = amount
+    // Ensure amount + fee does not overflow u128
+    amount
         .checked_add(fee)
         .ok_or(ValidationError::AmountPlusFeeOverflow { amount, fee })?;
-    if total > MAX_AMOUNT {
-        return Err(ValidationError::AmountPlusFeeOverflow { amount, fee });
-    }
     Ok(())
 }
 
@@ -268,7 +265,6 @@ pub fn validate_string_field(s: &str) -> Result<(), ValidationError> {
 /// - `solution_quality` is in [0.0, 1.0]
 /// - `complexity_weight` and `energy_estimate_joules` are finite and non-negative
 /// - `tx_count` ≤ MAX_BLOCK_TRANSACTIONS
-#[allow(clippy::too_many_arguments)]
 pub fn validate_block_header_fields(
     version: u32,
     timestamp: Timestamp,
@@ -311,7 +307,7 @@ pub fn validate_block_header_fields(
     }
 
     // Solution quality: in [0.0, 1.0]
-    if !(0.0..=1.0).contains(&solution_quality) {
+    if !solution_quality.is_finite() || solution_quality < 0.0 || solution_quality > 1.0 {
         return Err(ValidationError::InvalidSolutionQuality(solution_quality));
     }
 
@@ -567,11 +563,7 @@ mod tests {
         assert!(validate_fee(MIN_FEE).is_ok());
     }
 
-    // MAX_AMOUNT = u128::MAX / 2, so MAX_AMOUNT + MAX_AMOUNT = u128::MAX - 1 (no u128 overflow).
-    // validate_amount_and_fee therefore always returns Ok for valid inputs bounded by MAX_AMOUNT.
-    // The AmountPlusFeeOverflow variant is reserved for future use if MAX_AMOUNT is raised.
     #[test]
-    #[ignore = "MAX_AMOUNT = u128::MAX/2 makes u128 overflow impossible; overflow guard is dead code"]
     fn amount_and_fee_sum_overflow() {
         // Both individually at MAX_AMOUNT — sum overflows.
         assert!(matches!(

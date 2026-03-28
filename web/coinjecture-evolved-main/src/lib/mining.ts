@@ -5,6 +5,7 @@
 
 import { blake3 } from '@noble/hashes/blake3';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+import { blockRewardFromWorkScore } from './chain-metrics';
 import { ProblemType, SolutionType, Block, BlockHeader } from './rpc-client';
 
 // Types matching Rust implementation
@@ -260,66 +261,61 @@ export function generateProblem(
 }
 
 /**
- * Solve Subset Sum using dynamic programming
+ * Solve Subset Sum using dynamic programming (nonnegative integers).
+ * Matches on-chain / RPC verification: subset indices must sum exactly to `target`.
  */
-function solveSubsetSum(numbers: number[], target: number): number[] | null {
+export function solveSubsetSum(numbers: number[], target: number): number[] | null {
   const n = numbers.length;
+  if (n === 0) {
+    return target === 0 ? [] : null;
+  }
+  if (!numbers.every((x) => Number.isInteger(x) && x >= 0)) {
+    return null;
+  }
   const sum = numbers.reduce((a, b) => a + b, 0);
-  
-  if (target > sum || target < 0) {
+  if (target < 0 || target > sum || !Number.isInteger(target)) {
     return null;
   }
-  
-  // DP table: dp[i][j] = can we make sum j using first i numbers?
-  const offset = Math.abs(sum);
-  const range = 2 * offset + 1;
-  const dp: boolean[][] = [];
-  
-  for (let i = 0; i <= n; i++) {
-    dp[i] = new Array(range).fill(false);
-  }
-  
-  dp[0][offset] = true;
-  
+
+  const dp: boolean[][] = Array.from({ length: n + 1 }, () => new Array(sum + 1).fill(false));
+  dp[0][0] = true;
   for (let i = 1; i <= n; i++) {
-    for (let j = 0; j < range; j++) {
-      dp[i][j] = dp[i - 1][j];
-      const num = numbers[i - 1];
-      const prevIdx = j - num;
-      if (prevIdx >= 0 && prevIdx < range) {
-        dp[i][j] = dp[i][j] || dp[i - 1][prevIdx];
+    const w = numbers[i - 1];
+    for (let s = 0; s <= sum; s++) {
+      dp[i][s] = dp[i - 1][s];
+      if (s >= w) {
+        dp[i][s] = dp[i][s] || dp[i - 1][s - w];
       }
     }
   }
-  
-  const targetIdx = offset + target;
-  if (!dp[n][targetIdx]) {
+
+  if (!dp[n][target]) {
     return null;
   }
-  
-  // Backtrack to find solution
+
   const indices: number[] = [];
-  let currSum = target;
-  
+  let s = target;
   for (let i = n; i >= 1; i--) {
-    if (currSum === 0) break;
-    const num = numbers[i - 1];
-    if (currSum >= num) {
-      const prevIdx = offset + currSum - num;
-      if (prevIdx < range && dp[i - 1][prevIdx]) {
-        indices.push(i - 1);
-        currSum -= num;
-      }
+    const w = numbers[i - 1];
+    if (dp[i - 1][s]) {
+      continue;
+    }
+    if (s >= w && dp[i - 1][s - w]) {
+      indices.push(i - 1);
+      s -= w;
     }
   }
-  
+  indices.reverse();
   return indices;
 }
 
 /**
- * Solve SAT using brute force (for small problems)
+ * Solve SAT using brute force (for small problems). Literals are 1-indexed DIMACS-style (see `core::problem::Clause`).
  */
-function solveSATBruteForce(variables: number, clauses: Array<{ literals: number[] }>): boolean[] | null {
+export function solveSATBruteForce(
+  variables: number,
+  clauses: Array<{ literals: number[] }>
+): boolean[] | null {
   const maxAttempts = Math.min(1 << Math.min(variables, 20), 1000000); // Limit to 1M attempts
   
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -347,9 +343,9 @@ function solveSATBruteForce(variables: number, clauses: Array<{ literals: number
 }
 
 /**
- * Solve TSP using nearest neighbor heuristic
+ * Solve TSP using nearest-neighbor heuristic on a distance matrix (same as client mining).
  */
-function solveTSP(cities: number, distances: number[][]): number[] | null {
+export function solveTSP(cities: number, distances: number[][]): number[] | null {
   if (cities === 0) return null;
   
   const tour: number[] = [];
@@ -807,7 +803,8 @@ export async function createBlock(
   // Note: Address and Hash serialize as byte arrays [u8; 32] in JSON
   const coinbase = {
     to: Array.from(minerAddressBytes), // Address as byte array (reuse from above)
-    reward: Math.floor(workScore * 100), // Balance as number (u128 - JSON handles large numbers)
+    // tokenomics/src/rewards.rs: base_constant × (work_score / epoch_average_work)
+    reward: Number(blockRewardFromWorkScore(workScore)),
     height
   };
   
@@ -823,3 +820,111 @@ export async function createBlock(
   return block;
 }
 
+/**
+ * Build a block from a caller-provided problem and solution, using `prevHash` as the epoch salt
+ * (same as `createCommitment` / mining: H(problem_hash || epoch_salt || solution_hash)).
+ * Use the current chain tip hash and next height from RPC before submitting.
+ */
+export async function createBlockFromSolvedProblem(
+  prevHash: string | { hash?: string; bytes?: string } | any,
+  height: number,
+  minerAddress: string,
+  problem: ProblemType,
+  solution: Solution,
+  solveTimeMs: number,
+  transactions: any[] = [],
+  difficulty: number = DEFAULT_DIFFICULTY
+): Promise<Block | null> {
+  const prevHashHex = extractHashHex(prevHash);  if (!verifySolution(solution, problem)) {
+    console.error("❌ Solution does not verify against problem");
+    return null;
+  }
+
+  const commitment = createCommitment(problem, solution, prevHashHex);
+
+  const solveTimeUs = Math.floor(solveTimeMs * 1000);
+  const verifyTimeUs = Math.max(1000, Math.floor(solveTimeMs * 0.1));
+  const timeAsymmetryRatio = solveTimeUs / verifyTimeUs;
+
+  const complexityWeight = calculateProblemDifficultyWeight(problem);
+  const solutionQuality = calculateSolutionQuality(solution, problem);
+
+  const solveMemory = estimateSolveMemory(problem);
+  const verifyMemory = 1024;
+  const spaceRatio = Math.sqrt(solveMemory / verifyMemory);
+  const energyPerOp = 0.001;
+  const energyEfficiency = 1.0 / (energyPerOp + 1.0);
+
+  const workScore = timeAsymmetryRatio * spaceRatio * complexityWeight * solutionQuality * energyEfficiency;
+  const energyEstimateJoules = 100.0 * (solveTimeMs / 1000);
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const transactionsRoot = hash(new TextEncoder().encode(JSON.stringify(transactions)));
+  const solutionsRoot = hash(serializeSolution(solution));
+
+  const prevHashBytes = hexToBytes(prevHashHex);
+  const transactionsRootBytes = hexToBytes(transactionsRoot);
+  const solutionsRootBytes = hexToBytes(solutionsRoot);
+  const commitmentHashBytes = hexToBytes(commitment.hash);
+  const commitmentProblemHashBytes = hexToBytes(commitment.problem_hash);
+  const minerAddressBytes = hexToBytes(minerAddress);
+
+  let header: Block["header"] = {
+    version: 1,
+    height,
+    prev_hash: bytesToHex(prevHashBytes),
+    timestamp,
+    transactions_root: bytesToHex(transactionsRootBytes),
+    solutions_root: bytesToHex(solutionsRootBytes),
+    commitment: {
+      hash: bytesToHex(commitmentHashBytes),
+      problem_hash: bytesToHex(commitmentProblemHashBytes),
+    },
+    work_score: workScore,
+    miner: bytesToHex(minerAddressBytes),
+    nonce: 0,
+    solve_time_us: solveTimeUs,
+    verify_time_us: verifyTimeUs,
+    time_asymmetry_ratio: timeAsymmetryRatio,
+    solution_quality: solutionQuality,
+    complexity_weight: complexityWeight,
+    energy_estimate_joules: energyEstimateJoules,
+  };
+
+  const miningResult = mineHeader(header, difficulty);
+  if (!miningResult) {
+    console.error("❌ Failed to mine header");
+    return null;
+  }
+
+  header.nonce = miningResult.nonce;
+
+  const solutionType: SolutionType = {
+    SubsetSum: solution.SubsetSum,
+    SAT: solution.SAT,
+    TSP: solution.TSP,
+    Custom: solution.Custom,
+  };
+
+  const solutionReveal: SolutionReveal = {
+    problem,
+    solution: solutionType,
+    commitment: {
+      hash: bytesToHex(commitmentHashBytes),
+      problem_hash: bytesToHex(commitmentProblemHashBytes),
+    },
+  };
+
+  const coinbase = {
+    to: Array.from(minerAddressBytes),
+    reward: Number(blockRewardFromWorkScore(workScore)),
+    height,
+  };
+
+  return {
+    header,
+    coinbase,
+    transactions,
+    solution_reveal: solutionReveal,
+  };
+}

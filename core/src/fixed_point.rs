@@ -73,7 +73,7 @@ pub fn isqrt(n: u128) -> u128 {
         return 0;
     }
     let mut x = n;
-    let mut y = x.div_ceil(2);
+    let mut y = (x + 1) / 2;
     while y < x {
         x = y;
         y = (x + n / x) / 2;
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_from_f64_to_f64_roundtrip() {
-        let original = std::f64::consts::PI;
+        let original = 3.14159f64;
         let fixed = from_f64_lossy(original);
         let back = to_f64(fixed);
         assert!(

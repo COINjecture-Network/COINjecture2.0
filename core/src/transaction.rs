@@ -1,8 +1,8 @@
-use crate::validation::{
-    validate_additional_signatures_count, validate_data_payload, validate_dispute_proof,
-    validate_escrow_fields, validate_timelock_fields, validate_transfer_fields,
-};
 use crate::{Address, Balance, Ed25519Signature, Hash, PublicKey};
+use crate::validation::{
+    validate_transfer_fields, validate_timelock_fields, validate_escrow_fields,
+    validate_additional_signatures_count, validate_dispute_proof, validate_data_payload,
+};
 use serde::{Deserialize, Serialize};
 
 /// Transaction types supported by Network B
@@ -181,10 +181,10 @@ pub enum TrustLineType {
         account_b: Address,
         limit_a_to_b: Balance,
         limit_b_to_a: Balance,
-        quality_in: u16,  // Basis points (0-10000)
-        quality_out: u16, // Basis points (0-10000)
+        quality_in: u16,           // Basis points (0-10000)
+        quality_out: u16,          // Basis points (0-10000)
         ripple_enabled: bool,
-        dimensional_scale: u8, // 1-8
+        dimensional_scale: u8,     // 1-8
     },
     /// Update credit limits on existing trustline
     UpdateLimits {
@@ -196,7 +196,9 @@ pub enum TrustLineType {
     /// Close trustline (requires zero balance)
     Close,
     /// Evolve phase parameter (periodic dimensional adjustment)
-    EvolvePhase { delta_tau: f64 },
+    EvolvePhase {
+        delta_tau: f64,
+    },
 }
 
 /// Dimensional pool types based on exponential tokenomics
@@ -270,8 +272,7 @@ impl Transaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let timelock =
-            TimeLockTransaction::new(from, recipient, amount, unlock_time, fee, nonce, keypair);
+        let timelock = TimeLockTransaction::new(from, recipient, amount, unlock_time, fee, nonce, keypair);
         Transaction::TimeLock(timelock)
     }
 
@@ -549,16 +550,13 @@ impl EscrowTransaction {
         msg.extend_from_slice(self.public_key.as_bytes());
 
         // Include escrow type specific data
-        if let EscrowType::Create {
-            recipient,
-            amount,
-            timeout,
-            ..
-        } = &self.escrow_type
-        {
-            msg.extend_from_slice(recipient.as_bytes());
-            msg.extend_from_slice(&amount.to_le_bytes());
-            msg.extend_from_slice(&timeout.to_le_bytes());
+        match &self.escrow_type {
+            EscrowType::Create { recipient, amount, timeout, .. } => {
+                msg.extend_from_slice(recipient.as_bytes());
+                msg.extend_from_slice(&amount.to_le_bytes());
+                msg.extend_from_slice(&timeout.to_le_bytes());
+            }
+            _ => {}
         }
 
         msg
@@ -618,18 +616,11 @@ impl ChannelTransaction {
 
         // Include channel type specific data
         match &self.channel_type {
-            ChannelType::Open {
-                deposit_a,
-                deposit_b,
-                ..
-            } => {
+            ChannelType::Open { deposit_a, deposit_b, .. } => {
                 msg.extend_from_slice(&deposit_a.to_le_bytes());
                 msg.extend_from_slice(&deposit_b.to_le_bytes());
             }
-            ChannelType::CooperativeClose {
-                final_balance_a,
-                final_balance_b,
-            } => {
+            ChannelType::CooperativeClose { final_balance_a, final_balance_b } => {
                 msg.extend_from_slice(&final_balance_a.to_le_bytes());
                 msg.extend_from_slice(&final_balance_b.to_le_bytes());
             }
@@ -658,11 +649,7 @@ impl ChannelTransaction {
 
         // 4. Channel-type-specific bounds checks
         match &self.channel_type {
-            ChannelType::Open {
-                deposit_a,
-                deposit_b,
-                ..
-            } => {
+            ChannelType::Open { deposit_a, deposit_b, .. } => {
                 // Both deposits must be non-zero and within bounds
                 if crate::validation::validate_amount(*deposit_a).is_err() {
                     return false;
@@ -816,10 +803,7 @@ impl TrustLineTransaction {
                     return false;
                 }
             }
-            TrustLineType::UpdateLimits {
-                limit_a_to_b,
-                limit_b_to_a,
-            } => {
+            TrustLineType::UpdateLimits { limit_a_to_b, limit_b_to_a } => {
                 // At least one limit must be specified
                 if limit_a_to_b.is_none() && limit_b_to_a.is_none() {
                     return false;
@@ -842,7 +826,6 @@ impl TrustLineTransaction {
 
 impl PoolSwapTransaction {
     /// Create and sign a new pool swap transaction
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool_from: DimensionalPool,
         pool_to: DimensionalPool,
@@ -853,7 +836,7 @@ impl PoolSwapTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key();
+        let public_key = keypair.public_key().clone();
 
         // Create unsigned transaction
         let mut tx = PoolSwapTransaction {
@@ -976,14 +959,17 @@ pub enum MarketplaceOperation {
         solution: crate::Solution,
     },
     /// Claim bounty for solved problem
-    ClaimBounty { problem_id: Hash },
+    ClaimBounty {
+        problem_id: Hash,
+    },
     /// Cancel open problem and refund bounty
-    CancelProblem { problem_id: Hash },
+    CancelProblem {
+        problem_id: Hash,
+    },
 }
 
 impl MarketplaceTransaction {
     /// Create and sign a new problem submission transaction
-    #[allow(clippy::too_many_arguments)]
     pub fn new_problem_submission(
         problem: crate::ProblemType,
         from: Address,
@@ -994,7 +980,7 @@ impl MarketplaceTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key();
+        let public_key = keypair.public_key().clone();
         let operation = MarketplaceOperation::SubmitProblem {
             problem,
             bounty,
@@ -1025,7 +1011,7 @@ impl MarketplaceTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key();
+        let public_key = keypair.public_key().clone();
         let operation = MarketplaceOperation::SubmitSolution {
             problem_id,
             solution,
@@ -1086,12 +1072,7 @@ impl MarketplaceTransaction {
 
         // 4. Validate operation-specific constraints
         match &self.operation {
-            MarketplaceOperation::SubmitProblem {
-                bounty,
-                min_work_score,
-                expiration_days,
-                problem,
-            } => {
+            MarketplaceOperation::SubmitProblem { bounty, min_work_score, expiration_days, problem } => {
                 // Bounty must be non-zero and within bounds
                 if crate::validation::validate_amount(*bounty).is_err() {
                     return false;
@@ -1202,8 +1183,7 @@ mod tests {
         // Set unlock time in the past
         let unlock_time = chrono::Utc::now().timestamp() - 3600;
 
-        let timelock_tx =
-            TimeLockTransaction::new(from, recipient, 5000, unlock_time, 10, 1, &keypair);
+        let timelock_tx = TimeLockTransaction::new(from, recipient, 5000, unlock_time, 10, 1, &keypair);
 
         // Should be invalid because unlock time is in the past
         assert!(!timelock_tx.is_valid());

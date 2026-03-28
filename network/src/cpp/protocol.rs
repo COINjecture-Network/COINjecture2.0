@@ -391,8 +391,6 @@ mod tests {
             node_type: 1,
             timestamp: 1234567890,
             connection_nonce: 0, // Test with default nonce
-            ed25519_pubkey: [0u8; 32],
-            auth_signature: [0u8; 64],
         };
 
         let envelope = MessageEnvelope::new(MessageType::Hello, &msg).unwrap();

@@ -40,7 +40,7 @@ pub struct PeerInfo {
 }
 
 /// Equilibrium-based message router
-///
+/// 
 /// Uses the equilibrium constant to determine:
 /// - Broadcast fanout (√n × η peers)
 /// - Sync peer selection (dimensional distance)
@@ -48,7 +48,7 @@ pub struct PeerInfo {
 pub struct EquilibriumRouter {
     /// All connected peers
     peers: HashMap<PeerId, PeerInfo>,
-
+    
     /// Equilibrium constant
     eta: f64,
 }
@@ -61,137 +61,138 @@ impl EquilibriumRouter {
             eta: ETA,
         }
     }
-
+    
     /// Add or update peer
     pub fn add_peer(&mut self, peer: PeerInfo) {
         self.peers.insert(peer.id, peer);
     }
-
+    
     /// Remove peer
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
         self.peers.remove(peer_id);
     }
-
+    
     /// Get peer by ID
     pub fn get_peer(&self, peer_id: &PeerId) -> Option<&PeerInfo> {
         self.peers.get(peer_id)
     }
-
+    
     /// Get all peers
     pub fn all_peers(&self) -> Vec<&PeerInfo> {
         self.peers.values().collect()
     }
-
+    
     /// Get number of peers
     pub fn peer_count(&self) -> usize {
         self.peers.len()
     }
-
+    
     /// Select peers for broadcast using equilibrium fanout
-    ///
+    /// 
     /// Fanout = √n × η
-    ///
+    /// 
     /// Where:
     /// - n = total number of peers
     /// - η = equilibrium constant (1/√2 ≈ 0.7071)
-    ///
+    /// 
     /// This achieves optimal propagation:
     /// - Too few peers: slow propagation
     /// - Too many peers: network congestion
     /// - √n × η: critical damping (fastest without congestion)
     pub fn select_broadcast_peers(&self) -> Vec<PeerId> {
         let n = self.peers.len() as f64;
-
+        
         if n == 0.0 {
             return vec![];
         }
-
+        
         // Calculate equilibrium fanout
         let fanout = (n.sqrt() * self.eta).ceil() as usize;
-
+        
         // Select peers with highest quality
         let mut peers: Vec<_> = self.peers.values().collect();
         peers.sort_by(|a, b| b.quality.total_cmp(&a.quality));
-
-        peers.into_iter().take(fanout).map(|p| p.id).collect()
+        
+        peers.into_iter()
+            .take(fanout)
+            .map(|p| p.id)
+            .collect()
     }
-
+    
     /// Select peer for sync based on dimensional distance
-    ///
+    /// 
     /// Dimensional distance τ = |peer_height - required_height| × η
-    ///
+    /// 
     /// Selects the peer with smallest τ (closest in dimensional space)
     pub fn select_sync_peer(&self, required_height: u64) -> Option<PeerId> {
         // Find peers with height >= required_height
-        let mut candidates: Vec<_> = self
-            .peers
-            .values()
+        let mut candidates: Vec<_> = self.peers.values()
             .filter(|p| p.best_height >= required_height)
             .collect();
-
+        
         if candidates.is_empty() {
             return None;
         }
-
+        
         // Sort by dimensional distance (smallest τ first)
         candidates.sort_by_key(|p| {
             let delta = (p.best_height - required_height) as f64;
             let tau = delta * self.eta;
-            (tau * 1000.0) as u64 // Scale for integer sorting
+            (tau * 1000.0) as u64  // Scale for integer sorting
         });
-
+        
         // Return closest peer
         Some(candidates[0].id)
     }
-
+    
     /// Select multiple peers for parallel sync
-    ///
+    /// 
     /// Selects √n × η peers for parallel block requests
     pub fn select_sync_peers(&self, required_height: u64, max_peers: usize) -> Vec<PeerId> {
         // Find peers with height >= required_height
-        let mut candidates: Vec<_> = self
-            .peers
-            .values()
+        let mut candidates: Vec<_> = self.peers.values()
             .filter(|p| p.best_height >= required_height)
             .collect();
-
+        
         if candidates.is_empty() {
             return vec![];
         }
-
+        
         // Calculate equilibrium fanout
         let n = candidates.len() as f64;
         let fanout = ((n.sqrt() * self.eta).ceil() as usize).min(max_peers);
-
+        
         // Sort by quality and dimensional distance
         candidates.sort_by(|a, b| {
             let a_tau = ((a.best_height - required_height) as f64) * self.eta;
             let b_tau = ((b.best_height - required_height) as f64) * self.eta;
-
+            
             // Combine quality and distance (higher quality, lower distance = better)
             let a_score = a.quality - a_tau;
             let b_score = b.quality - b_tau;
-
+            
             b_score.total_cmp(&a_score)
         });
-
-        candidates.into_iter().take(fanout).map(|p| p.id).collect()
+        
+        candidates.into_iter()
+            .take(fanout)
+            .map(|p| p.id)
+            .collect()
     }
-
+    
     /// Select peers by node type
     pub fn select_peers_by_type(&self, node_type: u8) -> Vec<PeerId> {
-        self.peers
-            .values()
+        self.peers.values()
             .filter(|p| p.node_type == node_type)
             .map(|p| p.id)
             .collect()
     }
-
+    
     /// Calculate optimal chunk size for sync
-    ///
+    /// 
     /// Uses equilibrium-based adaptive chunking:
     /// chunk_size = base × (1 + Δh × η / scale)
-    ///
+    /// 
     /// Where:
     /// - Δh = height difference
     /// - η = equilibrium constant
@@ -201,9 +202,9 @@ impl EquilibriumRouter {
         let adaptive = (base_chunk as f64) * (1.0 + (delta * self.eta / 10.0));
         adaptive.min(max_chunk as f64).ceil() as u64
     }
-
+    
     /// Update peer quality based on performance
-    ///
+    /// 
     /// Quality decays exponentially on failure, increases linearly on success
     pub fn update_peer_quality(&mut self, peer_id: &PeerId, success: bool) {
         if let Some(peer) = self.peers.get_mut(peer_id) {
@@ -213,7 +214,7 @@ impl EquilibriumRouter {
             } else {
                 // Exponential decay on failure (multiply by (1 - η))
                 peer.quality *= 1.0 - self.eta;
-                peer.quality = peer.quality.max(0.1); // Minimum quality
+                peer.quality = peer.quality.max(0.1);  // Minimum quality
             }
         }
     }
@@ -249,9 +250,7 @@ impl EquilibriumRouter {
         let fanout = (n.sqrt() * self.eta * cohesion_factor).ceil() as usize;
 
         // Score all peers using flocking rules
-        let mut scored: Vec<(&PeerInfo, f64)> = self
-            .peers
-            .values()
+        let mut scored: Vec<(&PeerInfo, f64)> = self.peers.values()
             .map(|p| {
                 let sep = self.separation_score(p.best_height, our_height, swarm_center);
                 let align = self.alignment_score(p, our_phase);
@@ -264,7 +263,10 @@ impl EquilibriumRouter {
         // Sort by score (highest first)
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        scored.into_iter().take(fanout).map(|(p, _)| p.id).collect()
+        scored.into_iter()
+            .take(fanout)
+            .map(|(p, _)| p.id)
+            .collect()
     }
 
     /// Calculate median height of peer set
@@ -283,11 +285,9 @@ impl EquilibriumRouter {
             return 1.0;
         }
         let mean = heights.iter().sum::<u64>() as f64 / heights.len() as f64;
-        let variance = heights
-            .iter()
+        let variance = heights.iter()
             .map(|h| (*h as f64 - mean).powi(2))
-            .sum::<f64>()
-            / heights.len() as f64;
+            .sum::<f64>() / heights.len() as f64;
 
         // Cohesion = 1 / (1 + normalized_variance)
         let normalized_var = variance.sqrt() / (mean.max(1.0) * self.eta);
@@ -310,11 +310,7 @@ impl EquilibriumRouter {
     /// Alignment score: prefer peers in same flock phase
     fn alignment_score(&self, peer: &PeerInfo, our_phase: u8) -> f64 {
         // Peers in same phase get bonus (they broadcast together)
-        let phase_match = if peer.flock_phase == our_phase {
-            0.3
-        } else {
-            0.0
-        };
+        let phase_match = if peer.flock_phase == our_phase { 0.3 } else { 0.0 };
 
         // Also consider velocity alignment
         let vel_factor = 1.0 / (1.0 + peer.velocity.abs());
@@ -330,12 +326,7 @@ impl EquilibriumRouter {
     }
 
     /// Update peer with flock state from StatusMessage
-    pub fn update_peer_flock(
-        &mut self,
-        peer_id: &PeerId,
-        flock: &FlockStateCompact,
-        new_height: u64,
-    ) {
+    pub fn update_peer_flock(&mut self, peer_id: &PeerId, flock: &FlockStateCompact, new_height: u64) {
         if let Some(peer) = self.peers.get_mut(peer_id) {
             // Calculate velocity (height change rate)
             let height_delta = new_height as f64 - peer.best_height as f64;
@@ -358,7 +349,7 @@ impl Default for EquilibriumRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    
     fn create_test_peer(id: u8, height: u64, quality: f64) -> PeerInfo {
         PeerInfo {
             id: [id; 32],
@@ -371,76 +362,64 @@ mod tests {
             velocity: 0.0,
         }
     }
-
+    
     #[test]
     fn test_broadcast_fanout() {
         let mut router = EquilibriumRouter::new();
-
+        
         // Add 16 peers
         for i in 0..16 {
             router.add_peer(create_test_peer(i, 100, 1.0));
         }
-
+        
         // Fanout should be √16 × η = 4 × 0.707 ≈ 3
         let selected = router.select_broadcast_peers();
         assert!(selected.len() >= 2 && selected.len() <= 4);
     }
-
+    
     #[test]
     fn test_sync_peer_selection() {
         let mut router = EquilibriumRouter::new();
-
+        
         // Add peers with different heights
         router.add_peer(create_test_peer(1, 100, 1.0));
         router.add_peer(create_test_peer(2, 150, 1.0));
         router.add_peer(create_test_peer(3, 200, 1.0));
-        router.add_peer(create_test_peer(4, 50, 1.0)); // Too low
-
+        router.add_peer(create_test_peer(4, 50, 1.0));  // Too low
+        
         // Request height 120 - should select peer 2 (closest above)
         let selected = router.select_sync_peer(120).unwrap();
         assert_eq!(selected, [2; 32]);
     }
-
+    
     #[test]
     fn test_chunk_size_calculation() {
         let router = EquilibriumRouter::new();
-
+        
         // Small delta (10): chunk = 20 * (1 + (10 * η / 10)) = 20 * (1 + 0.707) ≈ 34
         let chunk = router.calculate_chunk_size(10, 20, 100);
-        assert!(
-            (30..=40).contains(&chunk),
-            "Expected chunk ~34 for delta=10, got {}",
-            chunk
-        );
-
+        assert!(chunk >= 30 && chunk <= 40, "Expected chunk ~34 for delta=10, got {}", chunk);
+        
         // Medium delta (100): chunk = 20 * (1 + (100 * η / 10)) = 20 * (1 + 7.07) ≈ 161, capped at 100
         let chunk = router.calculate_chunk_size(100, 20, 100);
-        assert_eq!(
-            chunk, 100,
-            "Expected chunk=100 (capped) for delta=100, got {}",
-            chunk
-        );
-
+        assert_eq!(chunk, 100, "Expected chunk=100 (capped) for delta=100, got {}", chunk);
+        
         // Large delta (1000): chunk capped at max
         let chunk = router.calculate_chunk_size(1000, 20, 100);
-        assert_eq!(
-            chunk, 100,
-            "Expected chunk=100 (capped) for delta=1000, got {}",
-            chunk
-        );
+        assert_eq!(chunk, 100, "Expected chunk=100 (capped) for delta=1000, got {}", chunk);
     }
-
+    
     #[test]
     fn test_peer_quality_update() {
         let mut router = EquilibriumRouter::new();
         let peer_id = [1; 32];
-
+        
         router.add_peer(create_test_peer(1, 100, 0.5));
-
+        
         // Success increases quality
         router.update_peer_quality(&peer_id, true);
         assert!(router.get_peer(&peer_id).unwrap().quality > 0.5);
-
+        
         // Failure decreases quality exponentially
         let before = router.get_peer(&peer_id).unwrap().quality;
         router.update_peer_quality(&peer_id, false);
@@ -448,23 +427,23 @@ mod tests {
         assert!(after < before);
         assert!((after - before * (1.0 - ETA)).abs() < 0.01);
     }
-
+    
     #[test]
     fn test_equilibrium_scaling() {
         let router = EquilibriumRouter::new();
-
+        
         // Verify η = 1/√2
-        assert!((router.eta - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.0001);
-
+        assert!((router.eta - 0.7071).abs() < 0.0001);
+        
         // Verify √n × η scaling
         for n in [4, 9, 16, 25, 36] {
             let expected_fanout = ((n as f64).sqrt() * router.eta).ceil() as usize;
-
+            
             let mut test_router = EquilibriumRouter::new();
             for i in 0..n {
                 test_router.add_peer(create_test_peer(i as u8, 100, 1.0));
             }
-
+            
             let selected = test_router.select_broadcast_peers();
             assert_eq!(selected.len(), expected_fanout);
         }

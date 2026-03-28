@@ -1,91 +1,111 @@
 version: '3.8'
 
-# COINjecture — Production Docker Compose
-#
-# Differences from docker-compose.yml (testnet):
-#   • No debug ports exposed to host (metrics/RPC bind to localhost only)
-#   • Higher resource limits suitable for a production node
-#   • always restart policy
-#   • json-file logging with rotation
-#   • Mining disabled by default (validator role)
-#   • RUST_BACKTRACE disabled
-#   • Internal-only network for P2P; separate network for RPC exposure
-#
-# Usage:
-#   docker compose -f docker-compose.production.yml up -d
-#
-# Prerequisites:
-#   • .env file with production values (see .env.example)
-#   • TLS termination handled by a reverse proxy (Caddy, nginx, Traefik) in
-#     front of the RPC port — do NOT expose 9933 directly to the internet.
+# COINjecture 2.0 — Full Production Stack
+# Usage: docker compose -f docker-compose.production.yml up -d
+# Requires: .env.production with Supabase credentials
 
 services:
-  # ── Bootstrap / Validator Node ────────────────────────────────────────────
+  # ── COINjecture Node ──────────────────────────────────────────────────────
   node:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:production
-    container_name: coinject-production
-    restart: always
-    env_file:
-      - .env
-    environment:
-      - RUST_LOG=${RUST_LOG:-warn}
-      - RUST_BACKTRACE=0
-    # No host port mappings for P2P or metrics in production.
-    # RPC is bound to 127.0.0.1 — expose via reverse proxy only.
+    container_name: coinject-node
     ports:
-      - "707:707"              # CPP P2P — must be reachable by peers
-      - "127.0.0.1:9933:9933" # JSON-RPC — localhost only; proxy handles TLS
-      - "127.0.0.1:9090:9090" # Metrics — localhost only; scrape via Prometheus
+      - "707:707"
+      - "9933:9933"
+      - "9090:9090"
     volumes:
-      - node-data:/data
+      - chain-data:/data
     command: >
+      --mine
       --data-dir /data
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
-      --bootnodes ${BOOTNODES}
-      --difficulty ${DIFFICULTY:-8}
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+    restart: unless-stopped
     networks:
-      - coinject-internal
-      - coinject-rpc
-    deploy:
-      resources:
-        limits:
-          cpus: '2.0'
-          memory: 1G
-        reservations:
-          cpus: '0.5'
-          memory: 256M
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
+      - coinjecture
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
-# ── Volumes ───────────────────────────────────────────────────────────────────
+  # ── API Server ────────────────────────────────────────────────────────────
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: coinject-api
+    ports:
+      - "3030:3030"
+    environment:
+      - COINJECTURE_API_HOST=0.0.0.0
+      - COINJECTURE_API_PORT=3030
+      - COINJECTURE_NETWORK=${COINJECTURE_NETWORK:-testnet}
+      - NODE_RPC_URL=http://node:9933
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - INDEXER_ENABLED=${INDEXER_ENABLED:-true}
+      - INDEXER_POLL_INTERVAL=${INDEXER_POLL_INTERVAL:-5}
+      - INDEXER_CONFIRMATIONS=${INDEXER_CONFIRMATIONS:-6}
+      - RUST_LOG=${RUST_LOG:-info}
+    depends_on:
+      node:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - coinjecture
+
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: coinject-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - coinjecture
+
+  # ── Grafana ───────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: coinject-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-coinjecture}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - coinjecture
+
 volumes:
-  node-data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      # Override DATA_DIR in .env to point at a persistent host path, e.g.:
-      # DATA_DIR=/mnt/chain-data
-      device: ${DATA_DIR:-/var/lib/coinject}
+  chain-data:
+  prometheus-data:
+  grafana-data:
 
-# ── Networks ──────────────────────────────────────────────────────────────────
 networks:
-  coinject-internal:
+  coinjecture:
     driver: bridge
-    internal: true   # P2P only — no external routing
-  coinject-rpc:
-    driver: bridge   # RPC port mapped to 127.0.0.1 above; proxy lives here

@@ -2,9 +2,9 @@
 // Load Test Results — Structured Output & Template
 // =============================================================================
 
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use chrono::Utc;
 
 /// Top-level test result container.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,10 +64,7 @@ impl TestResults {
     }
 
     pub fn error(&mut self, message: impl Into<String>, count: u64) {
-        self.errors.push(ErrorEntry {
-            message: message.into(),
-            count,
-        });
+        self.errors.push(ErrorEntry { message: message.into(), count });
     }
 
     pub fn note(&mut self, note: impl Into<String>) {
@@ -97,10 +94,7 @@ impl TestResults {
             println!("\n Phases:");
             for phase in &self.phases {
                 let pstatus = if phase.passed { "✓" } else { "✗" };
-                println!(
-                    "   {pstatus} {} ({:.1}s): {}",
-                    phase.name, phase.elapsed_secs, phase.summary
-                );
+                println!("   {pstatus} {} ({:.1}s): {}", phase.name, phase.elapsed_secs, phase.summary);
             }
         }
 
@@ -150,33 +144,18 @@ impl LatencyStats {
         self.samples.push(ms);
     }
 
-    pub fn p50(&self) -> f64 {
-        self.percentile(0.50)
-    }
-    pub fn p95(&self) -> f64 {
-        self.percentile(0.95)
-    }
-    pub fn p99(&self) -> f64 {
-        self.percentile(0.99)
-    }
-    pub fn max(&self) -> f64 {
-        self.samples.iter().cloned().fold(0.0_f64, f64::max)
-    }
-    #[allow(dead_code)]
-    pub fn min(&self) -> f64 {
-        self.samples.iter().cloned().fold(f64::MAX, f64::min)
-    }
+    pub fn p50(&self) -> f64 { self.percentile(0.50) }
+    pub fn p95(&self) -> f64 { self.percentile(0.95) }
+    pub fn p99(&self) -> f64 { self.percentile(0.99) }
+    pub fn max(&self) -> f64 { self.samples.iter().cloned().fold(0.0_f64, f64::max) }
+    pub fn min(&self) -> f64 { self.samples.iter().cloned().fold(f64::MAX, f64::min) }
     pub fn mean(&self) -> f64 {
-        if self.samples.is_empty() {
-            return 0.0;
-        }
+        if self.samples.is_empty() { return 0.0; }
         self.samples.iter().sum::<f64>() / self.samples.len() as f64
     }
 
     fn percentile(&self, p: f64) -> f64 {
-        if self.samples.is_empty() {
-            return 0.0;
-        }
+        if self.samples.is_empty() { return 0.0; }
         let mut sorted = self.samples.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let idx = ((sorted.len() as f64 * p) as usize).min(sorted.len() - 1);
@@ -189,11 +168,7 @@ impl LatencyStats {
         results.metric(format!("{prefix}.p99_ms"), self.p99(), "ms");
         results.metric(format!("{prefix}.max_ms"), self.max(), "ms");
         results.metric(format!("{prefix}.mean_ms"), self.mean(), "ms");
-        results.metric(
-            format!("{prefix}.count"),
-            self.samples.len() as f64,
-            "samples",
-        );
+        results.metric(format!("{prefix}.count"), self.samples.len() as f64, "samples");
     }
 }
 
@@ -210,27 +185,16 @@ impl ThroughputCounter {
         self.start = Some(std::time::Instant::now());
     }
 
-    pub fn success(&mut self) {
-        self.total += 1;
-    }
-    pub fn fail(&mut self) {
-        self.total += 1;
-        self.errors += 1;
-    }
+    pub fn success(&mut self) { self.total += 1; }
+    pub fn fail(&mut self)    { self.total += 1; self.errors += 1; }
 
     pub fn tps(&self) -> f64 {
         let elapsed = self.start.map(|s| s.elapsed().as_secs_f64()).unwrap_or(1.0);
-        if elapsed > 0.0 {
-            self.total as f64 / elapsed
-        } else {
-            0.0
-        }
+        if elapsed > 0.0 { self.total as f64 / elapsed } else { 0.0 }
     }
 
     pub fn error_rate(&self) -> f64 {
-        if self.total == 0 {
-            return 0.0;
-        }
+        if self.total == 0 { return 0.0; }
         self.errors as f64 / self.total as f64
     }
 
@@ -238,10 +202,6 @@ impl ThroughputCounter {
         results.metric(format!("{prefix}.total"), self.total as f64, "ops");
         results.metric(format!("{prefix}.errors"), self.errors as f64, "ops");
         results.metric(format!("{prefix}.tps"), self.tps(), "ops/s");
-        results.metric(
-            format!("{prefix}.error_rate"),
-            self.error_rate() * 100.0,
-            "%",
-        );
+        results.metric(format!("{prefix}.error_rate"), self.error_rate() * 100.0, "%");
     }
 }

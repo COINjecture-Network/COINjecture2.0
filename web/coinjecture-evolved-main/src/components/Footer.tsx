@@ -6,7 +6,7 @@ export const Footer = () => {
       <div className="container mx-auto px-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
           <div>
-            <div className="text-xl font-bold gradient-text mb-4">COINjecture</div>
+            <div className="text-xl font-brand font-extrabold gradient-text mb-4 tracking-tight">COINjecture</div>
             <p className="text-sm text-muted-foreground">
               Utility-based computational work blockchain powered by $BEANS
             </p>
@@ -15,7 +15,7 @@ export const Footer = () => {
           <div>
             <h4 className="font-semibold mb-4">Product</h4>
             <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><a href="#terminal" className="hover:text-foreground transition-colors">Terminal</a></li>
+              <li><a href="/solver-lab" className="hover:text-foreground transition-colors">Solver Lab</a></li>
               <li><a href="#api" className="hover:text-foreground transition-colors">API Docs</a></li>
               <li><a href="#metrics" className="hover:text-foreground transition-colors">Metrics</a></li>
               <li><a href="#marketplace" className="hover:text-foreground transition-colors">Marketplace</a></li>
@@ -25,7 +25,7 @@ export const Footer = () => {
           <div>
             <h4 className="font-semibold mb-4">Resources</h4>
             <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><a href="#api" className="hover:text-foreground transition-colors">Documentation</a></li>
+              <li><a href="/roadmap" className="hover:text-foreground transition-colors">Roadmap</a></li>
               <li><a href="/whitepaper" className="hover:text-foreground transition-colors">Whitepaper</a></li>
               <li><a href="https://github.com/Quigles1337/COINjecture2.0" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a></li>
               <li><a href="#" className="hover:text-foreground transition-colors">Support</a></li>

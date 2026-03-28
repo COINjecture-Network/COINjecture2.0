@@ -5,13 +5,12 @@
 //!
 //! Enable with: --features adzdb
 
-#![allow(clippy::duplicated_attributes)]
 #![cfg(feature = "adzdb")]
 
 use coinject_core::{Address, Balance};
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 

@@ -1,8 +1,3 @@
-// These tests use the redb-based AccountState (AccountState::from_db) and
-// ChainState APIs, which are not available when the `adzdb` feature is enabled.
-// The adzdb-specific tests live in node/src/chain_adzdb.rs.
-#![cfg(not(feature = "adzdb"))]
-
 // =============================================================================
 // Phase 9 — Integration Testing Suite
 // =============================================================================
@@ -20,20 +15,25 @@
 //  10.  Stress test                   — 500 transactions processed correctly
 // =============================================================================
 
+use coinject_core::{
+    Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash,
+    KeyPair, MerkleTree, ProblemType, Solution, SolutionReveal, Transaction,
+};
 use coinject_consensus::{
     CoordinatorCommand, CoordinatorConfig, CoordinatorEvent, EpochCoordinator,
 };
-use coinject_core::{
-    Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, KeyPair, MerkleTree,
-    ProblemType, Solution, SolutionReveal, Transaction,
-};
 use coinject_mempool::{PoolConfig, ProblemMarketplace, TransactionPool};
-use coinject_network::cpp::{CppConfig, CppNetwork, NetworkCommand, NodeType as CppNodeType};
+use coinject_network::cpp::{
+    CppConfig, CppNetwork, NetworkCommand, NodeType as CppNodeType,
+};
 use coinject_node::chain::ChainState;
 use coinject_node::genesis::{create_genesis_block, GenesisConfig};
 use coinject_rpc::{BlockchainReader, RpcServer, RpcServerState};
-use coinject_state::{AccountState, ChannelState, EscrowState, MarketplaceState, TimeLockState};
+use coinject_state::{
+    AccountState, ChannelState, EscrowState, MarketplaceState, TimeLockState,
+};
 use redb::Database;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,7 +49,6 @@ struct TestNode {
     chain: Arc<ChainState>,
     state: Arc<AccountState>,
     tx_pool: Arc<RwLock<TransactionPool>>,
-    #[allow(dead_code)]
     genesis: Block,
     genesis_hash: Hash,
     /// Keep tempdir alive for the lifetime of the node.
@@ -69,28 +68,18 @@ impl TestNode {
         let genesis_hash = genesis.header.hash();
 
         let chain = Arc::new(
-            ChainState::new(dir.path().join("chain.db"), &genesis, 512).expect("ChainState::new"),
+            ChainState::new(dir.path().join("chain.db"), &genesis)
+                .expect("ChainState::new"),
         );
 
-        #[cfg(not(feature = "adzdb"))]
-        let state = {
-            let state_db =
-                Arc::new(Database::create(dir.path().join("state.db")).expect("state db"));
-            Arc::new(AccountState::from_db(state_db))
-        };
-        #[cfg(feature = "adzdb")]
-        let state = Arc::new(AccountState::new(dir.path()).expect("AccountState::new"));
+        let state_db = Arc::new(
+            Database::create(dir.path().join("state.db")).expect("state db"),
+        );
+        let state = Arc::new(AccountState::from_db(state_db));
 
         let tx_pool = Arc::new(RwLock::new(TransactionPool::with_config(pool_cfg)));
 
-        TestNode {
-            chain,
-            state,
-            tx_pool,
-            genesis,
-            genesis_hash,
-            _dir: dir,
-        }
+        TestNode { chain, state, tx_pool, genesis, genesis_hash, _dir: dir }
     }
 
     async fn best_height(&self) -> u64 {
@@ -115,7 +104,8 @@ fn make_block_with_txs(height: u64, prev_hash: Hash, txs: Vec<Transaction>) -> B
     let miner = Address::from_bytes([0xABu8; 32]);
 
     // Compute real tx merkle root so block.verify() doesn't choke.
-    let tx_hashes: Vec<Vec<u8>> = txs.iter().map(|tx| tx.hash().to_vec()).collect();
+    let tx_hashes: Vec<Vec<u8>> =
+        txs.iter().map(|tx| tx.hash().to_vec()).collect();
     let transactions_root = MerkleTree::new(tx_hashes).root();
 
     let header = BlockHeader {
@@ -203,10 +193,7 @@ impl BlockchainReader for MockChain {
         }
     }
 
-    fn get_header_by_height(
-        &self,
-        height: u64,
-    ) -> Result<Option<coinject_core::BlockHeader>, String> {
+    fn get_header_by_height(&self, height: u64) -> Result<Option<coinject_core::BlockHeader>, String> {
         Ok(self.get_block_by_height(height)?.map(|b| b.header))
     }
 }
@@ -258,10 +245,7 @@ async fn test_1_multi_node_harness() {
 /// block → apply state changes → verify balances updated.
 #[tokio::test]
 async fn test_2_transaction_lifecycle() {
-    let pool_cfg = PoolConfig {
-        min_fee: 1_000,
-        ..Default::default()
-    };
+    let pool_cfg = PoolConfig { min_fee: 1_000, ..Default::default() };
     let node = TestNode::with_pool_config(pool_cfg);
 
     let genesis_hash = node.genesis_hash;
@@ -351,8 +335,6 @@ async fn test_3_block_propagation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
-        require_encryption: false,
-        ..CppConfig::default()
     };
     let cfg_b = CppConfig { ..cfg_a.clone() };
 
@@ -368,9 +350,7 @@ async fn test_3_block_propagation() {
 
     // Node A broadcasts the block — command must be accepted without error.
     cmd_a
-        .send(NetworkCommand::BroadcastBlock {
-            block: block.clone(),
-        })
+        .send(NetworkCommand::BroadcastBlock { block: block.clone() })
         .expect("BroadcastBlock send");
 
     // Node B updates its known chain state.
@@ -410,7 +390,8 @@ async fn test_4_consensus_round() {
         failover_depth: 2,
     };
 
-    let (coordinator, _shared) = EpochCoordinator::new(node_id, config, 0, Hash::ZERO);
+    let (coordinator, _shared) =
+        EpochCoordinator::new(node_id, config, 0, Hash::ZERO);
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<CoordinatorCommand>();
     let (evt_tx, mut evt_rx) = tokio::sync::mpsc::unbounded_channel::<CoordinatorEvent>();
@@ -467,7 +448,6 @@ async fn test_4_consensus_round() {
                             epoch: *epoch,
                             commit: coinject_consensus::SolutionCommit {
                                 node_id: peer_id,
-                                public_key: [0u8; 32],
                                 solution_hash: peer_hash,
                                 work_score: 150.0,
                                 signature: vec![],
@@ -485,8 +465,8 @@ async fn test_4_consensus_round() {
                 }
                 _ => {}
             },
-            Ok(None) => break, // channel closed
-            Err(_) => break,   // timeout
+            Ok(None) => break,   // channel closed
+            Err(_) => break,     // timeout
         }
     }
 
@@ -527,18 +507,15 @@ async fn test_5_fork_resolution() {
     // Build fork block at height 1 with different nonce → different hash.
     let b1_fork = {
         let mut blk = make_block(1, genesis_hash);
-        blk.header.nonce = 9_999; // ensure different hash
-        blk.header.work_score = 1000.0; // heavier work score
+        blk.header.nonce = 9_999;        // ensure different hash
+        blk.header.work_score = 1000.0;  // heavier work score
         blk
     };
     let b1_fork_hash = b1_fork.header.hash();
 
     // Store the fork block — does NOT advance best chain (height 1 < 3).
     let advanced = node.chain.store_block(&b1_fork).await.unwrap();
-    assert!(
-        !advanced,
-        "fork block at height 1 should NOT replace best chain at 3"
-    );
+    assert!(!advanced, "fork block at height 1 should NOT replace best chain at 3");
 
     // Canonical chain unchanged.
     assert_eq!(node.best_height().await, 3);
@@ -569,10 +546,7 @@ async fn test_5_fork_resolution() {
         // Fork block's prev_hash doesn't chain correctly off our stored tip
         // (ChainState stores the block but only advances if prev_hash == best).
         // Either way, the canonical chain must still be valid.
-        assert!(
-            node.best_height().await >= 3,
-            "best chain is at least height 3"
-        );
+        assert!(node.best_height().await >= 3, "best chain is at least height 3");
     }
 
     // Both fork and main blocks are stored and retrievable.
@@ -602,8 +576,6 @@ async fn test_6_peer_discovery() {
         max_peers: 20,
         enable_websocket: false,
         node_type: CppNodeType::Full,
-        require_encryption: false,
-        ..CppConfig::default()
     };
 
     let new_peer_id = [0x33u8; 32];
@@ -660,19 +632,19 @@ async fn test_7_rpc_integration() {
     let dir = tempfile::tempdir().unwrap();
 
     // ── State objects ──────────────────────────────────────────────────────
-    #[cfg(not(feature = "adzdb"))]
-    let state = {
-        let state_db = Arc::new(Database::create(dir.path().join("state.db")).unwrap());
-        Arc::new(AccountState::from_db(Arc::clone(&state_db)))
-    };
-    #[cfg(feature = "adzdb")]
-    let state = Arc::new(AccountState::new(dir.path()).expect("AccountState::new"));
+    let state_db = Arc::new(
+        Database::create(dir.path().join("state.db")).unwrap(),
+    );
+    let state = Arc::new(AccountState::from_db(Arc::clone(&state_db)));
 
-    let adv_db = Arc::new(Database::create(dir.path().join("adv.db")).unwrap());
+    let adv_db = Arc::new(
+        Database::create(dir.path().join("adv.db")).unwrap(),
+    );
     let timelock_state = Arc::new(TimeLockState::new(Arc::clone(&adv_db)).unwrap());
     let escrow_state = Arc::new(EscrowState::new(Arc::clone(&adv_db)).unwrap());
     let channel_state = Arc::new(ChannelState::new(Arc::clone(&adv_db)).unwrap());
-    let marketplace_state = Arc::new(MarketplaceState::from_db(Arc::clone(&adv_db)).unwrap());
+    let marketplace_state =
+        Arc::new(MarketplaceState::from_db(Arc::clone(&adv_db)).unwrap());
 
     let genesis = create_genesis_block(GenesisConfig::default());
     let genesis_hash = genesis.header.hash();
@@ -701,6 +673,7 @@ async fn test_7_rpc_integration() {
         local_peer_id: Some("test-peer-0xABCD".to_string()),
         listen_addresses: Arc::new(RwLock::new(vec![])),
         is_syncing: Arc::new(RwLock::new(false)),
+        mining_work_provider: None,
     });
 
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -736,11 +709,7 @@ async fn test_7_rpc_integration() {
         .await
         .expect("account_getBalance");
 
-    assert_eq!(
-        balance.as_u64().unwrap(),
-        123_456,
-        "balance matches funded amount"
-    );
+    assert_eq!(balance.as_u64().unwrap(), 123_456, "balance matches funded amount");
 
     // ── chain_getBlock (genesis height 0) ──────────────────────────────────
     let block: serde_json::Value = client
@@ -765,7 +734,10 @@ async fn test_7_rpc_integration() {
         .await
         .expect("network_getInfo");
 
-    assert_eq!(net_info["peer_id"].as_str().unwrap(), "test-peer-0xABCD");
+    assert_eq!(
+        net_info["peer_id"].as_str().unwrap(),
+        "test-peer-0xABCD"
+    );
 
     server.stop().expect("server stop");
 }
@@ -783,13 +755,8 @@ async fn test_8_mempool_sync() {
 
     // Create a funded sender.
     let dir = tempfile::tempdir().unwrap();
-    #[cfg(not(feature = "adzdb"))]
-    let state = {
-        let db = Arc::new(Database::create(dir.path().join("s.db")).unwrap());
-        AccountState::from_db(db)
-    };
-    #[cfg(feature = "adzdb")]
-    let state = AccountState::new(dir.path()).expect("AccountState::new");
+    let db = Arc::new(Database::create(dir.path().join("s.db")).unwrap());
+    let state = AccountState::from_db(db);
     let sender_kp = funded_keypair(&state, 500_000);
     let recipient_addr = Address::from_bytes([0x77u8; 32]);
 
@@ -820,14 +787,10 @@ async fn test_8_mempool_sync() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
-        require_encryption: false,
-        ..CppConfig::default()
     };
     let (_net, cmd_tx, _evt_rx) = CppNetwork::new(cfg, [0x44u8; 32], genesis);
     cmd_tx
-        .send(NetworkCommand::BroadcastTransaction {
-            transaction: tx.clone(),
-        })
+        .send(NetworkCommand::BroadcastTransaction { transaction: tx.clone() })
         .expect("BroadcastTransaction");
 
     // 3. Simulate node B receiving the broadcast and adding to its pool.
@@ -861,16 +824,9 @@ async fn test_8_mempool_sync() {
 async fn test_9_state_consistency() {
     // ── Setup 3 independent state stores ──────────────────────────────────
     fn make_state(dir: &TempDir, name: &str) -> Arc<AccountState> {
-        #[cfg(not(feature = "adzdb"))]
-        {
-            let db = Arc::new(Database::create(dir.path().join(name)).expect("db"));
-            Arc::new(AccountState::from_db(db))
-        }
-        #[cfg(feature = "adzdb")]
-        Arc::new(
-            AccountState::new(dir.path().join(name.trim_end_matches(".db")))
-                .expect("AccountState::new"),
-        )
+        let db =
+            Arc::new(Database::create(dir.path().join(name)).expect("db"));
+        Arc::new(AccountState::from_db(db))
     }
 
     let dir = tempfile::tempdir().unwrap();
@@ -923,21 +879,18 @@ async fn test_9_state_consistency() {
     apply(&state_c, &txs);
 
     // ── Assert identical final state across all 3 replicas ────────────────
-    let total_transferred: u128 = txs.iter().filter_map(|tx| tx.amount()).sum();
+    let total_transferred: u128 = txs
+        .iter()
+        .filter_map(|tx| tx.amount())
+        .sum();
 
     // Recipient balance must be identical on all nodes.
     let bal_a = state_a.get_balance(&recipient);
     let bal_b = state_b.get_balance(&recipient);
     let bal_c = state_c.get_balance(&recipient);
 
-    assert_eq!(
-        bal_a, bal_b,
-        "state A and B must agree on recipient balance"
-    );
-    assert_eq!(
-        bal_b, bal_c,
-        "state B and C must agree on recipient balance"
-    );
+    assert_eq!(bal_a, bal_b, "state A and B must agree on recipient balance");
+    assert_eq!(bal_b, bal_c, "state B and C must agree on recipient balance");
     assert_eq!(bal_a, total_transferred, "recipient received all transfers");
 
     // Sender balances are also consistent.
@@ -971,13 +924,8 @@ async fn test_10_stress_transactions() {
     let mut pool = TransactionPool::with_config(pool_cfg);
 
     let dir = tempfile::tempdir().unwrap();
-    #[cfg(not(feature = "adzdb"))]
-    let state = {
-        let db = Arc::new(Database::create(dir.path().join("stress.db")).unwrap());
-        AccountState::from_db(db)
-    };
-    #[cfg(feature = "adzdb")]
-    let state = AccountState::new(dir.path()).expect("AccountState::new");
+    let db = Arc::new(Database::create(dir.path().join("stress.db")).unwrap());
+    let state = AccountState::from_db(db);
 
     let recipient = Address::from_bytes([0xFFu8; 32]);
     let mut tx_hashes = Vec::with_capacity(N);
@@ -989,7 +937,7 @@ async fn test_10_stress_transactions() {
         state.set_balance(&addr, 1_000_000).unwrap();
 
         let tx = make_transfer(&kp, recipient, 1_000, 10, 1);
-        let h = pool.add(tx).unwrap_or_else(|_| panic!("add tx {}", i));
+        let h = pool.add(tx).expect(&format!("add tx {}", i));
         tx_hashes.push(h);
     }
 
@@ -1000,12 +948,11 @@ async fn test_10_stress_transactions() {
     assert_eq!(stats.transactions_rejected, 0, "zero rejections");
 
     // Every hash is individually retrievable.
-    let missing: Vec<_> = tx_hashes.iter().filter(|h| pool.get(h).is_none()).collect();
-    assert!(
-        missing.is_empty(),
-        "{} hashes not found in pool",
-        missing.len()
-    );
+    let missing: Vec<_> = tx_hashes
+        .iter()
+        .filter(|h| pool.get(h).is_none())
+        .collect();
+    assert!(missing.is_empty(), "{} hashes not found in pool", missing.len());
 
     // Verify pending list length.
     let pending = pool.get_pending();

@@ -212,10 +212,21 @@ rate(coinject_network_errors_total[5m])
 
 ### Nodes Not Connecting
 
-1. Verify firewall rules allow ports 707 and 7071
-2. Check bootnode is listening: `netstat -tulpn | grep 707`
-3. Verify Node 2 bootnode config: Check `--bootnodes` argument
-4. Check network connectivity: `ping $BOOTNODE_IP`
+1. **Bootnodes must be configured.** If you start the binary or Docker with **no** `--bootnodes` and **no** `COINJECT_BOOTNODES` / `BOOTNODES` env, the node stays in **standalone** mode and **`peer_count` stays 0**. Each VPS needs the **other** nodes’ public addresses on **port 707** (CPP P2P), e.g. `--bootnodes 203.0.113.11:707` or:
+   ```bash
+   export COINJECT_BOOTNODES=203.0.113.11:707,203.0.113.12:707
+   ```
+   The node merges CLI `--bootnodes` with these env vars at startup.
+
+2. **Firewall / security groups:** **707/tcp** must be **open inbound** on every peer that should accept P2P (not only 9933 for RPC). Check Hostinger panel, `ufw`, or cloud SGs.
+
+3. Verify bootnode is listening: `ss -tlnp | grep 707` (or `netstat`).
+
+4. Check logs for `connecting to bootnode` and handshake errors: `docker logs coinject-node` or `journalctl`.
+
+5. Check network connectivity: `nc -zv OTHER_IP 707` from each host.
+
+6. Legacy multi-node docs mention 7071 for a **second** local port; on separate servers both often use **707** inside the container with `-p 707:707`.
 
 ### WebSocket Not Working
 

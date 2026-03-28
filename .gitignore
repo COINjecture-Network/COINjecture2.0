@@ -78,3 +78,31 @@ web-wallet/node_modules/
 # Claude Code internals (worktrees, session data, memory)
 .claude/
 .claire/
+
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.production
+.env.*.local
+!.env.example
+
+# Node modules (all locations)
+node_modules/
+
+# Additional database files
+*.sqlite
+*.sqlite3
+peers.json
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/
+
+# Docker volumes
+docker-data/
+chain-data/
+
+# Monitoring data
+prometheus-data/
+grafana-data/
+.env.production

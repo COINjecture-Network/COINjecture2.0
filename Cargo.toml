@@ -16,6 +16,7 @@ members = [
     "huggingface",
     "mobile-sdk",
     "load-test",
+    "api-server",
 ]
 
 [workspace.package]

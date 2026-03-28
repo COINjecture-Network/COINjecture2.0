@@ -11,58 +11,57 @@
 #![allow(dead_code)]
 
 pub mod config;
-pub mod encryption;
-pub mod flock;
-pub mod flow_control;
-pub mod message;
-pub mod network;
-pub mod node_integration;
-pub mod peer;
-pub mod protocol;
-pub mod router;
 pub mod version;
+pub mod message;
+pub mod flow_control;
+pub mod router;
+pub mod protocol;
+pub mod peer;
+pub mod node_integration;
+pub mod network;
+pub mod flock;
+pub mod encryption;
 
 // Re-export commonly used types
 pub use config::{
+    CppConfig, NodeType, CPP_PORT, WEBSOCKET_PORT,
+    DEFAULT_P2P_LISTEN, DEFAULT_WS_LISTEN, ETA, SQRT_2,
     timeouts, // Unified timeout constants for network/consensus alignment
-    CppConfig,
-    NodeType,
-    CPP_PORT,
-    DEFAULT_P2P_LISTEN,
-    DEFAULT_WS_LISTEN,
-    ETA,
-    SQRT_2,
-    WEBSOCKET_PORT,
 };
 
 pub use message::{
-    BlocksMessage, DisconnectMessage, GetBlocksMessage, GetHeadersMessage, GetWorkMessage,
-    HeadersMessage, HelloAckMessage, HelloMessage, MessagePriority, MessageType, NewBlockMessage,
-    NewTransactionMessage, PingMessage, PongMessage, StatusMessage, SubmitWorkMessage,
-    WorkAcceptedMessage, WorkMessage, WorkRejectedMessage,
+    MessageType, MessagePriority,
+    HelloMessage, HelloAckMessage, StatusMessage,
+    GetBlocksMessage, BlocksMessage,
+    GetHeadersMessage, HeadersMessage,
+    NewBlockMessage, NewTransactionMessage,
+    SubmitWorkMessage, WorkAcceptedMessage, WorkRejectedMessage,
+    GetWorkMessage, WorkMessage,
+    PingMessage, PongMessage, DisconnectMessage,
+    PexRequestMessage, PexResponseMessage, PexPeerEntry,
 };
 
 pub use flow_control::{FlowControl, FlowControlStats};
 
-pub use router::{EquilibriumRouter, PeerId, PeerInfo};
+pub use router::{EquilibriumRouter, PeerInfo, PeerId};
 
-pub use protocol::{MessageCodec, MessageEnvelope, ProtocolError};
+pub use protocol::{MessageEnvelope, MessageCodec, ProtocolError};
 
 pub use version::{
-    ConnectionPolicy, FeatureFlags, NegotiatedVersion, ProtocolVersion, VersionDispatch,
-    CURRENT_PROTOCOL_VERSION, MIN_SUPPORTED_VERSION,
+    ProtocolVersion, NegotiatedVersion, FeatureFlags, VersionDispatch,
+    ConnectionPolicy, CURRENT_PROTOCOL_VERSION, MIN_SUPPORTED_VERSION,
 };
 
 pub use peer::{Peer, PeerState, PeerStats};
 
-pub use node_integration::{thresholds, NodeMetrics, PeerSelector};
+pub use node_integration::{NodeMetrics, PeerSelector, thresholds};
 
-pub use network::{CppNetwork, NetworkCommand, NetworkEvent};
+pub use network::{CppNetwork, NetworkEvent, NetworkCommand};
 pub mod block_provider;
 
 pub use block_provider::{BlockProvider, EmptyBlockProvider, MAX_BLOCKS_PER_REQUEST};
 
 pub use flock::{
-    FlockState, FlockStateCompact, GoldenGenerator, MurmurationRules, FLOCK_EPOCH_BLOCKS,
-    FLOCK_PHASES, GOLDEN_SEED, PHI, PHI_INV,
+    GoldenGenerator, FlockState, FlockStateCompact, MurmurationRules,
+    PHI, PHI_INV, GOLDEN_SEED, FLOCK_EPOCH_BLOCKS, FLOCK_PHASES,
 };

@@ -1,0 +1,34 @@
+groups:
+  - name: coinjecture_alerts
+    rules:
+      - alert: BlockProductionStalled
+        expr: increase(coinjecture_blocks_indexed_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No new blocks indexed in 10 minutes"
+
+      - alert: LowPeerCount
+        expr: coinjecture_connected_peers < 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low peer count ({{ $value }} peers)"
+
+      - alert: HighApiErrorRate
+        expr: rate(api_requests_total{status=~"5.."}[5m]) / rate(api_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API error rate above 5%"
+
+      - alert: HighApiLatency
+        expr: histogram_quantile(0.95, rate(api_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency above 2 seconds"

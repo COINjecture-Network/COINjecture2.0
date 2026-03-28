@@ -1,6 +1,6 @@
 // Fork Detection and Chain Reorganization
 // Handles chain reorganization, fork detection, and chain comparison
-#![allow(dead_code, clippy::too_many_arguments)]
+#![allow(dead_code)]
 
 use super::*;
 use tracing::{debug, error, info, trace, warn};

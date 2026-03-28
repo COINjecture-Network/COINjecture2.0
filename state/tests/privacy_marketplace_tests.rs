@@ -132,7 +132,7 @@ fn test_private_bounty_full_lifecycle() {
 fn test_private_bounty_duplicate_rejection() {
     let (marketplace, _temp_dir) = create_test_marketplace();
 
-    let (_problem, _salt, proof, commitment) = create_test_private_problem();
+    let (problem, _salt, proof, commitment) = create_test_private_problem();
 
     let submitter = Address::from_bytes([1u8; 32]);
 
@@ -161,7 +161,7 @@ fn test_private_bounty_duplicate_rejection() {
 fn test_private_bounty_invalid_reveal() {
     let (marketplace, _temp_dir) = create_test_marketplace();
 
-    let (_problem, salt, proof, commitment) = create_test_private_problem();
+    let (problem, salt, proof, commitment) = create_test_private_problem();
 
     let submitter = Address::from_bytes([1u8; 32]);
 
@@ -329,10 +329,10 @@ fn test_commitment_determinism() {
         complexity_estimate: 5.0,
     };
 
-    let (_proof1, commitment1) = WellformednessProof::create(&problem, &salt, &public_params)
+    let (proof1, commitment1) = WellformednessProof::create(&problem, &salt, &public_params)
         .expect("Failed to create proof 1");
 
-    let (_proof2, commitment2) = WellformednessProof::create(&problem, &salt, &public_params)
+    let (proof2, commitment2) = WellformednessProof::create(&problem, &salt, &public_params)
         .expect("Failed to create proof 2");
 
     assert_eq!(commitment1, commitment2);

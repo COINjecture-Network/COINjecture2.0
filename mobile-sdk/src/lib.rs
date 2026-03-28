@@ -556,9 +556,7 @@ pub mod ffi {
     /// Returns null on error. The caller owns the returned handle and must free
     /// it with `coinject_light_client_free`.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_light_client_new(
-        genesis_hex: *const c_char,
-    ) -> LightClientHandle {
+    pub extern "C" fn coinject_light_client_new(genesis_hex: *const c_char) -> LightClientHandle {
         if genesis_hex.is_null() {
             return std::ptr::null_mut();
         }
@@ -582,7 +580,7 @@ pub mod ffi {
     /// `handle` must have been returned by `coinject_light_client_new` and must
     /// not be used after this call. Passing null is safe and a no-op.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_light_client_free(handle: LightClientHandle) {
+    pub extern "C" fn coinject_light_client_free(handle: LightClientHandle) {
         if !handle.is_null() {
             unsafe { drop(Box::from_raw(handle)) }
         }
@@ -594,7 +592,7 @@ pub mod ffi {
     /// `handle` must be a valid pointer returned by `coinject_light_client_new`
     /// or null. Returns 0 for a null handle.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_light_client_height(handle: LightClientHandle) -> u64 {
+    pub extern "C" fn coinject_light_client_height(handle: LightClientHandle) -> u64 {
         if handle.is_null() {
             return 0;
         }
@@ -610,7 +608,7 @@ pub mod ffi {
     /// `proof_json` must be a valid nul-terminated UTF-8 C string.
     /// Null inputs return -1 immediately.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_verify_mmr_proof(
+    pub extern "C" fn coinject_verify_mmr_proof(
         handle: LightClientHandle,
         proof_json: *const c_char,
     ) -> i32 {
@@ -646,9 +644,7 @@ pub mod ffi {
     /// # Safety
     /// `handle` must be a valid pointer returned by `coinject_light_client_new` or null.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_light_client_export(
-        handle: LightClientHandle,
-    ) -> *mut c_char {
+    pub extern "C" fn coinject_light_client_export(handle: LightClientHandle) -> *mut c_char {
         if handle.is_null() {
             return std::ptr::null_mut();
         }
@@ -669,7 +665,7 @@ pub mod ffi {
     /// C string, or null. Passing null is safe and a no-op. Must not be called
     /// more than once for the same pointer.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_free_string(s: *mut c_char) {
+    pub extern "C" fn coinject_free_string(s: *mut c_char) {
         if !s.is_null() {
             unsafe { drop(CString::from_raw(s)) }
         }

@@ -1,0 +1,16 @@
+[project]
+id = "coinjecture"  # Replace with actual project ID
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+
+[auth]
+enabled = true
+site_url = "https://coinjecture.com"
+additional_redirect_urls = ["http://localhost:3000"]
+
+[auth.hook.custom_access_token]
+enabled = true
+uri = "pg-functions://public/custom_access_token_hook"

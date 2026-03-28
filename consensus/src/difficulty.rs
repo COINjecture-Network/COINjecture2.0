@@ -45,9 +45,9 @@ const DEFAULT_TARGET_US: u64 = 5_000_000;
 
 /// Scale factor clamp expressed as a fraction: new_size stays in
 /// [current × MIN_SCALE_NUM/DENOM, current × MAX_SCALE_NUM/DENOM].
-const SCALE_CLAMP_MIN_NUM: u128 = 2; // 0.4 = 2/5
+const SCALE_CLAMP_MIN_NUM: u128 = 2;  // 0.4 = 2/5
 const SCALE_CLAMP_MIN_DEN: u128 = 5;
-const SCALE_CLAMP_MAX_NUM: u128 = 2; // 2.0 = 2/1
+const SCALE_CLAMP_MAX_NUM: u128 = 2;  // 2.0 = 2/1
 const SCALE_CLAMP_MAX_DEN: u128 = 1;
 
 /// Difficulty adjuster - tracks solve times and adjusts problem size.
@@ -99,10 +99,7 @@ impl DifficultyAdjuster {
     }
 
     /// Create with both network metrics and problem registry.
-    pub fn with_registry(
-        network_metrics: Arc<RwLock<NetworkMetrics>>,
-        registry: SharedRegistry,
-    ) -> Self {
+    pub fn with_registry(network_metrics: Arc<RwLock<NetworkMetrics>>, registry: SharedRegistry) -> Self {
         DifficultyAdjuster {
             recent_solve_times_us: VecDeque::with_capacity(DIFFICULTY_WINDOW),
             current_size: 20,
@@ -163,11 +160,7 @@ impl DifficultyAdjuster {
         let (scaling_exp, abs_max, abs_min) = if let Some(ref registry) = self.registry {
             let reg = registry.read().await;
             if let Some(desc) = reg.get(problem_type) {
-                (
-                    desc.scaling_exponent(),
-                    desc.absolute_max_size(),
-                    desc.absolute_min_size(),
-                )
+                (desc.scaling_exponent(), desc.absolute_max_size(), desc.absolute_min_size())
             } else {
                 (0.8, 60, ABSOLUTE_MIN_SIZE)
             }
@@ -201,10 +194,7 @@ impl DifficultyAdjuster {
                 .max(ABSOLUTE_MIN_SIZE as f64) as usize;
             let max_size = (estimated_size as f64 * 2.0).min(abs_max as f64) as usize;
 
-            (
-                min_size.max(ABSOLUTE_MIN_SIZE),
-                max_size.max(ABSOLUTE_MIN_SIZE + 1),
-            )
+            (min_size.max(ABSOLUTE_MIN_SIZE), max_size.max(ABSOLUTE_MIN_SIZE + 1))
         } else {
             let min = abs_min.max(ABSOLUTE_MIN_SIZE);
             let max = abs_max.min(match problem_type {
@@ -243,21 +233,18 @@ impl DifficultyAdjuster {
             return DEFAULT_TARGET_US;
         }
         // Saturating sum to guard against overflow for very long solve times.
-        let sum: u64 = self
-            .recent_solve_times_us
+        let sum: u64 = self.recent_solve_times_us
             .iter()
             .fold(0u64, |acc, &t| acc.saturating_add(t));
         sum / self.recent_solve_times_us.len() as u64
     }
 
     /// Moving average as f64 seconds (display/monitoring only).
-    #[allow(dead_code)]
     fn moving_average_solve_time(&self) -> f64 {
         self.moving_average_us() as f64 / 1_000_000.0
     }
 
     /// Async moving average as f64 seconds (falls back to network target).
-    #[allow(dead_code)]
     async fn moving_average_solve_time_async(&self) -> f64 {
         if self.recent_solve_times_us.is_empty() {
             return self.optimal_solve_time().await;
@@ -333,10 +320,10 @@ impl DifficultyAdjuster {
         };
 
         // Clamp: [current × 0.4, current × 2.0] — integer fractions
-        let min_clamped =
-            (self.current_size() as u128 * SCALE_CLAMP_MIN_NUM / SCALE_CLAMP_MIN_DEN) as usize;
-        let max_clamped =
-            (self.current_size() as u128 * SCALE_CLAMP_MAX_NUM / SCALE_CLAMP_MAX_DEN) as usize;
+        let min_clamped = (self.current_size() as u128 * SCALE_CLAMP_MIN_NUM
+            / SCALE_CLAMP_MIN_DEN) as usize;
+        let max_clamped = (self.current_size() as u128 * SCALE_CLAMP_MAX_NUM
+            / SCALE_CLAMP_MAX_DEN) as usize;
 
         let (global_min, global_max) = (ABSOLUTE_MIN_SIZE, 50usize);
         let bounded = adjusted_size
@@ -355,11 +342,7 @@ impl DifficultyAdjuster {
             "   Problem size: {} → {}{}",
             self.current_size(),
             bounded,
-            if self.recovery_target.is_some() {
-                " (recovery mode)"
-            } else {
-                ""
-            }
+            if self.recovery_target.is_some() { " (recovery mode)" } else { "" }
         );
 
         self.current_size = bounded.max(ABSOLUTE_MIN_SIZE);
@@ -412,10 +395,10 @@ impl DifficultyAdjuster {
             raw_new_size
         };
 
-        let min_clamped =
-            (self.current_size() as u128 * SCALE_CLAMP_MIN_NUM / SCALE_CLAMP_MIN_DEN) as usize;
-        let max_clamped =
-            (self.current_size() as u128 * SCALE_CLAMP_MAX_NUM / SCALE_CLAMP_MAX_DEN) as usize;
+        let min_clamped = (self.current_size() as u128 * SCALE_CLAMP_MIN_NUM
+            / SCALE_CLAMP_MIN_DEN) as usize;
+        let max_clamped = (self.current_size() as u128 * SCALE_CLAMP_MAX_NUM
+            / SCALE_CLAMP_MAX_DEN) as usize;
 
         let (global_min, global_max) = self.get_size_limits("SubsetSum").await;
         let bounded = adjusted_size
@@ -429,21 +412,14 @@ impl DifficultyAdjuster {
             "   Avg solve time: {:.3}s (target: {:.1}s, range: [{:.1}, {:.1}]) σ={:.3}s",
             avg_secs, optimal, min_target, max_target, std_dev
         );
-        println!(
-            "   Time ratio: {:.3}x",
-            avg_us as f64 / target_us.max(1) as f64
-        );
+        println!("   Time ratio: {:.3}x", avg_us as f64 / target_us.max(1) as f64);
         println!(
             "   Problem size: {} → {} (limits: [{}, {}]){}",
             self.current_size(),
             bounded,
             global_min,
             global_max,
-            if self.recovery_target.is_some() {
-                " (recovery mode)"
-            } else {
-                ""
-            }
+            if self.recovery_target.is_some() { " (recovery mode)" } else { "" }
         );
 
         self.current_size = bounded.max(ABSOLUTE_MIN_SIZE);
@@ -454,7 +430,8 @@ impl DifficultyAdjuster {
     pub fn penalize_failure(&mut self) -> usize {
         let old_size = self.current_size();
         // Reduce to 85%, floor at ABSOLUTE_MIN_SIZE.
-        let reduced = ((old_size as u128 * 85) / 100).max(ABSOLUTE_MIN_SIZE as u128) as usize;
+        let reduced = ((old_size as u128 * 85) / 100)
+            .max(ABSOLUTE_MIN_SIZE as u128) as usize;
         println!("⚠️  Mining failure penalty: {} → {}", old_size, reduced);
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
@@ -496,12 +473,12 @@ impl DifficultyAdjuster {
         // Legacy fallback
         match problem_type {
             "SubsetSum" => self.current_size().min(50),
-            "SAT" => {
-                ((self.current_size() as f64 * 0.75).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 100)
-            }
-            "TSP" => {
-                ((self.current_size() as f64 * 0.35).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 25)
-            }
+            "SAT" => ((self.current_size() as f64 * 0.75).round() as usize)
+                .max(ABSOLUTE_MIN_SIZE)
+                .min(100),
+            "TSP" => ((self.current_size() as f64 * 0.35).round() as usize)
+                .max(ABSOLUTE_MIN_SIZE)
+                .min(25),
             _ => self.current_size(),
         }
     }
@@ -533,18 +510,8 @@ impl DifficultyAdjuster {
         let optimal_secs = DEFAULT_TARGET_US as f64 / 1_000_000.0;
         let std_dev = self.solve_time_std_dev(avg_secs);
 
-        let min_us = self
-            .recent_solve_times_us
-            .iter()
-            .copied()
-            .min()
-            .unwrap_or(0);
-        let max_us = self
-            .recent_solve_times_us
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0);
+        let min_us = self.recent_solve_times_us.iter().copied().min().unwrap_or(0);
+        let max_us = self.recent_solve_times_us.iter().copied().max().unwrap_or(0);
 
         DifficultyStats {
             current_size: self.current_size(),
@@ -567,18 +534,8 @@ impl DifficultyAdjuster {
         let target_secs = target_us as f64 / 1_000_000.0;
         let std_dev = self.solve_time_std_dev(avg_secs);
 
-        let min_us = self
-            .recent_solve_times_us
-            .iter()
-            .copied()
-            .min()
-            .unwrap_or(0);
-        let max_us = self
-            .recent_solve_times_us
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0);
+        let min_us = self.recent_solve_times_us.iter().copied().min().unwrap_or(0);
+        let max_us = self.recent_solve_times_us.iter().copied().max().unwrap_or(0);
 
         DifficultyStats {
             current_size: self.current_size(),
@@ -587,11 +544,7 @@ impl DifficultyAdjuster {
             max_solve_time_secs: max_us as f64 / 1_000_000.0,
             std_dev_secs: std_dev,
             sample_count: self.recent_solve_times_us.len(),
-            time_ratio: if target_secs > 0.0 {
-                avg_secs / target_secs
-            } else {
-                1.0
-            },
+            time_ratio: if target_secs > 0.0 { avg_secs / target_secs } else { 1.0 },
             stall_counter: self.stall_counter,
             in_recovery_mode: self.recovery_target.is_some(),
         }
@@ -644,11 +597,9 @@ impl DifficultyAdjuster {
     fn apply_stall_penalty(&mut self, reason: &str) -> usize {
         let old_size = self.current_size();
         // Reduce to 70%, floor at ABSOLUTE_MIN_SIZE.
-        let reduced = ((old_size as u128 * 7) / 10).max(ABSOLUTE_MIN_SIZE as u128) as usize;
-        println!(
-            "⚠️  Stall detected ({}). {} → {}",
-            reason, old_size, reduced
-        );
+        let reduced = ((old_size as u128 * 7) / 10)
+            .max(ABSOLUTE_MIN_SIZE as u128) as usize;
+        println!("⚠️  Stall detected ({}). {} → {}", reason, old_size, reduced);
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
         self.stall_counter = (self.stall_counter + 1).min(20);
@@ -693,10 +644,7 @@ mod tests {
         let new_size = adjuster.adjust_difficulty();
 
         // Should increase size because we're solving too fast
-        assert!(
-            new_size > original_size,
-            "Size should increase when solving too fast"
-        );
+        assert!(new_size > original_size, "Size should increase when solving too fast");
     }
 
     #[test]
@@ -712,10 +660,7 @@ mod tests {
         let new_size = adjuster.adjust_difficulty();
 
         // Should decrease size because we're solving too slow
-        assert!(
-            new_size < original_size,
-            "Size should decrease when solving too slow"
-        );
+        assert!(new_size < original_size, "Size should decrease when solving too slow");
     }
 
     #[test]
@@ -732,10 +677,7 @@ mod tests {
 
         // Should stay roughly the same (within 20%)
         let ratio = new_size as f64 / original_size as f64;
-        assert!(
-            ratio > 0.8 && ratio < 1.2,
-            "Size should be stable at target time"
-        );
+        assert!(ratio > 0.8 && ratio < 1.2, "Size should be stable at target time");
     }
 
     #[test]
@@ -760,19 +702,13 @@ mod tests {
             adjuster.record_solve_time_us(u64::MAX / 2);
         }
         adjuster.adjust_difficulty();
-        assert!(
-            adjuster.current_size() >= ABSOLUTE_MIN_SIZE,
-            "Size must never reach zero"
-        );
+        assert!(adjuster.current_size() >= ABSOLUTE_MIN_SIZE, "Size must never reach zero");
 
         // Repeated penalize_failure should also never drop to zero
         for _ in 0..100 {
             adjuster.penalize_failure();
         }
-        assert!(
-            adjuster.current_size() >= ABSOLUTE_MIN_SIZE,
-            "penalize_failure must not produce zero"
-        );
+        assert!(adjuster.current_size() >= ABSOLUTE_MIN_SIZE, "penalize_failure must not produce zero");
     }
 
     #[test]
@@ -796,9 +732,6 @@ mod tests {
         // avg < target → should compute larger size
         let slow_result = DifficultyAdjuster::compute_new_size_deterministic(20, 500_000, 500_000);
         let fast_result = DifficultyAdjuster::compute_new_size_deterministic(20, 100_000, 500_000);
-        assert!(
-            fast_result > slow_result,
-            "faster solving should yield larger problem size"
-        );
+        assert!(fast_result > slow_result, "faster solving should yield larger problem size");
     }
 }
