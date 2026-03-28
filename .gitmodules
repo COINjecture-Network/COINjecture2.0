@@ -1,0 +1,3 @@
+[submodule "proofs/eigenverse"]
+	path = proofs/eigenverse
+	url = https://github.com/beanapologist/Eigenverse.git
