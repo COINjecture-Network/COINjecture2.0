@@ -90,4 +90,9 @@ impl NodeRpcClient {
     pub async fn get_latest_block(&self) -> Result<Value, NodeRpcError> {
         self.call("chain_getLatestBlock", json!([])).await
     }
+
+    /// Get a block by height.
+    pub async fn get_block_by_height(&self, height: u64) -> Result<Value, NodeRpcError> {
+        self.call("chain_getBlock", json!([height])).await
+    }
 }

@@ -550,6 +550,51 @@ impl SupabaseClient {
         .await
     }
 
+    /// Public GET (used by indexer sync_state, etc.).
+    pub async fn postgrest_get_public(&self, path: &str) -> Result<Value, SupabaseError> {
+        self.postgrest_get(path).await
+    }
+
+    /// UPSERT a row (for sync_state, etc.).
+    pub async fn upsert_row(&self, table: &str, body: Value) -> Result<Value, SupabaseError> {
+        let key = self.service_key.as_deref().unwrap_or(&self.anon_key);
+        let resp = self
+            .http
+            .post(format!("{}/rest/v1/{table}", self.url))
+            .header("Authorization", format!("Bearer {key}"))
+            .header("apikey", &self.anon_key)
+            .header("Prefer", "resolution=merge-duplicates,return=representation")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SupabaseError::RequestFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(SupabaseError::RequestFailed(text));
+        }
+        resp.json().await.map_err(|e| SupabaseError::Unknown(e.to_string()))
+    }
+
+    /// PATCH rows matching a filter.
+    pub async fn patch_rows(&self, path: &str, body: Value) -> Result<(), SupabaseError> {
+        let key = self.service_key.as_deref().unwrap_or(&self.anon_key);
+        let resp = self
+            .http
+            .patch(format!("{}/rest/v1/{path}", self.url))
+            .header("Authorization", format!("Bearer {key}"))
+            .header("apikey", &self.anon_key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| SupabaseError::RequestFailed(e.to_string()))?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            Err(SupabaseError::RequestFailed(text))
+        }
+    }
+
     /// Get open PoUW tasks with optional class filter.
     pub async fn get_open_tasks(
         &self,

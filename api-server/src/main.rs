@@ -1,6 +1,7 @@
 use coinjecture_api_server::{
     build_router,
     config::Config,
+    indexer::service::IndexerService,
     matching::{engine::{EngineHandle, MatchingEngine}, outbox::TradeOutbox},
     metrics::init_metrics,
     middleware::rate_limit::create_rate_limiter,
@@ -98,6 +99,23 @@ async fn main() {
 
     let outbox = TradeOutbox::new(trade_rx, supabase.clone(), broadcaster.clone());
     tokio::spawn(outbox.run());
+
+    // ── Blockchain indexer ────────────────────────────────────────────────
+    if config.indexer_enabled {
+        if let (Some(ref rpc), Some(ref sb)) = (&node_rpc, &supabase) {
+            let indexer = IndexerService::new(
+                rpc.clone(),
+                sb.clone(),
+                broadcaster.clone(),
+                Duration::from_secs(config.indexer_poll_interval_secs),
+                config.indexer_confirmations,
+            );
+            tokio::spawn(indexer.run());
+            tracing::info!("Blockchain indexer started");
+        } else {
+            tracing::info!("Indexer enabled but node RPC or Supabase not configured — skipping");
+        }
+    }
 
     // ── Build state & router ────────────────────────────────────────────────
     let state = AppState {

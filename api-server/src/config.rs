@@ -14,6 +14,9 @@ pub struct Config {
     pub rate_limit_rps: u32,
     pub network: String,
     pub node_rpc_url: Option<String>,
+    pub indexer_enabled: bool,
+    pub indexer_poll_interval_secs: u64,
+    pub indexer_confirmations: u64,
 }
 
 impl Config {
@@ -44,6 +47,17 @@ impl Config {
             network: std::env::var("COINJECTURE_NETWORK")
                 .unwrap_or_else(|_| "testnet".into()),
             node_rpc_url: std::env::var("NODE_RPC_URL").ok(),
+            indexer_enabled: std::env::var("INDEXER_ENABLED")
+                .unwrap_or_else(|_| "true".into())
+                == "true",
+            indexer_poll_interval_secs: std::env::var("INDEXER_POLL_INTERVAL")
+                .unwrap_or_else(|_| "5".into())
+                .parse()
+                .unwrap_or(5),
+            indexer_confirmations: std::env::var("INDEXER_CONFIRMATIONS")
+                .unwrap_or_else(|_| "6".into())
+                .parse()
+                .unwrap_or(6),
         })
     }
 

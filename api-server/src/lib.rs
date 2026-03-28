@@ -1,6 +1,7 @@
 pub mod config;
 pub mod crypto;
 pub mod errors;
+pub mod indexer;
 pub mod jwt;
 pub mod matching;
 pub mod metrics;

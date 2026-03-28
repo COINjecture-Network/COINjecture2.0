@@ -101,3 +101,8 @@ supabase/.temp/
 # Docker volumes
 docker-data/
 chain-data/
+
+# Monitoring data
+prometheus-data/
+grafana-data/
+.env.production
