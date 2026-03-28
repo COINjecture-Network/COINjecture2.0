@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-# Configuration
-S3_BUCKET="${S3_BUCKET:-coinjecture-frontend}"
-CLOUDFRONT_DIST_ID="${CLOUDFRONT_DIST_ID:-}"
+# Configuration (production: coinjecture.com + www — CloudFront E2INLKPSADEUYX)
+S3_BUCKET="${S3_BUCKET:-coinjecture.com}"
+CLOUDFRONT_DIST_ID="${CLOUDFRONT_DIST_ID:-E2INLKPSADEUYX}"
 REGION="${AWS_REGION:-us-east-1}"
 
 echo "🚀 Starting deployment..."

@@ -195,7 +195,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::field_reassign_with_default)]
     fn test_base_fee_floor() {
         let mut market = FeeMarket::default();
         market.base_fee = 150; // Set to near minimum

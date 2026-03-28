@@ -71,7 +71,6 @@ pub struct ProblemMarketplace {
 }
 
 impl ProblemMarketplace {
-    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         ProblemMarketplace {
             problems: HashMap::new(),
@@ -180,7 +179,7 @@ impl ProblemMarketplace {
         // Index by submitter
         self.submitter_index
             .entry(submitter)
-            .or_default()
+            .or_insert_with(Vec::new)
             .push(problem_id);
 
         println!(
@@ -468,7 +467,7 @@ pub enum MarketplaceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coinject_core::{Address, Solution};
+    use coinject_core::{Address, ProblemType, Solution};
 
     #[test]
     fn test_submit_problem() {

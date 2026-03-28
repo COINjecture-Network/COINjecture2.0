@@ -5,7 +5,6 @@
 //!
 //! Enable with: --features adzdb
 
-#![allow(clippy::duplicated_attributes, dead_code)]
 #![cfg(feature = "adzdb")]
 
 use adzdb::{Config as AdzConfig, Database as AdzDatabase, Error as AdzError};
@@ -49,7 +48,7 @@ pub struct AdzdbChainState {
 
 impl AdzdbChainState {
     /// Create or open chain state database using ADZDB
-    pub fn new<P: AsRef<Path>>(path: P, genesis_block: &Block, _block_cache_size: usize) -> Result<Self, ChainError> {
+    pub fn new<P: AsRef<Path>>(path: P, genesis_block: &Block) -> Result<Self, ChainError> {
         // If path is a file (like chain.db), use its parent directory
         // Otherwise use the path directly
         let base_path = if path.as_ref().is_file() {
@@ -485,7 +484,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
 
         let genesis = create_genesis_block(GenesisConfig::default());
-        let chain = AdzdbChainState::new(&temp_dir, &genesis, 512).unwrap();
+        let chain = AdzdbChainState::new(&temp_dir, &genesis).unwrap();
 
         assert_eq!(chain.best_block_height().await, 0);
         assert_eq!(chain.genesis_hash(), genesis.header.hash());

@@ -165,7 +165,7 @@ pub async fn import_account(private_key: &str, name: Option<String>) -> Result<(
 fn format_timestamp(timestamp: i64) -> String {
     use chrono::{DateTime, Utc};
     let dt = DateTime::<Utc>::from_timestamp(timestamp, 0)
-        .unwrap_or_else(Utc::now);
+        .unwrap_or_else(|| Utc::now());
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
@@ -173,12 +173,14 @@ fn format_balance(balance: u128) -> String {
     // Format with thousand separators
     let balance_str = balance.to_string();
     let mut result = String::new();
+    let mut count = 0;
 
-    for (count, c) in balance_str.chars().rev().enumerate() {
+    for c in balance_str.chars().rev() {
         if count > 0 && count % 3 == 0 {
             result.insert(0, ',');
         }
         result.insert(0, c);
+        count += 1;
     }
 
     result

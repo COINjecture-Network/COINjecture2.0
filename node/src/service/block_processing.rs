@@ -1,6 +1,6 @@
 // Block Processing
 // Transaction application, block unwinding, and buffered block processing
-#![allow(dead_code, clippy::too_many_arguments)]
+#![allow(dead_code)]
 
 use super::*;
 use tracing::{debug, info, warn, error};

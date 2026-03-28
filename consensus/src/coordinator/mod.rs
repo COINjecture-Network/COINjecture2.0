@@ -73,8 +73,6 @@ pub enum CoordinatorEvent {
         epoch: u64,
         solution_hash: [u8; 32],
         work_score: f64,
-        signature: Vec<u8>,
-        public_key: [u8; 32],
     },
 
     /// A block was produced by this node (we won the epoch).
@@ -577,15 +575,6 @@ impl EpochCoordinator {
                     (Vec::new(), [0u8; 32])
                 };
 
-                // Broadcast our commitment before moving signature into commit
-                let _ = event_tx.send(CoordinatorEvent::BroadcastCommit {
-                    epoch,
-                    solution_hash,
-                    work_score,
-                    signature: signature.clone(),
-                    public_key,
-                });
-
                 // Add our own commit (unsigned legacy or signed depending on config).
                 let commit = SolutionCommit {
                     node_id: self.our_id,
@@ -595,6 +584,13 @@ impl EpochCoordinator {
                     signature,
                 };
                 self.collector.add_commit(commit);
+
+                // Broadcast our commitment
+                let _ = event_tx.send(CoordinatorEvent::BroadcastCommit {
+                    epoch,
+                    solution_hash,
+                    work_score,
+                });
             }
 
             CoordinatorCommand::CommitReceived { epoch, commit } => {
@@ -731,7 +727,7 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, _state) =
+        let (coordinator, state) =
             EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -745,8 +741,11 @@ mod tests {
         let mut events = Vec::new();
         let deadline = time::Instant::now() + Duration::from_millis(300);
 
-        while let Ok(Some(event)) = time::timeout_at(deadline, event_rx.recv()).await {
-            events.push(event);
+        loop {
+            match time::timeout_at(deadline, event_rx.recv()).await {
+                Ok(Some(event)) => events.push(event),
+                _ => break,
+            }
         }
 
         // Verify we got phase transition events
@@ -814,7 +813,6 @@ mod tests {
         drop(cmd_tx);
     }
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[tokio::test]
     async fn test_commit_collection() {
         let our_id = test_node_id(1);
@@ -832,7 +830,7 @@ mod tests {
             EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
         // Add a peer so quorum math works (2 peers, need 1 commit for 50%)
         cmd_tx
@@ -869,7 +867,6 @@ mod tests {
                 epoch: 1,
                 commit: SolutionCommit {
                     node_id: test_node_id(2),
-                    public_key: [0u8; 32],
                     solution_hash: [0xBB; 32],
                     work_score: 100.0,
                     signature: vec![],
@@ -898,7 +895,7 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, _state) =
+        let (coordinator, state) =
             EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();

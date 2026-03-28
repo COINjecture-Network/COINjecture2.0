@@ -79,8 +79,9 @@ pub const SECURITY_RATE_STRIKE_THRESHOLD: u32 = 10;
 pub const SECURITY_MALFORMED_STRIKE_THRESHOLD: u32 = 5;
 
 /// Whether to require full encryption + mutual authentication for all peers.
-/// When true, peers that do not perform the key-exchange handshake are rejected.
-pub const SECURITY_REQUIRE_ENCRYPTION: bool = true;
+/// When true, inbound connections are rejected unless `CppNetwork` is built with
+/// a signing key (`with_signing_key`). The default node uses plain CPP Hello/HelloAck.
+pub const SECURITY_REQUIRE_ENCRYPTION: bool = false;
 
 /// Connection timeout
 pub const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -192,7 +193,6 @@ pub mod timeouts {
     mod tests {
         use super::*;
 
-        #[allow(clippy::assertions_on_constants)]
         #[test]
         fn test_timeout_ratios() {
             // Network timeout should be 90s
@@ -344,8 +344,8 @@ mod tests {
 
     #[test]
     fn test_equilibrium_constant() {
-        // Verify η = 1/√2
-        assert!((ETA - std::f64::consts::FRAC_1_SQRT_2).abs() < 0.0001);
+        // Verify η = 1/√2 ≈ 0.7071
+        assert!((ETA - 0.7071).abs() < 0.0001);
         assert!((ETA * SQRT_2 - 1.0).abs() < 0.0001);
     }
 

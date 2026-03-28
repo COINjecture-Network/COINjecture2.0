@@ -2,29 +2,6 @@
 
 Last Updated: 2026-03-25
 
-## Mesh Pubkey Wiring, CI Lint Fix, Docker Smoke Test — Applied 2026-03-25
-
-Three improvements applied to the `remove-libp2p` branch:
-
-| # | Item | Severity | Files | Status |
-|---|------|----------|-------|--------|
-| A | Ed25519 `public_key` not threaded through mesh commit pipeline | High | `network/src/mesh/protocol.rs`, `consensus/src/coordinator/mod.rs`, `network/src/mesh/bridge.rs`, `node/src/service/mod.rs` | Fixed — `public_key: [u8; 32]` added to `NodeCommit`, `CoordinatorEvent::BroadcastCommit`, and `BridgeCommand::BroadcastCommit`; inbound receive now uses `commit.public_key` instead of `[0u8; 32]` |
-| B | `cargo clippy --all-targets --all-features -- -D warnings` produced 60+ errors | High | workspace-wide | Fixed — all clippy lints resolved: unused imports, `too_many_arguments`, `result_large_err`, `FRAC_1_SQRT_2` approximations, manual `contains` patterns, `assert!(true)` invocations, `items_after_test_module`, and more |
-| C | No Docker smoke test in CI — ship criteria unverifiable | Medium | `.github/workflows/ci.yml` | Fixed — added `smoke-test` job (Stage 6) that spins up a 4-node Docker testnet, waits 30 s, and health-checks all four RPC endpoints |
-
-## CI / Test Parity Follow-Up — Applied 2026-03-25
-
-Follow-up fixes applied after the cross-validated audit to achieve CI/ship parity:
-
-| # | Finding | Severity | File(s) | Status |
-|---|---------|----------|---------|--------|
-| F1 | `cargo test --all` fails (missing struct fields added in audit) | High | Multiple test files | Fixed — added `public_key`, `auth_signature`, `ed25519_pubkey` fields to all struct literals in tests |
-| F2 | `proptest` missing from dev-deps | Medium | `core/Cargo.toml`, `consensus/Cargo.toml` | Fixed — added `proptest.workspace = true` to dev-dependencies |
-| F3 | Unsigned commit tests not gated (fail without feature) | Medium | `consensus/src/coordinator/commit.rs`, `consensus/src/coordinator/mod.rs` | Fixed — gated 9 tests with `#[cfg(feature = "allow-unsigned-commits")]` |
-| F4 | Integration tests create unsigned commits without feature | Medium | `network/Cargo.toml`, `node/Cargo.toml` | Fixed — added `allow-unsigned-commits` feature to coinject-consensus in dev-dependencies |
-| F5 | CI only runs `cargo test --all --all-features` (no default-feature run) | Low | `.github/workflows/ci.yml` | Fixed — split into two jobs: default features + all features |
-| F6 | Docker `latest` tag only pushed on `main`, not `remove-libp2p` | Low | `.github/workflows/ci.yml` | Fixed — `latest` tag enabled for both `main` and `remove-libp2p` |
-
 ## Cross-Validated Audit Findings — Applied 2026-03-25
 
 The following 12 findings were identified and resolved in the audit pass on the `remove-libp2p` branch:
@@ -43,14 +20,6 @@ The following 12 findings were identified and resolved in the audit pass on the 
 | 10 | Empty Cursor screenshot assets tracked | Low | `assets/*.png` | Fixed — removed 4 zero-byte PNGs from git index |
 | 11 | Mobile SDK FFI functions missing Safety docs | Medium | `mobile-sdk/src/lib.rs` | Fixed — added `# Safety` docs to all `extern "C"` functions |
 | 12 | Dangerous `unwrap()` in network handshake | Medium | `network/src/cpp/network.rs` | Fixed — replaced with `unwrap_or_default()` |
-
-## ✅ Resolved Issues (2026-03-25 Audit Follow-up)
-
-| # | Finding | Severity | File(s) | Status |
-|---|---------|----------|---------|--------|
-| 13 | CI tests ran `--all-features` but ship builds use default features | Medium | `.github/workflows/ci.yml` | Fixed — split into `test` (default features) and `test-all-features` jobs, both gating docker |
-| 14 | Docker `latest` tag only pushed on `main`, not `remove-libp2p` | Low | `.github/workflows/ci.yml` | Fixed — `latest` tag now enabled on `main` or `remove-libp2p` |
-| 15 | Unsigned commit tests ran without `allow-unsigned-commits` feature | Medium | `consensus/src/coordinator/commit.rs` | Fixed — `make_unsigned_commit` helper and all tests that rely on unsigned commit acceptance gated behind `#[cfg(feature = "allow-unsigned-commits")]` |
 
 ## Testnet MVP Scope
 

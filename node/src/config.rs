@@ -22,13 +22,18 @@ use std::path::PathBuf;
 // =============================================================================
 
 /// Block pruning strategy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PruningMode {
     /// Keep all blocks forever (archive node behaviour, default)
-    #[default]
     Archive,
     /// Keep only the most recent N blocks (saves disk space)
     Full,
+}
+
+impl Default for PruningMode {
+    fn default() -> Self {
+        PruningMode::Archive
+    }
 }
 
 impl std::fmt::Display for PruningMode {
@@ -57,12 +62,11 @@ pub fn version_name(version: u32) -> &'static str {
 }
 
 /// Node type preference (actual classification is based on behavior)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum NodeTypePreference {
     /// Header-only sync for mobile/embedded devices (minimal storage)
     Light,
     /// Full validation with standard storage (default)
-    #[default]
     Full,
     /// Complete historical data preservation (2TB+ storage)
     Archive,
@@ -72,6 +76,12 @@ pub enum NodeTypePreference {
     Bounty,
     /// External data feeds and cross-chain bridges
     Oracle,
+}
+
+impl Default for NodeTypePreference {
+    fn default() -> Self {
+        NodeTypePreference::Full
+    }
 }
 
 impl std::fmt::Display for NodeTypePreference {
@@ -304,7 +314,25 @@ pub struct NodeConfig {
 
 impl NodeConfig {
     pub fn parse_args() -> Self {
-        NodeConfig::parse()
+        let mut config = NodeConfig::parse();
+        // Merge bootnodes from environment (comma-separated). Needed for Docker/K8s where each
+        // host passes peer IPs without repeating full CLI. COINJECT_BOOTNODES wins; BOOTNODES is a
+        // fallback matching .env.example.
+        let from_env = std::env::var("COINJECT_BOOTNODES")
+            .ok()
+            .or_else(|| std::env::var("BOOTNODES").ok());
+        if let Some(raw) = from_env {
+            for part in raw.split(',') {
+                let s = part.trim();
+                if s.is_empty() {
+                    continue;
+                }
+                if !config.bootnodes.iter().any(|b| b == s) {
+                    config.bootnodes.push(s.to_string());
+                }
+            }
+        }
+        config
     }
 
     pub fn rpc_socket_addr(&self) -> Result<SocketAddr, Box<dyn std::error::Error>> {

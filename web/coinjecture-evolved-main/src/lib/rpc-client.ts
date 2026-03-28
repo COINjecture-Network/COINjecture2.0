@@ -9,6 +9,30 @@
 
 import { hexToBytes } from '@noble/hashes/utils';
 
+/** Cross-origin JSON-RPC: omit cookies so `Access-Control-Allow-Origin: *` is valid. */
+const RPC_FETCH_TIMEOUT_MS = 45_000;
+/** Parallel `callAll` must not wait for the slowest node to hit the full client timeout (bad UX). */
+const RPC_CALL_ALL_TIMEOUT_MS = 14_000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number = RPC_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      credentials: 'omit',
+      mode: 'cors',
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Parse RPC URLs from environment variable (comma-separated)
 const parseRpcUrls = (): string[] => {
   const envUrl = import.meta.env.VITE_RPC_URL || 'http://localhost:9933';
@@ -20,7 +44,6 @@ const parseRpcUrls = (): string[] => {
 // In production (CloudFront), use relative /api/rpc path that CloudFront will proxy
 // The RPC client can specify target node via query parameter or header
 const isDevelopment = import.meta.env.DEV;
-const isProduction = import.meta.env.PROD;
 const isHTTPS = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
 // Parse RPC URLs and create proxy URLs for HTTPS
@@ -39,6 +62,13 @@ const createProxyUrls = (): string[] => {
       }
       if (url.includes('35.184.253.150')) {
         return 'https://rpc3.coinjecture.com';
+      }
+      // Hostinger VPS (current DNS targets)
+      if (url.includes('193.203.164.13')) {
+        return 'https://rpc1.coinjecture.com';
+      }
+      if (url.includes('76.13.101.67')) {
+        return 'https://rpc2.coinjecture.com';
       }
       // If already HTTPS, use as-is
       if (url.startsWith('https://')) {
@@ -62,9 +92,13 @@ const createProxyUrls = (): string[] => {
   return urls;
 };
 
-const DEFAULT_RPC_URLS = isDevelopment 
-  ? ['/api/rpc'] // Use Vite proxy in development
-  : createProxyUrls(); // Use CloudFront /api/rpc proxy in production HTTPS
+/** Dev: Vite proxy. Prod: `VITE_RPC_URL` hosts (HTTPS mapping in createProxyUrls). */
+export function getDefaultRpcBaseUrls(): string[] {
+  if (isDevelopment) {
+    return ['/api/rpc'];
+  }
+  return createProxyUrls();
+}
 
 export interface RpcError {
   code: number;
@@ -111,6 +145,15 @@ export interface ChainInfo {
   best_hash: string; // hex-encoded
   genesis_hash: string; // hex-encoded
   peer_count: number; // usize
+  total_work?: number;
+  is_syncing?: boolean;
+}
+
+/** `chain_getMiningWork` — deterministic instance for the next block (same as node miner). */
+export interface MiningWork {
+  next_height: number;
+  prev_hash: string;
+  problem: ProblemType;
 }
 
 // Account information - matches AccountInfo in rpc/src/server.rs
@@ -150,7 +193,12 @@ export interface Block {
     complexity_weight: number;
     energy_estimate_joules: number;
   };
-  coinbase: unknown;
+  /** coinject_core::transaction::CoinbaseTransaction */
+  coinbase?: {
+    to: string | number[];
+    reward: number | string;
+    height: number;
+  } | null;
   transactions: unknown[];
   solution_reveal: {
     problem: ProblemType;
@@ -263,8 +311,9 @@ export class RpcClient {
   private requestId: number = 1;
   private currentUrlIndex: number = 0;
 
-  constructor(baseUrls: string[] = DEFAULT_RPC_URLS) {
-    this.baseUrls = baseUrls.length > 0 ? baseUrls : ['http://localhost:9933'];
+  constructor(baseUrls?: string[]) {
+    const resolved = baseUrls?.length ? baseUrls : getDefaultRpcBaseUrls();
+    this.baseUrls = resolved.length > 0 ? resolved : ['http://localhost:9933'];
   }
 
   /**
@@ -292,7 +341,7 @@ export class RpcClient {
     for (let i = 0; i < this.baseUrls.length; i++) {
       const url = this.baseUrls[i];
       try {
-        const response = await fetch(url, {
+        const response = await fetchWithTimeout(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -342,18 +391,22 @@ export class RpcClient {
   private async callAll<T>(method: string, params: unknown[] = [], selector?: (results: T[]) => T): Promise<T> {
     const promises = this.baseUrls.map(async (url) => {
       try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
+        const response = await fetchWithTimeout(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: this.requestId++,
+              method,
+              params,
+            }),
           },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: this.requestId++,
-            method,
-            params,
-          }),
-        });
+          RPC_CALL_ALL_TIMEOUT_MS,
+        );
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -406,13 +459,53 @@ export class RpcClient {
   }
 
   // ========== Chain Methods ==========
-  
+
+  /**
+   * Query every RPC URL in parallel; return the first non-null block.
+   * `chain_getInfo` uses max height across nodes — any single node may return `null` for `chain_getBlock(h)`
+   * if it is behind, while another has the full chain. Sequential "try until null" still preferred rpc1 first;
+   * parallel avoids one slow/failing node hiding another that has data.
+   */
   async getBlock(height: number): Promise<Block | null> {
-    return this.call<Block | null>('chain_getBlock', [height]);
+    const outcomes = await Promise.all(
+      this.baseUrls.map((url) => this.jsonRpcRequest<Block | null>(url, 'chain_getBlock', [height])),
+    );
+    return outcomes.find((b) => b != null) ?? null;
   }
 
+  /** Same as {@link getBlock}: first successful non-null among all configured RPC URLs. */
   async getLatestBlock(): Promise<Block | null> {
-    return this.call<Block | null>('chain_getLatestBlock', []);
+    const outcomes = await Promise.all(
+      this.baseUrls.map((url) => this.jsonRpcRequest<Block | null>(url, 'chain_getLatestBlock', [])),
+    );
+    return outcomes.find((b) => b != null) ?? null;
+  }
+
+  /** Single JSON-RPC POST; returns null on error / jsonrpc error / null result (no throw). */
+  private async jsonRpcRequest<T>(url: string, method: string, params: unknown[]): Promise<T | null> {
+    try {
+      const response = await fetchWithTimeout(
+        url,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: this.requestId++,
+            method,
+            params,
+          }),
+        },
+        RPC_FETCH_TIMEOUT_MS,
+      );
+      if (!response.ok) return null;
+      const data: RpcResponse<T> = await response.json();
+      if (data.error) return null;
+      if (data.result === undefined) return null;
+      return data.result as T;
+    } catch {
+      return null;
+    }
   }
 
   async getBlockHeader(height: number): Promise<BlockHeader | null> {
@@ -420,13 +513,28 @@ export class RpcClient {
   }
 
   async getChainInfo(): Promise<ChainInfo> {
-    // Query all nodes and return the one with the highest block height
-    return this.callAll<ChainInfo>('chain_getInfo', [], (results) => {
-      // Return the chain info with the highest block height
-      return results.reduce((best, current) => 
-        current.best_height > best.best_height ? current : best
+    // Prefer the highest reported height across nodes; if parallel probes all fail, fall back to
+    // sequential failover (longer timeout) so the dashboard still loads when one path is flaky.
+    try {
+      return await this.callAll<ChainInfo>('chain_getInfo', [], (results) => {
+        return results.reduce((best, current) =>
+          current.best_height > best.best_height ? current : best
+        );
+      });
+    } catch {
+      return this.call<ChainInfo>('chain_getInfo', []);
+    }
+  }
+
+  /** Next mining template from nodes with mining enabled (longest `next_height` wins in multi-RPC). */
+  async getMiningWork(): Promise<MiningWork> {
+    try {
+      return await this.callAll<MiningWork>('chain_getMiningWork', [], (results) =>
+        results.reduce((best, cur) => (cur.next_height > best.next_height ? cur : best)),
       );
-    });
+    } catch {
+      return this.call<MiningWork>('chain_getMiningWork', []);
+    }
   }
 
   async submitBlock(block: Block): Promise<string> {

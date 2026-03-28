@@ -158,7 +158,7 @@ impl SecurityConfig {
             return true; // No keys configured → open access
         }
         let candidate = *blake3::hash(token.as_bytes()).as_bytes();
-        self.api_key_hashes.contains(&candidate)
+        self.api_key_hashes.iter().any(|h| *h == candidate)
     }
 }
 

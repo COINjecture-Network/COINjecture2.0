@@ -60,7 +60,6 @@ pub enum BridgeCommand {
         node_id: [u8; 32],
         work_score: f64,
         signature: Vec<u8>,
-        public_key: [u8; 32],
     },
 }
 
@@ -220,7 +219,7 @@ pub async fn run_bridge(
                         let _ = mesh_cmd_tx.send(MeshCommand::Broadcast(payload));
                     }
 
-                    Some(BridgeCommand::BroadcastCommit { epoch, solution_hash, node_id, work_score, signature, public_key }) => {
+                    Some(BridgeCommand::BroadcastCommit { epoch, solution_hash, node_id, work_score, signature }) => {
                         tracing::debug!(epoch, "bridge: broadcasting solution commit");
                         let payload = Payload::Commit {
                             epoch,
@@ -230,7 +229,6 @@ pub async fn run_bridge(
                                 solution_hash,
                                 work_score,
                                 signature,
-                                public_key,
                             }],
                         };
                         let _ = mesh_cmd_tx.send(MeshCommand::Broadcast(payload));

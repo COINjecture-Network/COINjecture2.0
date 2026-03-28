@@ -82,6 +82,16 @@ rpc.example.com {
 }
 ```
 
+### CORS and browser preflight
+
+Cross-origin browser clients send a **CORS preflight** (`OPTIONS`) before the JSON-RPC **`POST`**. The node applies CORS middleware before other gates so preflight succeeds when traffic reaches the app.
+
+If you terminate TLS or rate-limit in **Nginx** (or similar):
+
+- **Prefer** forwarding **`OPTIONS` and `POST`** to `127.0.0.1:9933` unchanged so the node can attach `Access-Control-*` headers consistently with the actual `POST` response.
+- If the proxy **answers `OPTIONS` itself** (e.g. `return 204`), it **must** still emit matching **`Access-Control-Allow-Origin`**, **`Access-Control-Allow-Methods`**, **`Access-Control-Allow-Headers`**, and usually **`Access-Control-Max-Age`**. A bare `204` without those headers breaks the browser.
+- Avoid Nginx `if` blocks that return early for `OPTIONS` unless you duplicate the full CORS header set there.
+
 ---
 
 ## Faucet Cooldown

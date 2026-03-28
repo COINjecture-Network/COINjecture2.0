@@ -19,10 +19,5 @@ pub mod service;
 
 // Exposed for integration tests
 pub mod chain;
-#[cfg(feature = "adzdb")]
-pub mod chain_adzdb;
 pub mod genesis;
 pub mod validator;
-
-#[cfg(feature = "adzdb")]
-pub mod chain_adzdb;

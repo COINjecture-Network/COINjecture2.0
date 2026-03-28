@@ -239,7 +239,6 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
 
-    #[cfg(feature = "allow-unsigned-commits")]
     fn make_unsigned_commit(node_byte: u8, score: f64) -> SolutionCommit {
         let mut node_id = [0u8; 32];
         node_id[0] = node_byte;
@@ -273,7 +272,6 @@ mod tests {
 
     // ── basic add / dedup / score ────────────────────────────────────────────
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_add_unsigned_commit() {
         let mut collector = CommitCollector::new(1);
@@ -288,7 +286,6 @@ mod tests {
         assert_eq!(collector.commit_count(), 1);
     }
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_reject_duplicate() {
         let mut collector = CommitCollector::new(1);
@@ -297,7 +294,6 @@ mod tests {
         assert_eq!(collector.commit_count(), 1);
     }
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_reject_zero_score() {
         let mut collector = CommitCollector::new(1);
@@ -373,7 +369,6 @@ mod tests {
 
     // ── winner selection ──────────────────────────────────────────────────────
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_select_winner_highest_score() {
         let mut collector = CommitCollector::new(1);
@@ -386,7 +381,6 @@ mod tests {
         assert_eq!(winner.work_score, 200.0);
     }
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_tiebreak_smallest_node_id() {
         let mut collector = CommitCollector::new(1);
@@ -400,7 +394,6 @@ mod tests {
 
     // ── quorum ────────────────────────────────────────────────────────────────
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_quorum() {
         let mut collector = CommitCollector::new(1);
@@ -421,7 +414,6 @@ mod tests {
 
     // ── ranked / accessors ────────────────────────────────────────────────────
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_ranked_ordering() {
         let mut collector = CommitCollector::new(1);
@@ -435,7 +427,6 @@ mod tests {
         assert_eq!(ranked[2].work_score, 50.0);
     }
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_ranked_tiebreak() {
         let mut collector = CommitCollector::new(1);
@@ -457,7 +448,6 @@ mod tests {
         assert_eq!(collector.ranked().len(), 0);
     }
 
-    #[cfg(feature = "allow-unsigned-commits")]
     #[test]
     fn test_get_commit() {
         let mut collector = CommitCollector::new(1);

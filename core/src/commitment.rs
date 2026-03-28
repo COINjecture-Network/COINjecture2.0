@@ -288,7 +288,7 @@ mod tests {
             target: 25,
         };
 
-        let _solution = Solution::SubsetSum(vec![0, 2]); // 5 + 15 = 20... wait that's wrong
+        let solution = Solution::SubsetSum(vec![0, 2]); // 5 + 15 = 20... wait that's wrong
         let solution = Solution::SubsetSum(vec![0, 3]); // 5 + 20 = 25
 
         let epoch_salt = Hash::new(b"epoch_salt");

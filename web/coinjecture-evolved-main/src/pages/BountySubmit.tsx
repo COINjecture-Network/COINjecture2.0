@@ -6,7 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+/** Must match `STORAGE_KEY` in `NpPlayground.tsx` (Solver Lab → Bounty draft). */
+const SOLVER_LAB_BOUNTY_KEY = "solverLabBountyPayload";
 
 const BountySubmit = () => {
   const { toast } = useToast();
@@ -27,6 +30,37 @@ const BountySubmit = () => {
 
   const TRANSACTION_FEE = 1000; // Fixed transaction fee in BEANS
   const totalRequired = formData.bounty ? parseInt(formData.bounty) + TRANSACTION_FEE : TRANSACTION_FEE;
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(SOLVER_LAB_BOUNTY_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw) as {
+        problemType?: string;
+        title?: string;
+        description?: string;
+        draftKind?: "problem" | "solver";
+      };
+      sessionStorage.removeItem(SOLVER_LAB_BOUNTY_KEY);
+      if (data.title && data.description) {
+        setFormData((prev) => ({
+          ...prev,
+          title: data.title!,
+          description: data.description!,
+          problemType: data.problemType ?? prev.problemType,
+        }));
+        const isProblemOnly = data.draftKind === "problem";
+        toast({
+          title: isProblemOnly ? "Problem draft from Solver Lab" : "Draft loaded from Solver Lab",
+          description: isProblemOnly
+            ? "Instance JSON only — set bounty and escrow, then submit on-chain."
+            : "Review the instance JSON, set bounty and escrow, then submit.",
+        });
+      }
+    } catch {
+      sessionStorage.removeItem(SOLVER_LAB_BOUNTY_KEY);
+    }
+  }, [toast]);
 
   // Problem templates with example data
   const problemTemplates = {
@@ -223,7 +257,7 @@ Return a satisfying assignment or proof of unsatisfiability.
           <div className="max-w-4xl mx-auto">
             <div className="text-center mb-12 animate-fade-in">
               <h1 className="text-4xl md:text-5xl font-bold mb-4">
-                Submit a <span className="text-primary">Bounty</span>
+                Submit <span className="text-primary">a Bounty</span>
               </h1>
               <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
                 Submit computational problems with escrowed bounties. Solvers earn BEANS automatically upon verification. Set work score requirements and choose public or private submission modes.

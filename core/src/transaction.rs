@@ -550,10 +550,13 @@ impl EscrowTransaction {
         msg.extend_from_slice(self.public_key.as_bytes());
 
         // Include escrow type specific data
-        if let EscrowType::Create { recipient, amount, timeout, .. } = &self.escrow_type {
-            msg.extend_from_slice(recipient.as_bytes());
-            msg.extend_from_slice(&amount.to_le_bytes());
-            msg.extend_from_slice(&timeout.to_le_bytes());
+        match &self.escrow_type {
+            EscrowType::Create { recipient, amount, timeout, .. } => {
+                msg.extend_from_slice(recipient.as_bytes());
+                msg.extend_from_slice(&amount.to_le_bytes());
+                msg.extend_from_slice(&timeout.to_le_bytes());
+            }
+            _ => {}
         }
 
         msg
@@ -823,7 +826,6 @@ impl TrustLineTransaction {
 
 impl PoolSwapTransaction {
     /// Create and sign a new pool swap transaction
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool_from: DimensionalPool,
         pool_to: DimensionalPool,
@@ -834,7 +836,7 @@ impl PoolSwapTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key();
+        let public_key = keypair.public_key().clone();
 
         // Create unsigned transaction
         let mut tx = PoolSwapTransaction {
@@ -968,7 +970,6 @@ pub enum MarketplaceOperation {
 
 impl MarketplaceTransaction {
     /// Create and sign a new problem submission transaction
-    #[allow(clippy::too_many_arguments)]
     pub fn new_problem_submission(
         problem: crate::ProblemType,
         from: Address,
@@ -979,7 +980,7 @@ impl MarketplaceTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key();
+        let public_key = keypair.public_key().clone();
         let operation = MarketplaceOperation::SubmitProblem {
             problem,
             bounty,
@@ -1010,7 +1011,7 @@ impl MarketplaceTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key();
+        let public_key = keypair.public_key().clone();
         let operation = MarketplaceOperation::SubmitSolution {
             problem_id,
             solution,

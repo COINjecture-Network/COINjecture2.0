@@ -21,7 +21,9 @@ use jsonrpsee::{
     types::ErrorObjectOwned,
 };
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -252,6 +254,11 @@ pub trait CoinjectRpc {
     #[method(name = "chain_getInfo")]
     async fn get_chain_info(&self) -> RpcResult<ChainInfo>;
 
+    /// Next mining instance: same deterministic `ProblemType` as the node's miner
+    /// for `(next_height = best_height + 1, prev_hash = tip)`. Used by Solver Lab `instance.json`.
+    #[method(name = "chain_getMiningWork")]
+    async fn get_mining_work(&self) -> RpcResult<MiningWork>;
+
     /// Get open problems from marketplace
     #[method(name = "marketplace_getOpenProblems")]
     async fn get_open_problems(&self) -> RpcResult<Vec<ProblemInfo>>;
@@ -333,6 +340,20 @@ pub type FaucetHandler = Arc<dyn Fn(&Address) -> Result<Balance, String> + Send 
 /// Block submission handler callback type
 pub type BlockSubmissionHandler = Arc<dyn Fn(Block) -> Result<String, String> + Send + Sync>;
 
+/// Mining template for the block that would extend the current tip (Solver Lab / web miners).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiningWork {
+    /// Height of the block built on the current tip (`best_height + 1`).
+    pub next_height: u64,
+    /// Parent block hash (epoch salt) as hex — must match `chain_getInfo.best_hash` when you pull and submit immediately.
+    pub prev_hash: String,
+    /// Deterministic instance: SubsetSum, SAT, or TSP (same serde as `chain_getBlock` / `solution_reveal.problem`).
+    pub problem: ProblemType,
+}
+
+pub type MiningWorkFuture = Pin<Box<dyn Future<Output = Result<MiningWork, String>> + Send>>;
+pub type MiningWorkProvider = Arc<dyn Fn() -> MiningWorkFuture + Send + Sync>;
+
 /// RPC server state
 pub struct RpcServerState {
     pub account_state: Arc<AccountState>,
@@ -357,6 +378,8 @@ pub struct RpcServerState {
     pub listen_addresses: Arc<RwLock<Vec<String>>>,
     /// Whether the node is currently syncing
     pub is_syncing: Arc<RwLock<bool>>,
+    /// When set (nodes with consensus miner), serves [`chain_getMiningWork`].
+    pub mining_work_provider: Option<MiningWorkProvider>,
 }
 
 /// RPC server implementation
@@ -677,9 +700,22 @@ impl CoinjectRpcServer for RpcServerImpl {
         })
     }
 
+    async fn get_mining_work(&self) -> RpcResult<MiningWork> {
+        let provider = self.state.mining_work_provider.as_ref().ok_or_else(|| {
+            ErrorObjectOwned::owned(
+                NOT_FOUND,
+                "Mining work not available on this node (mining disabled)",
+                None::<()>,
+            )
+        })?;
+        provider()
+            .await
+            .map_err(|e| ErrorObjectOwned::owned(INTERNAL_ERROR, e, None::<()>))
+    }
+
     async fn get_open_problems(&self) -> RpcResult<Vec<ProblemInfo>> {
         let problems = self.state.marketplace_state.get_open_problems()
-            .map_err(Self::internal_error)?;
+            .map_err(|e| Self::internal_error(e))?;
         Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
     }
 
@@ -687,13 +723,13 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&problem_id, 256, "problem_id")?;
         let hash = self.parse_hash(&problem_id)?;
         let problem = self.state.marketplace_state.get_problem(&hash)
-            .map_err(Self::internal_error)?;
+            .map_err(|e| Self::internal_error(e))?;
         Ok(problem.map(|p| self.problem_to_info(&p)))
     }
 
     async fn get_marketplace_stats(&self) -> RpcResult<MarketplaceStats> {
         self.state.marketplace_state.get_stats()
-            .map_err(Self::internal_error)
+            .map_err(|e| Self::internal_error(e))
     }
 
     async fn submit_private_problem(&self, params: PrivateProblemParams) -> RpcResult<String> {
@@ -761,7 +797,7 @@ impl CoinjectRpcServer for RpcServerImpl {
             params.min_work_score,
             params.expiration_days,
         )
-        .map_err(Self::internal_error)?;
+        .map_err(|e| Self::internal_error(e))?;
 
         Ok(hex::encode(problem_id.as_bytes()))
     }
@@ -802,7 +838,7 @@ impl CoinjectRpcServer for RpcServerImpl {
 
         // Submit reveal to marketplace state
         self.state.marketplace_state.reveal_problem(problem_id, reveal)
-            .map_err(Self::internal_error)?;
+            .map_err(|e| Self::internal_error(e))?;
 
         Ok(true)
     }
@@ -874,12 +910,12 @@ impl CoinjectRpcServer for RpcServerImpl {
             params.min_work_score,
             params.expiration_days,
         )
-        .map_err(Self::internal_error)?;
+        .map_err(|e| Self::internal_error(e))?;
 
         // Deduct bounty from submitter's balance (escrow)
         let new_balance = balance - bounty;
         self.state.account_state.set_balance(&submitter, new_balance)
-            .map_err(Self::internal_error)?;
+            .map_err(|e| Self::internal_error(e))?;
 
         tracing::info!(problem_id = %hex::encode(problem_id.as_bytes()), bounty, "subset_sum_submitted");
 
@@ -905,17 +941,17 @@ impl CoinjectRpcServer for RpcServerImpl {
 
         // Submit solution to marketplace state (validates and updates status)
         self.state.marketplace_state.submit_solution(problem_id, solver, solution)
-            .map_err(Self::internal_error)?;
+            .map_err(|e| Self::internal_error(e))?;
 
         // Claim bounty and credit solver
         let (solver_addr, bounty) = self.state.marketplace_state.claim_bounty(problem_id)
-            .map_err(Self::internal_error)?;
+            .map_err(|e| Self::internal_error(e))?;
 
         // Credit solver's account with bounty
         let current_balance = self.state.account_state.get_balance(&solver_addr);
         let new_balance = current_balance + bounty;
         self.state.account_state.set_balance(&solver_addr, new_balance)
-            .map_err(Self::internal_error)?;
+            .map_err(|e| Self::internal_error(e))?;
 
         tracing::info!(solver = %hex::encode(solver_addr.as_bytes()), bounty, "solution_accepted");
 
@@ -1092,7 +1128,7 @@ impl RpcServer {
     /// Create and start a new RPC server with the full Phase-2 security stack.
     ///
     /// Middleware order (outer → inner):
-    ///   AuditLog → Timeout(30s) → SecurityGate → CORS → jsonrpsee
+    ///   CORS → AuditLog → Timeout(30s) → SecurityGate → jsonrpsee
     ///
     /// If `RPC_TLS_CERT` and `RPC_TLS_KEY` env vars are set a TLS termination
     /// proxy is also spawned on `RPC_TLS_BIND` (default: same IP, port+1).
@@ -1112,11 +1148,13 @@ impl RpcServer {
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
 
+        // CORS is outermost so OPTIONS preflight is handled before AuditLog, Timeout, or
+        // SecurityGate (rate limits / auth). Browsers send preflight before the JSON-RPC POST.
         let middleware = ServiceBuilder::new()
+            .layer(cors)
             .layer(AuditLogLayer)
             .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs)))
-            .layer(SecurityGateLayer::new(SecurityConfig::default()))
-            .layer(cors);
+            .layer(SecurityGateLayer::new(SecurityConfig::default()));
 
         let server = Server::builder()
             .set_http_middleware(middleware)
@@ -1214,6 +1252,7 @@ mod tests {
             local_peer_id: Some("test-peer-id".to_string()),
             listen_addresses: Arc::new(RwLock::new(vec![])),
             is_syncing: Arc::new(RwLock::new(false)),
+            mining_work_provider: None,
         });
 
         let rpc = RpcServerImpl::new(state);
@@ -1256,6 +1295,7 @@ mod tests {
             local_peer_id: Some("test-peer-id".to_string()),
             listen_addresses: Arc::new(RwLock::new(vec![])),
             is_syncing: Arc::new(RwLock::new(false)),
+            mining_work_provider: None,
         });
 
         let rpc = RpcServerImpl::new(state);

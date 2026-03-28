@@ -3,16 +3,18 @@
 # Security: runs as non-root user 'coinject' (uid 10001)
 
 # ── Builder stage ────────────────────────────────────────────────────────────
+# `rustls` → `aws-lc-sys` needs CMake to compile native code in Linux builds.
 FROM rust:1.88-slim AS builder
 
 # Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
 RUN echo 'Types: deb\nURIs: http://mirrors.kernel.org/debian\nSuites: bookworm bookworm-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg' > /etc/apt/sources.list.d/debian.sources
 
-# Install build dependencies
+# Install build dependencies (cmake: required by aws-lc-sys)
 RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
     libssl-dev \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -32,6 +34,7 @@ COPY wallet/Cargo.toml ./wallet/
 COPY marketplace-export/Cargo.toml ./marketplace-export/
 COPY huggingface/Cargo.toml ./huggingface/
 COPY mobile-sdk/Cargo.toml ./mobile-sdk/
+COPY load-test/Cargo.toml ./load-test/
 
 # Copy source code
 COPY adzdb ./adzdb
@@ -47,9 +50,10 @@ COPY wallet ./wallet
 COPY marketplace-export ./marketplace-export
 COPY huggingface ./huggingface
 COPY mobile-sdk ./mobile-sdk
+COPY load-test ./load-test
 
-# Build release binary
-RUN cargo build --release --bin coinject
+# Build release binary (workspace package name is `coinject-node`, bin name `coinject`)
+RUN cargo build --release -p coinject-node --bin coinject
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim

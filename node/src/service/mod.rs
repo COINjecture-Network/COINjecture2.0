@@ -27,7 +27,8 @@ use coinject_network::cpp::{
     CppNetwork, NetworkEvent as CppNetworkEvent, NetworkCommand as CppNetworkCommand, 
     CppConfig, NodeType as CppNodeType, PeerId as CppPeerId, BlockProvider
 };
-use coinject_rpc::{RpcServer, RpcServerState};
+use coinject_rpc::server::{MiningWork, MiningWorkFuture};
+use coinject_rpc::{MiningWorkProvider, RpcServer, RpcServerState};
 use coinject_rpc::websocket::{WebSocketRpc, RpcEvent as WebSocketRpcEvent, RpcCommand as WebSocketRpcCommand};
 use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
 use coinject_huggingface::{
@@ -35,11 +36,14 @@ use coinject_huggingface::{
     DualFeedStreamer, StreamerConfig,
 };
 use tracing::{debug, info, warn, error};
+use rand;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
+use blake3;
+use hex;
 
 /// Get the debug log path from DATA_DIR environment variable
 pub fn get_debug_log_path() -> std::path::PathBuf {
@@ -156,10 +160,7 @@ impl CoinjectNode {
         if let Some(parent) = chain_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        #[cfg(not(feature = "adzdb"))]
         let chain = Arc::new(ChainState::new(chain_db_path, &genesis, config.block_cache_size)?);
-        #[cfg(feature = "adzdb")]
-        let chain = Arc::new(ChainState::new(chain_db_path, &genesis)?);
         let best_height = chain.best_block_height().await;
         info!(best_height, "blockchain state initialized");
 
@@ -601,6 +602,32 @@ impl CoinjectNode {
             .map_err(|_| "Failed to receive result".to_string())?
         }));
 
+        let mining_work_provider: Option<MiningWorkProvider> = self.miner.as_ref().map(|miner| {
+            let miner = Arc::clone(miner);
+            let best_height = self.chain.best_height_ref();
+            let best_hash = self.chain.best_hash_ref();
+            Arc::new(move || -> MiningWorkFuture {
+                let miner = Arc::clone(&miner);
+                let best_height = Arc::clone(&best_height);
+                let best_hash = Arc::clone(&best_hash);
+                Box::pin(async move {
+                    let bh = *best_height.read().await;
+                    let prev = *best_hash.read().await;
+                    let next_height = bh + 1;
+                    let problem = miner
+                        .read()
+                        .await
+                        .generate_problem(next_height, prev)
+                        .await;
+                    Ok(MiningWork {
+                        next_height,
+                        prev_hash: hex::encode(prev.as_bytes()),
+                        problem,
+                    })
+                }) as MiningWorkFuture
+            }) as MiningWorkProvider
+        });
+
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
             timelock_state: Arc::clone(&self.timelock_state),
@@ -620,6 +647,7 @@ impl CoinjectNode {
             local_peer_id: Some(local_peer_id_str.clone()),
             listen_addresses: Arc::clone(&listen_addresses),
             is_syncing: Arc::new(tokio::sync::RwLock::new(false)), // Node starts not syncing
+            mining_work_provider,
         });
 
         let rpc_server = RpcServer::new(rpc_addr, rpc_state).await?;
@@ -680,6 +708,8 @@ impl CoinjectNode {
             max_peers: self.config.max_peers,
             enable_websocket: true,
             node_type: CppNodeType::Full, // TODO: Get from node classification
+            // Must stay false until CppNetwork uses `with_signing_key`; otherwise inbound peers are rejected.
+            require_encryption: false,
             ..Default::default()
         };
         
@@ -1264,7 +1294,7 @@ impl CoinjectNode {
                                         coinject_network::MeshBridgeCommand::BroadcastConsensusSalt { epoch, salt }
                                     );
                                 }
-                                coinject_consensus::CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score, signature, public_key } => {
+                                coinject_consensus::CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score } => {
                                     tracing::info!(epoch, "coordinator: broadcasting commit via mesh");
                                     let _ = bridge_cmd_for_coord.send(
                                         coinject_network::MeshBridgeCommand::BroadcastCommit {
@@ -1272,8 +1302,7 @@ impl CoinjectNode {
                                             solution_hash,
                                             node_id: coord_node_id,
                                             work_score,
-                                            signature,
-                                            public_key,
+                                            signature: Vec::new(),
                                         }
                                     );
                                 }
@@ -1487,7 +1516,11 @@ impl CoinjectNode {
                                                     solution_hash: commit.solution_hash,
                                                     work_score: commit.work_score,
                                                     signature: commit.signature,
-                                                    public_key: commit.public_key,
+                                                    // Migration default: network peers that have not yet
+                                                    // upgraded to include their public key send all-zeros.
+                                                    // The commit collector accepts these during the transition
+                                                    // window (all-zero pubkey bypasses signature verification).
+                                                    public_key: [0u8; 32],
                                                 },
                                             }
                                         );
