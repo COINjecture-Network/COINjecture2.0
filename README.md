@@ -766,6 +766,26 @@ Contributions welcome! Please:
 
 ---
 
+## Formal Verification (Eigenverse)
+
+COINjecture's mathematical foundations are **machine-checked** via the [Eigenverse](https://github.com/beanapologist/Eigenverse) project — 450 theorems verified in Lean 4 with **zero `sorry`**.
+
+The Eigenverse proofs are included as a git submodule at `proofs/eigenverse/`. To clone with proofs:
+
+```bash
+git clone --recurse-submodules https://github.com/COINjecture-Network/COINjecture2.0.git
+```
+
+Key verified results:
+- **mu^8 = 1**: The 8-fold closure of the critical eigenvalue (Theorem 3)
+- **C(r) <= 1**: Coherence function bounds (Theorem 8)
+- **eta^2 + |mu*eta|^2 = 1**: Canonical norm / unit circle constraint (Theorem 10)
+- **deltaS * (sqrt(2)-1) = 1**: Silver ratio reciprocal (Theorem 11)
+
+See [proofs/README.md](proofs/README.md) for the full theorem catalog and build instructions.
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details
