@@ -39,7 +39,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 # Rate limiting
-governor = "0.7"
+governor = "0.10"
 
 # In-memory nonce store
 dashmap = "6"
