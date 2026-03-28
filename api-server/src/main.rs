@@ -1,6 +1,7 @@
 use coinjecture_api_server::{
     build_router,
     config::Config,
+    matching::{engine::{EngineHandle, MatchingEngine}, outbox::TradeOutbox},
     metrics::init_metrics,
     middleware::rate_limit::create_rate_limiter,
     node_poller::NodePoller,
@@ -89,6 +90,15 @@ async fn main() {
         });
     }
 
+    // ── Matching engine + trade outbox ─────────────────────────────────────
+    let known_pairs = vec!["BEANS/USDC".into(), "BEANS/ETH".into()];
+    let (engine, engine_tx, trade_rx) = MatchingEngine::new(known_pairs);
+    let engine_handle = EngineHandle::new(engine_tx);
+    tokio::spawn(engine.run());
+
+    let outbox = TradeOutbox::new(trade_rx, supabase.clone(), broadcaster.clone());
+    tokio::spawn(outbox.run());
+
     // ── Build state & router ────────────────────────────────────────────────
     let state = AppState {
         config: config.clone(),
@@ -98,6 +108,7 @@ async fn main() {
         supabase,
         node_rpc,
         broadcaster,
+        engine: Some(engine_handle),
     };
     let app = build_router(state);
 

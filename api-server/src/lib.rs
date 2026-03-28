@@ -2,6 +2,7 @@ pub mod config;
 pub mod crypto;
 pub mod errors;
 pub mod jwt;
+pub mod matching;
 pub mod metrics;
 pub mod middleware;
 pub mod node_poller;
@@ -13,6 +14,7 @@ pub mod sse;
 pub mod supabase;
 
 use config::Config;
+use matching::engine::EngineHandle;
 use metrics_exporter_prometheus::PrometheusHandle;
 use middleware::rate_limit::KeyedRateLimiter;
 use node_rpc::NodeRpcClient;
@@ -31,10 +33,10 @@ pub struct AppState {
     pub supabase: Option<Arc<SupabaseClient>>,
     pub node_rpc: Option<Arc<NodeRpcClient>>,
     pub broadcaster: Arc<EventBroadcaster>,
+    pub engine: Option<EngineHandle>,
 }
 
-/// Build the full axum router — used by `main.rs` standalone and embeddable
-/// by the `node` crate.
+/// Build the full axum router.
 pub fn build_router(state: AppState) -> axum::Router {
     routes::build_routes(state)
 }

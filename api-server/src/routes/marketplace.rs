@@ -1,9 +1,13 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use chrono::Utc;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::errors::ApiError;
+use crate::matching::types::*;
 use crate::middleware::jwt_auth::AuthenticatedUser;
 use crate::AppState;
 
@@ -44,6 +48,7 @@ pub struct NewOrderRequest {
     pub order_type: String,
     pub price: Option<String>,
     pub quantity: String,
+    pub time_in_force: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -58,45 +63,114 @@ pub struct NewTaskRequest {
 
 // ── Handlers ────────────────────────────────────────────────────────────────
 
-/// `GET /marketplace/pairs` — list active trading pairs.
+/// `GET /marketplace/pairs`
 pub async fn get_pairs(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let supabase = require_supabase(&state)?;
-    let pairs = supabase.get_trading_pairs().await.map_err(|e| {
-        ApiError::Internal(format!("Failed to fetch pairs: {e}"))
-    })?;
+    let pairs = supabase
+        .get_trading_pairs()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch pairs: {e}")))?;
     Ok(Json(pairs))
 }
 
-/// `GET /marketplace/orders` — get order book for a pair.
+/// `GET /marketplace/orders` — order book depth (engine-first, Supabase fallback).
 pub async fn get_orders(
     State(state): State<AppState>,
     Query(params): Query<OrderQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let supabase = require_supabase(&state)?;
     let pair_id = params
         .pair_id
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("pair_id query parameter is required".into()))?;
 
-    let orders = supabase.get_order_book(pair_id).await.map_err(|e| {
-        ApiError::Internal(format!("Failed to fetch orders: {e}"))
-    })?;
+    // Try in-memory engine first
+    if let Some(ref engine) = state.engine {
+        if let Ok(Some(depth)) = engine.get_depth(pair_id.to_string(), 20).await {
+            return Ok(Json(serde_json::to_value(depth).unwrap_or(json!({}))));
+        }
+    }
+
+    // Fall back to Supabase
+    let supabase = require_supabase(&state)?;
+    let orders = supabase
+        .get_order_book(pair_id)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch orders: {e}")))?;
     Ok(Json(orders))
 }
 
-/// `POST /marketplace/orders` — place a new order (protected).
+/// `POST /marketplace/orders` — route through matching engine (or Supabase fallback).
 pub async fn place_order(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
     Json(req): Json<NewOrderRequest>,
 ) -> Result<Json<Value>, ApiError> {
-    let supabase = require_supabase(&state)?;
-
     let wallet = auth_user
         .wallet_address
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("Wallet address required to place orders".into()))?;
 
+    let side = match req.side.to_lowercase().as_str() {
+        "buy" => Side::Buy,
+        "sell" => Side::Sell,
+        _ => return Err(ApiError::BadRequest("side must be 'buy' or 'sell'".into())),
+    };
+
+    let order_type = match req.order_type.to_lowercase().as_str() {
+        "limit" => OrderType::Limit,
+        "market" => OrderType::Market,
+        _ => return Err(ApiError::BadRequest("type must be 'limit' or 'market'".into())),
+    };
+
+    let price = match &req.price {
+        Some(p) if order_type == OrderType::Limit => Some(
+            p.parse::<Decimal>()
+                .map_err(|_| ApiError::BadRequest("Invalid price format".into()))?,
+        ),
+        _ => None,
+    };
+
+    let quantity: Decimal = req
+        .quantity
+        .parse()
+        .map_err(|_| ApiError::BadRequest("Invalid quantity format".into()))?;
+
+    if quantity <= Decimal::ZERO {
+        return Err(ApiError::BadRequest("Quantity must be positive".into()));
+    }
+
+    let tif = match req.time_in_force.as_deref() {
+        Some("IOC") => TimeInForce::IOC,
+        Some("FOK") => TimeInForce::FOK,
+        _ => TimeInForce::GTC,
+    };
+
+    // If matching engine is available, route through it
+    if let Some(ref engine) = state.engine {
+        let order = InternalOrder {
+            id: Uuid::new_v4(),
+            user_id: auth_user.user_id.clone(),
+            wallet_address: wallet.to_string(),
+            pair_id: req.pair_id.clone(),
+            side,
+            order_type,
+            price,
+            quantity,
+            filled_quantity: Decimal::ZERO,
+            time_in_force: tif,
+            created_at: Utc::now(),
+        };
+
+        let result = engine
+            .submit_order(order)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Engine error: {e}")))?;
+
+        return Ok(Json(serde_json::to_value(&result).unwrap_or(json!({}))));
+    }
+
+    // Fallback: write directly to Supabase
+    let supabase = require_supabase(&state)?;
     let body = json!({
         "user_id": auth_user.user_id,
         "wallet_address": wallet,
@@ -107,33 +181,48 @@ pub async fn place_order(
         "quantity": req.quantity,
         "status": "pending",
     });
-
-    let result = supabase.insert_row("orders", body).await.map_err(|e| {
-        ApiError::Internal(format!("Failed to place order: {e}"))
-    })?;
-
+    let result = supabase
+        .insert_row("orders", body)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to place order: {e}")))?;
     Ok(Json(result))
 }
 
-/// `DELETE /marketplace/orders/:id` — cancel an order (protected).
+/// `DELETE /marketplace/orders/{id}`
 pub async fn cancel_order(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
     Path(order_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    // Try engine first
+    if let Some(ref engine) = state.engine {
+        // We need the pair_id to cancel in the engine. For now, try all known pairs.
+        // A production system would have an order→pair index.
+        if let Ok(oid) = order_id.parse::<Uuid>() {
+            for pair in &["BEANS/USDC", "BEANS/ETH"] {
+                if let Ok(Some(_)) = engine.cancel_order(oid, pair.to_string()).await {
+                    return Ok(Json(json!({
+                        "order_id": order_id,
+                        "status": "cancelled",
+                    })));
+                }
+            }
+        }
+    }
+
+    // Fallback: Supabase
     let supabase = require_supabase(&state)?;
     supabase
         .cancel_order(&order_id, &auth_user.user_id)
         .await
         .map_err(|e| ApiError::Internal(format!("Failed to cancel order: {e}")))?;
-
     Ok(Json(json!({
         "order_id": order_id,
         "status": "cancelled",
     })))
 }
 
-/// `GET /marketplace/trades` — recent trade history.
+/// `GET /marketplace/trades`
 pub async fn get_trades(
     State(state): State<AppState>,
     Query(params): Query<TradeQuery>,
@@ -144,14 +233,14 @@ pub async fn get_trades(
         .as_deref()
         .ok_or_else(|| ApiError::BadRequest("pair_id query parameter is required".into()))?;
     let limit = params.limit.unwrap_or(50);
-
-    let trades = supabase.get_recent_trades(pair_id, limit).await.map_err(|e| {
-        ApiError::Internal(format!("Failed to fetch trades: {e}"))
-    })?;
+    let trades = supabase
+        .get_recent_trades(pair_id, limit)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch trades: {e}")))?;
     Ok(Json(trades))
 }
 
-/// `GET /marketplace/tasks` — list PoUW tasks.
+/// `GET /marketplace/tasks`
 pub async fn get_tasks(
     State(state): State<AppState>,
     Query(params): Query<TaskQuery>,
@@ -164,22 +253,19 @@ pub async fn get_tasks(
     Ok(Json(tasks))
 }
 
-/// `POST /marketplace/tasks` — submit a PoUW task (protected).
+/// `POST /marketplace/tasks`
 pub async fn create_task(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
     Json(req): Json<NewTaskRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let supabase = require_supabase(&state)?;
-
     let wallet = auth_user
         .wallet_address
         .as_deref()
         .unwrap_or(&auth_user.user_id);
-
-    let deadline = chrono::Utc::now()
-        + chrono::Duration::hours(req.deadline_hours.unwrap_or(720) as i64);
-
+    let deadline =
+        Utc::now() + chrono::Duration::hours(req.deadline_hours.unwrap_or(720) as i64);
     let body = json!({
         "submitter_user_id": auth_user.user_id,
         "submitter_wallet": wallet,
@@ -192,10 +278,22 @@ pub async fn create_task(
         "status": "draft",
         "deadline": deadline.to_rfc3339(),
     });
-
-    let result = supabase.insert_row("pouw_tasks", body).await.map_err(|e| {
-        ApiError::Internal(format!("Failed to create task: {e}"))
-    })?;
-
+    let result = supabase
+        .insert_row("pouw_tasks", body)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to create task: {e}")))?;
     Ok(Json(result))
+}
+
+/// `GET /marketplace/engine/stats`
+pub async fn engine_stats(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let engine = state
+        .engine
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("Matching engine not running".into()))?;
+    let stats = engine
+        .get_stats()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Engine error: {e}")))?;
+    Ok(Json(serde_json::to_value(stats).unwrap_or(json!({}))))
 }

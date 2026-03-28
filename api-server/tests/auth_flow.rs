@@ -57,6 +57,7 @@ fn test_app() -> axum::Router {
         supabase: None,
         node_rpc: None,
         broadcaster: std::sync::Arc::new(coinjecture_api_server::sse::EventBroadcaster::new(16)),
+        engine: None,
         config,
     };
     build_router(state)

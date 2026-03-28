@@ -64,6 +64,7 @@ pub fn build_routes(state: AppState) -> Router {
             "/marketplace/tasks",
             get(marketplace::get_tasks).post(marketplace::create_task),
         )
+        .route("/marketplace/engine/stats", get(marketplace::engine_stats))
         // Admin
         .route("/admin/stats", get(admin::stats))
         .route("/admin/peers", get(peers::list_peers))

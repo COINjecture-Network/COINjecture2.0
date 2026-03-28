@@ -36,13 +36,16 @@ rand = "0.8"
 hex = "0.4"
 jsonwebtoken = "9"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 # Rate limiting
 governor = "0.7"
 
 # In-memory nonce store
 dashmap = "6"
+
+# Matching engine
+rust_decimal = { version = "1", features = ["serde-with-str"] }
 
 # SSE streaming
 async-stream = "0.3"
