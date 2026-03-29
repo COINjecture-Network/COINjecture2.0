@@ -23,15 +23,18 @@ pub async fn get_hint() -> Json<serde_json::Value> {
 }
 
 pub async fn proxy(State(state): State<AppState>, body: Bytes) -> Result<Response, ApiError> {
-    let rpc = state
-        .node_rpc
-        .as_ref()
-        .ok_or_else(|| ApiError::ServiceUnavailable("Node RPC not configured".into()))?;
+    let rpc = state.node_rpc.as_ref().ok_or_else(|| {
+        tracing::warn!("/node-rpc: NODE_RPC_URL not set — cannot forward to chain node");
+        ApiError::ServiceUnavailable("Node RPC not configured (set NODE_RPC_URL for the API process)".into())
+    })?;
 
     let (status_u16, bytes) = rpc
         .forward_jsonrpc_body(body)
         .await
-        .map_err(|e| ApiError::ServiceUnavailable(e.to_string()))?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, body_len = body.len(), "/node-rpc forward to node failed");
+            ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
+        })?;
 
     let status = StatusCode::from_u16(status_u16).unwrap_or(StatusCode::BAD_GATEWAY);
 

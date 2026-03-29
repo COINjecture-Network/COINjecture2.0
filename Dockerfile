@@ -35,6 +35,7 @@ COPY marketplace-export/Cargo.toml ./marketplace-export/
 COPY huggingface/Cargo.toml ./huggingface/
 COPY mobile-sdk/Cargo.toml ./mobile-sdk/
 COPY load-test/Cargo.toml ./load-test/
+COPY api-server/Cargo.toml ./api-server/
 
 # Copy source code
 COPY adzdb ./adzdb
@@ -51,6 +52,7 @@ COPY marketplace-export ./marketplace-export
 COPY huggingface ./huggingface
 COPY mobile-sdk ./mobile-sdk
 COPY load-test ./load-test
+COPY api-server ./api-server
 
 # Build release binary (workspace package name is `coinject-node`, bin name `coinject`)
 RUN cargo build --release -p coinject-node --bin coinject

@@ -35,6 +35,15 @@ async function fetchWithTimeout(
   }
 }
 
+/** Non-OK responses: include body (API JSON or nginx HTML snippet) so 503 is debuggable in the UI. */
+async function httpErrorFromResponse(response: Response): Promise<Error> {
+  const hint = await response.text().catch(() => '');
+  const trimmed = hint.replace(/\s+/g, ' ').trim().slice(0, 400);
+  return trimmed.length > 0
+    ? new Error(`HTTP ${response.status}: ${trimmed}`)
+    : new Error(`HTTP error! status: ${response.status}`);
+}
+
 // Parse RPC URLs from environment variable (comma-separated). Empty in production = use API tunnel.
 const parseRpcUrls = (): string[] => {
   const raw = (import.meta.env.VITE_RPC_URL as string | undefined)?.trim();
@@ -161,7 +170,7 @@ async function fetchChainInfoFromApi(): Promise<ChainInfo> {
     15_000,
   );
   if (!response.ok) {
-    throw new Error(`chain/info HTTP ${response.status}`);
+    throw await httpErrorFromResponse(response);
   }
   const j = (await response.json()) as Record<string, unknown>;
   const network = typeof j.network === 'string' ? j.network : 'mainnet';
@@ -439,7 +448,7 @@ export class RpcClient {
         );
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          throw await httpErrorFromResponse(response);
         }
 
         const data: RpcResponse<T> = await response.json();
@@ -493,7 +502,7 @@ export class RpcClient {
         );
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          throw await httpErrorFromResponse(response);
         }
 
         const data: RpcResponse<T> = await response.json();

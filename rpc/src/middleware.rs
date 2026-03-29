@@ -74,7 +74,7 @@ pub struct SecurityConfig {
     pub admin_allowed_ips: Vec<IpAddr>,
     /// URL path prefixes that are considered admin-only
     pub admin_paths: Vec<String>,
-    /// General max body size in bytes (env: RPC_MAX_BODY_BYTES, default 1 MB)
+    /// General max body size in bytes (env: RPC_MAX_BODY_BYTES, default 64 MiB)
     pub max_body_bytes: usize,
     /// Max body size for transaction-submit endpoints (env: RPC_MAX_TX_BODY_BYTES, default 256 KB)
     pub max_tx_body_bytes: usize,
@@ -107,10 +107,12 @@ impl Default for SecurityConfig {
             admin_allowed_ips
         };
 
+        // Default 64 MiB: `chain_submitBlock` JSON exceeds 1 MiB when proxied (api → node).
+        // Tighten on fully public RPC with `RPC_MAX_BODY_BYTES`.
         let max_body_bytes = std::env::var("RPC_MAX_BODY_BYTES")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(1024 * 1024); // 1 MB
+            .unwrap_or(64 * 1024 * 1024);
 
         let max_tx_body_bytes = std::env::var("RPC_MAX_TX_BODY_BYTES")
             .ok()

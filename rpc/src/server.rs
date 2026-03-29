@@ -1143,10 +1143,11 @@ impl RpcServer {
             .expose_headers(Any)
             .max_age(Duration::from_secs(86400));
 
+        // Default 300s: large `chain_submitBlock` validation + proxy path; override with RPC_TIMEOUT_SECS.
         let timeout_secs: u64 = std::env::var("RPC_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(30);
+            .unwrap_or(300);
 
         // CORS is outermost so OPTIONS preflight is handled before AuditLog, Timeout, or
         // SecurityGate (rate limits / auth). Browsers send preflight before the JSON-RPC POST.
