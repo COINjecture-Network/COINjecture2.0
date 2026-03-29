@@ -4,6 +4,7 @@ pub mod chain;
 pub mod email_auth;
 pub mod events;
 pub mod health;
+pub mod jsonrpc_proxy;
 pub mod marketplace;
 pub mod peers;
 
@@ -46,6 +47,10 @@ pub fn build_routes(state: AppState) -> Router {
         // Chain data
         .route("/chain/latest-block", get(chain::latest_block))
         .route("/chain/info", get(chain::chain_info))
+        .route(
+            "/node-rpc",
+            get(jsonrpc_proxy::get_hint).post(jsonrpc_proxy::proxy),
+        )
         // Marketplace
         .route(
             "/marketplace/pairs",

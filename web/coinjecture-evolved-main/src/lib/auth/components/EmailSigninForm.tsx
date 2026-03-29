@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../useAuth';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export function EmailSigninForm({ onSuccess }: { onSuccess?: () => void }) {
   const { signInWithEmail } = useAuth();
@@ -15,8 +17,8 @@ export function EmailSigninForm({ onSuccess }: { onSuccess?: () => void }) {
     try {
       await signInWithEmail(email, password);
       onSuccess?.();
-    } catch (err: any) {
-      setError(err.message || 'Sign-in failed');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Sign-in failed');
     } finally {
       setLoading(false);
     }
@@ -24,33 +26,26 @@ export function EmailSigninForm({ onSuccess }: { onSuccess?: () => void }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
-      <input
+      <Input
         type="email"
         placeholder="Email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
-        className="w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm
-                   text-zinc-200 placeholder-zinc-500 focus:border-emerald-500 focus:outline-none"
+        autoComplete="email"
         required
       />
-      <input
+      <Input
         type="password"
         placeholder="Password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
-        className="w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm
-                   text-zinc-200 placeholder-zinc-500 focus:border-emerald-500 focus:outline-none"
+        autoComplete="current-password"
         required
       />
-      {error && <p className="text-red-400 text-xs">{error}</p>}
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm
-                   font-medium text-white transition-colors disabled:opacity-50"
-      >
-        {loading ? 'Signing in...' : 'Sign In'}
-      </button>
+      {error && <p className="text-destructive text-xs">{error}</p>}
+      <Button type="submit" disabled={loading} className="w-full">
+        {loading ? 'Signing in…' : 'Sign in'}
+      </Button>
     </form>
   );
 }

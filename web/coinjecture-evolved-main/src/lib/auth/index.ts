@@ -10,4 +10,12 @@ export { EmailSignupForm } from './components/EmailSignupForm';
 export { EmailSigninForm } from './components/EmailSigninForm';
 export { MagicLinkForm } from './components/MagicLinkForm';
 export { BindWalletCard } from './components/BindWalletCard';
-export type { AuthContextType, AuthState, AuthActions, AuthUser, AuthMethod } from './types';
+export type {
+  AuthContextType,
+  AuthState,
+  AuthActions,
+  AuthUser,
+  AuthMethod,
+  AuthModalEmailSection,
+  AuthModalTab,
+} from './types';

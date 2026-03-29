@@ -28,6 +28,8 @@ pub struct VerifyRequest {
 
 #[derive(Serialize)]
 pub struct MeResponse {
+    /// Supabase user id (JWT `sub`) — stable for email- and wallet-backed sessions.
+    sub: String,
     wallet_address: Option<String>,
     email: Option<String>,
     network: String,
@@ -145,6 +147,7 @@ pub async fn me(
     let c = decode_token(&state.config.supabase_jwt_secret, bearer)?;
 
     Ok(Json(MeResponse {
+        sub: c.sub,
         wallet_address: c.wallet_address,
         email: c.email,
         network: c.network,

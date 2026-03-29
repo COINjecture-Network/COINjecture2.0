@@ -54,11 +54,13 @@ export const MetricsSection = () => {
               </>
             ) : (
               <>
-                Could not load chain metrics. The browser calls URLs from{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-xs">VITE_RPC_URL</code> (see build). If this
-                persists, check those endpoints are up and return CORS for{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-xs">https://coinjecture.com</code> (or use{" "}
-                <code className="rounded bg-muted px-1 py-0.5 text-xs">*</code> on the RPC server).
+                Could not load chain metrics. The app uses your API{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">GET /chain/info</code> first (see{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">VITE_API_URL</code>), then JSON-RPC (
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">POST …/node-rpc</code> or{" "}
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">VITE_RPC_URL</code>). Ensure the API is up,
+                <code className="rounded bg-muted px-1 py-0.5 text-xs">NODE_RPC_URL</code> is set on the server, and
+                CORS allows this origin.
               </>
             )}
           </p>
@@ -99,14 +101,22 @@ export const MetricsSection = () => {
                 <Target className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Best Hash</p>
               </div>
-              <p className="text-xs font-mono break-all">{chainInfo.best_hash.slice(0, 16)}...</p>
+              <p className="text-xs font-mono break-all">
+                {chainInfo.best_hash.length >= 16
+                  ? `${chainInfo.best_hash.slice(0, 16)}...`
+                  : chainInfo.best_hash || "—"}
+              </p>
             </Card>
             <Card className="glass-effect p-6">
               <div className="flex items-center gap-3 mb-2">
                 <Award className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Genesis</p>
               </div>
-              <p className="text-xs font-mono break-all">{chainInfo.genesis_hash.slice(0, 16)}...</p>
+              <p className="text-xs font-mono break-all">
+                {chainInfo.genesis_hash.length >= 16
+                  ? `${chainInfo.genesis_hash.slice(0, 16)}...`
+                  : chainInfo.genesis_hash || "—"}
+              </p>
             </Card>
           </div>
         )}

@@ -1,5 +1,7 @@
 export type AuthMethod = 'wallet' | 'email' | 'magic_link';
 
+export type AuthModalEmailSection = 'signin' | 'signup' | 'magic';
+
 export interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -29,11 +31,15 @@ export interface AuthActions {
   bindWallet: () => Promise<void>;
   signOut: () => void;
   refreshSession: () => Promise<void>;
-  openAuthModal: (tab?: 'wallet' | 'email') => void;
+  openAuthModal: (
+    tab?: AuthModalTab,
+    emailSection?: AuthModalEmailSection,
+  ) => void;
   closeAuthModal: () => void;
 }
 
 export type AuthContextType = AuthState & AuthActions & {
   authModalOpen: boolean;
-  authModalTab: 'wallet' | 'email';
+  authModalTab: AuthModalTab;
+  authModalEmailSection: AuthModalEmailSection;
 };

@@ -41,7 +41,10 @@ export interface SiwbVerifyResponse {
 }
 
 export interface AuthMeResponse {
-  wallet_address: string;
+  /** Supabase auth user id (JWT subject). Present on api-server builds that expose `/auth/me` `sub`. */
+  sub?: string;
+  wallet_address: string | null;
+  email: string | null;
   network: string;
   issued_at: string | null;
   expires_at: string | null;

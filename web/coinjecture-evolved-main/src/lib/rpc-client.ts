@@ -33,11 +33,13 @@ async function fetchWithTimeout(
   }
 }
 
-// Parse RPC URLs from environment variable (comma-separated)
+// Parse RPC URLs from environment variable (comma-separated). Empty in production = use API tunnel.
 const parseRpcUrls = (): string[] => {
-  const envUrl = import.meta.env.VITE_RPC_URL || 'http://localhost:9933';
-  // Support comma-separated list of URLs
-  return envUrl.split(',').map(url => url.trim()).filter(url => url.length > 0);
+  const raw = (import.meta.env.VITE_RPC_URL as string | undefined)?.trim();
+  if (!raw) {
+    return [];
+  }
+  return raw.split(',').map((url) => url.trim()).filter((url) => url.length > 0);
 };
 
 // In development, use Vite proxy to avoid CORS issues
@@ -92,12 +94,84 @@ const createProxyUrls = (): string[] => {
   return urls;
 };
 
-/** Dev: Vite proxy. Prod: `VITE_RPC_URL` hosts (HTTPS mapping in createProxyUrls). */
+function apiBaseTrimmed(): string {
+  return ((import.meta.env.VITE_API_URL as string | undefined) || '').replace(/\/$/, '');
+}
+
+function urlsAreUnsafeForHttpsBrowser(urls: string[]): boolean {
+  return urls.some((u) => {
+    try {
+      const { protocol, hostname } = new URL(u);
+      if (protocol !== 'https:') {
+        return true;
+      }
+      return hostname === 'localhost' || hostname === '127.0.0.1';
+    } catch {
+      return true;
+    }
+  });
+}
+
+/**
+ * Dev: Vite `/api/rpc` → first `VITE_RPC_URL` (see vite.config).
+ * Prod: explicit `VITE_RPC_URL` (HTTPS public RPC) if set; otherwise `VITE_API_URL/node-rpc` so the
+ * bundle never needs to call `http://localhost:9933` from the user's browser.
+ */
 export function getDefaultRpcBaseUrls(): string[] {
   if (isDevelopment) {
     return ['/api/rpc'];
   }
-  return createProxyUrls();
+
+  const apiBase = apiBaseTrimmed();
+  const fromEnv = createProxyUrls();
+
+  if (fromEnv.length === 0 && apiBase) {
+    return [`${apiBase}/node-rpc`];
+  }
+
+  if (fromEnv.length > 0 && apiBase && isHTTPS && urlsAreUnsafeForHttpsBrowser(fromEnv)) {
+    return [`${apiBase}/node-rpc`];
+  }
+
+  if (fromEnv.length > 0) {
+    return fromEnv;
+  }
+
+  console.error(
+    '[rpc-client] Production: set VITE_API_URL (uses /node-rpc) or HTTPS VITE_RPC_URL. Using localhost (broken on deployed sites).',
+  );
+  return ['http://localhost:9933'];
+}
+
+/** Production: same-origin-friendly chain summary from the API (CORS already on `VITE_API_URL`). */
+async function fetchChainInfoFromApi(): Promise<ChainInfo> {
+  const raw = import.meta.env.VITE_API_URL as string | undefined;
+  const base = (raw || '').replace(/\/$/, '');
+  if (!base) {
+    throw new Error('VITE_API_URL not set');
+  }
+  const response = await fetchWithTimeout(
+    `${base}/chain/info`,
+    {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    },
+    15_000,
+  );
+  if (!response.ok) {
+    throw new Error(`chain/info HTTP ${response.status}`);
+  }
+  const j = (await response.json()) as Record<string, unknown>;
+  const network = typeof j.network === 'string' ? j.network : 'mainnet';
+  return {
+    chain_id: typeof j.chain_id === 'string' ? j.chain_id : `coinjecture:${network}`,
+    best_height: typeof j.height === 'number' ? j.height : Number(j.height ?? 0) || 0,
+    best_hash: typeof j.best_hash === 'string' ? j.best_hash : '',
+    genesis_hash: typeof j.genesis_hash === 'string' ? j.genesis_hash : '',
+    peer_count: typeof j.peer_count === 'number' ? j.peer_count : Number(j.peer_count ?? 0) || 0,
+    total_work: typeof j.total_work === 'number' ? j.total_work : undefined,
+    is_syncing: Boolean(j.syncing),
+  };
 }
 
 export interface RpcError {
@@ -513,6 +587,14 @@ export class RpcClient {
   }
 
   async getChainInfo(): Promise<ChainInfo> {
+    // Production: browser → API `/chain/info` (no public RPC CORS required for the landing metrics).
+    if (!isDevelopment && import.meta.env.VITE_API_URL) {
+      try {
+        return await fetchChainInfoFromApi();
+      } catch (e) {
+        console.warn('[rpc-client] /chain/info failed, falling back to JSON-RPC', e);
+      }
+    }
     // Prefer the highest reported height across nodes; if parallel probes all fail, fall back to
     // sequential failover (longer timeout) so the dashboard still loads when one path is flaky.
     try {

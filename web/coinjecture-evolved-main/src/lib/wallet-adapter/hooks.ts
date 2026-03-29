@@ -49,7 +49,10 @@ export function useSiwbAuth(): SiwbAuthState {
     if (!token) return;
     getMe(token)
       .then((me) =>
-        setUser({ id: me.wallet_address, wallet_address: me.wallet_address }),
+        setUser({
+          id: me.sub ?? me.wallet_address ?? '',
+          wallet_address: me.wallet_address ?? '',
+        }),
       )
       .catch(() => {
         // Token expired or invalid — clear it

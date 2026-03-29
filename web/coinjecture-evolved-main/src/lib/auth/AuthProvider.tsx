@@ -2,7 +2,13 @@ import { createContext, useState, useEffect, useCallback, ReactNode } from 'reac
 import { useWallet } from '@/contexts/WalletContext';
 import { signMessage } from '@/lib/wallet-crypto';
 import { performSiwbAuth, getMe } from '@/lib/wallet-adapter/siwb';
-import type { AuthContextType, AuthMethod, AuthUser } from './types';
+import type {
+  AuthContextType,
+  AuthMethod,
+  AuthModalEmailSection,
+  AuthModalTab,
+  AuthUser,
+} from './types';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3030';
 const TOKEN_KEY = 'coinjecture:auth_token';
@@ -19,6 +25,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authMethod, setAuthMethod] = useState<AuthMethod | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalTab, setAuthModalTab] = useState<'wallet' | 'email'>('wallet');
+  const [authModalEmailSection, setAuthModalEmailSection] =
+    useState<AuthModalEmailSection>('signin');
 
   // Restore session on mount
   useEffect(() => {
@@ -31,9 +39,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((me) => {
         setToken(stored);
         setUser({
-          id: me.wallet_address || '',
-          email: (me as any).email || null,
-          wallet_address: me.wallet_address || null,
+          id: me.sub ?? me.wallet_address ?? '',
+          email: me.email,
+          wallet_address: me.wallet_address,
           display_name: null,
           created_at: me.issued_at || '',
         });
@@ -189,7 +197,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const me = await getMe(token);
       setUser((prev) =>
         prev
-          ? { ...prev, wallet_address: me.wallet_address || null }
+          ? {
+              ...prev,
+              id: me.sub ?? me.wallet_address ?? prev.id,
+              wallet_address: me.wallet_address ?? prev.wallet_address,
+              email: me.email ?? prev.email,
+            }
           : prev,
       );
     } catch {
@@ -197,10 +210,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token, signOut]);
 
-  const openAuthModal = useCallback((tab: 'wallet' | 'email' = 'wallet') => {
-    setAuthModalTab(tab);
-    setAuthModalOpen(true);
-  }, []);
+  const openAuthModal = useCallback(
+    (tab: AuthModalTab = 'welcome', section: AuthModalEmailSection = 'signin') => {
+      setAuthModalTab(tab);
+      setAuthModalEmailSection(section);
+      setAuthModalOpen(true);
+    },
+    [],
+  );
 
   const closeAuthModal = useCallback(() => setAuthModalOpen(false), []);
 
@@ -230,6 +247,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     closeAuthModal,
     authModalOpen,
     authModalTab,
+    authModalEmailSection,
   };
 
   return <AuthContext.Provider value={ctx}>{children}</AuthContext.Provider>;

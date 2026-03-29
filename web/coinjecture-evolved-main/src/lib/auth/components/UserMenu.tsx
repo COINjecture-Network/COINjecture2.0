@@ -1,5 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
+import { LogIn } from 'lucide-react';
 import { useAuth } from '../useAuth';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 function truncate(s: string, head = 6, tail = 4): string {
   if (s.length <= head + tail + 3) return s;
@@ -30,108 +39,96 @@ export function UserMenu() {
 
   if (isLoading) {
     return (
-      <div className="rounded-lg bg-zinc-800 px-4 py-2 text-sm text-zinc-500">
-        Loading...
-      </div>
+      <Button variant="outline" size="sm" disabled className="min-w-[5.5rem] border-border/60">
+        …
+      </Button>
     );
   }
 
-  // Unauthenticated
   if (!isAuthenticated) {
     return (
-      <button
-        onClick={() => openAuthModal('wallet')}
-        className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm
-                   font-medium text-white transition-colors"
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="border-border/60 bg-background/50 backdrop-blur-sm gap-2"
+        onClick={() => openAuthModal('welcome')}
       >
-        Sign In
-      </button>
+        <LogIn className="h-4 w-4 opacity-80" />
+        Log in
+      </Button>
     );
   }
 
-  // Status dot color
   const dotColor = isFullyLinked
-    ? 'bg-blue-400'           // email + wallet
+    ? 'bg-blue-400'
     : user?.wallet_address
-    ? 'bg-emerald-400'        // wallet only
-    : 'bg-amber-400';         // email only
+      ? 'bg-emerald-400'
+      : 'bg-amber-400';
 
   const displayLabel = user?.wallet_address
     ? truncate(user.wallet_address)
     : user?.email
-    ? truncate(user.email, 10, 0)
-    : 'Signed In';
+      ? truncate(user.email, 10, 0)
+      : 'Account';
 
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="rounded-lg bg-zinc-800 hover:bg-zinc-700 px-4 py-2 text-sm font-medium
-                   text-zinc-200 border border-zinc-600 flex items-center gap-2 transition-colors"
-      >
-        <span className={`h-2 w-2 rounded-full ${dotColor}`} />
-        <span className="font-mono">{displayLabel}</span>
-      </button>
-
-      {open && (
-        <div className="absolute right-0 top-full mt-1 w-52 rounded-lg bg-zinc-800 border
-                        border-zinc-700 shadow-lg py-1 z-50">
-          {/* Copy address (wallet users) */}
+    <div ref={ref}>
+      <DropdownMenu open={open} onOpenChange={setOpen}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-border/60 bg-background/50 font-mono text-xs gap-2 max-w-[11rem] sm:max-w-[14rem]"
+          >
+            <span className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`} />
+            <span className="truncate">{displayLabel}</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
           {user?.wallet_address && (
-            <button
+            <DropdownMenuItem
               onClick={() => {
                 navigator.clipboard.writeText(user.wallet_address!);
                 setOpen(false);
               }}
-              className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700
-                         transition-colors"
             >
-              Copy Address
-            </button>
+              Copy wallet address
+            </DropdownMenuItem>
           )}
-
-          {/* Link wallet (email-only users) */}
           {!user?.wallet_address && authMethod === 'email' && (
-            <button
+            <DropdownMenuItem
               onClick={() => {
                 openAuthModal('wallet');
                 setOpen(false);
               }}
-              className="w-full px-3 py-2 text-left text-sm text-amber-400 hover:bg-zinc-700
-                         transition-colors"
             >
-              Link Wallet
-            </button>
+              Link wallet
+            </DropdownMenuItem>
           )}
-
-          {/* Add email (wallet-only users) */}
           {!user?.email && authMethod === 'wallet' && (
-            <button
+            <DropdownMenuItem
               onClick={() => {
-                openAuthModal('email');
+                openAuthModal('email', 'signin');
                 setOpen(false);
               }}
-              className="w-full px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-700
-                         transition-colors"
             >
-              Add Email
-            </button>
+              Add email
+            </DropdownMenuItem>
           )}
-
-          <hr className="border-zinc-700 my-1" />
-
-          <button
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
             onClick={() => {
               signOut();
               setOpen(false);
             }}
-            className="w-full px-3 py-2 text-left text-sm text-red-400 hover:bg-zinc-700
-                       transition-colors"
           >
-            Sign Out
-          </button>
-        </div>
-      )}
+            Sign out
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

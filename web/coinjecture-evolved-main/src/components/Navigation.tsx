@@ -5,6 +5,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Menu, X, Wallet } from "lucide-react";
 import { useState } from "react";
 import { useWallet } from "@/contexts/WalletContext";
+import { UserMenu } from "@/lib/auth";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,7 +62,10 @@ export const Navigation = () => {
             >
               Whitepaper
             </NavLink>
-            <ThemeToggle />
+            <div className="flex items-center gap-3 shrink-0">
+              <ThemeToggle />
+              <UserMenu />
+            </div>
             {selectedKeyPair ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -94,13 +98,18 @@ export const Navigation = () => {
             )}
           </div>
 
-          {/* Mobile Menu Button */}
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            className="md:hidden text-foreground"
-          >
-            {isOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
+          {/* Mobile: account + menu (auth is here without opening the drawer) */}
+          <div className="flex md:hidden items-center gap-2">
+            <UserMenu />
+            <button
+              type="button"
+              onClick={() => setIsOpen(!isOpen)}
+              className="text-foreground p-1"
+              aria-label={isOpen ? 'Close menu' : 'Open menu'}
+            >
+              {isOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
+          </div>
         </div>
 
         {/* Mobile Navigation */}
@@ -141,7 +150,7 @@ export const Navigation = () => {
             >
               Whitepaper
             </NavLink>
-            <div className="flex items-center gap-2 pt-2">
+            <div className="flex flex-col gap-2 pt-2">
               <ThemeToggle />
               <Button 
                 variant="default" 

@@ -148,6 +148,7 @@ async fn test_full_siwb_flow() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let me = body_json(resp.into_body()).await;
+    assert_eq!(me["sub"], pubkey_hex);
     assert_eq!(me["wallet_address"], pubkey_hex);
     assert_eq!(me["network"], "testnet");
 }

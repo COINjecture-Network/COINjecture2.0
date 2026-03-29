@@ -8,9 +8,12 @@ REGION="${AWS_REGION:-us-east-1}"
 
 echo "🚀 Starting deployment..."
 
-# Check if .env.production exists
+# Email & wallet auth need the real API origin baked into the bundle.
+# Add `.env.production` (see `.env.production.example`) with at least:
+#   VITE_API_URL=https://your-api-host
 if [ ! -f .env.production ]; then
-  echo "⚠️  Warning: .env.production not found. Using default environment variables."
+  echo "⚠️  Warning: .env.production not found — VITE_API_URL defaults to localhost in the build."
+  echo "    Copy .env.production.example to .env.production and set your production API URL."
 fi
 
 # Build the frontend

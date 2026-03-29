@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../useAuth';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export function EmailSignupForm({ onSuccess }: { onSuccess?: () => void }) {
   const { signUpWithEmail } = useAuth();
@@ -20,8 +22,8 @@ export function EmailSignupForm({ onSuccess }: { onSuccess?: () => void }) {
       } else {
         onSuccess?.();
       }
-    } catch (err: any) {
-      setError(err.message || 'Signup failed');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Signup failed');
     } finally {
       setLoading(false);
     }
@@ -30,9 +32,9 @@ export function EmailSignupForm({ onSuccess }: { onSuccess?: () => void }) {
   if (needsConfirmation) {
     return (
       <div className="text-center py-4">
-        <p className="text-emerald-400 font-medium">Check your email</p>
-        <p className="text-zinc-400 text-sm mt-2">
-          We sent a confirmation link to <strong>{email}</strong>
+        <p className="text-primary font-medium">Check your email</p>
+        <p className="text-muted-foreground text-sm mt-2">
+          We sent a confirmation link to <strong className="text-foreground">{email}</strong>
         </p>
       </div>
     );
@@ -40,34 +42,27 @@ export function EmailSignupForm({ onSuccess }: { onSuccess?: () => void }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
-      <input
+      <Input
         type="email"
         placeholder="Email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
-        className="w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm
-                   text-zinc-200 placeholder-zinc-500 focus:border-emerald-500 focus:outline-none"
+        autoComplete="email"
         required
       />
-      <input
+      <Input
         type="password"
         placeholder="Password (min 8 characters)"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         minLength={8}
-        className="w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm
-                   text-zinc-200 placeholder-zinc-500 focus:border-emerald-500 focus:outline-none"
+        autoComplete="new-password"
         required
       />
-      {error && <p className="text-red-400 text-xs">{error}</p>}
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-2 text-sm
-                   font-medium text-white transition-colors disabled:opacity-50"
-      >
-        {loading ? 'Creating account...' : 'Sign Up'}
-      </button>
+      {error && <p className="text-destructive text-xs">{error}</p>}
+      <Button type="submit" disabled={loading} className="w-full">
+        {loading ? 'Creating account…' : 'Create account'}
+      </Button>
     </form>
   );
 }

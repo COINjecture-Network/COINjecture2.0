@@ -3,13 +3,17 @@
 //! The API server proxies peer management requests to the node's
 //! existing JSON-RPC server (default: localhost:9933).
 
+use bytes::Bytes;
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::fmt;
+use std::time::Duration;
 
 pub struct NodeRpcClient {
     url: String,
     http: Client,
+    /// Longer timeout for browser-originated JSON-RPC forwarded through `POST /node-rpc`.
+    http_proxy: Client,
 }
 
 #[derive(Debug)]
@@ -34,10 +38,33 @@ impl NodeRpcClient {
         Self {
             url: url.trim_end_matches('/').to_string(),
             http: Client::builder()
-                .timeout(std::time::Duration::from_secs(5))
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap_or_default(),
+            http_proxy: Client::builder()
+                .timeout(Duration::from_secs(60))
                 .build()
                 .unwrap_or_default(),
         }
+    }
+
+    /// Forward a raw JSON-RPC POST body to the node; returns upstream status + body bytes.
+    pub async fn forward_jsonrpc_body(&self, body: Bytes) -> Result<(u16, Bytes), NodeRpcError> {
+        let resp = self
+            .http_proxy
+            .post(&self.url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| NodeRpcError::Unavailable(e.to_string()))?;
+
+        let status = resp.status().as_u16();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| NodeRpcError::RequestFailed(e.to_string()))?;
+        Ok((status, bytes))
     }
 
     /// Send a JSON-RPC 2.0 request and return the result field.

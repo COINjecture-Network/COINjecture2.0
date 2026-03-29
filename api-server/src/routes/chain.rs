@@ -13,6 +13,15 @@ pub struct ChainInfoResponse {
     syncing: bool,
     peer_count: Option<u64>,
     version: String,
+    /// Mirrors node `chain_getInfo` when the API can reach the node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chain_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    best_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    genesis_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_work: Option<u64>,
 }
 
 /// `GET /chain/latest-block` — returns cached latest block from the poller.
@@ -38,13 +47,24 @@ pub async fn latest_block(State(state): State<AppState>) -> Result<Json<Value>, 
 
 /// `GET /chain/info` — returns chain status (always returns at minimum the network name).
 pub async fn chain_info(State(state): State<AppState>) -> Json<ChainInfoResponse> {
+    let mut chain_id = None;
+    let mut best_hash = None;
+    let mut genesis_hash = None;
+    let mut total_work = None;
+
     let (height, syncing, peer_count) = if let Some(ref rpc) = state.node_rpc {
         match rpc.get_chain_info().await {
-            Ok(info) => (
-                info["best_height"].as_u64(),
-                info["is_syncing"].as_bool().unwrap_or(false),
-                info["peer_count"].as_u64(),
-            ),
+            Ok(info) => {
+                chain_id = info["chain_id"].as_str().map(str::to_owned);
+                best_hash = info["best_hash"].as_str().map(str::to_owned);
+                genesis_hash = info["genesis_hash"].as_str().map(str::to_owned);
+                total_work = info["total_work"].as_u64();
+                (
+                    info["best_height"].as_u64(),
+                    info["is_syncing"].as_bool().unwrap_or(false),
+                    info["peer_count"].as_u64(),
+                )
+            }
             Err(_) => (None, false, None),
         }
     } else {
@@ -57,5 +77,9 @@ pub async fn chain_info(State(state): State<AppState>) -> Json<ChainInfoResponse
         syncing,
         peer_count,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        chain_id,
+        best_hash,
+        genesis_hash,
+        total_work,
     })
 }
