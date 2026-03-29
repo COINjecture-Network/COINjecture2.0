@@ -30,7 +30,7 @@ export default function Whitepaper() {
               </Button>
               <Button size="lg" variant="outline" className="gap-2">
                 <Github className="h-4 w-4" />
-                <a href="https://github.com/Quigles1337/COINjecture2.0" target="_blank" rel="noopener noreferrer">
+                <a href="https://github.com/COINjecture-Network/COINjecture2.0" target="_blank" rel="noopener noreferrer">
                   View on GitHub
                 </a>
               </Button>
@@ -56,14 +56,14 @@ export default function Whitepaper() {
             <h2 className="text-2xl font-bold mb-4">Code Base</h2>
             <div className="space-y-3">
               <a 
-                href="https://github.com/Quigles1337/COINjecture2.0" 
+                href="https://github.com/COINjecture-Network/COINjecture2.0" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted/50 transition-colors group"
               >
                 <GitBranch className="h-5 w-5 text-primary" />
                 <span className="flex-1 text-foreground group-hover:text-primary transition-colors">
-                  Active Testnet
+                  Active Codebase
                 </span>
                 <ExternalLink className="h-4 w-4 text-muted-foreground" />
               </a>

@@ -27,7 +27,7 @@ export const Footer = () => {
             <ul className="space-y-2 text-sm text-muted-foreground">
               <li><a href="/roadmap" className="hover:text-foreground transition-colors">Roadmap</a></li>
               <li><a href="/whitepaper" className="hover:text-foreground transition-colors">Whitepaper</a></li>
-              <li><a href="https://github.com/Quigles1337/COINjecture2.0" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a></li>
+              <li><a href="https://github.com/COINjecture-Network/COINjecture2.0" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a></li>
               <li><a href="#" className="hover:text-foreground transition-colors">Support</a></li>
             </ul>
           </div>
@@ -35,7 +35,7 @@ export const Footer = () => {
           <div>
             <h4 className="font-semibold mb-4">Community</h4>
             <div className="flex gap-4">
-              <a href="https://github.com/Quigles1337/COINjecture2.0" target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="GitHub">
+              <a href="https://github.com/COINjecture-Network/COINjecture2.0" target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="GitHub">
                 <Github className="h-5 w-5" />
               </a>
               <a href="https://x.com/COINjecture" target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Twitter">
