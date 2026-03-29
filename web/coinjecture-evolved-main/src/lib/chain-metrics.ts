@@ -4,6 +4,27 @@
  * - Block reward: tokenomics/src/rewards.rs — reward = base_constant × (work_score / epoch_average_work)
  */
 
+/** Match `consensus/src/work_score.rs` — same floors as the f64 `calculate` path. */
+const MIN_VERIFY_TIME_US = 1;
+const MIN_ASYMMETRY_RATIO = 2;
+
+/**
+ * Bit-equivalent work score (header `work_score`), matching `WorkScoreCalculator::calculate`.
+ */
+export function workScoreBitsFromPouw(
+  solveTimeUs: number,
+  verifyTimeUs: number,
+  quality: number
+): number {
+  if (!Number.isFinite(quality) || quality <= 0) return 0;
+  const q = Math.min(1, Math.max(0, quality));
+  const solveUs = Math.max(0, Math.floor(solveTimeUs));
+  const verifyUs = Math.max(MIN_VERIFY_TIME_US, Math.floor(verifyTimeUs));
+  if (solveUs < verifyUs * MIN_ASYMMETRY_RATIO) return 0;
+  const ratio = solveUs / verifyUs;
+  return Math.log2(ratio) * q;
+}
+
 /** `RewardCalculator::new()` in tokenomics/src/rewards.rs */
 export const REWARD_BASE_CONSTANT = 10_000_000;
 

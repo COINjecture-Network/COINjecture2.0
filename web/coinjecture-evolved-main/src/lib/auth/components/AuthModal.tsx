@@ -102,7 +102,7 @@ export function AuthModal() {
                   Welcome to COINjecture
                 </DialogTitle>
                 <DialogDescription className="text-base">
-                  Sign in or create an account — same dialog, fewer buttons in the nav.
+                  Sign in or create an account.
                 </DialogDescription>
               </DialogHeader>
 

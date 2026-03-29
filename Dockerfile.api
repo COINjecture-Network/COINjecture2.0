@@ -1,5 +1,6 @@
 # Stage 1: Chef — compute dependency recipe
-FROM rust:1.82-slim AS chef
+# Align with root Dockerfile (rust 1.82’s cargo cannot install current cargo-chef / edition2024 deps)
+FROM rust:1.88-slim AS chef
 RUN cargo install cargo-chef
 WORKDIR /app
 

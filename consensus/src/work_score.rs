@@ -64,13 +64,17 @@ use std::time::Duration;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Minimum verify time floor in seconds (f64 path only — display/compat).
-/// Prevents division-by-zero for negligibly fast verification.
-const MIN_VERIFY_TIME_SECS: f64 = 0.001;
+/// Minimum verify time floor in seconds (f64 path).
+/// Must match the header / microsecond path: use **1 µs**, not 1 ms. A 1 ms floor
+/// made `solve_time / verify_time` artificially tiny for sub-millisecond solves
+/// (common for SAT/TSP), zeroing work while `time_asymmetry_ratio` still showed
+/// large asymmetry from raw `Instant` timings.
+const MIN_VERIFY_TIME_SECS: f64 = 1e-6;
 
 /// Minimum verify time floor in microseconds (deterministic integer path).
-/// 1 ms = 1_000 μs.  Real NP verification takes at least this long.
-const MIN_VERIFY_TIME_US: u64 = 1_000;
+/// Same epsilon as `MIN_VERIFY_TIME_SECS` — avoids div-by-zero without dominating
+/// the ratio when verification is genuinely faster than a millisecond.
+const MIN_VERIFY_TIME_US: u64 = 1;
 
 /// Minimum meaningful asymmetry ratio (f64 path).
 /// log₂(2) = 1 bit — solving took at least 2× longer than verifying.
@@ -305,6 +309,30 @@ mod tests {
         let score = calc.calculate(Duration::from_millis(1), Duration::from_millis(1), 1.0);
 
         assert_eq!(score, 0.0, "Trivial asymmetry should produce zero work");
+    }
+
+    /// Sub-millisecond solves with microsecond-scale verify must match header asymmetry:
+    /// a 1 ms verify floor used to force ratio < 2 and zero work while UI showed 100×+ asymmetry.
+    #[test]
+    fn test_sub_ms_solve_fast_verify_matches_log2_formula() {
+        let calc = WorkScoreCalculator::new();
+        let score = calc.calculate(Duration::from_micros(324), Duration::from_micros(3), 1.0);
+        let expected = (324.0_f64 / 3.0).log2();
+        assert!(
+            (score - expected).abs() < 0.02,
+            "expected ~{:.2} bits (log₂ 108), got {:.2}",
+            expected,
+            score
+        );
+
+        let det = calc.calculate_deterministic(324, 3, 10_000);
+        let bits = coinject_core::fixed_point::to_f64(det);
+        assert!(
+            (bits - expected).abs() < 0.15,
+            "deterministic path should track f64, expected ~{:.2}, got {:.2}",
+            expected,
+            bits
+        );
     }
 
     #[test]

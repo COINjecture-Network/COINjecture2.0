@@ -103,9 +103,12 @@ pub const MESSAGE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// After this many consecutive timeouts, the peer is considered dead
 pub const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
 
-/// Minimum healthy peer count before triggering reconnection attempts
-/// Quality-based reconnection kicks in when healthy peers < this value
-pub const MIN_HEALTHY_PEERS: usize = 2;
+/// Minimum healthy peer count before ceasing bootnode redial / recovery dials.
+/// Must be **1** for small nets: with only two validators each node has at most **one**
+/// remote CPP peer, so a value of **2** is never satisfiable and spams
+/// `Insufficient healthy peers (1/1 …, 2 required)` forever.
+/// Larger deployments still benefit: we only skip redial once at least one peer is healthy.
+pub const MIN_HEALTHY_PEERS: usize = 1;
 
 /// Peer quality threshold below which peer is considered unhealthy (0.0-1.0)
 /// Peers with quality below this are not counted toward MIN_HEALTHY_PEERS

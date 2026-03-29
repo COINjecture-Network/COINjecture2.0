@@ -39,10 +39,12 @@ services:
       start_period: 30s
 
   # ── API Server ────────────────────────────────────────────────────────────
+  # Distinct image from `coinject-node:latest` — push/deploy independently if needed.
   api-server:
     build:
       context: .
       dockerfile: Dockerfile.api
+    image: coinject-api:latest
     container_name: coinject-api
     ports:
       - "3030:3030"

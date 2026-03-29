@@ -9,6 +9,8 @@ import {
   blockRewardFromWorkScore,
   formatBeans,
   formatWorkScoreBits,
+  parseBalance,
+  workScoreBitsFromPouw,
 } from "@/lib/chain-metrics";
 
 /** RPC may send `problem` as object or (rarely) JSON string. */
@@ -52,6 +54,41 @@ function headerWorkScore(header: unknown): number {
   const h = header as Record<string, unknown>;
   const raw = h.work_score ?? h.workScore;
   return typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+}
+
+/**
+ * Header `work_score` is authoritative when non-zero. Some nodes/blocks stored 0 while PoUW
+ * fields (solve/verify/quality) still reflect real work — recompute bits with the same formula
+ * as `consensus/src/work_score.rs` + `chain-metrics.ts`.
+ */
+function effectiveHeaderWorkScoreBits(header: Record<string, unknown>): number {
+  const stored = headerWorkScore(header);
+  if (Number.isFinite(stored) && stored > 0) {
+    return stored;
+  }
+  const solveUs =
+    typeof header.solve_time_us === "number"
+      ? header.solve_time_us
+      : Number(header.solve_time_us ?? 0);
+  const verifyUs =
+    typeof header.verify_time_us === "number"
+      ? header.verify_time_us
+      : Number(header.verify_time_us ?? 0);
+  const quality =
+    typeof header.solution_quality === "number"
+      ? header.solution_quality
+      : Number(header.solution_quality ?? 0);
+  const recomputed = workScoreBitsFromPouw(solveUs, verifyUs, quality);
+  if (Number.isFinite(recomputed) && recomputed > 0) {
+    return recomputed;
+  }
+  return Number.isFinite(stored) ? stored : 0;
+}
+
+function coinbaseRewardBeansFromBlock(raw: Record<string, unknown>): bigint | null {
+  const cb = raw.coinbase;
+  if (cb == null || typeof cb !== "object" || Array.isArray(cb)) return null;
+  return parseBalance((cb as Record<string, unknown>).reward);
 }
 
 function numish(v: unknown): number | null {
@@ -150,15 +187,18 @@ export const LiveSolutionFeed = () => {
         header: Record<string, unknown>,
         height: number,
         note: string,
+        blockRaw?: Record<string, unknown>,
       ) => {
-        const ws = headerWorkScore(header);
-        const rewardBeans = blockRewardFromWorkScore(Number.isFinite(ws) ? ws : 0);
+        const bits = effectiveHeaderWorkScoreBits(header);
+        const fromCb = blockRaw ? coinbaseRewardBeansFromBlock(blockRaw) : null;
+        const rewardBeans =
+          fromCb !== null && fromCb > 0n ? fromCb : blockRewardFromWorkScore(bits);
         newSolutions.push({
           block_height: height,
           problem_type: "Custom",
           solver: formatMinerShort(header.miner),
           reward_beans: rewardBeans,
-          work_score_bits: Number.isFinite(ws) ? ws : 0,
+          work_score_bits: bits,
           time_asymmetry_ratio: typeof header.time_asymmetry_ratio === "number" ? header.time_asymmetry_ratio : Number(header.time_asymmetry_ratio ?? NaN),
           solution_quality: typeof header.solution_quality === "number" ? header.solution_quality : Number(header.solution_quality ?? NaN),
           solve_time_us: typeof header.solve_time_us === "number" ? header.solve_time_us : Number(header.solve_time_us ?? 0),
@@ -191,6 +231,7 @@ export const LiveSolutionFeed = () => {
             headerRaw,
             height,
             "Block header received; solution_reveal missing from this RPC response (try another node or refresh).",
+            raw,
           );
           return;
         }
@@ -208,7 +249,10 @@ export const LiveSolutionFeed = () => {
           }
         }
 
-        const rewardBeans = blockRewardFromWorkScore(headerWorkScore(headerRaw));
+        const bits = effectiveHeaderWorkScoreBits(headerRaw);
+        const fromCb = coinbaseRewardBeansFromBlock(raw);
+        const rewardBeans =
+          fromCb !== null && fromCb > 0n ? fromCb : blockRewardFromWorkScore(bits);
 
         let problemType: "SubsetSum" | "TSP" | "SAT" | "Custom" | null = null;
         let problemData: Solution['problem_data'] = {};
@@ -301,7 +345,7 @@ export const LiveSolutionFeed = () => {
           problem_type: problemType,
           solver,
           reward_beans: rewardBeans,
-          work_score_bits: headerWorkScore(headerRaw),
+          work_score_bits: bits,
           time_asymmetry_ratio: typeof headerRaw.time_asymmetry_ratio === "number" ? headerRaw.time_asymmetry_ratio : Number(headerRaw.time_asymmetry_ratio ?? NaN),
           solution_quality: typeof headerRaw.solution_quality === "number" ? headerRaw.solution_quality : Number(headerRaw.solution_quality ?? NaN),
           solve_time_us: typeof headerRaw.solve_time_us === "number" ? headerRaw.solve_time_us : Number(headerRaw.solve_time_us ?? 0),

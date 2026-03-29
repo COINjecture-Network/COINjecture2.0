@@ -1061,7 +1061,7 @@ impl Miner {
 
         // 6. Calculate PoUW transparency metrics
         let solve_time_us = solve_time.as_micros() as u64;
-        let verify_time_us = verify_time.as_micros().max(1) as u64; // Minimum 1ms to avoid div by zero
+        let verify_time_us = verify_time.as_micros().max(1) as u64; // Minimum 1 µs to avoid div-by-zero in ratio
         let time_asymmetry_ratio = solve_time_us as f64 / verify_time_us as f64;
         let solution_quality = solution.quality(&problem);
         let complexity_weight = problem.difficulty_weight();

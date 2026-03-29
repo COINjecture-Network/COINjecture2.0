@@ -5,7 +5,7 @@
 
 import { blake3 } from '@noble/hashes/blake3';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
-import { blockRewardFromWorkScore } from './chain-metrics';
+import { blockRewardFromWorkScore, workScoreBitsFromPouw } from './chain-metrics';
 import { ProblemType, SolutionType, Block, BlockHeader } from './rpc-client';
 
 // Types matching Rust implementation
@@ -661,23 +661,6 @@ function calculateSolutionQuality(solution: Solution, problem: ProblemType): num
 }
 
 /**
- * Estimate solve memory usage (bytes)
- */
-function estimateSolveMemory(problem: ProblemType): number {
-  if (problem.SubsetSum) {
-    // DP table: O(n * sum_range)
-    return problem.SubsetSum.numbers.length * 1000 * 8; // bytes
-  } else if (problem.SAT) {
-    // Assignment array: O(variables)
-    return problem.SAT.variables * 1; // bytes (booleans)
-  } else if (problem.TSP) {
-    // Distance matrix: O(cities^2)
-    return problem.TSP.cities * problem.TSP.cities * 8; // bytes (u64)
-  }
-  return 1024; // Default
-}
-
-/**
  * Create complete block from problem, solution, and chain state
  */
 export async function createBlock(
@@ -711,26 +694,19 @@ export async function createBlock(
   const commitment = createCommitment(problem, solution, prevHashHex);
   console.log(`🔒 Commitment created: ${commitment.hash.slice(0, 16)}...`);
   
-  // 4. Calculate work score and metrics (matching server-side calculation)
-  const solveTimeUs = Math.floor(solveTimeMs * 1000);
-  const verifyTimeUs = Math.max(1000, Math.floor(solveTimeMs * 0.1)); // Verification should be fast
+  // 4. Measured verify + PoUW metrics (consensus/src/work_score.rs: log₂(solve/verify)×quality)
+  const solveTimeUs = Math.max(0, Math.round(solveTimeMs * 1000));
+  const verifyStart = performance.now();
+  if (!verifySolution(solution, problem)) {
+    console.error('❌ Internal verify failed after solve');
+    return null;
+  }
+  const verifyTimeUs = Math.max(1, Math.round((performance.now() - verifyStart) * 1000));
   const timeAsymmetryRatio = solveTimeUs / verifyTimeUs;
   
-  // Calculate actual problem difficulty weight
   const complexityWeight = calculateProblemDifficultyWeight(problem);
-  
-  // Calculate actual solution quality
   const solutionQuality = calculateSolutionQuality(solution, problem);
-  
-  // Calculate work score using server-side formula:
-  // work_score = time_ratio * sqrt(space_ratio) * problem_weight * quality_score * energy_efficiency
-  const solveMemory = estimateSolveMemory(problem);
-  const verifyMemory = 1024; // Approximate verification memory
-  const spaceRatio = Math.sqrt(solveMemory / verifyMemory);
-  const energyPerOp = 0.001;
-  const energyEfficiency = 1.0 / (energyPerOp + 1.0);
-  
-  const workScore = timeAsymmetryRatio * spaceRatio * complexityWeight * solutionQuality * energyEfficiency;
+  const workScore = workScoreBitsFromPouw(solveTimeUs, verifyTimeUs, solutionQuality);
   
   const energyEstimateJoules = 100.0 * (solveTimeMs / 1000);
   
@@ -835,27 +811,26 @@ export async function createBlockFromSolvedProblem(
   transactions: any[] = [],
   difficulty: number = DEFAULT_DIFFICULTY
 ): Promise<Block | null> {
-  const prevHashHex = extractHashHex(prevHash);  if (!verifySolution(solution, problem)) {
+  const prevHashHex = extractHashHex(prevHash);
+  if (!verifySolution(solution, problem)) {
     console.error("❌ Solution does not verify against problem");
     return null;
   }
 
   const commitment = createCommitment(problem, solution, prevHashHex);
 
-  const solveTimeUs = Math.floor(solveTimeMs * 1000);
-  const verifyTimeUs = Math.max(1000, Math.floor(solveTimeMs * 0.1));
+  const solveTimeUs = Math.max(0, Math.round(solveTimeMs * 1000));
+  const verifyStart = performance.now();
+  if (!verifySolution(solution, problem)) {
+    console.error("❌ Solution failed timed verify pass");
+    return null;
+  }
+  const verifyTimeUs = Math.max(1, Math.round((performance.now() - verifyStart) * 1000));
   const timeAsymmetryRatio = solveTimeUs / verifyTimeUs;
 
   const complexityWeight = calculateProblemDifficultyWeight(problem);
   const solutionQuality = calculateSolutionQuality(solution, problem);
-
-  const solveMemory = estimateSolveMemory(problem);
-  const verifyMemory = 1024;
-  const spaceRatio = Math.sqrt(solveMemory / verifyMemory);
-  const energyPerOp = 0.001;
-  const energyEfficiency = 1.0 / (energyPerOp + 1.0);
-
-  const workScore = timeAsymmetryRatio * spaceRatio * complexityWeight * solutionQuality * energyEfficiency;
+  const workScore = workScoreBitsFromPouw(solveTimeUs, verifyTimeUs, solutionQuality);
   const energyEstimateJoules = 100.0 * (solveTimeMs / 1000);
 
   const timestamp = Math.floor(Date.now() / 1000);

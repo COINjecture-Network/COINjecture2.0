@@ -200,10 +200,12 @@ services:
       start_period: 40s
 
   # ── API Server ──────────────────────────────────────────────────────────────
+  # Separate image from P2P nodes (`coinject-node:latest`). Build: docker build -f Dockerfile.api -t coinject-api:latest .
   api-server:
     build:
       context: .
       dockerfile: Dockerfile.api
+    image: coinject-api:latest
     container_name: coinject-api
     ports:
       - "3030:3030"
