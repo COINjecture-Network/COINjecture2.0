@@ -11,6 +11,8 @@ import { hexToBytes } from '@noble/hashes/utils';
 
 /** Cross-origin JSON-RPC: omit cookies so `Access-Control-Allow-Origin: *` is valid. */
 const RPC_FETCH_TIMEOUT_MS = 45_000;
+/** `chain_submitBlock` payloads are large; API + Nginx must allow big bodies and long proxy reads. */
+const RPC_SUBMIT_BLOCK_TIMEOUT_MS = 300_000;
 /** Parallel `callAll` must not wait for the slowest node to hit the full client timeout (bad UX). */
 const RPC_CALL_ALL_TIMEOUT_MS = 14_000;
 
@@ -408,25 +410,33 @@ export class RpcClient {
    * Call RPC method with failover support
    * Tries each node in order until one succeeds
    */
-  private async call<T>(method: string, params: unknown[] = []): Promise<T> {
+  private async call<T>(
+    method: string,
+    params: unknown[] = [],
+    timeoutMs: number = RPC_FETCH_TIMEOUT_MS,
+  ): Promise<T> {
     const errors: Error[] = [];
     
     // Try each URL in order (failover)
     for (let i = 0; i < this.baseUrls.length; i++) {
       const url = this.baseUrls[i];
       try {
-        const response = await fetchWithTimeout(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
+        const response = await fetchWithTimeout(
+          url,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: this.requestId++,
+              method,
+              params,
+            }),
           },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: this.requestId++,
-            method,
-            params,
-          }),
-        });
+          timeoutMs,
+        );
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
@@ -624,7 +634,7 @@ export class RpcClient {
     // Hash and Address are serialized as byte arrays [u8; 32]
     // Convert any hex strings to byte arrays before submission
     const serializedBlock = this.serializeBlockForRpc(block);
-    return this.call<string>('chain_submitBlock', [serializedBlock]);
+    return this.call<string>('chain_submitBlock', [serializedBlock], RPC_SUBMIT_BLOCK_TIMEOUT_MS);
   }
 
   private serializeBlockForRpc(block: Block): any {
@@ -685,7 +695,7 @@ export class RpcClient {
   // ========== Transaction Methods ==========
   
   async submitTransaction(txHex: string): Promise<string> {
-    return this.call<string>('transaction_submit', [txHex]);
+    return this.call<string>('transaction_submit', [txHex], RPC_SUBMIT_BLOCK_TIMEOUT_MS);
   }
 
   async getTransactionStatus(txHash: string): Promise<TransactionStatus> {

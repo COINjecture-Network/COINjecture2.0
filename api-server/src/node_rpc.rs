@@ -41,8 +41,9 @@ impl NodeRpcClient {
                 .timeout(Duration::from_secs(5))
                 .build()
                 .unwrap_or_default(),
+            // Block submission (`chain_submitBlock`) can be large + slow; browser → /node-rpc → node.
             http_proxy: Client::builder()
-                .timeout(Duration::from_secs(60))
+                .timeout(Duration::from_secs(300))
                 .build()
                 .unwrap_or_default(),
         }

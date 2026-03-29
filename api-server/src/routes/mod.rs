@@ -8,6 +8,7 @@ pub mod jsonrpc_proxy;
 pub mod marketplace;
 pub mod peers;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::Router;
@@ -83,10 +84,10 @@ pub fn build_routes(state: AppState) -> Router {
             rate_limit::rate_limit_middleware,
         ))
         .with_state(state.clone())
-        // Timeout (only API routes, NOT SSE)
+        // Timeout (only API routes, NOT SSE). `/node-rpc` may run `chain_submitBlock` (large/slow).
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(30),
+            Duration::from_secs(300),
         ));
 
     // ── SSE routes (NO timeout — long-lived connections) ────────────────
@@ -99,6 +100,8 @@ pub fn build_routes(state: AppState) -> Router {
     // ── Merge + shared middleware ───────────────────────────────────────
     api_routes
         .merge(sse_routes)
+        // Default is ~2 MiB; solver-lab `chain_submitBlock` JSON exceeds that.
+        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .layer(axum::middleware::from_fn(
             crate::metrics::metrics_middleware,
         ))
