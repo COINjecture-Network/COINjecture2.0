@@ -29,13 +29,23 @@ pub async fn proxy(State(state): State<AppState>, body: Bytes) -> Result<Respons
     })?;
 
     let body_len = body.len();
-    let (status_u16, bytes) = rpc
-        .forward_jsonrpc_body(body)
-        .await
-        .map_err(|e| {
-            tracing::warn!(error = %e, body_len, "/node-rpc forward to node failed");
-            ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
-        })?;
+
+    // Retry once on connection error — the node may briefly refuse connections
+    // while mining a block (CPU-intensive PoW solving).
+    let result = rpc.forward_jsonrpc_body(body.clone()).await;
+    let (status_u16, bytes) = match result {
+        Ok(r) => r,
+        Err(first_err) => {
+            tracing::debug!(error = %first_err, body_len, "/node-rpc first attempt failed, retrying in 500ms");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            rpc.forward_jsonrpc_body(body)
+                .await
+                .map_err(|e| {
+                    tracing::warn!(error = %e, body_len, "/node-rpc forward to node failed (after retry)");
+                    ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
+                })?
+        }
+    };
 
     let status = StatusCode::from_u16(status_u16).unwrap_or(StatusCode::BAD_GATEWAY);
 
