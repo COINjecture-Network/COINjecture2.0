@@ -19,14 +19,16 @@ pub struct ProcessResult {
 impl EventProcessor {
     /// Process a confirmed block — finalize trades and update marketplace state.
     pub async fn process_block(&self, block: &Value) -> Result<ProcessResult, String> {
-        let height = block["height"].as_u64().unwrap_or(0);
-        let tx_count = block["tx_count"].as_u64().unwrap_or(0);
+        // Block structure: { header: { height, prev_hash, ... }, transactions: [...], ... }
+        let header = &block["header"];
+        let height = header["height"].as_u64().unwrap_or(0);
+        let tx_count = block["transactions"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
 
-        // Finalize trades that reference transactions in this block
-        // (In production, match on_chain_tx_hash from the trades table)
-        let trades_finalized = 0; // Actual finalization requires tx hash matching
+        let trades_finalized = 0;
 
-        // Record indexer metrics
         metrics::gauge!("coinjecture_indexer_height").set(height as f64);
         metrics::counter!("coinjecture_blocks_indexed_total").increment(1);
 
@@ -44,7 +46,6 @@ impl EventProcessor {
         tracing::warn!(fork_height, "Chain reorg — rolling back indexed data");
         metrics::counter!("coinjecture_reorg_events_total").increment(1);
 
-        // Unfinalize trades above fork height
         let body = serde_json::json!({ "is_finalized": false });
         let _ = self
             .supabase

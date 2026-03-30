@@ -28,11 +28,12 @@ pub async fn proxy(State(state): State<AppState>, body: Bytes) -> Result<Respons
         ApiError::ServiceUnavailable("Node RPC not configured (set NODE_RPC_URL for the API process)".into())
     })?;
 
+    let body_len = body.len();
     let (status_u16, bytes) = rpc
         .forward_jsonrpc_body(body)
         .await
         .map_err(|e| {
-            tracing::warn!(error = %e, body_len = body.len(), "/node-rpc forward to node failed");
+            tracing::warn!(error = %e, body_len, "/node-rpc forward to node failed");
             ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
         })?;
 
