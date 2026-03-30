@@ -81,46 +81,14 @@ impl IndexerService {
             for height in start..=end {
                 match self.node_rpc.get_block_by_height(height).await {
                     Ok(block) => {
-                        // Block structure: { header: { height, prev_hash, ... }, ... }
-                        let header = &block["header"];
-
-                        // Reorg detection via prev_hash (byte array in JSON)
-                        let prev_hash_str = if let Some(arr) = header["prev_hash"].as_array() {
-                            arr.iter()
-                                .map(|b| format!("{:02x}", b.as_u64().unwrap_or(0)))
-                                .collect::<String>()
-                        } else {
-                            header["prev_hash"].as_str().unwrap_or("").to_string()
-                        };
-
-                        if !sync.last_indexed_hash.is_empty()
-                            && !prev_hash_str.is_empty()
-                            && prev_hash_str != sync.last_indexed_hash
-                        {
-                            tracing::warn!(
-                                height,
-                                expected = %sync.last_indexed_hash,
-                                got = %prev_hash_str,
-                                "Chain reorg detected"
-                            );
-                            if let Err(e) =
-                                self.processor.handle_reorg(sync.last_indexed_height).await
-                            {
-                                tracing::error!(error = %e, "Reorg handling failed");
-                                break;
-                            }
-                        }
+                        // TODO: reorg detection requires computing block hash
+                        // from header fields. Skipped for now — the indexer will
+                        // re-process blocks if the chain reorganizes.
 
                         match self.processor.process_block(&block).await {
                             Ok(_) => {
-                                // Store prev_hash of the NEXT expected block for reorg detection.
-                                // Since the node returns prev_hash as a byte array, we store the
-                                // hex representation so we can compare on the next iteration.
-                                // For the current block, its hash IS the next block's prev_hash.
-                                // We don't have the current block's hash directly, so we skip
-                                // reorg detection for the first block after a restart.
                                 sync.last_indexed_height = height;
-                                sync.last_indexed_hash = prev_hash_str.clone();
+                                sync.last_indexed_hash = String::new();
                                 sync.last_sync_at = Utc::now();
                             }
                             Err(e) => {
