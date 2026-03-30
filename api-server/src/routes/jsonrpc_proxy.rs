@@ -29,29 +29,35 @@ pub async fn proxy(State(state): State<AppState>, body: Bytes) -> Result<Respons
     })?;
 
     let body_len = body.len();
+    const MAX_RETRIES: u32 = 3;
+    const RETRY_DELAY_MS: u64 = 1000;
 
-    // Retry once on connection error — the node may briefly refuse connections
-    // while mining a block (CPU-intensive PoW solving).
-    let result = rpc.forward_jsonrpc_body(body.clone()).await;
-    let (status_u16, bytes) = match result {
-        Ok(r) => r,
-        Err(first_err) => {
-            tracing::debug!(error = %first_err, body_len, "/node-rpc first attempt failed, retrying in 500ms");
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            rpc.forward_jsonrpc_body(body)
-                .await
-                .map_err(|e| {
-                    tracing::warn!(error = %e, body_len, "/node-rpc forward to node failed (after retry)");
-                    ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
-                })?
+    // Retry up to 3 times with 1s delay — the node may briefly refuse connections
+    // while mining a block (CPU-intensive PoW solving). Worst case: ~3s before 503.
+    let mut last_err = String::new();
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            tracing::debug!(attempt, body_len, "/node-rpc retrying in {RETRY_DELAY_MS}ms");
+            tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS)).await;
         }
-    };
+        match rpc.forward_jsonrpc_body(body.clone()).await {
+            Ok(r) => {
+                if attempt > 0 {
+                    tracing::info!(attempt, body_len, "/node-rpc succeeded after retry");
+                }
+                let status = StatusCode::from_u16(r.0).unwrap_or(StatusCode::BAD_GATEWAY);
+                return Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+                    .body(Body::from(r.1))
+                    .map_err(|e| ApiError::Internal(e.to_string()));
+            }
+            Err(e) => {
+                last_err = e.to_string();
+            }
+        }
+    }
 
-    let status = StatusCode::from_u16(status_u16).unwrap_or(StatusCode::BAD_GATEWAY);
-
-    Response::builder()
-        .status(status)
-        .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-        .body(Body::from(bytes))
-        .map_err(|e| ApiError::Internal(e.to_string()))
+    tracing::warn!(body_len, retries = MAX_RETRIES, "/node-rpc all attempts failed: {last_err}");
+    Err(ApiError::ServiceUnavailable(format!("Node RPC forward failed after {MAX_RETRIES} retries: {last_err}")))
 }

@@ -425,49 +425,69 @@ export class RpcClient {
     timeoutMs: number = RPC_FETCH_TIMEOUT_MS,
   ): Promise<T> {
     const errors: Error[] = [];
-    
+
     // Try each URL in order (failover)
     for (let i = 0; i < this.baseUrls.length; i++) {
       const url = this.baseUrls[i];
-      try {
-        const response = await fetchWithTimeout(
-          url,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
+
+      // Retry up to 3 times on 503 (node busy mining) with 2s delay
+      for (let retry = 0; retry <= 3; retry++) {
+        try {
+          if (retry > 0) {
+            console.log(`[rpc-client] ${method}: retry ${retry}/3 after 503 (node busy)…`);
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+
+          const response = await fetchWithTimeout(
+            url,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: this.requestId++,
+                method,
+                params,
+              }),
             },
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: this.requestId++,
-              method,
-              params,
-            }),
-          },
-          timeoutMs,
-        );
+            timeoutMs,
+          );
 
-        if (!response.ok) {
-          throw await httpErrorFromResponse(response);
+          if (response.status === 503 && retry < 3) {
+            // Node busy — retry after delay
+            continue;
+          }
+
+          if (!response.ok) {
+            throw await httpErrorFromResponse(response);
+          }
+
+          const data: RpcResponse<T> = await response.json();
+
+          if (data.error) {
+            throw new Error(data.error.message || 'RPC error');
+          }
+
+          if (data.result === undefined) {
+            throw new Error('No result in RPC response');
+          }
+
+          // Success! Rotate to next URL for load balancing
+          if (retry > 0) {
+            console.log(`[rpc-client] ${method}: succeeded on retry ${retry}`);
+          }
+          this.rotateUrl();
+          return data.result;
+        } catch (error: any) {
+          if (retry < 3 && error.message?.includes('503')) {
+            continue; // retry on 503
+          }
+          // Store error and try next URL
+          errors.push(error);
+          break; // non-503 error — move to next URL
         }
-
-        const data: RpcResponse<T> = await response.json();
-
-        if (data.error) {
-          throw new Error(data.error.message || 'RPC error');
-        }
-
-        if (data.result === undefined) {
-          throw new Error('No result in RPC response');
-        }
-
-        // Success! Rotate to next URL for load balancing
-        this.rotateUrl();
-        return data.result;
-      } catch (error: any) {
-        // Store error and try next URL
-        errors.push(error);
-        // Continue to next URL
       }
     }
 
