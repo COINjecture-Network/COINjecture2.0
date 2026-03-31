@@ -32,7 +32,7 @@ metrics-exporter-prometheus = "0.16"
 
 # Auth (for SIWB)
 ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
-rand = "0.8"
+rand = "0.9"
 hex = "0.4"
 blake3.workspace = true
 jsonwebtoken = "9"
