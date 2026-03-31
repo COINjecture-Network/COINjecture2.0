@@ -90,7 +90,7 @@ tempfile = "3"
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
 
 # Metrics
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 lazy_static = "1.4"
 hyper = { version = "1.5", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
