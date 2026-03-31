@@ -38,7 +38,7 @@ futures = "0.3"
 # Cryptography
 sha2 = "0.10"
 sha3 = "0.10"
-blake3 = "1.5"
+blake3 = "1.8"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = "2.0"
 chacha20poly1305 = "0.10"
@@ -92,7 +92,7 @@ jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
 # Metrics
 prometheus = { version = "0.13", features = ["process"] }
 lazy_static = "1.4"
-hyper = { version = "1.5", features = ["full"] }
+hyper = { version = "1.9", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 http-body = "1.0"
