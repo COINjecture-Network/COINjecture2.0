@@ -1,0 +1,29 @@
+# Stage 1: Chef — compute dependency recipe
+# Align with root Dockerfile (rust 1.82’s cargo cannot install current cargo-chef / edition2024 deps)
+FROM rust:1.88-slim AS chef
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-chef
+WORKDIR /app
+
+# Stage 2: Planner — generate recipe
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Stage 3: Builder — cook dependencies (cached) then build
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+# Cook dependencies — this layer is cached until Cargo.toml/Cargo.lock change
+RUN cargo chef cook --release --recipe-path recipe.json -p coinjecture-api-server
+# Copy source and build
+COPY . .
+RUN cargo build --release -p coinjecture-api-server
+
+# Stage 4: Runtime — minimal image
+FROM gcr.io/distroless/cc-debian12 AS runtime
+COPY --from=builder /app/target/release/coinjecture-api /usr/local/bin/
+USER nonroot:nonroot
+EXPOSE 3030 9090
+ENTRYPOINT ["/usr/local/bin/coinjecture-api"]

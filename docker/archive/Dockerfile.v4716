@@ -1,0 +1,32 @@
+# Single-stage build to avoid multi-stage COPY issues
+FROM rust:1.85-slim
+
+WORKDIR /build
+
+# Install build AND runtime dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy source
+COPY . .
+
+# Build the binary
+RUN cargo build --profile fast-release -p coinject-node
+
+# Copy binary to final location and verify
+RUN ls -la target/fast-release/coinject && \
+    cp target/fast-release/coinject /usr/local/bin/coinject && \
+    chmod +x /usr/local/bin/coinject
+
+# Clean up to reduce image size
+RUN rm -rf target .git .cargo
+
+# Expose ports
+EXPOSE 9933 30333 9090
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/coinject"]
+

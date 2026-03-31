@@ -1,0 +1,116 @@
+# COINjecture 2.0 — Full Production Stack
+# Usage: docker compose -f docker-compose.production.yml up -d
+# Requires: .env.production with Supabase credentials
+
+services:
+  # ── COINjecture Node ──────────────────────────────────────────────────────
+  node:
+    # Must match `docker images` when using `up --no-build` (same tag as Dockerfile / main compose).
+    image: coinject-node:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coinject-node
+    ports:
+      - "707:707"
+      - "9933:9933"
+      - "9090:9090"
+    volumes:
+      - chain-data:/data
+    command: >
+      --mine
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      # Default RPC max body is 1 MiB — chain_submitBlock JSON exceeds that; API proxy then sees "error sending request".
+      - RPC_MAX_BODY_BYTES=${RPC_MAX_BODY_BYTES:-67108864}
+      - RPC_TIMEOUT_SECS=${RPC_TIMEOUT_SECS:-300}
+    restart: unless-stopped
+    networks:
+      - coinjecture
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── API Server ────────────────────────────────────────────────────────────
+  # Distinct image from `coinject-node:latest` — push/deploy independently if needed.
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: coinject-api:latest
+    container_name: coinject-api
+    ports:
+      - "3030:3030"
+    environment:
+      - COINJECTURE_API_HOST=0.0.0.0
+      - COINJECTURE_API_PORT=3030
+      - COINJECTURE_NETWORK=${COINJECTURE_NETWORK:-testnet}
+      - NODE_RPC_URL=http://node:9933
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - INDEXER_ENABLED=${INDEXER_ENABLED:-true}
+      - INDEXER_POLL_INTERVAL=${INDEXER_POLL_INTERVAL:-5}
+      - INDEXER_CONFIRMATIONS=${INDEXER_CONFIRMATIONS:-6}
+      - RUST_LOG=${RUST_LOG:-info}
+    depends_on:
+      node:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - coinjecture
+
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: coinject-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    networks:
+      - coinjecture
+
+  # ── Grafana ───────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: coinject-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-coinjecture}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - coinjecture
+
+volumes:
+  chain-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  coinjecture:
+    driver: bridge

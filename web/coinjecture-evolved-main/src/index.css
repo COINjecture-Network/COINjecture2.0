@@ -1,0 +1,274 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+:root {
+    --background: 0 0% 98%;
+    --foreground: 0 0% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
+
+    --primary: 280 70% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 285 30% 90%;
+    --secondary-foreground: 280 70% 20%;
+
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 40%;
+
+    --accent: 280 65% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 280 20% 90%;
+    --input: 0 0% 95%;
+    --ring: 280 70% 55%;
+
+    --radius: 0.25rem;
+
+    --success: 142 70% 45%;
+    --warning: 38 90% 50%;
+    
+    --glow-primary: 280 70% 55%;
+    --glow-secondary: 285 60% 45%;
+    
+    --gradient-start: 280 70% 55%;
+    --gradient-end: 285 60% 45%;
+    
+    --terminal-bg: 0 0% 97%;
+    --terminal-text: 280 65% 40%;
+
+    --accent-blue: 217 91% 60%;
+    --accent-purple: 271 81% 56%;
+    --accent-emerald: 160 84% 39%;
+  }
+
+.dark {
+    --background: 0 0% 7%;
+    --foreground: 0 0% 95%;
+
+    --card: 0 0% 10%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 0 0% 10%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 280 70% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 285 60% 45%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 60%;
+
+    --accent: 280 65% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 70% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 280 20% 20%;
+    --input: 0 0% 15%;
+    --ring: 280 70% 55%;
+    
+    --terminal-bg: 0 0% 5%;
+    --terminal-text: 280 65% 65%;
+
+    --accent-blue: 217 91% 60%;
+    --accent-purple: 271 81% 56%;
+    --accent-emerald: 160 84% 39%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold;
+  }
+}
+
+@layer utilities {
+  .glow-primary {
+    box-shadow: 0 0 20px hsl(var(--glow-primary) / 0.3);
+  }
+  
+  .glow-hover {
+    transition: box-shadow 0.3s ease;
+  }
+  
+  .glow-hover:hover {
+    box-shadow: 0 0 30px hsl(var(--glow-primary) / 0.5);
+  }
+  
+  .glass-effect {
+    @apply backdrop-blur-xl bg-card/30 border border-border/50;
+  }
+
+  .glass-navbar {
+    @apply backdrop-blur-2xl bg-background/70 supports-[backdrop-filter]:bg-background/55;
+  }
+
+  .gentle-animation {
+    @apply transition-all duration-300 ease-out;
+  }
+
+  .subtle-shadow {
+    box-shadow: 0 4px 24px -8px hsl(var(--foreground) / 0.08);
+  }
+
+  .elevated-shadow {
+    box-shadow:
+      0 16px 48px -12px hsl(var(--primary) / 0.22),
+      0 0 0 1px hsl(var(--border) / 0.4);
+  }
+
+  .interactive-lift {
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    box-shadow: 0 4px 24px -8px hsl(var(--foreground) / 0.08);
+  }
+
+  .interactive-lift:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 16px 48px -12px hsl(var(--primary) / 0.22),
+      0 0 0 1px hsl(var(--border) / 0.4);
+  }
+
+  .text-shadow-strong {
+    text-shadow:
+      0 2px 24px hsl(var(--background) / 0.9),
+      0 1px 3px hsl(var(--foreground) / 0.35);
+  }
+
+  .text-shadow-medium {
+    text-shadow: 0 1px 16px hsl(var(--background) / 0.75);
+  }
+
+  /* Purple outline: stroke layer behind solid white text (avoids hollow letters from stroke on one layer) */
+  .hero-headline-wrap {
+    position: relative;
+    display: inline-block;
+  }
+
+  .hero-headline-wrap::before {
+    content: attr(data-text);
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 0;
+    pointer-events: none;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    -webkit-text-stroke-width: 1.5px;
+    -webkit-text-stroke-color: hsl(var(--primary));
+  }
+
+  @media (min-width: 768px) {
+    .hero-headline-wrap::before {
+      -webkit-text-stroke-width: 2px;
+    }
+  }
+
+  .hero-headline-inner {
+    position: relative;
+    z-index: 1;
+    color: #ffffff;
+    -webkit-text-fill-color: #ffffff;
+    text-shadow:
+      0 2px 20px hsl(var(--background) / 0.85),
+      0 1px 2px hsl(var(--foreground) / 0.2);
+  }
+
+  .gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary via-accent-purple to-accent-emerald;
+  }
+
+  .hero-video-fallback {
+    @apply absolute inset-0 bg-gradient-to-br from-accent-blue/25 via-accent-purple/15 to-accent-emerald/20;
+  }
+
+  /* Hero video is disabled under md; use a static gradient instead of a large MP4 */
+  .hero-video-fallback-mobile {
+    background-color: hsl(var(--background));
+    background-image:
+      radial-gradient(ellipse 130% 70% at 50% -10%, hsl(var(--primary) / 0.35), transparent 50%),
+      linear-gradient(
+        to bottom,
+        hsl(var(--background) / 0.97) 0%,
+        hsl(var(--background) / 0.82) 42%,
+        hsl(var(--background) / 0.96) 100%
+      ),
+      linear-gradient(
+        to bottom right,
+        hsl(var(--accent-blue) / 0.2),
+        hsl(var(--accent-purple) / 0.12) 45%,
+        hsl(var(--accent-emerald) / 0.18)
+      );
+  }
+  
+  .terminal-font {
+    font-family: 'Fira Code', 'Courier New', monospace;
+  }
+  
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out;
+  }
+  
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .animate-pulse-glow {
+    animation: pulseGlow 2s ease-in-out infinite;
+  }
+  
+  @keyframes pulseGlow {
+    0%, 100% {
+      box-shadow: 0 0 20px hsl(var(--glow-primary) / 0.3);
+    }
+    50% {
+      box-shadow: 0 0 40px hsl(var(--glow-primary) / 0.6);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-bg-video {
+    display: none;
+  }
+
+  .animate-float-gentle,
+  .animate-drift-left,
+  .animate-drift-right,
+  .animate-fade-in {
+    animation: none !important;
+  }
+}

@@ -1,0 +1,20 @@
+[package]
+name = "coinject-mempool"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+coinject-core = { path = "../core" }
+coinject-tokenomics = { path = "../tokenomics" }
+tokio.workspace = true
+serde.workspace = true
+bincode.workspace = true
+thiserror.workspace = true
+chrono = "0.4"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }

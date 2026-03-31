@@ -1,0 +1,43 @@
+# Git files
+.git
+.gitignore
+
+# Build artifacts
+target/
+*.exe
+*.dll
+
+# Data directories
+data/
+node*-data/
+marketplace-db/
+
+# Logs
+*.log
+*.jsonl
+
+# Environment files
+.env
+*.key
+coinjecture-droplet-key
+
+# Documentation (not needed in container)
+*.md
+docs/
+
+# Scripts
+*.ps1
+*.sh
+deploy/
+
+# Web interface
+web/
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+nul
+tmp/
+temp/

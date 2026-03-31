@@ -1,0 +1,101 @@
+{
+  "uid": "coinjecture-overview",
+  "title": "COINjecture 2.0 Overview",
+  "tags": ["coinjecture"],
+  "timezone": "browser",
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Latest Block Height",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "coinjecture_indexer_height", "legendFormat": "height" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } } }
+    },
+    {
+      "id": 2,
+      "title": "Connected Peers",
+      "type": "gauge",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "coinjecture_connected_peers", "legendFormat": "peers" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 50, "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 3 }, { "color": "green", "value": 8 }] } } }
+    },
+    {
+      "id": 3,
+      "title": "Blocks Indexed / min",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "expr": "rate(coinjecture_blocks_indexed_total[1m]) * 60", "legendFormat": "blocks/min" }]
+    },
+    {
+      "id": 4,
+      "title": "Chain Tip vs Indexed",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        { "expr": "coinjecture_chain_tip_height", "legendFormat": "chain tip" },
+        { "expr": "coinjecture_indexer_height", "legendFormat": "indexed" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "API Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 4 },
+      "targets": [{ "expr": "sum(rate(api_requests_total[1m])) by (path)", "legendFormat": "{{ path }}" }]
+    },
+    {
+      "id": 6,
+      "title": "API Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 4 },
+      "targets": [{ "expr": "sum(rate(api_requests_total{status=~\"5..\"}[1m]))", "legendFormat": "5xx/s" }]
+    },
+    {
+      "id": 7,
+      "title": "API Latency (p50 / p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 4 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(api_request_duration_seconds_bucket[5m]))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, rate(api_request_duration_seconds_bucket[5m]))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Engine Resting Orders",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 9 },
+      "targets": [{ "expr": "coinjecture_engine_resting_orders", "legendFormat": "orders" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "blue", "value": null }] } } }
+    },
+    {
+      "id": 9,
+      "title": "Engine Trades / min",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 9 },
+      "targets": [{ "expr": "rate(coinjecture_engine_trades_total[1m]) * 60", "legendFormat": "trades/min" }]
+    },
+    {
+      "id": 10,
+      "title": "Trades Finalized",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 9 },
+      "targets": [{ "expr": "coinjecture_trades_finalized_total", "legendFormat": "finalized" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }] } } }
+    },
+    {
+      "id": 11,
+      "title": "Reorg Events",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 9 },
+      "targets": [{ "expr": "coinjecture_reorg_events_total", "legendFormat": "reorgs" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] }
+}

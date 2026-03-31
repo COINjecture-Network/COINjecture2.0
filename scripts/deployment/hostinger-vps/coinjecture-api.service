@@ -1,0 +1,17 @@
+[Unit]
+Description=COINjecture API Server
+After=network.target
+
+[Service]
+Type=simple
+User=coinjecture
+Group=coinjecture
+WorkingDirectory=/opt/coinjecture
+EnvironmentFile=/etc/coinjecture/api.env
+ExecStart=/opt/coinjecture/coinjecture-api
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
