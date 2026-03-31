@@ -30,7 +30,7 @@ serde_json.workspace = true
 dashmap = "6"
 
 # Noise Protocol Framework for formally-compliant encrypted transport
-snow = "0.9"
+snow = "0.10"
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
