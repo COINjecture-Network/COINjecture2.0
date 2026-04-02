@@ -6,7 +6,7 @@
 
 use coinject_core::{
     Address, Balance, Block, BlockHeader, Hash, Transaction,
-    ProblemType, SubmissionMode, ProblemReveal, WellformednessProof, ProblemParameters,
+    ProblemType, Solution, SubmissionMode, ProblemReveal, WellformednessProof, ProblemParameters,
 };
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 use coinject_state::{MarketplaceStats, ProblemSubmission};
@@ -109,6 +109,7 @@ pub struct ProblemInfo {
     pub problem_type: Option<String>,
     pub problem_size: Option<usize>,
     pub is_revealed: bool,
+    pub problem: Option<ProblemType>,
 }
 
 /// Private problem submission parameters
@@ -126,12 +127,40 @@ pub struct PrivateProblemParams {
     pub expiration_days: u64,
 }
 
+/// Wallet-backed private problem submission parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateProblemWalletParams {
+    pub problem: ProblemType,
+    pub salt: String, // Hex-encoded 32-byte salt
+    pub bounty: Balance,
+    pub min_work_score: f64,
+    pub expiration_days: u64,
+    pub submitter: String,
+}
+
+/// Wallet-backed private submission result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrivateProblemSubmissionResult {
+    pub problem_id: String,
+    pub commitment: String,
+}
+
 /// Problem reveal parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RevealParams {
     pub problem_id: String,
     pub problem: String, // JSON-encoded ProblemType
     pub salt: String,    // Hex-encoded 32-byte salt
+}
+
+/// Generic public problem submission
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicProblemParams {
+    pub problem: ProblemType,
+    pub bounty: Balance,
+    pub min_work_score: f64,
+    pub expiration_days: u64,
+    pub submitter: String,
 }
 
 /// Public SubsetSum problem submission (Phase 2 MVP - simple API)
@@ -156,8 +185,8 @@ pub struct PublicSubsetSumParams {
 pub struct SolutionSubmissionParams {
     /// Problem ID (hex-encoded)
     pub problem_id: String,
-    /// Selected indices that sum to target
-    pub selected_indices: Vec<usize>,
+    /// Full typed solution payload
+    pub solution: Solution,
     /// Solver's hex-encoded address
     pub solver: String,
 }
@@ -275,9 +304,20 @@ pub trait CoinjectRpc {
     #[method(name = "marketplace_submitPrivateProblem")]
     async fn submit_private_problem(&self, params: PrivateProblemParams) -> RpcResult<String>;
 
+    /// Submit private problem with wallet-backed escrow; server derives commitment/proof
+    #[method(name = "marketplace_submitPrivateProblemWithWallet")]
+    async fn submit_private_problem_with_wallet(
+        &self,
+        params: PrivateProblemWalletParams,
+    ) -> RpcResult<PrivateProblemSubmissionResult>;
+
     /// Reveal problem for private bounty
     #[method(name = "marketplace_revealProblem")]
     async fn reveal_problem(&self, params: RevealParams) -> RpcResult<bool>;
+
+    /// Submit a public problem of any supported type
+    #[method(name = "marketplace_submitPublicProblem")]
+    async fn submit_public_problem(&self, params: PublicProblemParams) -> RpcResult<String>;
 
     /// Submit a public SubsetSum problem (Phase 2 MVP - simple API)
     /// Returns problem_id on success
@@ -337,8 +377,10 @@ pub trait CoinjectRpc {
 /// Faucet handler callback type
 pub type FaucetHandler = Arc<dyn Fn(&Address) -> Result<Balance, String> + Send + Sync>;
 
+pub type BlockSubmissionFuture = Pin<Box<dyn Future<Output = Result<String, String>> + Send>>;
+
 /// Block submission handler callback type
-pub type BlockSubmissionHandler = Arc<dyn Fn(Block) -> Result<String, String> + Send + Sync>;
+pub type BlockSubmissionHandler = Arc<dyn Fn(Block) -> BlockSubmissionFuture + Send + Sync>;
 
 /// Mining template for the block that would extend the current tip (Solver Lab / web miners).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,6 +389,8 @@ pub struct MiningWork {
     pub next_height: u64,
     /// Parent block hash (epoch salt) as hex — must match `chain_getInfo.best_hash` when you pull and submit immediately.
     pub prev_hash: String,
+    /// Current miner header difficulty target (leading zero hex chars).
+    pub difficulty: u32,
     /// Deterministic instance: SubsetSum, SAT, or TSP (same serde as `chain_getBlock` / `solution_reveal.problem`).
     pub problem: ProblemType,
 }
@@ -415,6 +459,50 @@ impl RpcServerImpl {
         ErrorObjectOwned::owned(INTERNAL_ERROR, "Internal server error", None::<()>)
     }
 
+    fn submit_block_error(detail: impl std::fmt::Display) -> ErrorObjectOwned {
+        let detail = detail.to_string();
+        tracing::warn!(detail = %detail, "rpc.submit_block_error");
+
+        let lower = detail.to_ascii_lowercase();
+        let (code, message) = if lower.contains("invalid previous hash") {
+            (INVALID_PARAMS, "Invalid previous hash".to_string())
+        } else if lower.contains("invalid block height")
+            || lower.contains("height mismatch")
+            || (lower.contains("expected") && lower.contains("got") && lower.contains("height"))
+        {
+            (INVALID_PARAMS, "Invalid block height".to_string())
+        } else if lower.contains("invalid block hash") {
+            (INVALID_PARAMS, "Invalid block hash".to_string())
+        } else if lower.contains("invalid block signature") {
+            (INVALID_PARAMS, "Invalid block signature".to_string())
+        } else if lower.contains("timestamp too old")
+            || lower.contains("invalid timestamp")
+            || lower.contains("in the future")
+        {
+            (INVALID_PARAMS, "Invalid block timestamp".to_string())
+        } else if lower.contains("invalid solution") {
+            (INVALID_PARAMS, "Invalid solution for mining problem".to_string())
+        } else if lower.contains("insufficient work") || lower.contains("work score below") {
+            (INVALID_PARAMS, "Insufficient work score".to_string())
+        } else if lower.contains("did not extend the chain") {
+            (INVALID_PARAMS, "Block did not extend the current chain tip".to_string())
+        } else if lower.contains("failed to store block") {
+            (INTERNAL_ERROR, "Failed to store block".to_string())
+        } else if lower.contains("failed to apply block transactions") {
+            (INTERNAL_ERROR, "Failed to apply block transactions".to_string())
+        } else if lower.contains("failed to broadcast block") {
+            (INTERNAL_ERROR, "Failed to broadcast block".to_string())
+        } else if lower.contains("no async runtime available") {
+            (INTERNAL_ERROR, "Block submission service unavailable".to_string())
+        } else if lower.contains("block validation failed") {
+            (INVALID_PARAMS, detail.clone())
+        } else {
+            (INTERNAL_ERROR, detail.clone())
+        };
+
+        ErrorObjectOwned::owned(code, message, None::<()>)
+    }
+
     // -----------------------------------------------------------------------
     // Address / hash parsing
     // -----------------------------------------------------------------------
@@ -453,6 +541,85 @@ impl RpcServerImpl {
         let mut hash_bytes = [0u8; 32];
         hash_bytes.copy_from_slice(&bytes);
         Ok(Hash::from_bytes(hash_bytes))
+    }
+
+    fn validate_problem(problem: &ProblemType) -> RpcResult<()> {
+        match problem {
+            ProblemType::SubsetSum { numbers, .. } => {
+                if numbers.is_empty() {
+                    return Err(ErrorObjectOwned::owned(
+                        INVALID_PARAMS,
+                        "Numbers array cannot be empty",
+                        None::<()>,
+                    ));
+                }
+                if numbers.len() > 1000 {
+                    return Err(ErrorObjectOwned::owned(
+                        INVALID_PARAMS,
+                        "Numbers array too large (max 1000)",
+                        None::<()>,
+                    ));
+                }
+            }
+            ProblemType::SAT { variables, clauses } => {
+                if *variables == 0 || *variables > 10_000 {
+                    return Err(ErrorObjectOwned::owned(
+                        INVALID_PARAMS,
+                        "SAT variable count must be 1-10000",
+                        None::<()>,
+                    ));
+                }
+                if clauses.is_empty() || clauses.len() > 50_000 {
+                    return Err(ErrorObjectOwned::owned(
+                        INVALID_PARAMS,
+                        "SAT clauses must contain 1-50000 entries",
+                        None::<()>,
+                    ));
+                }
+            }
+            ProblemType::TSP { cities, distances } => {
+                if *cities < 2 || *cities > 1000 {
+                    return Err(ErrorObjectOwned::owned(
+                        INVALID_PARAMS,
+                        "TSP city count must be 2-1000",
+                        None::<()>,
+                    ));
+                }
+                if distances.len() != *cities || distances.iter().any(|row| row.len() != *cities) {
+                    return Err(ErrorObjectOwned::owned(
+                        INVALID_PARAMS,
+                        "TSP distances must be a square matrix matching city count",
+                        None::<()>,
+                    ));
+                }
+            }
+            ProblemType::Custom { data, .. } => {
+                if data.len() > 1024 * 1024 {
+                    return Err(ErrorObjectOwned::owned(
+                        INVALID_PARAMS,
+                        "Custom problem payload exceeds 1 MB",
+                        None::<()>,
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn problem_public_params(problem: &ProblemType, min_work_score: f64) -> ProblemParameters {
+        let (problem_type, size) = match problem {
+            ProblemType::SubsetSum { numbers, .. } => ("SubsetSum".to_string(), numbers.len()),
+            ProblemType::SAT { variables, .. } => ("SAT".to_string(), *variables),
+            ProblemType::TSP { cities, .. } => ("TSP".to_string(), *cities),
+            ProblemType::Custom { data, .. } => ("Custom".to_string(), data.len()),
+        };
+
+        ProblemParameters {
+            problem_type,
+            size,
+            complexity_estimate: problem.difficulty_weight().max(min_work_score),
+        }
     }
 
     /// Convert TimeLock to TimeLockInfo
@@ -503,7 +670,7 @@ impl RpcServerImpl {
 
     /// Convert ProblemSubmission to ProblemInfo
     fn problem_to_info(&self, problem: &ProblemSubmission) -> ProblemInfo {
-        let (is_private, problem_type, problem_size, is_revealed) = match &problem.submission_mode {
+        let (is_private, problem_type, problem_size, is_revealed, revealed_problem) = match &problem.submission_mode {
             SubmissionMode::Public { problem } => {
                 let problem_type_name = match problem {
                     ProblemType::SubsetSum { numbers, .. } => {
@@ -523,13 +690,14 @@ impl RpcServerImpl {
                     ProblemType::TSP { cities, .. } => Some(*cities),
                     ProblemType::Custom { .. } => None,
                 };
-                (false, problem_type_name, size, true)
+                (false, problem_type_name, size, true, Some(problem.clone()))
             }
             SubmissionMode::Private { public_params, .. } => {
                 let problem_type_name = Some(public_params.problem_type.clone());
                 let size = Some(public_params.size);
                 let is_revealed = problem.problem_reveal.is_some();
-                (true, problem_type_name, size, is_revealed)
+                let revealed_problem = problem.problem_reveal.as_ref().map(|reveal| reveal.problem.clone());
+                (true, problem_type_name, size, is_revealed, revealed_problem)
             }
         };
 
@@ -545,6 +713,7 @@ impl RpcServerImpl {
             problem_type,
             problem_size,
             is_revealed,
+            problem: revealed_problem,
         }
     }
 }
@@ -802,6 +971,94 @@ impl CoinjectRpcServer for RpcServerImpl {
         Ok(hex::encode(problem_id.as_bytes()))
     }
 
+    async fn submit_private_problem_with_wallet(
+        &self,
+        params: PrivateProblemWalletParams,
+    ) -> RpcResult<PrivateProblemSubmissionResult> {
+        Self::validate_str_len(&params.submitter, 256, "submitter")?;
+        Self::validate_str_len(&params.salt, 256, "salt")?;
+
+        if params.bounty == 0 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Bounty must be greater than 0",
+                None::<()>,
+            ));
+        }
+        if params.expiration_days == 0 || params.expiration_days > 365 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Expiration must be 1-365 days",
+                None::<()>,
+            ));
+        }
+        if !params.min_work_score.is_finite() || params.min_work_score <= 0.0 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "min_work_score must be a positive finite number",
+                None::<()>,
+            ));
+        }
+
+        Self::validate_problem(&params.problem)?;
+
+        let submitter = self.parse_address(&params.submitter)?;
+        let balance = self.state.account_state.get_balance(&submitter);
+        if balance < params.bounty {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                format!("Insufficient balance: have {}, need {}", balance, params.bounty),
+                None::<()>,
+            ));
+        }
+
+        let salt_bytes = hex::decode(params.salt.trim_start_matches("0x"))
+            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, e.to_string(), None::<()>))?;
+        if salt_bytes.len() != 32 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Salt must be 32 bytes",
+                None::<()>,
+            ));
+        }
+        let mut salt = [0u8; 32];
+        salt.copy_from_slice(&salt_bytes);
+
+        let public_params = Self::problem_public_params(&params.problem, params.min_work_score);
+        let (zk_wellformed_proof, commitment) =
+            WellformednessProof::create(&params.problem, &salt, &public_params)
+                .map_err(|e| Self::internal_error(e))?;
+
+        let submission_mode = SubmissionMode::Private {
+            problem_commitment: commitment,
+            zk_wellformed_proof,
+            public_params,
+        };
+
+        let problem_id = self
+            .state
+            .marketplace_state
+            .submit_problem(
+                submission_mode,
+                submitter,
+                params.bounty,
+                params.min_work_score,
+                params.expiration_days,
+            )
+            .map_err(|e| Self::internal_error(e))?;
+
+        let new_balance = balance - params.bounty;
+        self.state
+            .account_state
+            .set_balance(&submitter, new_balance)
+            .map_err(|e| Self::internal_error(e))?;
+
+        Ok(PrivateProblemSubmissionResult {
+            problem_id: hex::encode(problem_id.as_bytes()),
+            commitment: hex::encode(commitment.as_bytes()),
+        })
+    }
+
     async fn reveal_problem(&self, params: RevealParams) -> RpcResult<bool> {
         // Input validation
         Self::validate_str_len(&params.problem_id, 256, "problem_id")?;
@@ -841,6 +1098,64 @@ impl CoinjectRpcServer for RpcServerImpl {
             .map_err(|e| Self::internal_error(e))?;
 
         Ok(true)
+    }
+
+    async fn submit_public_problem(&self, params: PublicProblemParams) -> RpcResult<String> {
+        Self::validate_str_len(&params.submitter, 256, "submitter")?;
+
+        if params.bounty == 0 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Bounty must be greater than 0",
+                None::<()>,
+            ));
+        }
+        if params.expiration_days == 0 || params.expiration_days > 365 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "Expiration must be 1-365 days",
+                None::<()>,
+            ));
+        }
+        if !params.min_work_score.is_finite() || params.min_work_score <= 0.0 {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "min_work_score must be a positive finite number",
+                None::<()>,
+            ));
+        }
+
+        Self::validate_problem(&params.problem)?;
+
+        let submitter = self.parse_address(&params.submitter)?;
+        let balance = self.state.account_state.get_balance(&submitter);
+        if balance < params.bounty {
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                format!("Insufficient balance: have {}, need {}", balance, params.bounty),
+                None::<()>,
+            ));
+        }
+
+        let problem_id = self
+            .state
+            .marketplace_state
+            .submit_public_problem(
+                params.problem,
+                submitter,
+                params.bounty,
+                params.min_work_score,
+                params.expiration_days,
+            )
+            .map_err(|e| Self::internal_error(e))?;
+
+        let new_balance = balance - params.bounty;
+        self.state
+            .account_state
+            .set_balance(&submitter, new_balance)
+            .map_err(|e| Self::internal_error(e))?;
+
+        Ok(hex::encode(problem_id.as_bytes()))
     }
 
     async fn submit_public_subset_sum(&self, params: PublicSubsetSumParams) -> RpcResult<String> {
@@ -926,9 +1241,6 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Input validation
         Self::validate_str_len(&params.solver, 256, "solver")?;
         Self::validate_str_len(&params.problem_id, 256, "problem_id")?;
-        if params.selected_indices.len() > 10_000 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "selected_indices exceeds 10000 elements", None::<()>));
-        }
 
         // Parse solver address
         let solver = self.parse_address(&params.solver)?;
@@ -936,11 +1248,8 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Parse problem ID
         let problem_id = self.parse_hash(&params.problem_id)?;
 
-        // Create solution
-        let solution = coinject_core::Solution::SubsetSum(params.selected_indices);
-
         // Submit solution to marketplace state (validates and updates status)
-        self.state.marketplace_state.submit_solution(problem_id, solver, solution)
+        self.state.marketplace_state.submit_solution(problem_id, solver, params.solution)
             .map_err(|e| Self::internal_error(e))?;
 
         // Claim bounty and credit solver
@@ -1106,12 +1415,12 @@ impl CoinjectRpcServer for RpcServerImpl {
                 )
             })?;
 
-        match handler(block) {
+        match handler(block).await {
             Ok(block_hash) => {
                 tracing::info!(hash = %block_hash, "block_submitted");
                 Ok(block_hash)
             }
-            Err(e) => Err(Self::internal_error(format!("block submission: {}", e))),
+            Err(e) => Err(Self::submit_block_error(format!("block submission: {}", e))),
         }
     }
 }

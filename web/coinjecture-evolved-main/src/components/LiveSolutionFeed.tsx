@@ -621,16 +621,6 @@ export const LiveSolutionFeed = () => {
         ))}
       </div>
 
-      <div className="mt-4 text-center">
-        <a 
-          href="https://huggingface.co/datasets/COINjecture/NP_Solutions" 
-          target="_blank" 
-          rel="noopener noreferrer"
-          className="text-xs text-primary hover:underline"
-        >
-          View full NP_Solutions dataset on HuggingFace →
-        </a>
-      </div>
     </Card>
   );
 };

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -49,8 +50,13 @@ import { SubsetSumVisualizer } from "./visualizers/SubsetSumVisualizer";
 import { TSPVisualizer } from "./visualizers/TSPVisualizer";
 import { SATVisualizer } from "./visualizers/SATVisualizer";
 import { useWallet } from "@/contexts/WalletContext";
-import { rpcClient } from "@/lib/rpc-client";
-import { createBlockFromSolvedProblem, extractHashHex, type Solution as MiningSolution } from "@/lib/mining";
+import { rpcClient, type ProblemInfo, type ProblemType } from "@/lib/rpc-client";
+import {
+  createBlockFromSolvedProblem,
+  extractHashHex,
+  getClientHeaderHashDebug,
+  type Solution as MiningSolution,
+} from "@/lib/mining";
 
 /** Alias for `<Editor />` — must stay after all imports (ES modules forbid statements between imports). */
 const Editor = SolverCodeEditor;
@@ -64,12 +70,25 @@ const FILE_META: Record<WorkspaceFilePath, { label: string; icon: typeof FileCod
   "instance.json": { label: "instance.json", icon: FileJson },
 };
 
+function getProblemKind(problem: ProblemType): NetworkProblemKind | null {
+  if (problem.SubsetSum) return "SubsetSum";
+  if (problem.SAT) return "SAT";
+  if (problem.TSP) return "TSP";
+  return null;
+}
+
+function formatShortProblemId(problemId: string) {
+  return `${problemId.slice(0, 12)}...`;
+}
+
 type NpPlaygroundProps = {
   className?: string;
 };
 
 export function NpPlayground({ className }: NpPlaygroundProps) {
+  const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const { selectedAccount, accounts } = useWallet();
@@ -84,6 +103,11 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   const [pullingChainInstance, setPullingChainInstance] = useState(false);
   const [isLg, setIsLg] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"code" | "visual" | "result" | "console">("code");
+  const [successPopup, setSuccessPopup] = useState<{ height: number; hash: string } | null>(null);
+  const [bountySuccessPopup, setBountySuccessPopup] = useState<{ problemId: string; bounty: number } | null>(null);
+  const [loadedBountyProblemId, setLoadedBountyProblemId] = useState<string | null>(null);
+  const routeState = location.state as { selectedBounty?: ProblemInfo } | null;
+  const bountyProblemId = searchParams.get("problemId");
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)");
@@ -111,6 +135,17 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     staleTime: 5_000,
   });
 
+  const { data: selectedBounty, isLoading: selectedBountyLoading } = useQuery({
+    queryKey: ["solverLab", "selectedBounty", bountyProblemId],
+    queryFn: () => rpcClient.getProblem(bountyProblemId as string),
+    enabled: Boolean(bountyProblemId),
+    initialData:
+      routeState?.selectedBounty && routeState.selectedBounty.problem_id === bountyProblemId
+        ? routeState.selectedBounty
+        : undefined,
+    staleTime: 15_000,
+  });
+
   const instanceText = files["instance.json"];
 
   const parsedPreview = useMemo(() => parseNetworkProblem(instanceText), [instanceText]);
@@ -129,6 +164,13 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     if (!miningWork || !parsedPreview.ok) return false;
     return problemTypesEqual(miningWork.problem, parsedPreview.value);
   }, [miningWork, parsedPreview]);
+
+  const selectedBountyProblem = selectedBounty?.problem ?? null;
+  const selectedBountyKind = selectedBountyProblem ? getProblemKind(selectedBountyProblem) : null;
+  const instanceMatchesSelectedBounty = useMemo(() => {
+    if (!selectedBountyProblem || !parsedPreview.ok) return false;
+    return problemTypesEqual(selectedBountyProblem, parsedPreview.value);
+  }, [parsedPreview, selectedBountyProblem]);
 
   /** Run label reflects the open file; execution always uses all solver files + instance.json. */
   const runButtonLabel = useMemo(() => {
@@ -256,6 +298,27 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     }
   };
 
+  const loadProblemIntoInstance = useCallback(
+    (problem: ProblemType, focusFile: WorkspaceFilePath = "instance.json") => {
+      setFiles((prev) => ({ ...prev, "instance.json": JSON.stringify(problem, null, 2) }));
+      const kind = getProblemKind(problem);
+      if (kind === "SubsetSum") {
+        setActiveFile(focusFile === "instance.json" ? "solvers/subset-sum.js" : focusFile);
+        return;
+      }
+      if (kind === "SAT") {
+        setActiveFile(focusFile === "instance.json" ? "solvers/sat.js" : focusFile);
+        return;
+      }
+      if (kind === "TSP") {
+        setActiveFile(focusFile === "instance.json" ? "solvers/tsp.js" : focusFile);
+        return;
+      }
+      setActiveFile(focusFile);
+    },
+    []
+  );
+
   /** Replace `instance.json` with the canonical default for `kind`. Optionally keep another file focused (e.g. open `sat.js` while loading a SAT instance). */
   const loadInstanceTemplate = (kind: NetworkProblemKind, focusFile: WorkspaceFilePath = "instance.json") => {
     setFiles((prev) => ({ ...prev, "instance.json": DEFAULT_PROBLEM_JSON[kind] }));
@@ -278,6 +341,23 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     }
     setActiveFile(path);
   };
+
+  useEffect(() => {
+    if (!selectedBounty || !selectedBountyProblem || loadedBountyProblemId === selectedBounty.problem_id) {
+      return;
+    }
+
+    loadProblemIntoInstance(selectedBountyProblem);
+    setLoadedBountyProblemId(selectedBounty.problem_id);
+    setRunResult(null);
+    setConsoleLines((prev) => [
+      ...prev,
+      `[bounty] Loaded listing ${formatShortProblemId(selectedBounty.problem_id)} into instance.json`,
+      `[bounty] Payout: ${selectedBounty.bounty.toLocaleString()} BEANS`,
+      "",
+    ]);
+    toast.success("Bounty loaded into Solver Lab");
+  }, [loadProblemIntoInstance, loadedBountyProblemId, selectedBounty, selectedBountyProblem]);
 
   const submitToBounty = () => {
     const parsed = parseNetworkProblem(instanceText);
@@ -324,6 +404,84 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       return;
     }
     navigate("/bounty-submit");
+  };
+
+  const submitSelectedBountySolution = async () => {
+    if (!selectedBounty || !selectedBountyProblem) {
+      toast.error("No bounty selected", { description: "Open a listing from the marketplace first." });
+      return;
+    }
+
+    if (selectedBounty.status.toUpperCase() !== "OPEN") {
+      toast.error("Bounty is no longer open");
+      return;
+    }
+
+    if (!selectedKeyPair) {
+      toast.error("Wallet required", { description: "Create or select an account on the Wallet page first." });
+      navigate("/wallet");
+      return;
+    }
+
+    const parsed = parseNetworkProblem(instanceText);
+    if (!parsed.ok) {
+      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parsed.error}`]);
+      return;
+    }
+
+    if (!problemTypesEqual(parsed.value, selectedBountyProblem)) {
+      const msg = "instance.json must match the selected bounty before you submit.";
+      setConsoleLines((prev) => [...prev, `[error] ${msg}`, ""]);
+      toast.error("Selected bounty is not loaded", { description: "Load the bounty problem into instance.json first." });
+      return;
+    }
+
+    setSubmittingChain(true);
+    try {
+      const out = await runUserSolver(files, parsed.value, 45000);
+      if (!out.ok) {
+        setConsoleLines((prev) => [...prev, `[error] Solver: ${out.error}`, ""]);
+        return;
+      }
+
+      const normalized = normalizeSolution(parsed.value, out.solution);
+      if (!normalized) {
+        setConsoleLines((prev) => [...prev, "[error] Solution shape invalid — cannot submit to bounty.", ""]);
+        return;
+      }
+
+      await rpcClient.submitSolution({
+        problem_id: selectedBounty.problem_id,
+        solver: selectedKeyPair.address,
+        solution: normalized,
+      });
+
+      setRunResult({
+        ok: true,
+        timeMs: out.timeMs,
+        solution: normalized,
+        log: [],
+      });
+      setConsoleLines((prev) => [
+        ...prev,
+        `[bounty] Submitted solution for ${formatShortProblemId(selectedBounty.problem_id)}`,
+        `[bounty] Solver ${selectedKeyPair.address.slice(0, 12)}… claimed ${selectedBounty.bounty.toLocaleString()} BEANS`,
+        "",
+      ]);
+      await queryClient.invalidateQueries({ queryKey: ["marketplace-problems"] });
+      await queryClient.invalidateQueries({ queryKey: ["marketplace-stats"] });
+      await queryClient.invalidateQueries({ queryKey: ["solverLab", "selectedBounty", selectedBounty.problem_id] });
+      await queryClient.invalidateQueries({ queryKey: ["accountInfo", selectedKeyPair.address] });
+      await queryClient.invalidateQueries({ queryKey: ["balance", selectedKeyPair.address] });
+      setBountySuccessPopup({ problemId: selectedBounty.problem_id, bounty: selectedBounty.bounty });
+      toast.success("Bounty solution accepted");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setConsoleLines((prev) => [...prev, `[error] ${msg}`, ""]);
+      toast.error("Bounty submission failed", { description: msg });
+    } finally {
+      setSubmittingChain(false);
+    }
   };
 
   /**
@@ -378,6 +536,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       setConsoleLines((prev) => [
         ...prev,
         `[chain] Mining template block #${nextHeight} prev_hash: ${prevHashHex.slice(0, 16)}…`,
+        `[chain] Network difficulty: ${work.difficulty}`,
         `[chain] Building block + PoW; coinbase → your wallet address…`,
         "",
       ]);
@@ -390,12 +549,20 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         miningSolution,
         out.timeMs,
         [],
-        2
+        work.difficulty
       );
       if (!block) {
         setConsoleLines((prev) => [...prev, "[error] Solution failed verification or PoW header mining failed.", ""]);
         return;
       }
+
+      const clientHashDebug = getClientHeaderHashDebug(block.header);
+      setConsoleLines((prev) => [
+        ...prev,
+        `[chain] Client header hash: ${clientHashDebug.hash.slice(0, 32)}… (${clientHashDebug.hash.match(/^0*/)?.[0].length || 0} leading zeros)`,
+        `[chain] Client header payload preview: ${clientHashDebug.json.slice(0, 160)}…`,
+        "",
+      ]);
 
       const finalChainInfo = await rpcClient.getChainInfo();
       if (finalChainInfo.best_height >= block.header.height) {
@@ -418,8 +585,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       await queryClient.invalidateQueries({ queryKey: ["accountInfo", selectedKeyPair.address] });
       await queryClient.invalidateQueries({ queryKey: ["balance", selectedKeyPair.address] });
       await queryClient.invalidateQueries({ queryKey: ["solverLab"] });
-      toast.success("Block submitted — miner reward sent to your wallet", { description: "Opening Wallet…" });
-      navigate("/wallet");
+      setSuccessPopup({ height: block.header.height, hash: blockHash });
+      toast.success("Block submitted — miner reward sent to your wallet");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setConsoleLines((prev) => [...prev, `[error] ${msg}`, ""]);
@@ -525,7 +692,35 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
               </>
             ) : null}
             <span>·</span>
-            {parsedPreview.ok ? (
+            {bountyProblemId ? (
+              selectedBountyLoading ? (
+                <span>Loading selected bounty…</span>
+              ) : selectedBounty && selectedBountyProblem ? (
+                instanceMatchesSelectedBounty ? (
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    instance.json matches selected bounty {formatShortProblemId(selectedBounty.problem_id)}
+                  </span>
+                ) : (
+                  <span className="inline-flex flex-wrap items-center gap-2">
+                    <span className="text-amber-600 dark:text-amber-400">
+                      instance.json must match the selected bounty before you submit
+                    </span>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 text-xs px-2 shrink-0"
+                      onClick={() => loadProblemIntoInstance(selectedBountyProblem)}
+                      disabled={submittingChain || running}
+                    >
+                      Load bounty
+                    </Button>
+                  </span>
+                )
+              ) : (
+                <span className="text-destructive">Selected bounty could not be loaded</span>
+              )
+            ) : parsedPreview.ok ? (
               instanceMatchesMiningWork ? (
                 <span className="text-emerald-600 dark:text-emerald-400">instance.json matches mining work</span>
               ) : (
@@ -550,6 +745,40 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
               <span className="text-destructive">fix instance.json JSON</span>
             )}
           </div>
+          {bountyProblemId ? (
+            <Card className="mb-3 border-primary/20 bg-primary/5">
+              <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-1">
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Bounty mode</div>
+                  <div className="text-sm font-semibold text-foreground">
+                    {selectedBounty
+                      ? `Solve ${selectedBounty.problem_type ?? "selected listing"} for ${selectedBounty.bounty.toLocaleString()} BEANS`
+                      : "Loading selected bounty"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {selectedBounty
+                      ? `Problem ${formatShortProblemId(selectedBounty.problem_id)} • Minimum work ${selectedBounty.min_work_score}`
+                      : "Fetching the selected marketplace listing..."}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {selectedBountyProblem ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => loadProblemIntoInstance(selectedBountyProblem)}
+                    >
+                      Load bounty instance
+                    </Button>
+                  ) : null}
+                  <Button type="button" variant="ghost" size="sm" onClick={() => navigate("/marketplace")}>
+                    Back to marketplace
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
           {isLg ? (
           <div className="flex h-[min(72dvh,720px)] w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 min-h-[min(68dvh,560px)] lg:h-[min(86dvh,calc(100dvh-13rem))] lg:min-h-[520px] lg:flex-row">
             {/* File explorer — full height; console does not span under this column */}
@@ -644,16 +873,24 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                           variant="outline"
                           size="sm"
                           className="h-8 gap-1 max-w-[min(100%,11rem)]"
-                          onClick={() => void submitProblemToChain()}
+                          onClick={() =>
+                            selectedBountyProblem ? void submitSelectedBountySolution() : void submitProblemToChain()
+                          }
                           disabled={submittingChain || running || pullingChainInstance}
-                          title="Run solver, commit with tip hash as epoch salt, mine PoW, submitBlock. Requires wallet."
+                          title={
+                            selectedBountyProblem
+                              ? "Run your solver and submit the result for the selected bounty. Requires wallet."
+                              : "Run solver, commit with tip hash as epoch salt, mine PoW, submitBlock. Requires wallet."
+                          }
                         >
                           <Link2 className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">{submittingChain ? "…" : "Submit problem"}</span>
+                          <span className="truncate">
+                            {submittingChain ? "…" : selectedBountyProblem ? "Submit bounty solution" : "Mine block"}
+                          </span>
                         </Button>
                         <Button type="button" variant="outline" size="sm" className="h-8 gap-1" onClick={submitToBounty}>
                           <Send className="h-3.5 w-3.5" />
-                          Bounty
+                          Draft bounty
                         </Button>
                       </div>
                     </div>
@@ -795,12 +1032,20 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     variant="outline"
                     size="default"
                     className="h-11 min-h-[44px] flex-1 min-w-[8rem] sm:flex-none"
-                    onClick={() => void submitProblemToChain()}
+                    onClick={() =>
+                      selectedBountyProblem ? void submitSelectedBountySolution() : void submitProblemToChain()
+                    }
                     disabled={submittingChain || running || pullingChainInstance}
-                    title="Submit solution to chain (epoch salt = tip hash)"
+                    title={
+                      selectedBountyProblem
+                        ? "Submit your solver output for the selected bounty"
+                        : "Submit solution to chain (epoch salt = tip hash)"
+                    }
                   >
                     <Link2 className="h-4 w-4 mr-2 shrink-0" />
-                    <span className="truncate">{submittingChain ? "…" : "Submit"}</span>
+                    <span className="truncate">
+                      {submittingChain ? "…" : selectedBountyProblem ? "Submit bounty" : "Mine block"}
+                    </span>
                   </Button>
                   <Button
                     type="button"
@@ -810,7 +1055,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     onClick={submitToBounty}
                   >
                     <Send className="h-4 w-4 mr-2 shrink-0" />
-                    Bounty
+                    Draft bounty
                   </Button>
                   <Button
                     type="button"
@@ -894,6 +1139,94 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
           )}
         </TabsContent>
       </Tabs>
+      <Dialog open={successPopup !== null} onOpenChange={(open) => !open && setSuccessPopup(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Block Submitted</DialogTitle>
+            <DialogDescription>
+              Your mined block was accepted. Stay in the lab to chase the next one, or jump to Wallet to review the reward path.
+            </DialogDescription>
+          </DialogHeader>
+          {successPopup ? (
+            <div className="space-y-4 text-sm">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="signal-card">
+                  <div className="signal-kicker">Accepted block</div>
+                  <div className="mt-2 text-xl font-semibold">#{successPopup.height}</div>
+                </div>
+                <div className="signal-card">
+                  <div className="signal-kicker">Network hash</div>
+                  <div className="mt-2 font-semibold"><code>{successPopup.hash.slice(0, 16)}…</code></div>
+                </div>
+              </div>
+              <div className="signal-card-strong">
+                <div className="signal-kicker">Next action</div>
+                <div className="mt-2 font-semibold">Sync from chain again if you want to compete for the next live block, or open Wallet to review your active account.</div>
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSuccessPopup(null)}>
+              Stay Here
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setSuccessPopup(null);
+                navigate("/wallet");
+              }}
+            >
+              Open Wallet
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={bountySuccessPopup !== null} onOpenChange={(open) => !open && setBountySuccessPopup(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bounty Solution Accepted</DialogTitle>
+            <DialogDescription>
+              Your solver output was accepted for the selected listing and the bounty was credited to your wallet.
+            </DialogDescription>
+          </DialogHeader>
+          {bountySuccessPopup ? (
+            <div className="space-y-4 text-sm">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="signal-card">
+                  <div className="signal-kicker">Problem</div>
+                  <div className="mt-2 font-semibold">
+                    <code>{formatShortProblemId(bountySuccessPopup.problemId)}</code>
+                  </div>
+                </div>
+                <div className="signal-card">
+                  <div className="signal-kicker">Reward</div>
+                  <div className="mt-2 text-xl font-semibold">{bountySuccessPopup.bounty.toLocaleString()} BEANS</div>
+                </div>
+              </div>
+              <div className="signal-card-strong">
+                <div className="signal-kicker">Next action</div>
+                <div className="mt-2 font-semibold">
+                  Open Wallet to verify the credited balance, or return to the marketplace to hunt the next listing.
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setBountySuccessPopup(null)}>
+              Stay Here
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setBountySuccessPopup(null);
+                navigate("/wallet");
+              }}
+            >
+              Open Wallet
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

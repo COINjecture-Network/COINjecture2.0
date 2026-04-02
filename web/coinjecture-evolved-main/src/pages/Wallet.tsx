@@ -12,6 +12,7 @@ import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check } from "lu
 import { useState } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
 
 export default function WalletPage() {
   const { accounts, selectedAccount, setSelectedAccount, createAccount, importAccount, deleteAccount } = useWallet();
@@ -80,7 +81,48 @@ export default function WalletPage() {
       </div>
       <div className="pt-8 pb-20 container mx-auto px-6">
         <div className="max-w-6xl mx-auto">
-          <h1 className="text-4xl font-bold mb-8">Wallet</h1>
+          <div className="market-surface-strong p-6 md:p-8 mb-8">
+            <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+              <div>
+                <div className="signal-kicker">Miner activation</div>
+                <h1 className="text-4xl font-bold mt-2">Wallet</h1>
+                <p className="text-muted-foreground mt-3 max-w-2xl">
+                  Create or import an account, confirm your balance, and move directly into Solver Lab when you are ready to compete for the next block reward.
+                </p>
+                <div className="provenance-row mt-4">
+                  <span>Create wallet</span>
+                  <span>•</span>
+                  <span>Select account</span>
+                  <span>•</span>
+                  <span>Open Solver Lab</span>
+                  <span>•</span>
+                  <span>Submit block</span>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="signal-card">
+                  <div className="signal-kicker">Current status</div>
+                  <div className="mt-2 font-semibold">
+                    {selectedKeyPair ? `Ready as ${selectedAccount}` : "No active wallet selected"}
+                  </div>
+                </div>
+                <div className="signal-card">
+                  <div className="signal-kicker">Next best action</div>
+                  <div className="mt-2 font-semibold">
+                    {selectedKeyPair ? "Open Solver Lab and sync a live mining instance." : "Create or import an account to start earning."}
+                  </div>
+                </div>
+                <div className="sm:col-span-2 flex flex-col sm:flex-row gap-3">
+                  <Button asChild className="sm:flex-1">
+                    <Link to="/solver-lab">Start Mining</Link>
+                  </Button>
+                  <Button asChild variant="outline" className="sm:flex-1">
+                    <Link to="/marketplace">View Live Market</Link>
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left: Account List */}

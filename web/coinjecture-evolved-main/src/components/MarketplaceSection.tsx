@@ -30,6 +30,7 @@ import {
   Cpu,
   Database,
   Download,
+  LineChart,
   Loader2,
   ShieldCheck,
   Sparkles,
@@ -40,6 +41,7 @@ import { rpcClient, type ProblemInfo } from "@/lib/rpc-client";
 import { formatDistanceToNow } from "date-fns";
 import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
+import { API_BASE } from "@/lib/api/client";
 
 type DatasetCatalogItem = {
   id?: string;
@@ -57,6 +59,7 @@ type DatasetCatalogItem = {
     row_count?: number;
     end_height?: number;
     checksum?: string | null;
+    storage_path?: string | null;
     status?: string;
   } | null;
 };
@@ -132,6 +135,52 @@ const getProblemTypeLabel = (type: string) => {
   }
 };
 
+const getReadableProblemLabel = (type: string | null, isPrivate: boolean) => {
+  if (!type) {
+    return isPrivate ? "Private Problem" : "Unknown";
+  }
+
+  if (type.startsWith("SubsetSum")) {
+    return "SubsetSum";
+  }
+
+  if (type.startsWith("SAT")) {
+    return "Boolean SAT";
+  }
+
+  if (type.startsWith("TSP")) {
+    return "TSP";
+  }
+
+  if (type.startsWith("Custom")) {
+    return "Custom Problem";
+  }
+
+  return type;
+};
+
+function getComplexityLabel(problem: ProblemInfo) {
+  const size = typeof problem.problem_size === "number" ? problem.problem_size : null;
+
+  if (size === null) {
+    return "Network sized";
+  }
+
+  if (size <= 8) {
+    return "Small";
+  }
+
+  if (size <= 64) {
+    return "Medium";
+  }
+
+  if (size <= 512) {
+    return "Large";
+  }
+
+  return "High complexity";
+}
+
 const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
   const expirationDate = new Date(problem.expires_at * 1000);
   const submittedDate = new Date(problem.submitted_at * 1000);
@@ -139,16 +188,18 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
   const statusLabel = problem.status === "OPEN" ? "Live bounty" : problem.status;
   const minWorkLabel = typeof problem.min_work_score === "number" ? problem.min_work_score.toString() : "Open";
   const urgencyLabel = isExpiringSoon ? "Closing soon" : "Plenty of runway";
+  const readableProblemLabel = getReadableProblemLabel(problem.problem_type, problem.is_private);
+  const canSolveInLab = Boolean(problem.problem) && (!problem.is_private || problem.is_revealed);
 
   return (
-    <Card className="glass-effect border-border/70 hover:border-primary/40 transition-colors">
+    <Card className="border-border/70 bg-background hover:border-primary/40 hover:shadow-[0_18px_60px_rgba(0,0,0,0.12)] transition-all">
       <CardContent className="p-6 space-y-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-lg font-semibold">
-                {problem.problem_type || (problem.is_private ? "Private Problem" : "Unknown")}
-              </h3>
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="border-primary/20 text-primary">
+                Solver demand
+              </Badge>
               <Badge variant={problem.status === "OPEN" ? "default" : "secondary"}>
                 {statusLabel}
               </Badge>
@@ -156,19 +207,21 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
                 <Badge variant="outline">{problem.is_revealed ? "Revealed" : "Private"}</Badge>
               )}
             </div>
+            <h3 className="text-lg font-semibold leading-snug break-words">{readableProblemLabel}</h3>
             <p className="text-sm text-muted-foreground">
               Problem ID <code className="text-xs">{problem.problem_id.slice(0, 16)}...</code>
             </p>
           </div>
-          <div className="rounded-xl border border-primary/20 bg-primary/10 px-3 py-2 text-right">
-            <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Bounty</div>
+          <div className="rounded-xl border border-primary/20 bg-primary/10 px-3 py-2 text-left xl:min-w-[144px] xl:text-right">
+            <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Payout</div>
             <div className="text-lg font-semibold text-primary">{problem.bounty.toLocaleString()} BEANS</div>
+            <div className="text-[11px] text-muted-foreground mt-1">Available now</div>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
           <MetricPill label="Difficulty floor" value={minWorkLabel} />
-          <MetricPill label="Problem size" value={problem.problem_size || "Network sized"} />
+          <MetricPill label="Complexity" value={getComplexityLabel(problem)} />
           <MetricPill label="Submitted" value={formatDistanceToNow(submittedDate, { addSuffix: true })} />
           <MetricPill
             label="Window"
@@ -178,9 +231,9 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
         </div>
 
         <div className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground mb-2">Operational view</div>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground mb-2">Buyer brief</div>
           <p className="text-foreground leading-relaxed">
-            This bounty is live on-chain now. Open Solver Lab to inspect the structure, test an approach, and prepare a submission.
+            This listing is live on-chain right now. Inspect the structure, estimate the effort, and jump into Solver Lab when the reward looks worth taking.
           </p>
           <div className="mt-3 text-muted-foreground">
             Closes {formatDistanceToNow(expirationDate, { addSuffix: true })}
@@ -188,9 +241,12 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3">
-          <Button asChild className="sm:flex-1" disabled={problem.status !== "OPEN"}>
-            <Link to="/solver-lab">
-              Solve in Solver Lab
+          <Button asChild className="sm:flex-1" disabled={problem.status !== "OPEN" || !canSolveInLab}>
+            <Link
+              to={`/solver-lab?problemId=${encodeURIComponent(problem.problem_id)}`}
+              state={{ selectedBounty: problem }}
+            >
+              {canSolveInLab ? "Solve this bounty" : "Await reveal"}
               <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
@@ -215,10 +271,13 @@ const SolutionSetCard = ({ solution }: { solution: SolutionSet }) => {
     <Dialog>
       <DialogTrigger asChild>
         <button type="button" className="w-full text-left">
-          <Card className="border-border/60 bg-background/60 transition-colors hover:border-primary/40">
+          <Card className="border-border/60 bg-background transition-all hover:border-primary/40 hover:shadow-[0_16px_48px_rgba(0,0,0,0.10)]">
             <CardContent className="p-5">
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div>
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground mb-1">
+                    Verified inventory
+                  </div>
                   <div className="text-sm font-semibold">{getProblemTypeLabel(solution.problem_type)}</div>
                   <div className="text-xs text-muted-foreground">
                     Block {solution.block_height.toLocaleString()} • {solution.quality_band || "unknown"} quality band
@@ -235,8 +294,9 @@ const SolutionSetCard = ({ solution }: { solution: SolutionSet }) => {
               <div className="mt-4 text-xs text-muted-foreground">
                 Problem ID <code>{solution.problem_id?.slice(0, 24) || "pending"}</code>
               </div>
-              <div className="mt-3 text-xs text-primary">
-                Click to inspect this solution set
+              <div className="mt-3 flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Preview the payload and metrics before export.</span>
+                <span className="text-primary">Inspect listing</span>
               </div>
             </CardContent>
           </Card>
@@ -361,17 +421,14 @@ export const MarketplaceSection = () => {
 
   const openRegistration = () => openAuthModal("email", "signup");
 
-  const handleDatasetAction = () => {
-    if (isAuthenticated) {
-      window.alert("Dataset exploration tools are reserved for signed-in accounts. You already have access to the live previews below.");
-      return;
-    }
-
-    openRegistration();
+  const handleDatasetDownload = (slug: string) => {
+    window.open(`${API_BASE}/marketplace/datasets/${encodeURIComponent(slug)}/download`, "_blank", "noopener,noreferrer");
   };
 
   const liveSolutionCount = solutionSets.length.toString();
   const topSolution = solutionSets[0];
+  const featuredProblem = problems?.[0];
+  const featuredDataset = normalizedDatasets[0];
   const bountyCtaLabel = isAuthenticated ? "Open Solver Lab" : "Register and solve";
   const solutionState = getDataState(solutionSetsLoading, solutionSetsError, solutionSets.length);
   const datasetState = getDataState(datasetsLoading, datasetsError, normalizedDatasets.length);
@@ -379,80 +436,106 @@ export const MarketplaceSection = () => {
   return (
     <section id="marketplace" className="py-20">
       <div className="container mx-auto px-6">
-        <Card className="glass-effect overflow-hidden border-primary/20 bg-gradient-to-br from-primary/10 via-background to-background mb-12">
-          <div className="grid gap-8 px-6 py-8 md:grid-cols-[1.2fr_0.8fr] md:px-8">
+        <Card className="overflow-hidden border-primary/20 mb-12 bg-[radial-gradient(circle_at_top_left,rgba(147,51,234,0.14),transparent_34%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.12),transparent_28%),linear-gradient(135deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))] text-foreground dark:bg-[radial-gradient(circle_at_top_left,rgba(147,51,234,0.22),transparent_34%),radial-gradient(circle_at_top_right,rgba(59,130,246,0.18),transparent_28%),linear-gradient(135deg,rgba(14,14,24,0.96),rgba(10,10,16,0.92))] dark:text-white">
+          <div className="grid gap-8 px-6 py-8 md:grid-cols-[1.1fr_0.9fr] md:px-8">
             <div>
               <div className="flex flex-wrap items-center gap-2 mb-4">
-                <Badge variant="secondary" className="text-xs">Live blockchain marketplace</Badge>
-                <Badge variant="outline" className="text-xs border-primary/30 text-primary">
-                  {isAuthenticated ? "Dataset access unlocked" : "Register to explore datasets"}
+                <Badge variant="secondary" className="text-xs bg-foreground/5 text-foreground border-foreground/10 dark:bg-white/10 dark:text-white dark:border-white/10">Live market</Badge>
+                <Badge variant="outline" className="text-xs border-foreground/15 text-foreground/80 dark:border-white/20 dark:text-white/90">
+                  {isAuthenticated ? "Signed in and ready to act" : "Browse free, then unlock"}
                 </Badge>
               </div>
-              <h2 className="text-4xl font-bold tracking-tight mb-4">
-                See useful work happening live, then step in and <span className="text-primary">use the chain output</span>
+              <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4 leading-tight">
+                The live market for <span className="text-primary">solver payouts, verified outputs, and premium chain data</span>
               </h2>
-              <p className="text-muted-foreground max-w-3xl leading-relaxed mb-6">
-                COINjecture turns useful computation into a visible market. Watch active bounties, inspect fresh solution
-                data, and register when you want to move from browsing into dataset exploration.
+              <p className="text-muted-foreground dark:text-white/75 max-w-3xl leading-relaxed mb-6 text-lg">
+                High-signal bounties. Freshly verified solution inventory. Productized datasets with proof and provenance.
               </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
                 <SignalStat
-                  label="See useful work"
+                  label="Open listings"
                   value={statsLoading ? "Loading" : stats ? stats.open_problems.toLocaleString() : "Live"}
+                  dark
                 />
-                <SignalStat label="Explore solution data" value={solutionSetsLoading ? "Loading" : liveSolutionCount} />
+                <SignalStat label="Fresh outputs" value={solutionSetsLoading ? "Loading" : liveSolutionCount} dark />
                 <SignalStat
-                  label="Register to unlock"
-                  value={isAuthenticated ? "Dataset tools enabled" : "Free account"}
+                  label="Market mode"
+                  value={isAuthenticated ? "Buyer active" : "Preview mode"}
+                  dark
                 />
               </div>
+              <div className="flex flex-wrap gap-3 text-sm text-foreground/80 dark:text-white/80">
+                <MarketChip icon={Zap} text="Highest payout first" />
+                <MarketChip icon={ShieldCheck} text="Chain-backed proof" />
+                <MarketChip icon={Sparkles} text="Fresh inventory every block" />
+              </div>
             </div>
-            <Card className="border-border/60 bg-background/80">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-lg">What this page shows</CardTitle>
-                <CardDescription>
-                  A quick read on what the network is doing right now.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm text-muted-foreground">
-                <ValueBullet icon={Activity} text="Live bounty demand shows where the chain wants useful work next." />
-                <ValueBullet icon={BrainCircuit} text="Verified solution sets prove the chain is producing real outputs now." />
-                <ValueBullet icon={Database} text="Registration unlocks deeper dataset exploration instead of a generic download flow." />
-              </CardContent>
-            </Card>
+            <div className="grid gap-4">
+              <FeatureSpotlight
+                eyebrow="Featured opportunity"
+                title={featuredProblem ? getProblemTypeLabel(featuredProblem.problem_type || "Unknown") : "Live bounty feed"}
+                value={featuredProblem ? `${featuredProblem.bounty.toLocaleString()} BEANS` : "Loading"}
+                description={
+                  featuredProblem
+                    ? `${featuredProblem.status === "OPEN" ? "Open now" : featuredProblem.status} • closes ${formatDistanceToNow(new Date(featuredProblem.expires_at * 1000), { addSuffix: true })}`
+                    : "Loading the highest-signal solver opportunity."
+                }
+                tone="bounty"
+              />
+              <FeatureSpotlight
+                eyebrow="Featured product"
+                title={featuredDataset?.title || "Dataset catalog"}
+                value={featuredDataset?.latest_snapshot?.version || "Preview"}
+                description={
+                  featuredDataset
+                    ? `${featuredDataset.latest_snapshot?.row_count?.toLocaleString() || "Growing"} rows • ${featuredDataset.latest_snapshot?.status || "Preview ready"}`
+                    : "Loading the first premium chain dataset."
+                }
+                tone="dataset"
+              />
+            </div>
           </div>
         </Card>
 
         <Tabs value={marketplaceTab} onValueChange={setMarketplaceTab}>
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between mb-8">
+          <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between mb-8">
             <div>
-              <h3 className="text-2xl font-bold">Marketplace</h3>
+              <h3 className="text-3xl font-bold">Choose your side of the market</h3>
               <p className="text-muted-foreground">
-                Browse the network from two angles: live work opportunities and live chain output.
+                Hunt payouts on one side. Shop verified chain products on the other.
               </p>
             </div>
-            <TabsList className="w-full md:w-auto">
-              <TabsTrigger value="bounties">Bounty Marketplace</TabsTrigger>
-              <TabsTrigger value="data">Data Marketplace</TabsTrigger>
+            <TabsList className="w-full md:w-auto h-auto grid grid-cols-2 rounded-2xl border border-border/60 bg-muted/30 p-1.5 md:min-w-[360px] md:shadow-sm">
+              <TabsTrigger
+                value="bounties"
+                className="rounded-xl px-6 py-4 text-base font-semibold data-[state=active]:bg-background data-[state=active]:shadow-sm"
+              >
+                Earn
+              </TabsTrigger>
+              <TabsTrigger
+                value="data"
+                className="rounded-xl px-6 py-4 text-base font-semibold data-[state=active]:bg-background data-[state=active]:shadow-sm"
+              >
+                Buy
+              </TabsTrigger>
             </TabsList>
           </div>
 
           <TabsContent value="bounties" className="space-y-6">
-            <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-              <Card className="glass-effect border-border/70">
+            <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+              <Card className="border-border/70 bg-background">
                 <CardHeader>
-                  <div className="flex items-center gap-2 mb-2">
-                    <Badge variant="secondary">Live problem feed</Badge>
-                    <Badge variant="outline">Routes into Solver Lab</Badge>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary">Active listings</Badge>
+                    <Badge variant="outline">Solver-side marketplace</Badge>
                   </div>
-                  <CardTitle className="text-2xl">Solve the next useful block</CardTitle>
+                  <CardTitle className="text-2xl xl:text-3xl leading-tight">Earn from live demand</CardTitle>
                   <CardDescription className="leading-relaxed">
-                    Open bounties show what the network wants solved right now. Scan current work, compare urgency and reward,
-                    then jump into Solver Lab to act on it.
+                    Start with the biggest payout that matches your solving style. Move fast when a listing is heating up.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                     <MetricPill
                       label="Open now"
                       value={statsLoading ? "Loading" : stats ? stats.open_problems.toLocaleString() : "Live"}
@@ -469,14 +552,6 @@ export const MarketplaceSection = () => {
                       label="Expired"
                       value={statsLoading ? "Loading" : stats ? stats.expired_problems.toLocaleString() : "Live"}
                     />
-                  </div>
-
-                  <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-2">What to do next</div>
-                    <p className="text-sm text-foreground leading-relaxed">
-                      Start with the live cards on the right. When a bounty looks attractive, open Solver Lab to inspect the
-                      problem, test ideas, and work toward a submission.
-                    </p>
                   </div>
 
                   <div className="flex flex-col sm:flex-row gap-3">
@@ -498,7 +573,7 @@ export const MarketplaceSection = () => {
 
               <div className="space-y-4">
                 {problemsLoading && (
-                  <Card className="glass-effect p-8">
+                  <Card className="p-8">
                     <div className="flex items-center justify-center py-8">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
                     </div>
@@ -507,7 +582,7 @@ export const MarketplaceSection = () => {
                 )}
 
                 {problemsError && (
-                  <Card className="glass-effect border-warning/30 bg-warning/5">
+                  <Card className="border-warning/30 bg-warning/5">
                     <CardContent className="flex items-start gap-3 p-6 text-sm">
                       <AlertCircle className="h-5 w-5 text-warning mt-0.5" />
                       <div>
@@ -529,7 +604,7 @@ export const MarketplaceSection = () => {
                 ) : null}
 
                 {!problemsLoading && !problemsError && (!problems || problems.length === 0) && (
-                  <Card className="glass-effect p-8 text-center">
+                  <Card className="p-8 text-center">
                     <p className="text-muted-foreground">
                       No live bounties are listed at the moment. Open Solver Lab anyway so you are ready when the next problem lands.
                     </p>
@@ -541,18 +616,17 @@ export const MarketplaceSection = () => {
 
           <TabsContent value="data" className="space-y-6">
             <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-              <Card className="glass-effect border-border/70">
+              <Card className="border-border/70 bg-background">
                 <CardHeader>
                   <div className="flex items-center gap-2 mb-2">
-                    <Badge variant="secondary">Live chain visibility</Badge>
+                    <Badge variant="secondary">Featured inventory</Badge>
                     <Badge variant="outline" className="border-primary/30 text-primary">
-                      {isAuthenticated ? "Signed in" : "Register to explore"}
+                      {isAuthenticated ? "Buyer tools active" : "Preview mode"}
                     </Badge>
                   </div>
-                  <CardTitle className="text-2xl">The chain is producing usable outputs now</CardTitle>
+                  <CardTitle className="text-3xl">Buy into the network’s output layer</CardTitle>
                   <CardDescription className="leading-relaxed">
-                    Start with the live solution browser below. It is the clearest proof that the network is active, solving work,
-                    and turning blocks into structured data you can explore.
+                    The proof is live below. The products are the snapshots, feeds, and structured exports built from it.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -572,17 +646,16 @@ export const MarketplaceSection = () => {
                     />
                   </div>
 
-                  <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
-                    <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-2">Why register</div>
-                    <p className="text-sm text-foreground leading-relaxed">
-                      Signed-out visitors can preview the chain. Signed-in users get the unlock moment: guided dataset exploration,
-                      richer tools, and better ways to act on what the chain is producing.
-                    </p>
-                  </div>
-
                   <div className="flex flex-col sm:flex-row gap-3">
-                    <Button className="sm:flex-1" onClick={handleDatasetAction}>
-                      {isAuthenticated ? "Explore dataset tools" : "Create free account"}
+                    <Button
+                      className="sm:flex-1"
+                      onClick={() =>
+                        isAuthenticated && featuredDataset
+                          ? handleDatasetDownload(featuredDataset.slug)
+                          : openRegistration()
+                      }
+                    >
+                      {isAuthenticated ? "Download featured dataset" : "Create free account"}
                       <ArrowRight className="h-4 w-4" />
                     </Button>
                     <Button variant="outline" className="sm:flex-1" asChild>
@@ -597,17 +670,21 @@ export const MarketplaceSection = () => {
 
               <RegisterToExploreCard
                 isAuthenticated={isAuthenticated}
-                onPrimaryAction={handleDatasetAction}
+                onPrimaryAction={() =>
+                  isAuthenticated && featuredDataset
+                    ? handleDatasetDownload(featuredDataset.slug)
+                    : openRegistration()
+                }
                 onSecondaryAction={openRegistration}
               />
             </div>
 
-            <Card className="glass-effect max-w-6xl mx-auto">
+            <Card className="max-w-6xl mx-auto border-border/70 bg-background">
               <CardHeader className="gap-4 md:flex-row md:items-end md:justify-between">
                 <div>
                   <CardTitle className="text-xl">Verified solution sets</CardTitle>
                   <CardDescription>
-                    Recent on-chain solutions, sortable by work score, quality, and problem type.
+                    Recent on-chain solutions shown like browsable inventory, sortable by value and type.
                   </CardDescription>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -671,7 +748,7 @@ export const MarketplaceSection = () => {
             </Card>
 
             <div className="flex justify-center">
-              <Card className="glass-effect w-full max-w-4xl border-primary/20 bg-gradient-to-br from-primary/10 via-background to-background">
+              <Card className="w-full max-w-4xl border-primary/20 bg-gradient-to-br from-primary/10 via-background to-background">
                 <CardContent className="flex flex-col gap-4 p-6 md:flex-row md:items-center md:justify-between">
                   <div className="space-y-2">
                     <div className="text-sm font-semibold text-foreground">
@@ -684,8 +761,14 @@ export const MarketplaceSection = () => {
                     </p>
                   </div>
                   <div className="flex flex-col gap-3 sm:flex-row">
-                    <Button onClick={handleDatasetAction}>
-                      {isAuthenticated ? "Explore dataset tools" : "Create free account"}
+                    <Button
+                      onClick={() =>
+                        isAuthenticated && featuredDataset
+                          ? handleDatasetDownload(featuredDataset.slug)
+                          : openRegistration()
+                      }
+                    >
+                      {isAuthenticated ? "Download featured dataset" : "Create free account"}
                       <ArrowRight className="h-4 w-4" />
                     </Button>
                     {!isAuthenticated && (
@@ -699,11 +782,11 @@ export const MarketplaceSection = () => {
               </Card>
             </div>
 
-            <Card className="glass-effect max-w-6xl mx-auto">
+            <Card className="max-w-6xl mx-auto border-border/70 bg-background">
               <CardHeader>
                 <CardTitle className="text-xl">Dataset catalog</CardTitle>
                 <CardDescription>
-                  Follow-on products built from the live chain output above.
+                  Productized snapshots built from the live chain output above.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -733,7 +816,7 @@ export const MarketplaceSection = () => {
                   const snapshot = dataset.latest_snapshot;
 
                   return (
-                    <Card key={dataset.slug} className="border-border/70 hover:border-primary/40 transition-colors">
+                    <Card key={dataset.slug} className="border-border/70 bg-background hover:border-primary/40 hover:shadow-[0_18px_60px_rgba(0,0,0,0.12)] transition-all">
                       <CardHeader className="space-y-4">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex items-start gap-4">
@@ -748,7 +831,7 @@ export const MarketplaceSection = () => {
                             </div>
                           </div>
                           <Badge variant="outline" className={cn("shrink-0", visual.badgeClass)}>
-                            {isAuthenticated ? "Explore now" : "Preview + register"}
+                            {isAuthenticated ? "Browse product" : "Preview product"}
                           </Badge>
                         </div>
                         <CardDescription className="text-sm leading-relaxed">
@@ -756,6 +839,19 @@ export const MarketplaceSection = () => {
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-5">
+                        <div className="flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+                          <div>
+                            <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Starting price</div>
+                            <div className="text-xl font-semibold text-foreground">
+                              {dataset.price > 0 ? `${dataset.price.toLocaleString()} ${dataset.currency}` : "Free preview"}
+                            </div>
+                          </div>
+                          <div className="text-right text-xs text-muted-foreground">
+                            <div>{snapshot?.status || "Preview ready"}</div>
+                            <div>{snapshot?.checksum ? `Checksum ${snapshot.checksum.slice(0, 8)}…` : "Chain-backed snapshot"}</div>
+                          </div>
+                        </div>
+
                         <div className="grid grid-cols-2 gap-3 text-sm">
                           <MetricPill label="Version" value={snapshot?.version || "Preview"} />
                           <MetricPill
@@ -771,7 +867,7 @@ export const MarketplaceSection = () => {
 
                         <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
                           <div className="text-xs font-mono uppercase tracking-[0.16em] text-muted-foreground mb-2">
-                            What you can do with it
+                            Why teams would buy this
                           </div>
                           <p className="text-sm text-foreground leading-relaxed">
                             {datasetUseCase(dataset.slug)}
@@ -779,17 +875,17 @@ export const MarketplaceSection = () => {
                         </div>
 
                         <div className="flex flex-col sm:flex-row gap-3">
-                          <Button className="sm:flex-1" onClick={handleDatasetAction}>
+                          <Button className="sm:flex-1" onClick={() => handleDatasetDownload(dataset.slug)}>
                             <Download className="h-4 w-4" />
-                            {isAuthenticated ? "Explore dataset" : "Create free account"}
+                            Download dataset
                           </Button>
                           <Button
                             variant="outline"
                             className="sm:flex-1"
-                            onClick={isAuthenticated ? handleDatasetAction : openRegistration}
+                            onClick={() => handleDatasetDownload(dataset.slug)}
                           >
                             <Zap className="h-4 w-4" />
-                            {isAuthenticated ? "Unlock dataset tools" : "Register to explore"}
+                            Download JSON
                           </Button>
                         </div>
                       </CardContent>
@@ -807,11 +903,107 @@ export const MarketplaceSection = () => {
   );
 };
 
-function SignalStat({ label, value }: { label: string; value: string }) {
+function SignalStat({ label, value, dark = false }: { label: string; value: string; dark?: boolean }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-background/70 p-4">
-      <div className="text-xs uppercase tracking-[0.16em] text-muted-foreground mb-1">{label}</div>
-      <div className="text-lg font-semibold">{value}</div>
+    <div
+      className={cn(
+        "rounded-xl border p-4",
+        dark ? "border-white/10 bg-white/5" : "border-foreground/10 bg-background/75",
+      )}
+    >
+      <div className={cn("text-xs uppercase tracking-[0.16em] mb-1", dark ? "text-white/60" : "text-foreground/55")}>
+        {label}
+      </div>
+      <div className={cn("text-lg font-semibold", dark ? "text-white" : "text-foreground")}>{value}</div>
+    </div>
+  );
+}
+
+function MarketChip({
+  icon: Icon,
+  text,
+}: {
+  icon: typeof Zap | typeof ShieldCheck | typeof Sparkles;
+  text: string;
+}) {
+  return (
+    <div className="inline-flex items-center gap-2 rounded-full border border-foreground/10 bg-foreground/5 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+      <Icon className="h-4 w-4 text-primary" />
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function FeatureSpotlight({
+  eyebrow,
+  title,
+  value,
+  description,
+  tone,
+}: {
+  eyebrow: string;
+  title: string;
+  value: string;
+  description: string;
+  tone: "bounty" | "dataset";
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border p-5 backdrop-blur-sm",
+        tone === "bounty"
+          ? "border-primary/25 bg-primary/10 text-foreground dark:border-primary/30 dark:bg-primary/10 dark:text-white"
+          : "border-foreground/10 bg-background/60 text-foreground dark:border-white/10 dark:bg-white/5 dark:text-white",
+      )}
+    >
+      <div className="text-[11px] uppercase tracking-[0.18em] text-foreground/55 dark:text-white/60 mb-2">{eyebrow}</div>
+      <div className="text-xl font-semibold leading-tight">{title}</div>
+      <div className="mt-3 text-3xl font-bold text-primary">{value}</div>
+      <div className="mt-2 text-sm text-muted-foreground dark:text-white/70 leading-relaxed">{description}</div>
+    </div>
+  );
+}
+
+function MerchFeature({
+  icon: Icon,
+  title,
+  body,
+}: {
+  icon: typeof Sparkles | typeof Zap | typeof Database | typeof ShieldCheck;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-background/75 p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="rounded-lg bg-primary/10 p-2">
+          <Icon className="h-4 w-4 text-primary" />
+        </div>
+        <div className="font-medium">{title}</div>
+      </div>
+      <p className="text-sm text-muted-foreground leading-relaxed">{body}</p>
+    </div>
+  );
+}
+
+function ShelfRow({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string;
+  note: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
+          <div className="mt-1 text-lg font-semibold text-foreground">{value}</div>
+        </div>
+        <div className="max-w-[180px] text-right text-xs text-muted-foreground leading-relaxed">{note}</div>
+      </div>
     </div>
   );
 }

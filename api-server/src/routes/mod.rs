@@ -77,6 +77,10 @@ pub fn build_routes(state: AppState) -> Router {
         )
         .route("/marketplace/trades", get(marketplace::get_trades))
         .route("/marketplace/datasets", get(marketplace::get_datasets))
+        .route(
+            "/marketplace/datasets/{slug}/download",
+            get(marketplace::download_dataset),
+        )
         .route("/marketplace/solution-sets", get(marketplace::get_solution_sets))
         .route(
             "/marketplace/tasks",

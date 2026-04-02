@@ -4,7 +4,12 @@ import { Copy, Check, Loader2 } from "lucide-react";
 import { useWallet } from "@/contexts/WalletContext";
 import { rpcClient } from "@/lib/rpc-client";
 import { formatBeans, parseBalance } from "@/lib/chain-metrics";
-import { createBlock, extractHashHex } from "@/lib/mining";
+import {
+  createBlockFromSolvedProblem,
+  extractHashHex,
+  getClientHeaderHashDebug,
+  solveProblem,
+} from "@/lib/mining";
 import { cn } from "@/lib/utils";
 
 const COMMANDS = [
@@ -224,12 +229,12 @@ Peers: ${chainInfo.peer_count}`;
           } else {
             try {
               const chainInfo = await rpcClient.getChainInfo();
-              const latestBlock = await rpcClient.getLatestBlock();
+              const work = await rpcClient.getMiningWork();
 
-              if (!latestBlock || !chainInfo.best_hash) {
+              if (!chainInfo.best_hash || !work.prev_hash) {
                 appendLines([`coinjectured$ ${cmd}`, "No blocks found. Cannot submit block without chain state.", ""]);
               } else {
-                const nextHeight = chainInfo.best_height + 1;
+                const nextHeight = work.next_height;
 
                 appendLines([
                   `coinjectured$ ${cmd}`,
@@ -241,20 +246,37 @@ Your address: ${selectedKeyPair.address.slice(0, 16)}...${selectedKeyPair.addres
                 ]);
 
                 try {
-                  const prevHashHex = extractHashHex(chainInfo.best_hash);
+                  const prevHashHex = extractHashHex(work.prev_hash);
+                  const solved = solveProblem(work.problem);
 
-                  const block = await createBlock(
+                  if (!solved) {
+                    appendLines(["Mining failed. Could not solve the current network problem.", ""]);
+                    break;
+                  }
+
+                  appendLines([`Mining header at network difficulty ${work.difficulty}…`, ""]);
+
+                  const block = await createBlockFromSolvedProblem(
                     prevHashHex,
                     nextHeight,
                     selectedKeyPair.address,
+                    work.problem,
+                    solved.solution,
+                    solved.solveTimeMs,
                     [],
-                    10,
-                    2
+                    work.difficulty,
                   );
 
                   if (!block) {
-                    appendLines(["Mining failed. Could not create block.", ""]);
+                    appendLines([`Mining failed. Could not create block at difficulty ${work.difficulty}.`, ""]);
                   } else {
+                    const clientHashDebug = getClientHeaderHashDebug(block.header);
+                    appendLines([
+                      `Client header hash: ${clientHashDebug.hash.slice(0, 32)}… (${clientHashDebug.hash.match(/^0*/)?.[0].length || 0} leading zeros)`,
+                      `Client header payload preview: ${clientHashDebug.json.slice(0, 160)}…`,
+                      "",
+                    ]);
+
                     const finalChainInfo = await rpcClient.getChainInfo();
 
                     if (finalChainInfo.best_height >= block.header.height) {
@@ -296,6 +318,7 @@ Block:
 Height: #${block.header.height}
 Hash: ${blockHash.slice(0, 16)}…
 Nonce: ${block.header.nonce}
+Difficulty: ${work.difficulty}
 Work score: ${block.header.work_score.toFixed(2)}
 Solve time: ${(block.header.solve_time_us / 1000).toFixed(2)}ms
 Energy: ${block.header.energy_estimate_joules.toFixed(4)} J

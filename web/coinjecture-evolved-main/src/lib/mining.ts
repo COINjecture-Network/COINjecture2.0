@@ -38,6 +38,14 @@ const MAX_TSP_CITIES = 10;
 const DEFAULT_DIFFICULTY = 2;
 const MINING_DEBUG_FLAG_KEY = 'coinjecture:mining-debug';
 
+function normalizeHeaderFloat(value: number, decimals: number = 12): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Number(value.toFixed(decimals));
+}
+
 function shouldLogMiningDebug(): boolean {
   // Always allow logging in development builds
   if (import.meta.env && import.meta.env.DEV) {
@@ -492,7 +500,7 @@ export function createCommitment(
  *                    commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
  *                    time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
  */
-function calculateHeaderHash(header: Block['header']): string {
+function buildHeaderHashDebug(header: Block['header']): { hash: string; json: string } {
   // Convert header to match server format (byte arrays for hashes/addresses)
   // CRITICAL: Field order must match Rust struct field order exactly
   const headerForHash: any = {
@@ -522,7 +530,40 @@ function calculateHeaderHash(header: Block['header']): string {
   // Rust struct order: version, height, prev_hash, timestamp, transactions_root, solutions_root,
   //                    commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
   //                    time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
-  const headerJson = JSON.stringify(headerForHash);
+  const floatFieldNames = new Set([
+    'work_score',
+    'time_asymmetry_ratio',
+    'solution_quality',
+    'complexity_weight',
+    'energy_estimate_joules',
+  ]);
+
+  const serializeRustLikeJson = (value: unknown, parentKey?: string): string => {
+    if (value === null) return 'null';
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        throw new Error(`Cannot serialize non-finite number for ${parentKey ?? 'value'}`);
+      }
+      if (parentKey && floatFieldNames.has(parentKey) && Number.isInteger(value)) {
+        return `${value.toFixed(1)}`;
+      }
+      return JSON.stringify(value);
+    }
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    if (typeof value === 'string') return JSON.stringify(value);
+    if (Array.isArray(value)) {
+      return `[${value.map((item) => serializeRustLikeJson(item)).join(',')}]`;
+    }
+    if (typeof value === 'object') {
+      const entries = Object.entries(value as Record<string, unknown>);
+      return `{${entries
+        .map(([key, item]) => `${JSON.stringify(key)}:${serializeRustLikeJson(item, key)}`)
+        .join(',')}}`;
+    }
+    throw new Error(`Unsupported value in header serialization: ${String(value)}`);
+  };
+
+  const headerJson = serializeRustLikeJson(headerForHash);
   const headerBytes = new TextEncoder().encode(headerJson);
   const calculatedHash = hash(headerBytes);
   
@@ -539,7 +580,11 @@ function calculateHeaderHash(header: Block['header']): string {
     console.log('🔍 Client header object (before JSON.stringify):', JSON.stringify(headerForHash, null, 2));
   }
   
-  return calculatedHash;
+  return { hash: calculatedHash, json: headerJson };
+}
+
+function calculateHeaderHash(header: Block['header']): string {
+  return buildHeaderHashDebug(header).hash;
 }
 
 /**
@@ -572,6 +617,10 @@ export function mineHeader(
   }
   
   return null;
+}
+
+export function getClientHeaderHashDebug(header: Block['header']): { hash: string; json: string } {
+  return buildHeaderHashDebug(header);
 }
 
 /**
@@ -702,13 +751,15 @@ export async function createBlock(
     return null;
   }
   const verifyTimeUs = Math.max(1, Math.round((performance.now() - verifyStart) * 1000));
-  const timeAsymmetryRatio = solveTimeUs / verifyTimeUs;
+  const timeAsymmetryRatio = normalizeHeaderFloat(solveTimeUs / verifyTimeUs);
   
-  const complexityWeight = calculateProblemDifficultyWeight(problem);
-  const solutionQuality = calculateSolutionQuality(solution, problem);
-  const workScore = workScoreBitsFromPouw(solveTimeUs, verifyTimeUs, solutionQuality);
+  const complexityWeight = normalizeHeaderFloat(calculateProblemDifficultyWeight(problem));
+  const solutionQuality = normalizeHeaderFloat(calculateSolutionQuality(solution, problem));
+  const workScore = normalizeHeaderFloat(
+    workScoreBitsFromPouw(solveTimeUs, verifyTimeUs, solutionQuality)
+  );
   
-  const energyEstimateJoules = 100.0 * (solveTimeMs / 1000);
+  const energyEstimateJoules = normalizeHeaderFloat(100.0 * (solveTimeMs / 1000));
   
   // 5. Create block header
   const timestamp = Math.floor(Date.now() / 1000);
@@ -827,12 +878,14 @@ export async function createBlockFromSolvedProblem(
     return null;
   }
   const verifyTimeUs = Math.max(1, Math.round((performance.now() - verifyStart) * 1000));
-  const timeAsymmetryRatio = solveTimeUs / verifyTimeUs;
+  const timeAsymmetryRatio = normalizeHeaderFloat(solveTimeUs / verifyTimeUs);
 
-  const complexityWeight = calculateProblemDifficultyWeight(problem);
-  const solutionQuality = calculateSolutionQuality(solution, problem);
-  const workScore = workScoreBitsFromPouw(solveTimeUs, verifyTimeUs, solutionQuality);
-  const energyEstimateJoules = 100.0 * (solveTimeMs / 1000);
+  const complexityWeight = normalizeHeaderFloat(calculateProblemDifficultyWeight(problem));
+  const solutionQuality = normalizeHeaderFloat(calculateSolutionQuality(solution, problem));
+  const workScore = normalizeHeaderFloat(
+    workScoreBitsFromPouw(solveTimeUs, verifyTimeUs, solutionQuality)
+  );
+  const energyEstimateJoules = normalizeHeaderFloat(100.0 * (solveTimeMs / 1000));
 
   const timestamp = Math.floor(Date.now() / 1000);
   const transactionsRoot = hash(new TextEncoder().encode(JSON.stringify(transactions)));

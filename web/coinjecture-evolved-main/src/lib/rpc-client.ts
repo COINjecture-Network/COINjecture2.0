@@ -211,6 +211,7 @@ export interface ProblemInfo {
   problem_type: string | null; // e.g., "SubsetSum(5)", "SAT(vars=10, clauses=20)"
   problem_size: number | null; // usize
   is_revealed: boolean;
+  problem?: ProblemType | null;
 }
 
 // Marketplace statistics - matches MarketplaceStats in state/src/marketplace.rs
@@ -238,6 +239,7 @@ export interface ChainInfo {
 export interface MiningWork {
   next_height: number;
   prev_hash: string;
+  difficulty: number;
   problem: ProblemType;
 }
 
@@ -384,11 +386,40 @@ export interface PrivateProblemParams {
   expiration_days: number; // u64
 }
 
+export interface PrivateProblemWalletParams {
+  problem: ProblemType;
+  salt: string;
+  bounty: number;
+  min_work_score: number;
+  expiration_days: number;
+  submitter: string;
+}
+
+export interface PrivateProblemSubmissionResult {
+  problem_id: string;
+  commitment: string;
+}
+
+// Public problem submission parameters - matches PublicProblemParams in rpc/src/server.rs
+export interface PublicProblemParams {
+  problem: ProblemType;
+  bounty: number;
+  min_work_score: number;
+  expiration_days: number;
+  submitter: string;
+}
+
 // Problem reveal parameters - matches RevealParams in rpc/src/server.rs
 export interface RevealParams {
   problem_id: string; // hex-encoded hash
   problem: string; // JSON-encoded ProblemType
   salt: string; // hex-encoded 32-byte salt
+}
+
+export interface SolutionSubmissionParams {
+  problem_id: string;
+  solution: SolutionType;
+  solver: string;
 }
 
 export class RpcClient {
@@ -725,12 +756,29 @@ export class RpcClient {
     return this.call<MarketplaceStats>('marketplace_getStats', []);
   }
 
+  async submitPublicProblem(params: PublicProblemParams): Promise<string> {
+    return this.call<string>('marketplace_submitPublicProblem', [params]);
+  }
+
   async submitPrivateProblem(params: PrivateProblemParams): Promise<string> {
     return this.call<string>('marketplace_submitPrivateProblem', [params]);
   }
 
+  async submitPrivateProblemWithWallet(
+    params: PrivateProblemWalletParams,
+  ): Promise<PrivateProblemSubmissionResult> {
+    return this.call<PrivateProblemSubmissionResult>(
+      'marketplace_submitPrivateProblemWithWallet',
+      [params],
+    );
+  }
+
   async revealProblem(params: RevealParams): Promise<boolean> {
     return this.call<boolean>('marketplace_revealProblem', [params]);
+  }
+
+  async submitSolution(params: SolutionSubmissionParams): Promise<boolean> {
+    return this.call<boolean>('marketplace_submitSolution', [params]);
   }
 
   // ========== TimeLock Methods ==========

@@ -1,4 +1,6 @@
 use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::Response;
 use axum::Json;
 use chrono::Utc;
 use rust_decimal::Decimal;
@@ -342,6 +344,196 @@ pub async fn get_solution_sets(
         .map_err(|e| ApiError::Internal(format!("Failed to fetch solution sets: {e}")))?;
 
     Ok(Json(solution_sets))
+}
+
+/// `GET /marketplace/datasets/{slug}/download`
+pub async fn download_dataset(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Response, ApiError> {
+    let supabase = require_supabase(&state)?;
+    let datasets = supabase
+        .get_dataset_catalog()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch dataset catalog: {e}")))?;
+
+    let dataset = datasets
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row["slug"].as_str() == Some(slug.as_str()))
+                .cloned()
+        })
+        .ok_or_else(|| ApiError::NotFound(format!("Dataset '{slug}' not found")))?;
+
+    let snapshot = dataset
+        .get("latest_snapshot")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let end_height = snapshot
+        .get("end_height")
+        .and_then(|value| value.as_i64())
+        .ok_or_else(|| ApiError::NotFound(format!("Dataset '{slug}' has no ready snapshot to download")))?;
+
+    let rows_path = dataset_rows_path(&slug, end_height)?;
+    let rows = supabase
+        .postgrest_get_public(&rows_path)
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to fetch dataset rows: {e}")))?;
+    let version = snapshot
+        .get("version")
+        .and_then(|value| value.as_str())
+        .unwrap_or("latest");
+    let exported_at = Utc::now().to_rfc3339();
+    let (filename, content_type, body) =
+        render_dataset_export(&slug, version, &exported_at, &dataset, &snapshot, &rows)?;
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(body.into())
+        .map_err(|e| ApiError::Internal(format!("Failed to build dataset download response: {e}")))
+}
+
+fn dataset_rows_path(slug: &str, end_height: i64) -> Result<String, ApiError> {
+    let path = match slug {
+        "marketplace-events-by-block" => format!(
+            "marketplace_block_events?block_height=eq.{end_height}&select=*&order=tx_index.asc,event_index.asc"
+        ),
+        "problem-submissions-and-solutions" => format!(
+            "marketplace_block_events?block_height=eq.{end_height}&event_type=in.(submit_problem,submit_solution)&select=*&order=tx_index.asc,event_index.asc"
+        ),
+        "bounty-payout-history" => format!(
+            "marketplace_block_events?block_height=eq.{end_height}&event_type=eq.claim_bounty&select=*&order=tx_index.asc,event_index.asc"
+        ),
+        "trading-and-liquidity-activity" => format!(
+            "marketplace_block_events?block_height=eq.{end_height}&event_type=in.(trade,liquidity,pool_swap)&select=*&order=tx_index.asc,event_index.asc"
+        ),
+        "verified-solution-sets" => format!(
+            "solution_sets?block_height=eq.{end_height}&select=*&order=created_at.desc"
+        ),
+        _ => {
+            return Err(ApiError::NotFound(format!(
+                "Dataset '{slug}' is not available for download"
+            )))
+        }
+    };
+
+    Ok(path)
+}
+
+fn render_dataset_export(
+    slug: &str,
+    version: &str,
+    exported_at: &str,
+    dataset: &Value,
+    snapshot: &Value,
+    rows: &Value,
+) -> Result<(String, &'static str, Vec<u8>), ApiError> {
+    match slug {
+        "verified-solution-sets" => {
+            let lines = rows
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(serde_json::to_string)
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .map_err(|e| ApiError::Internal(format!("Failed to serialize JSONL export: {e}")))?
+                .unwrap_or_default();
+            let mut body = lines.join("\n");
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            Ok((
+                format!("{slug}-{version}.jsonl"),
+                "application/x-ndjson",
+                body.into_bytes(),
+            ))
+        }
+        _ => {
+            let csv = rows_to_csv(rows).map_err(ApiError::Internal)?;
+            let metadata = format!(
+                "# dataset_slug={slug}\n# version={version}\n# exported_at={exported_at}\n# title={}\n# row_count={}\n# checksum={}\n",
+                csv_meta_value(dataset.get("title")),
+                csv_meta_value(snapshot.get("row_count")),
+                csv_meta_value(snapshot.get("checksum"))
+            );
+            Ok((
+                format!("{slug}-{version}.csv"),
+                "text/csv; charset=utf-8",
+                format!("{metadata}\n{csv}").into_bytes(),
+            ))
+        }
+    }
+}
+
+fn rows_to_csv(rows: &Value) -> Result<String, String> {
+    let items = rows
+        .as_array()
+        .ok_or_else(|| "Dataset rows were not returned as an array".to_string())?;
+
+    let mut headers: Vec<String> = Vec::new();
+    for item in items {
+        if let Some(obj) = item.as_object() {
+            for key in obj.keys() {
+                if !headers.iter().any(|existing| existing == key) {
+                    headers.push(key.clone());
+                }
+            }
+        }
+    }
+
+    if headers.is_empty() {
+        return Ok("empty_dataset\n".to_string());
+    }
+
+    let mut out = String::new();
+    out.push_str(&headers.iter().map(|h| csv_escape(h)).collect::<Vec<_>>().join(","));
+    out.push('\n');
+
+    for item in items {
+        let obj = item
+            .as_object()
+            .ok_or_else(|| "Dataset row was not an object".to_string())?;
+        let row = headers
+            .iter()
+            .map(|header| csv_escape(&csv_value(obj.get(header))))
+            .collect::<Vec<_>>()
+            .join(",");
+        out.push_str(&row);
+        out.push('\n');
+    }
+
+    Ok(out)
+}
+
+fn csv_value(value: Option<&Value>) -> String {
+    match value {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(other) => serde_json::to_string(other).unwrap_or_else(|_| String::new()),
+    }
+}
+
+fn csv_meta_value(value: Option<&Value>) -> String {
+    csv_value(value).replace('\n', " ")
+}
+
+fn csv_escape(value: &str) -> String {
+    let escaped = value.replace('"', "\"\"");
+    if escaped.contains(',') || escaped.contains('"') || escaped.contains('\n') || escaped.contains('\r') {
+        format!("\"{escaped}\"")
+    } else {
+        escaped
+    }
 }
 
 /// `GET /marketplace/engine/stats`

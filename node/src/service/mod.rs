@@ -39,7 +39,7 @@ use tracing::{debug, info, warn, error};
 use rand;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
 use blake3;
@@ -488,15 +488,22 @@ impl CoinjectNode {
         let network_tx_for_submission = network_cmd_tx.clone();
         let hf_sync_for_submission = self.hf_sync.clone();
         
-        let block_submission_handler: Option<coinject_rpc::BlockSubmissionHandler> = Some(Arc::new(move |block: coinject_core::Block| -> Result<String, String> {
-            // Get runtime handle for async operations
-            let rt_handle = tokio::runtime::Handle::try_current()
-                .map_err(|_| "No async runtime available".to_string())?;
-            
-            // Use a standard blocking channel so the sync RPC handler does not
-            // try to re-enter the Tokio runtime while waiting for completion.
-            let (tx, rx) = std::sync::mpsc::sync_channel(1);
-            
+        let block_submission_handler: Option<coinject_rpc::BlockSubmissionHandler> = Some(Arc::new(move |block: coinject_core::Block| -> coinject_rpc::server::BlockSubmissionFuture {
+            let submission_started_at = Instant::now();
+            let submission_height = block.header.height;
+            let block_hash = block.hash();
+            let submission_trace = format!(
+                "{}:{}",
+                submission_height,
+                hex::encode(&block_hash.as_bytes()[..4])
+            );
+            info!(
+                trace = %submission_trace,
+                height = submission_height,
+                elapsed_ms = submission_started_at.elapsed().as_millis(),
+                "rpc block submission received"
+            );
+
             let chain = Arc::clone(&chain_for_submission);
             let state = Arc::clone(&state_for_submission);
             let timelock_state = Arc::clone(&timelock_state_for_submission);
@@ -509,14 +516,24 @@ impl CoinjectNode {
             let tx_pool = Arc::clone(&tx_pool_for_submission);
             let network_tx = network_tx_for_submission.clone();
             let hf_sync = hf_sync_for_submission.clone();
-            
-            // Spawn async task to handle block submission
-            rt_handle.spawn(async move {
+            let submission_trace_for_task = submission_trace.clone();
+
+            Box::pin(async move {
+                let task_started_at = Instant::now();
                 let result = async {
                     // Get current chain state
                     let best_height = chain.best_block_height().await;
                     let best_hash = chain.best_block_hash().await;
                     let expected_height = best_height + 1;
+                    info!(
+                        trace = %submission_trace_for_task,
+                        height = block.header.height,
+                        elapsed_ms = task_started_at.elapsed().as_millis(),
+                        best_height,
+                        expected_height,
+                        best_hash = %best_hash,
+                        "rpc block submission fetched chain tip"
+                    );
                     
                     // Validate block height
                     if block.header.height != expected_height {
@@ -529,14 +546,32 @@ impl CoinjectNode {
                     }
                     
                     // Validate block (skip timestamp age check for RPC submissions)
+                    let validation_started_at = Instant::now();
                     match validator.validate_block_with_options(&block, &best_hash, expected_height, false) {
-                        Ok(()) => {},
+                        Ok(()) => {
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = validation_started_at.elapsed().as_millis(),
+                                "rpc block submission validation completed"
+                            );
+                        },
                         Err(e) => return Err(format!("Block validation failed: {:?}", e)),
                     }
                     
                     // Store block
+                    let store_started_at = Instant::now();
                     match chain.store_block(&block).await {
                         Ok(is_new_best) => {
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = store_started_at.elapsed().as_millis(),
+                                is_new_best,
+                                "rpc block submission store completed"
+                            );
                             if !is_new_best {
                                 return Err("Block did not extend the chain".to_string());
                             }
@@ -545,6 +580,7 @@ impl CoinjectNode {
                     }
                     
                     // Apply block transactions
+                    let apply_started_at = Instant::now();
                     match Self::apply_block_transactions(
                         &block,
                         &state,
@@ -556,6 +592,14 @@ impl CoinjectNode {
                         &marketplace_state,
                     ) {
                         Ok(applied_txs) => {
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = apply_started_at.elapsed().as_millis(),
+                                applied_tx_count = applied_txs.len(),
+                                "rpc block submission applied block transactions"
+                            );
                             // Remove applied transactions from pool
                             let mut pool = tx_pool.write().await;
                             for tx_hash in &applied_txs {
@@ -564,9 +608,17 @@ impl CoinjectNode {
                             drop(pool);
                             
                             // Broadcast block to network
+                            let broadcast_started_at = Instant::now();
                             if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block.clone())) {
                                 return Err(format!("Failed to broadcast block: {}", e));
                             }
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = broadcast_started_at.elapsed().as_millis(),
+                                "rpc block submission queued network broadcast"
+                            );
                             
                             // Push to Hugging Face if enabled
                             if let Some(ref hf_sync) = hf_sync {
@@ -577,6 +629,12 @@ impl CoinjectNode {
                                         warn!(error = %e, "failed to push rpc-submitted block to huggingface");
                                     }
                                 });
+                                info!(
+                                    trace = %submission_trace_for_task,
+                                    height = block.header.height,
+                                    elapsed_ms = task_started_at.elapsed().as_millis(),
+                                    "rpc block submission spawned huggingface push"
+                                );
                             }
                             
                             Ok(block.hash().to_string())
@@ -584,26 +642,23 @@ impl CoinjectNode {
                         Err(e) => Err(format!("Failed to apply block transactions: {}", e)),
                     }
                 }.await;
-                
-                // Send result back to synchronous handler
-                let _ = tx.send(result);
-            });
-            
-            // Wait for result (with timeout)
-            {
-                // Timeout should be network-derived: ETA * network_median_block_time
-                // For now, using ETA-scaled default: 10s * ETA ≈ 7s effective
-                use coinject_core::ETA;
-                rx.recv_timeout(Duration::from_secs_f64(10.0 * ETA))
-            }
-            .map_err(|e| match e {
-                std::sync::mpsc::RecvTimeoutError::Timeout => {
-                    "Block submission timeout".to_string()
-                }
-                std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                    "Failed to receive result".to_string()
-                }
-            })?
+
+                info!(
+                    trace = %submission_trace_for_task,
+                    height = block.header.height,
+                    elapsed_ms = task_started_at.elapsed().as_millis(),
+                    ok = result.is_ok(),
+                    "rpc block submission async handler completed"
+                );
+                info!(
+                    trace = %submission_trace,
+                    height = submission_height,
+                    elapsed_ms = submission_started_at.elapsed().as_millis(),
+                    ok = result.is_ok(),
+                    "rpc block submission completed"
+                );
+                result
+            })
         }));
 
         let mining_work_provider: Option<MiningWorkProvider> = self.miner.as_ref().map(|miner| {
@@ -618,14 +673,13 @@ impl CoinjectNode {
                     let bh = *best_height.read().await;
                     let prev = *best_hash.read().await;
                     let next_height = bh + 1;
-                    let problem = miner
-                        .read()
-                        .await
-                        .generate_problem(next_height, prev)
-                        .await;
+                    let miner = miner.read().await;
+                    let difficulty = miner.current_difficulty();
+                    let problem = miner.generate_problem(next_height, prev).await;
                     Ok(MiningWork {
                         next_height,
                         prev_hash: hex::encode(prev.as_bytes()),
+                        difficulty,
                         problem,
                     })
                 }) as MiningWorkFuture

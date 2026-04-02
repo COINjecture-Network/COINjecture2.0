@@ -430,6 +430,11 @@ impl Miner {
         }
     }
 
+    /// Current header difficulty target (leading zero hex chars) used by the miner.
+    pub fn current_difficulty(&self) -> u32 {
+        self.difficulty
+    }
+
     /// Generate a deterministic NP-hard problem for mining
     /// RUNTIME INTEGRATION: Uses dimensional complexity |ψ(τ)| to modulate difficulty
     /// DETERMINISM: Seeded by parent hash + height to ensure all nodes generate the same problem
