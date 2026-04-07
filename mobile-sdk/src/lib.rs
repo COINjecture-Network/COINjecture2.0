@@ -556,7 +556,9 @@ pub mod ffi {
     /// Returns null on error. The caller owns the returned handle and must free
     /// it with `coinject_light_client_free`.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_light_client_new(genesis_hex: *const c_char) -> LightClientHandle {
+    pub unsafe extern "C" fn coinject_light_client_new(
+        genesis_hex: *const c_char,
+    ) -> LightClientHandle {
         if genesis_hex.is_null() {
             return std::ptr::null_mut();
         }
@@ -644,7 +646,9 @@ pub mod ffi {
     /// # Safety
     /// `handle` must be a valid pointer returned by `coinject_light_client_new` or null.
     #[no_mangle]
-    pub unsafe extern "C" fn coinject_light_client_export(handle: LightClientHandle) -> *mut c_char {
+    pub unsafe extern "C" fn coinject_light_client_export(
+        handle: LightClientHandle,
+    ) -> *mut c_char {
         if handle.is_null() {
             return std::ptr::null_mut();
         }
