@@ -1,0 +1,29 @@
+# Bootnode uses an existing Docker volume (production / VPS).
+#
+# Default `docker-compose.yml` uses project-scoped `bootnode-data`, which creates a
+# *new* empty volume when the compose project name changes — easy to accidentally
+# remount a fresh chain. This overlay pins the bootnode to a fixed external volume.
+#
+# One-time on the host (if the volume does not exist yet):
+#   docker volume create coinjecture_chain-data
+#
+# Usage (repo root):
+#   docker compose -f docker-compose.yml -f docker-compose.bootnode-external-chain.yml \
+#     up -d --no-build bootnode api-server
+#
+# Or with the helper script:
+#   COMPOSE_EXTRA=docker-compose.bootnode-external-chain.yml \
+#   SERVICES="bootnode api-server" \
+#     ./scripts/deployment/redeploy-safe.sh
+#
+# If you previously edited docker-compose.yml on the server to add this wiring,
+# restore the stock file (`git checkout docker-compose.yml`) and rely on this file only.
+
+services:
+  bootnode:
+    volumes:
+      - coinjecture_chain-data:/data
+
+volumes:
+  coinjecture_chain-data:
+    external: true

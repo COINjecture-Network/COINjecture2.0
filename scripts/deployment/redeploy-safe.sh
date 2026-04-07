@@ -7,6 +7,8 @@
 # Usage (from repo root):
 #   ./scripts/deployment/redeploy-safe.sh                    # backend only, default compose + services
 #   COMPOSE_FILE=docker-compose.production.yml ./scripts/deployment/redeploy-safe.sh
+#   COMPOSE_EXTRA=docker-compose.bootnode-external-chain.yml \  # VPS bootnode: fixed chain volume
+#     SERVICES="bootnode api-server" ./scripts/deployment/redeploy-safe.sh
 #   SERVICES="bootnode node1 node2" ./scripts/deployment/redeploy-safe.sh
 #   WITH_FRONTEND=1 ./scripts/deployment/redeploy-safe.sh   # also npm build (no AWS; upload separately)
 #
@@ -24,6 +26,9 @@ echo "=========================================="
 echo "COINjecture safe redeploy (keeps volumes)"
 echo "=========================================="
 echo "Compose file: $COMPOSE_FILE"
+if [[ -n "$COMPOSE_EXTRA" ]]; then
+  echo "Compose extra: $COMPOSE_EXTRA"
+fi
 echo "Services:     $SERVICES"
 echo ""
 
@@ -40,7 +45,7 @@ fi
 
 echo "[1/2] Backend: build + recreate containers (volumes unchanged)..."
 # shellcheck disable=SC2086
-docker compose -f "$COMPOSE_FILE" up -d --build $SERVICES
+docker compose "${compose_args[@]}" up -d --build $SERVICES
 
 echo ""
 echo "[2/2] Backend containers updated."
