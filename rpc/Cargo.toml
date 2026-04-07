@@ -31,7 +31,7 @@ http-body.workspace = true
 http-body-util.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
-rustls-pemfile.workspace = true
+rustls-pki-types.workspace = true
 
 [dev-dependencies]
 adzdb = { path = "../adzdb" }

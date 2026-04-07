@@ -57,8 +57,8 @@ num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"
 
-# Caches
-lru = "0.12"
+# Caches (>=0.16.3 fixes RUSTSEC-2026-0002)
+lru = "0.16"
 
 # Codec
 tokio-util = { version = "0.7", features = ["codec"] }
@@ -101,7 +101,8 @@ bytes = "1.5"
 dashmap = "6"
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
-rustls-pemfile = "2"
+# PEM loading lives in rustls-pki-types (avoid unmaintained rustls-pemfile / RUSTSEC-2025-0134)
+rustls-pki-types = { version = "1.14", features = ["std"] }
 
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }

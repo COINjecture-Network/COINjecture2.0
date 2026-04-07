@@ -15,7 +15,8 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use rustls::ServerConfig;
-use rustls_pemfile::{certs, pkcs8_private_keys};
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::AsyncWriteExt;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
@@ -57,25 +58,25 @@ impl TlsConfig {
 // Certificate / key loading helpers
 // ---------------------------------------------------------------------------
 
-fn load_certs(path: &PathBuf) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+fn load_certs(path: &PathBuf) -> Result<Vec<CertificateDer<'static>>, String> {
     let data = std::fs::read(path)
         .map_err(|e| format!("Failed to read TLS cert {}: {}", path.display(), e))?;
     let mut cursor = std::io::Cursor::new(data);
-    certs(&mut cursor)
+    CertificateDer::pem_reader_iter(&mut cursor)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to parse TLS cert: {}", e))
 }
 
-fn load_key(path: &PathBuf) -> Result<rustls::pki_types::PrivateKeyDer<'static>, String> {
+fn load_key(path: &PathBuf) -> Result<PrivateKeyDer<'static>, String> {
     let data = std::fs::read(path)
         .map_err(|e| format!("Failed to read TLS key {}: {}", path.display(), e))?;
     let mut cursor = std::io::Cursor::new(data);
-    let keys: Vec<_> = pkcs8_private_keys(&mut cursor)
+    let keys: Vec<_> = PrivatePkcs8KeyDer::pem_reader_iter(&mut cursor)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to parse TLS key (PKCS#8): {}", e))?;
     keys.into_iter()
         .next()
-        .map(rustls::pki_types::PrivateKeyDer::Pkcs8)
+        .map(PrivateKeyDer::Pkcs8)
         .ok_or_else(|| format!("No PKCS#8 private key found in {}", path.display()))
 }
 
