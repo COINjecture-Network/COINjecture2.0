@@ -734,7 +734,7 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, state) =
+        let (coordinator, _state) =
             EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -748,11 +748,8 @@ mod tests {
         let mut events = Vec::new();
         let deadline = time::Instant::now() + Duration::from_millis(300);
 
-        loop {
-            match time::timeout_at(deadline, event_rx.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                _ => break,
-            }
+        while let Ok(Some(event)) = time::timeout_at(deadline, event_rx.recv()).await {
+            events.push(event);
         }
 
         // Verify we got phase transition events
@@ -837,7 +834,7 @@ mod tests {
             EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
 
         // Add a peer so quorum math works (2 peers, need 1 commit for 50%)
         cmd_tx
@@ -874,6 +871,7 @@ mod tests {
                 epoch: 1,
                 commit: SolutionCommit {
                     node_id: test_node_id(2),
+                    public_key: [0u8; 32],
                     solution_hash: [0xBB; 32],
                     work_score: 100.0,
                     signature: vec![],
@@ -902,7 +900,7 @@ mod tests {
             ..CoordinatorConfig::default()
         };
 
-        let (coordinator, state) =
+        let (coordinator, _state) =
             EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -916,13 +914,11 @@ mod tests {
         let mut epoch_starts = Vec::new();
         let deadline = time::Instant::now() + Duration::from_millis(500);
 
-        loop {
-            match time::timeout_at(deadline, event_rx.recv()).await {
-                Ok(Some(CoordinatorEvent::EpochStarted { epoch, .. })) => {
-                    epoch_starts.push(epoch);
-                }
-                Ok(Some(_)) => {} // Other events
-                _ => break,
+        while let Ok(msg) = time::timeout_at(deadline, event_rx.recv()).await {
+            match msg {
+                Some(CoordinatorEvent::EpochStarted { epoch, .. }) => epoch_starts.push(epoch),
+                Some(_) => {} // Other events
+                None => break,
             }
         }
 

@@ -250,19 +250,6 @@ impl DifficultyAdjuster {
         sum / self.recent_solve_times_us.len() as u64
     }
 
-    /// Moving average as f64 seconds (display/monitoring only).
-    fn moving_average_solve_time(&self) -> f64 {
-        self.moving_average_us() as f64 / 1_000_000.0
-    }
-
-    /// Async moving average as f64 seconds (falls back to network target).
-    async fn moving_average_solve_time_async(&self) -> f64 {
-        if self.recent_solve_times_us.is_empty() {
-            return self.optimal_solve_time().await;
-        }
-        self.moving_average_us() as f64 / 1_000_000.0
-    }
-
     /// Compute new problem size using deterministic integer arithmetic.
     ///
     /// `new_size = isqrt(current_size² × target_us / avg_us)`
@@ -494,12 +481,12 @@ impl DifficultyAdjuster {
         // Legacy fallback
         match problem_type {
             "SubsetSum" => self.current_size().min(50),
-            "SAT" => ((self.current_size() as f64 * 0.75).round() as usize)
-                .max(ABSOLUTE_MIN_SIZE)
-                .min(100),
-            "TSP" => ((self.current_size() as f64 * 0.35).round() as usize)
-                .max(ABSOLUTE_MIN_SIZE)
-                .min(25),
+            "SAT" => {
+                ((self.current_size() as f64 * 0.75).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 100)
+            }
+            "TSP" => {
+                ((self.current_size() as f64 * 0.35).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 25)
+            }
             _ => self.current_size(),
         }
     }

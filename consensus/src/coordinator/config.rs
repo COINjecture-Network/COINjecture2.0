@@ -110,24 +110,33 @@ mod tests {
 
     #[test]
     fn test_invalid_quorum() {
-        let mut cfg = CoordinatorConfig::default();
-        cfg.quorum_threshold = 0.0;
+        let cfg = CoordinatorConfig {
+            quorum_threshold: 0.0,
+            ..CoordinatorConfig::default()
+        };
         assert!(cfg.validate().is_err());
-        cfg.quorum_threshold = 1.5;
+        let cfg = CoordinatorConfig {
+            quorum_threshold: 1.5,
+            ..CoordinatorConfig::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn test_invalid_mine_duration() {
-        let mut cfg = CoordinatorConfig::default();
-        cfg.mine_duration = Duration::ZERO;
+        let cfg = CoordinatorConfig {
+            mine_duration: Duration::ZERO,
+            ..CoordinatorConfig::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn test_invalid_failover_depth() {
-        let mut cfg = CoordinatorConfig::default();
-        cfg.failover_depth = 0;
+        let cfg = CoordinatorConfig {
+            failover_depth: 0,
+            ..CoordinatorConfig::default()
+        };
         assert!(cfg.validate().is_err());
     }
 }
