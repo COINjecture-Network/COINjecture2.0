@@ -8,7 +8,6 @@ use coinject_network::cpp::{
     CppConfig, CppNetwork, NetworkCommand, NetworkEvent, NodeType as CppNodeType,
 };
 use std::net::SocketAddr;
-use tokio::time::{timeout, Duration};
 
 /// Helper to create a test block
 fn create_test_block(height: u64, prev_hash: Hash) -> Block {
@@ -64,6 +63,7 @@ async fn test_two_node_network_creation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..Default::default()
     };
     let peer_id1 = [1u8; 32];
     let (_network1, _cmd_tx1, _event_rx1) = CppNetwork::new(config1, peer_id1, genesis);
@@ -76,6 +76,7 @@ async fn test_two_node_network_creation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..Default::default()
     };
     let peer_id2 = [2u8; 32];
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, peer_id2, genesis);
@@ -90,7 +91,7 @@ async fn test_network_broadcast_block() {
     let config = CppConfig::default();
     let peer_id = [1u8; 32];
 
-    let (_network, cmd_tx, mut event_rx) = CppNetwork::new(config, peer_id, genesis);
+    let (_network, cmd_tx, _event_rx) = CppNetwork::new(config, peer_id, genesis);
 
     // Create a test block
     let block = create_test_block(1, genesis);
