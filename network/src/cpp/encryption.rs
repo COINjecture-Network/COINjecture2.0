@@ -38,7 +38,7 @@
 // =============================================================================
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, Payload},
+    aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};

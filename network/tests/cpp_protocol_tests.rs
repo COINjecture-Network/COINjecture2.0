@@ -136,6 +136,8 @@ async fn test_cpp_handshake_success() {
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
         connection_nonce: 12345, // Test nonce
+        ed25519_pubkey: [0u8; 32],
+        auth_signature: [0u8; 64],
     };
     MessageCodec::send_hello(&mut client_stream, &hello)
         .await
@@ -199,6 +201,8 @@ async fn test_cpp_handshake_genesis_mismatch() {
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
         connection_nonce: 12345, // Test nonce
+        ed25519_pubkey: [0u8; 32],
+        auth_signature: [0u8; 64],
     };
     MessageCodec::send_hello(&mut client_stream, &hello)
         .await

@@ -7,15 +7,13 @@ use crate::cpp::{
     config::{
         CppConfig, NodeType, KEEPALIVE_INTERVAL, MAX_BLOCKS_PER_RESPONSE, MESSAGE_READ_TIMEOUT,
         MIN_HEALTHY_PEERS, PEER_TIMEOUT, SECURITY_MALFORMED_STRIKE_THRESHOLD,
-        SECURITY_RATE_BUCKET_CAPACITY, SECURITY_RATE_MSGS_PER_SEC, SECURITY_RATE_STRIKE_THRESHOLD,
+        SECURITY_RATE_STRIKE_THRESHOLD,
     },
     encryption,
     flock::{FlockState, FlockStateCompact},
     message::{
-        self, sign_hello, verify_hello_auth, BlocksMessage, DisconnectMessage, GetBlocksMessage,
-        GetHeadersMessage, GetWorkMessage, HeadersMessage, HelloAckMessage, HelloMessage,
-        MessageType, NewBlockMessage, NewTransactionMessage, PingMessage, PongMessage,
-        StatusMessage, SubmitWorkMessage, WorkAcceptedMessage, WorkMessage, WorkRejectedMessage,
+        sign_hello, BlocksMessage, GetBlocksMessage, HelloAckMessage, HelloMessage, MessageType,
+        NewBlockMessage, NewTransactionMessage, PingMessage, PongMessage, StatusMessage,
     },
     node_integration::{NodeMetrics, PeerSelector},
     peer::{Peer, PeerId, PeerState},
@@ -23,19 +21,20 @@ use crate::cpp::{
     router::{EquilibriumRouter, PeerInfo},
 };
 use crate::reputation::ReputationManager;
-use crate::security::{
-    BanList, ConnectionLimiter, EclipseGuard, NetworkSecurityMetrics, TokenBucket,
-    DEFAULT_RATE_BUCKET_CAPACITY, DEFAULT_RATE_MSGS_PER_SEC,
-};
+use crate::security::{BanList, ConnectionLimiter, EclipseGuard, NetworkSecurityMetrics, TokenBucket};
 use coinject_core::{Block, BlockHeader, Hash, Transaction};
 use ed25519_dalek::SigningKey;
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio::time::{interval, Duration, Instant};
+
+/// Gossip dedupe window (Clippy `type_complexity`).
+type SeenMessagesInner = VecDeque<([u8; 32], Instant)>;
+type SeenMessages = Arc<RwLock<SeenMessagesInner>>;
 
 // =============================================================================
 // Network Events & Commands
@@ -197,7 +196,7 @@ pub struct CppNetwork {
     flock_state: Arc<RwLock<FlockState>>,
 
     /// Seen-message deduplication cache (hash, timestamp) — max 5000 entries, 60s TTL
-    seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+    seen_messages: SeenMessages,
 
     // =========================================================================
     // Security subsystems (Phase 5)
@@ -567,7 +566,7 @@ impl CppNetwork {
         chain_state: Arc<RwLock<ChainState>>,
         flock_state: Arc<RwLock<FlockState>>,
         pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
-        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        seen_messages: SeenMessages,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
         _shutdown: broadcast::Receiver<()>,
@@ -722,7 +721,7 @@ impl CppNetwork {
             let peers_guard = peers.read().await;
             if let Some(peer) = peers_guard.get(&peer_id) {
                 let mut router_guard = router.write().await;
-                router_guard.add_peer(PeerInfo::from(&*peer));
+                router_guard.add_peer(PeerInfo::from(peer));
             }
         }
 
@@ -813,7 +812,7 @@ impl CppNetwork {
         router: Arc<RwLock<EquilibriumRouter>>,
         flock_state: Arc<RwLock<FlockState>>,
         pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
-        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        seen_messages: SeenMessages,
         chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
@@ -1050,6 +1049,7 @@ impl CppNetwork {
     }
 
     /// Handle incoming message from peer
+    #[allow(clippy::too_many_arguments)]
     async fn handle_peer_message(
         peer_id: PeerId,
         envelope: MessageEnvelope,
@@ -1057,7 +1057,7 @@ impl CppNetwork {
         router: Arc<RwLock<EquilibriumRouter>>,
         flock_state: Arc<RwLock<FlockState>>,
         pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
-        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        seen_messages: SeenMessages,
         _chain_state: Arc<RwLock<ChainState>>,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         block_provider: Arc<dyn BlockProvider>,
@@ -1184,7 +1184,7 @@ impl CppNetwork {
 
         let hello: HelloMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Validate genesis hash
         if hello.genesis_hash != chain_state.genesis_hash {
@@ -1394,7 +1394,7 @@ impl CppNetwork {
         );
         let hello_ack: HelloAckMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Validate genesis hash
         if hello_ack.genesis_hash != state.genesis_hash {
@@ -1455,7 +1455,7 @@ impl CppNetwork {
             let peers_guard = self.peers.read().await;
             if let Some(peer) = peers_guard.get(&peer_id) {
                 let mut router = self.router.write().await;
-                router.add_peer(PeerInfo::from(&*peer));
+                router.add_peer(PeerInfo::from(peer));
             }
         }
 
@@ -1658,7 +1658,7 @@ impl CppNetwork {
     ) -> Result<(), NetworkError> {
         let status: StatusMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         let node_type = NodeType::from_u8(status.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
@@ -1707,7 +1707,7 @@ impl CppNetwork {
     ) -> Result<(), NetworkError> {
         let get_blocks: GetBlocksMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         let peer_id_short: String = peer_id
             .iter()
@@ -1746,7 +1746,7 @@ impl CppNetwork {
         let peers_guard = peers.read().await;
         if let Some(peer) = peers_guard.get(&peer_id) {
             let envelope = MessageEnvelope::new(MessageType::Blocks, &blocks_msg)
-                .map_err(|e| NetworkError::Protocol(e))?;
+                .map_err(NetworkError::Protocol)?;
             let data = envelope.encode();
 
             tracing::info!(
@@ -1756,7 +1756,7 @@ impl CppNetwork {
             );
 
             peer.send_message(data.clone())
-                .map_err(|e| NetworkError::InvalidHandshake(e))?;
+                .map_err(NetworkError::InvalidHandshake)?;
 
             drop(peers_guard);
 
@@ -1780,7 +1780,7 @@ impl CppNetwork {
     ) -> Result<(), NetworkError> {
         let blocks_msg: BlocksMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Remove fulfilled request from pending
         {
@@ -1801,7 +1801,7 @@ impl CppNetwork {
     /// Check if a message has been seen before (deduplication)
     /// Returns true if already seen, false if new (and adds to cache)
     async fn check_seen(
-        seen_messages: &Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        seen_messages: &SeenMessages,
         payload: &[u8],
     ) -> bool {
         let hash = *blake3::hash(payload).as_bytes();
@@ -1834,7 +1834,7 @@ impl CppNetwork {
     async fn handle_new_block(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
-        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        seen_messages: SeenMessages,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
@@ -1845,7 +1845,7 @@ impl CppNetwork {
 
         let new_block: NewBlockMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Send BlockReceived event
         let _ = event_tx.send(NetworkEvent::BlockReceived {
@@ -1860,7 +1860,7 @@ impl CppNetwork {
     async fn handle_new_transaction(
         peer_id: PeerId,
         envelope: &MessageEnvelope,
-        seen_messages: Arc<RwLock<std::collections::VecDeque<([u8; 32], Instant)>>>,
+        seen_messages: SeenMessages,
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
@@ -1871,7 +1871,7 @@ impl CppNetwork {
 
         let new_tx: NewTransactionMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Send TransactionReceived event
         let _ = event_tx.send(NetworkEvent::TransactionReceived {
@@ -1890,7 +1890,7 @@ impl CppNetwork {
     ) -> Result<(), NetworkError> {
         let ping: PingMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Send Pong response
         let peers_guard = peers.read().await;
@@ -1901,11 +1901,11 @@ impl CppNetwork {
             };
 
             let envelope = MessageEnvelope::new(MessageType::Pong, &pong)
-                .map_err(|e| NetworkError::Protocol(e))?;
+                .map_err(NetworkError::Protocol)?;
             let data = envelope.encode();
 
             peer.send_message(data.clone())
-                .map_err(|e| NetworkError::InvalidHandshake(e))?;
+                .map_err(NetworkError::InvalidHandshake)?;
 
             drop(peers_guard);
 
@@ -1927,7 +1927,7 @@ impl CppNetwork {
     ) -> Result<(), NetworkError> {
         let _pong: PongMessage = envelope
             .deserialize()
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
 
         // Update RTT and flow control
         let mut peers_guard = peers.write().await;
@@ -1976,7 +1976,7 @@ impl CppNetwork {
 
                     // Serialize message
                     let envelope = MessageEnvelope::new(MessageType::NewBlock, &new_block_msg)
-                        .map_err(|e| NetworkError::Protocol(e))?;
+                        .map_err(NetworkError::Protocol)?;
                     let data = envelope.encode();
 
                     // Send via channel
@@ -2033,7 +2033,7 @@ impl CppNetwork {
 
                     // Serialize message
                     let envelope = MessageEnvelope::new(MessageType::NewTransaction, &new_tx_msg)
-                        .map_err(|e| NetworkError::Protocol(e))?;
+                        .map_err(NetworkError::Protocol)?;
                     let data = envelope.encode();
 
                     // Send via channel
@@ -2108,11 +2108,11 @@ impl CppNetwork {
 
         // Serialize and send message
         let envelope = MessageEnvelope::new(MessageType::GetBlocks, &get_blocks)
-            .map_err(|e| NetworkError::Protocol(e))?;
+            .map_err(NetworkError::Protocol)?;
         let data = envelope.encode();
 
         peer.send_message(data.clone())
-            .map_err(|e| NetworkError::InvalidHandshake(e))?;
+            .map_err(NetworkError::InvalidHandshake)?;
 
         drop(peers);
 
@@ -2344,7 +2344,7 @@ impl CppNetwork {
 
         let median_height = if peer_heights.is_empty() {
             return;
-        } else if peer_heights.len() % 2 == 0 {
+        } else if peer_heights.len().is_multiple_of(2) {
             let mid = peer_heights.len() / 2;
             (peer_heights[mid - 1] + peer_heights[mid]) / 2
         } else {

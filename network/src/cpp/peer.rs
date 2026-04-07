@@ -121,6 +121,7 @@ impl Peer {
     /// # Parameters
     /// - `connection_nonce`: Nonce for deterministic tie-breaking of simultaneous connections
     /// - `is_outbound`: Whether we initiated this connection (true) or received it (false)
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: PeerId,
         addr: SocketAddr,
