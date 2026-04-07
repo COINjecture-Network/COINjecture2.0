@@ -34,8 +34,10 @@ const MAX_SUBSET_SUM_SIZE = 50;
 const MAX_SAT_VARIABLES = 30;
 const MAX_TSP_CITIES = 10;
 
-// Default difficulty (number of leading zeros required in hash)
+/** Leading **hex** zeroes required on `hex(headerHash)` — not Bitcoin difficulty bits / nBits. */
 const DEFAULT_DIFFICULTY = 2;
+/** 32-byte digest in hex is at most 64 characters — cap difficulty to match node validation. */
+const MAX_LEADING_HEX_ZEROS = 64;
 const MINING_DEBUG_FLAG_KEY = 'coinjecture:mining-debug';
 
 function normalizeHeaderFloat(value: number, decimals: number = 12): number {
@@ -588,14 +590,16 @@ function calculateHeaderHash(header: Block['header']): string {
 }
 
 /**
- * Mine header by finding nonce that meets difficulty
+ * Mine header until `hex(headerHash)` starts with `difficulty` leading **hex** `0` characters.
+ * Same rule as the node; not Bitcoin nBits / 256-bit target difficulty.
  */
 export function mineHeader(
   header: Block['header'],
   difficulty: number = DEFAULT_DIFFICULTY,
   onProgress?: (nonce: number, hash: string) => void
 ): { nonce: number; hash: string } | null {
-  const targetPrefix = '0'.repeat(difficulty);
+  const n = Math.min(Math.max(0, difficulty), MAX_LEADING_HEX_ZEROS);
+  const targetPrefix = '0'.repeat(n);
   const maxNonce = 10000000; // Limit nonce search to prevent infinite loops
   
   for (let nonce = 0; nonce < maxNonce; nonce++) {

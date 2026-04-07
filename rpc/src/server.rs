@@ -389,7 +389,12 @@ pub struct MiningWork {
     pub next_height: u64,
     /// Parent block hash (epoch salt) as hex — must match `chain_getInfo.best_hash` when you pull and submit immediately.
     pub prev_hash: String,
-    /// Current miner header difficulty target (leading zero hex chars).
+    /// Required **leading hexadecimal zero characters** at the start of `hex(header_hash)`.
+    ///
+    /// This is **not** Bitcoin’s compact `nBits` target, nor “bits of difficulty” as a
+    /// 256-bit threshold: each increment is one more required leading `0` in the **hex string**
+    /// (e.g. `4` ⇒ hash hex must start with `0000`). Maximum meaningful value is 64 (32-byte
+    /// digest → 64 hex digits).
     pub difficulty: u32,
     /// Deterministic instance: SubsetSum, SAT, or TSP (same serde as `chain_getBlock` / `solution_reveal.problem`).
     pub problem: ProblemType,

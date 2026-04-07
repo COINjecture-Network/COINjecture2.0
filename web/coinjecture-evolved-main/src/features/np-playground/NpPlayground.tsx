@@ -51,6 +51,7 @@ import { TSPVisualizer } from "./visualizers/TSPVisualizer";
 import { SATVisualizer } from "./visualizers/SATVisualizer";
 import { useWallet } from "@/contexts/WalletContext";
 import { rpcClient, type ProblemInfo, type ProblemType } from "@/lib/rpc-client";
+import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import {
   createBlockFromSolvedProblem,
   extractHashHex,
@@ -234,13 +235,14 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     try {
       const out = await runUserSolver(files, parsed.value, 45000);
       if (!out.ok) {
+        const solverErr = out.error;
         setRunResult({
           ok: false,
           timeMs: out.timeMs ?? 0,
           solution: null,
-          log: [out.error],
+          log: [solverErr],
         });
-        setConsoleLines((prev) => [...prev, `[error] ${out.error}`, ""]);
+        setConsoleLines((prev) => [...prev, `[error] ${solverErr}`, ""]);
         return;
       }
       const normalized = normalizeSolution(parsed.value, out.solution);
@@ -412,7 +414,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       return;
     }
 
-    if (selectedBounty.status.toUpperCase() !== "OPEN") {
+    if (!isMarketplaceListingOpen(selectedBounty.status)) {
       toast.error("Bounty is no longer open");
       return;
     }
@@ -425,7 +427,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
 
     const parsed = parseNetworkProblem(instanceText);
     if (!parsed.ok) {
-      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parsed.error}`]);
+      const parseErr = parsed.error;
+      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parseErr}`]);
       return;
     }
 
@@ -497,7 +500,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
 
     const parsed = parseNetworkProblem(instanceText);
     if (!parsed.ok) {
-      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parsed.error}`]);
+      const parseErr = parsed.error;
+      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parseErr}`]);
       return;
     }
 
@@ -598,7 +602,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
 
   const renderViz = () => {
     if (!parsedPreview.ok) {
-      return <p className="text-sm text-destructive">{parsedPreview.error}</p>;
+      const previewErr = parsedPreview.error;
+      return <p className="text-sm text-destructive">{previewErr}</p>;
     }
     const p = parsedPreview.value;
     const sol = runResult?.ok ? runResult.solution : null;

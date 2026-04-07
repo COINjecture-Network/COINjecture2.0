@@ -11,6 +11,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { ProblemType } from "@/lib/rpc-client";
 import { rpcClient } from "@/lib/rpc-client";
+import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { useWallet } from "@/contexts/WalletContext";
 
 /** Must match `STORAGE_KEY` in `NpPlayground.tsx` (Solver Lab → Bounty draft). */
@@ -285,7 +286,7 @@ const BountySubmit = () => {
       problem.submitter.toLowerCase() === selectedKeyPair.address.toLowerCase() &&
       problem.is_private &&
       !problem.is_revealed &&
-      problem.status === "Open"
+      isMarketplaceListingOpen(problem.status)
     );
   });
 

@@ -204,7 +204,7 @@ export interface ProblemInfo {
   submitter: string;
   bounty: number; // Balance type
   min_work_score: number;
-  status: string; // "OPEN", "SOLVED", "EXPIRED", "CANCELLED"
+  status: string; // Rust Debug, e.g. "Open", "Solved" (case varies; use isMarketplaceListingOpen)
   submitted_at: number; // i64 timestamp
   expires_at: number; // i64 timestamp
   is_private: boolean;
@@ -239,6 +239,10 @@ export interface ChainInfo {
 export interface MiningWork {
   next_height: number;
   prev_hash: string;
+  /**
+   * Required leading **hex** `0` characters on the header hash hex string (not Bitcoin nBits).
+   * E.g. `4` means the hash hex must start with `0000`. Max meaningful value is 64.
+   */
   difficulty: number;
   problem: ProblemType;
 }

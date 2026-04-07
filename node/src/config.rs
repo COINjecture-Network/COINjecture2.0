@@ -172,7 +172,8 @@ pub struct NodeConfig {
     #[arg(long, default_value = "coinject-network-b-v2")]
     pub chain_id: String,
 
-    /// Mining difficulty (leading zeros in hash)
+    /// Minimum header PoW: count of **leading hex zero characters** in `hex(block_header_hash)`.
+    /// Not Bitcoin `nBits`; each +1 is one more leading `0` in the hex string (max 64).
     #[arg(long, default_value = "4")]
     pub difficulty: u32,
 

@@ -49,7 +49,7 @@ pub enum ValidationError {
 pub struct BlockValidator {
     /// Minimum work score required
     min_work_score: f64,
-    /// Minimum difficulty (leading zeros)
+    /// Minimum header PoW: **leading hex zero characters** in `hex(header_hash)` (not Bitcoin nBits).
     min_difficulty: u32,
     /// Maximum timestamp drift (seconds into future)
     max_timestamp_drift: i64,

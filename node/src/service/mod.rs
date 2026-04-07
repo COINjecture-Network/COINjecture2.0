@@ -236,7 +236,6 @@ impl CoinjectNode {
                 miner_address,
                 target_block_time: Duration::from_secs(config.block_time),
                 min_difficulty: config.difficulty,
-                max_difficulty: config.difficulty + 20,
                 golden_activation_height: config.golden_activation_height,
             };
 

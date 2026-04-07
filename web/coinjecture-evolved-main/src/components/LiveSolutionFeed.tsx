@@ -213,7 +213,7 @@ export const LiveSolutionFeed = () => {
       const processBlock = (block: Awaited<ReturnType<typeof rpcClient.getBlock>>) => {
         if (!block) return;
         try {
-        const raw = block as Record<string, unknown>;
+        const raw = block as unknown as Record<string, unknown>;
         const headerRaw = raw.header as Record<string, unknown> | undefined;
         if (!headerRaw) return;
 

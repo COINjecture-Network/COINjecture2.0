@@ -18,6 +18,10 @@ const MAX_MINING_ATTEMPTS: usize = 5;
 const MINING_TIMEOUT: Duration = Duration::from_secs(60);
 const FAILURE_PENALTY_TIME: Duration = Duration::from_secs(60);
 
+/// Header PoW uses hex(`hash`) with 32 bytes → 64 hex chars. At most 64 leading `'0'` can exist;
+/// this is a representation limit, not a network “difficulty ceiling” policy.
+const HEADER_HASH_HEX_DIGITS: u32 = 64;
+
 // ============================================================================
 // STANDALONE BLOCKING FUNCTIONS
 // These run in spawn_blocking to avoid starving the tokio runtime
@@ -30,7 +34,8 @@ pub fn mine_header_blocking(
     mut header: BlockHeader,
     difficulty: u32,
 ) -> Option<(BlockHeader, Hash)> {
-    let target_prefix = "0".repeat(difficulty as usize);
+    let n = (difficulty.min(HEADER_HASH_HEX_DIGITS)) as usize;
+    let target_prefix = "0".repeat(n);
     let start_time = Instant::now();
     let mut hashes = 0u64;
 
@@ -339,7 +344,6 @@ pub struct MiningConfig {
     pub miner_address: Address,
     pub target_block_time: Duration,
     pub min_difficulty: u32,
-    pub max_difficulty: u32,
     /// Block height at which golden-enhanced features activate
     /// Before: produce v1 blocks, After: produce v2 blocks
     pub golden_activation_height: u64,
@@ -351,7 +355,6 @@ impl Default for MiningConfig {
             miner_address: Address::from_bytes([0u8; 32]),
             target_block_time: Duration::from_secs(60), // 1 minute blocks
             min_difficulty: 2,
-            max_difficulty: 8,
             golden_activation_height: 0, // Golden active from genesis
         }
     }
@@ -1179,7 +1182,8 @@ impl Miner {
     /// Mine header by finding nonce that meets difficulty target
     #[allow(dead_code)]
     fn mine_header(&self, header: &mut BlockHeader) -> Option<Hash> {
-        let target_prefix = "0".repeat(self.difficulty as usize);
+        let n = (self.difficulty.min(HEADER_HASH_HEX_DIGITS)) as usize;
+        let target_prefix = "0".repeat(n);
         let start_time = Instant::now();
         let mut hashes = 0u64;
 
@@ -1279,17 +1283,16 @@ impl Miner {
         self.stats.read().await.clone()
     }
 
-    /// Adjust mining difficulty based on block time
+    /// Adjust header PoW difficulty from observed block spacing (no policy `max_difficulty`;
+    /// the only upper bound is [`HEADER_HASH_HEX_DIGITS`]—the hex length of a 32-byte hash).
     pub fn adjust_difficulty(&mut self, actual_block_time: Duration) {
         let target = self.config.target_block_time.as_secs_f64();
         let actual = actual_block_time.as_secs_f64();
 
         if actual < target * 0.8 {
-            // Blocks too fast, increase difficulty
-            self.difficulty = (self.difficulty + 1).min(self.config.max_difficulty);
+            self.difficulty = (self.difficulty + 1).min(HEADER_HASH_HEX_DIGITS);
             println!("Difficulty increased to {}", self.difficulty);
         } else if actual > target * 1.2 {
-            // Blocks too slow, decrease difficulty
             self.difficulty = (self.difficulty.saturating_sub(1)).max(self.config.min_difficulty);
             println!("Difficulty decreased to {}", self.difficulty);
         }

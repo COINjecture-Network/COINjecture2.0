@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { WalletProvider } from "@/contexts/WalletContext";
@@ -19,23 +19,25 @@ import Wallet from "./pages/Wallet";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (
+        msg.includes("Cannot connect to RPC server") ||
+        msg.includes("ERR_CONNECTION_REFUSED") ||
+        msg.includes("Failed to fetch")
+      ) {
+        return;
+      }
+      console.error("Query error:", error);
+    },
+  }),
   defaultOptions: {
     queries: {
       retry: 2,
       retryDelay: (attempt) => Math.min(800 * 2 ** attempt, 4000),
       staleTime: 5_000,
       refetchOnWindowFocus: false,
-      onError: (error: any) => {
-        // Suppress connection refused errors in console
-        if (error?.message?.includes('Cannot connect to RPC server') ||
-            error?.message?.includes('ERR_CONNECTION_REFUSED') ||
-            error?.message?.includes('Failed to fetch')) {
-          // Silently handle - expected when node isn't running
-          return;
-        }
-        // Log other errors
-        console.error('Query error:', error);
-      },
     },
   },
 });
