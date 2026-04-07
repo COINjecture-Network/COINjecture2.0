@@ -18,6 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # dtolnay/rust-toolchain requires `toolchain` input (does not read rust-toolchain.toml).
       - name: Install Rust toolchain (stable + rustfmt + clippy)
         uses: dtolnay/rust-toolchain@v1
         with:
