@@ -63,10 +63,7 @@ pub fn build_routes(state: AppState) -> Router {
         )
         .route("/auth/email/bind-wallet", post(email_auth::bind_wallet))
         // Marketplace
-        .route(
-            "/marketplace/pairs",
-            get(marketplace::get_pairs),
-        )
+        .route("/marketplace/pairs", get(marketplace::get_pairs))
         .route(
             "/marketplace/orders",
             get(marketplace::get_orders).post(marketplace::place_order),
@@ -81,7 +78,10 @@ pub fn build_routes(state: AppState) -> Router {
             "/marketplace/datasets/{slug}/download",
             get(marketplace::download_dataset),
         )
-        .route("/marketplace/solution-sets", get(marketplace::get_solution_sets))
+        .route(
+            "/marketplace/solution-sets",
+            get(marketplace::get_solution_sets),
+        )
         .route(
             "/marketplace/tasks",
             get(marketplace::get_tasks).post(marketplace::create_task),

@@ -2,7 +2,10 @@ use coinjecture_api_server::{
     build_router,
     config::Config,
     indexer::service::IndexerService,
-    matching::{engine::{EngineHandle, MatchingEngine}, outbox::TradeOutbox},
+    matching::{
+        engine::{EngineHandle, MatchingEngine},
+        outbox::TradeOutbox,
+    },
     metrics::init_metrics,
     middleware::rate_limit::create_rate_limiter,
     node_poller::NodePoller,

@@ -161,7 +161,19 @@ export const LiveSolutionFeed = () => {
     enabled: !!chainInfo,
     refetchInterval: 12000,
     queryFn: async () => {
-      const latestHeight = chainInfo!.best_height;
+      // `/chain/info` (or parallel chain_getInfo) may report a higher tip than the node behind
+      // `VITE_API_URL/node-rpc` or a single lagging RPC. chain_getBlock(h) then returns null for
+      // every h > that node's tip → "fetched 0". Cap heights to the RPC tip we can actually read.
+      const apiBest = chainInfo!.best_height;
+      const tipBlock = await rpcClient.getLatestBlock();
+      let latestHeight = apiBest;
+      if (tipBlock?.header) {
+        const th = headerHeight(tipBlock.header);
+        if (th !== null) {
+          latestHeight = Math.min(apiBest, th);
+        }
+      }
+
       const blockCount = 20;
       const startHeight = Math.max(0, latestHeight - blockCount + 1);
       const heights: number[] = [];
@@ -372,10 +384,13 @@ export const LiveSolutionFeed = () => {
         }
       }
 
-      // If every chain_getBlock(height) returned null (nodes behind / flaky), try tip once.
+      // If every chain_getBlock(height) returned null, reuse RPC tip from above, then REST fallback.
+      if (blocksFetched === 0 && tipBlock) {
+        processBlock(tipBlock);
+      }
       if (blocksFetched === 0) {
-        const tip = await rpcClient.getLatestBlock();
-        if (tip) processBlock(tip);
+        const viaApi = await rpcClient.getLatestBlockFromApi();
+        if (viaApi) processBlock(viaApi);
       }
 
       const uniqueByHeight = Array.from(
@@ -391,7 +406,8 @@ export const LiveSolutionFeed = () => {
           "Blocks include solution_reveal but problem/solution JSON was not recognized (see browser console).";
       } else if (uniqueByHeight.length === 0 && blocksFetched === 0) {
         feedHint =
-          "Could not load block bodies from any RPC in VITE_RPC_URL (chain_getBlock / chain_getLatestBlock).";
+          "Could not load block bodies (chain_getBlock / chain_getLatestBlock / API /chain/latest-block). " +
+          "Confirm VITE_API_URL, API NODE_RPC_URL, and that /node-rpc and /chain/latest-block reach a synced node.";
       }
 
       const feedStats =

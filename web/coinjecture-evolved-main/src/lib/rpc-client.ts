@@ -11,6 +11,8 @@ import { hexToBytes } from '@noble/hashes/utils';
 
 /** Cross-origin JSON-RPC: omit cookies so `Access-Control-Allow-Origin: *` is valid. */
 const RPC_FETCH_TIMEOUT_MS = 45_000;
+/** Full block JSON can be large; allow longer read than generic RPC calls. */
+const RPC_BLOCK_BODY_TIMEOUT_MS = 90_000;
 /** `chain_submitBlock` payloads are large; API + Nginx must allow big bodies and long proxy reads. */
 const RPC_SUBMIT_BLOCK_TIMEOUT_MS = 300_000;
 /** Parallel `callAll` must not wait for the slowest node to hit the full client timeout (bad UX). */
@@ -174,9 +176,23 @@ async function fetchChainInfoFromApi(): Promise<ChainInfo> {
   }
   const j = (await response.json()) as Record<string, unknown>;
   const network = typeof j.network === 'string' ? j.network : 'mainnet';
+
+  // When the API cannot reach the node, `height` is omitted or null — do not coerce to 0 or the UI
+  // shows a fake "0" tip and skips JSON-RPC fallback in getChainInfo().
+  const rawHeight = j.height ?? j.best_height;
+  if (rawHeight === null || rawHeight === undefined) {
+    throw new Error(
+      'API /chain/info has no block height (check API NODE_RPC_URL and that the chain node RPC is up)',
+    );
+  }
+  const best_height =
+    typeof rawHeight === 'number' && Number.isFinite(rawHeight)
+      ? rawHeight
+      : Number(rawHeight) || 0;
+
   return {
     chain_id: typeof j.chain_id === 'string' ? j.chain_id : `coinjecture:${network}`,
-    best_height: typeof j.height === 'number' ? j.height : Number(j.height ?? 0) || 0,
+    best_height,
     best_hash: typeof j.best_hash === 'string' ? j.best_hash : '',
     genesis_hash: typeof j.genesis_hash === 'string' ? j.genesis_hash : '',
     peer_count: typeof j.peer_count === 'number' ? j.peer_count : Number(j.peer_count ?? 0) || 0,
@@ -596,7 +612,9 @@ export class RpcClient {
    */
   async getBlock(height: number): Promise<Block | null> {
     const outcomes = await Promise.all(
-      this.baseUrls.map((url) => this.jsonRpcRequest<Block | null>(url, 'chain_getBlock', [height])),
+      this.baseUrls.map((url) =>
+        this.jsonRpcRequest<Block | null>(url, 'chain_getBlock', [height], RPC_BLOCK_BODY_TIMEOUT_MS),
+      ),
     );
     return outcomes.find((b) => b != null) ?? null;
   }
@@ -604,13 +622,45 @@ export class RpcClient {
   /** Same as {@link getBlock}: first successful non-null among all configured RPC URLs. */
   async getLatestBlock(): Promise<Block | null> {
     const outcomes = await Promise.all(
-      this.baseUrls.map((url) => this.jsonRpcRequest<Block | null>(url, 'chain_getLatestBlock', [])),
+      this.baseUrls.map((url) =>
+        this.jsonRpcRequest<Block | null>(url, 'chain_getLatestBlock', [], RPC_BLOCK_BODY_TIMEOUT_MS),
+      ),
     );
     return outcomes.find((b) => b != null) ?? null;
   }
 
+  /**
+   * Latest full block via `GET {VITE_API_URL}/chain/latest-block` (same CORS as `/chain/info`).
+   * Use when browser POST to `/node-rpc` fails or returns empty bodies.
+   */
+  async getLatestBlockFromApi(): Promise<Block | null> {
+    if (isDevelopment) return null;
+    const base = apiBaseTrimmed();
+    if (!base) return null;
+    try {
+      const response = await fetchWithTimeout(
+        `${base}/chain/latest-block`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        RPC_BLOCK_BODY_TIMEOUT_MS,
+      );
+      if (!response.ok) return null;
+      const data = (await response.json()) as unknown;
+      if (!data || typeof data !== 'object') return null;
+      const o = data as Record<string, unknown>;
+      if (!('header' in o)) return null;
+      return data as Block;
+    } catch {
+      return null;
+    }
+  }
+
   /** Single JSON-RPC POST; returns null on error / jsonrpc error / null result (no throw). */
-  private async jsonRpcRequest<T>(url: string, method: string, params: unknown[]): Promise<T | null> {
+  private async jsonRpcRequest<T>(
+    url: string,
+    method: string,
+    params: unknown[],
+    timeoutMs: number = RPC_FETCH_TIMEOUT_MS,
+  ): Promise<T | null> {
     try {
       const response = await fetchWithTimeout(
         url,
@@ -624,7 +674,7 @@ export class RpcClient {
             params,
           }),
         },
-        RPC_FETCH_TIMEOUT_MS,
+        timeoutMs,
       );
       if (!response.ok) return null;
       const data: RpcResponse<T> = await response.json();

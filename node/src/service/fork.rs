@@ -184,8 +184,10 @@ impl CoinjectNode {
                                             // bootnode's short-ban rate limiter before we learned anything
                                             // useful about the competing branch.
                                             const CHUNK_SIZE: u64 = 16; // MAX_BLOCKS_PER_RESPONSE
-                                            let from_height = current_best_height.saturating_sub(CHUNK_SIZE);
-                                            let to_height = max_buffered_height.min(current_best_height + CHUNK_SIZE);
+                                            let from_height =
+                                                current_best_height.saturating_sub(CHUNK_SIZE);
+                                            let to_height = max_buffered_height
+                                                .min(current_best_height + CHUNK_SIZE);
                                             let request_id: u64 = rand::random();
 
                                             debug!(
@@ -225,7 +227,8 @@ impl CoinjectNode {
                                                     }
 
                                                     let conflicts_with_local =
-                                                        match chain_for_requests.get_block_by_height(*height)
+                                                        match chain_for_requests
+                                                            .get_block_by_height(*height)
                                                         {
                                                             Ok(Some(existing_block)) => {
                                                                 existing_block.header.hash()
@@ -1225,9 +1228,7 @@ impl CoinjectNode {
 
         info!(
             block_count = chain_blocks.len(),
-            total_work,
-            end_height,
-            "candidate chain validated from genesis"
+            total_work, end_height, "candidate chain validated from genesis"
         );
         Ok((chain_blocks, total_work))
     }
@@ -1240,7 +1241,12 @@ impl CoinjectNode {
         match chain.get_block_by_hash(target_hash) {
             Ok(Some(block)) => return Ok(Some(block)),
             Ok(None) => {}
-            Err(e) => return Err(format!("Error getting block by hash {:?}: {}", target_hash, e)),
+            Err(e) => {
+                return Err(format!(
+                    "Error getting block by hash {:?}: {}",
+                    target_hash, e
+                ))
+            }
         }
 
         if let Some(buffer) = block_buffer {

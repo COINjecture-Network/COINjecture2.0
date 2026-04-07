@@ -189,7 +189,9 @@ impl PeerStore {
         let mut peers: Vec<StoredPeer> = self
             .peers
             .iter()
-            .filter(|r| r.value().bucket == PeerBucket::Vetted && !self.is_banned_inner(r.value(), now))
+            .filter(|r| {
+                r.value().bucket == PeerBucket::Vetted && !self.is_banned_inner(r.value(), now)
+            })
             .map(|r| r.value().clone())
             .collect();
         peers.truncate(max);

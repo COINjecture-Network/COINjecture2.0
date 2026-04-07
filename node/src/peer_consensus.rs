@@ -200,7 +200,10 @@ impl PeerConsensus {
     pub async fn mark_peer_disconnected(&self, peer_id: &str) {
         let mut peers = self.peers.write().await;
         if peers.remove(peer_id).is_some() {
-            println!("📡 Peer {} disconnected and removed from active consensus tracking", peer_id);
+            println!(
+                "📡 Peer {} disconnected and removed from active consensus tracking",
+                peer_id
+            );
         }
     }
 

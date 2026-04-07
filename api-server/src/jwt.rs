@@ -59,7 +59,11 @@ pub fn decode_token(secret: &str, token: &str) -> Result<Claims, ApiError> {
     validation.set_issuer(&["coinjecture-api"]);
     validation.set_audience(&["coinjecture-app"]);
 
-    decode::<Claims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation)
-        .map(|data| data.claims)
-        .map_err(|_| ApiError::Unauthorized("Invalid or expired token".into()))
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .map(|data| data.claims)
+    .map_err(|_| ApiError::Unauthorized("Invalid or expired token".into()))
 }

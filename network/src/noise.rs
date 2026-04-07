@@ -59,8 +59,7 @@ impl NoiseKeypair {
         } else {
             let keypair = Self::generate();
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| NoiseError::KeyLoad(e.to_string()))?;
+                std::fs::create_dir_all(parent).map_err(|e| NoiseError::KeyLoad(e.to_string()))?;
             }
             let mut bytes = Vec::with_capacity(64);
             bytes.extend_from_slice(&keypair.private_key);
@@ -99,9 +98,10 @@ impl NoiseConnection {
         mut stream: TcpStream,
         local_keypair: &NoiseKeypair,
     ) -> Result<Self, NoiseError> {
-        let params: snow::params::NoiseParams = NOISE_PARAMS
-            .parse()
-            .map_err(|e: snow::error::Error| NoiseError::Handshake(format!("Invalid params: {e}")))?;
+        let params: snow::params::NoiseParams =
+            NOISE_PARAMS.parse().map_err(|e: snow::error::Error| {
+                NoiseError::Handshake(format!("Invalid params: {e}"))
+            })?;
 
         let mut hs = Builder::new(params)
             .local_private_key(&local_keypair.private_key)
@@ -156,9 +156,10 @@ impl NoiseConnection {
         mut stream: TcpStream,
         local_keypair: &NoiseKeypair,
     ) -> Result<Self, NoiseError> {
-        let params: snow::params::NoiseParams = NOISE_PARAMS
-            .parse()
-            .map_err(|e: snow::error::Error| NoiseError::Handshake(format!("Invalid params: {e}")))?;
+        let params: snow::params::NoiseParams =
+            NOISE_PARAMS.parse().map_err(|e: snow::error::Error| {
+                NoiseError::Handshake(format!("Invalid params: {e}"))
+            })?;
 
         let mut hs = Builder::new(params)
             .local_private_key(&local_keypair.private_key)

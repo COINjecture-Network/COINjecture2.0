@@ -32,9 +32,10 @@ pub async fn latest_block(State(state): State<AppState>) -> Result<Json<Value>, 
         None => {
             // Try direct RPC call if no cached block
             if let Some(ref rpc) = state.node_rpc {
-                let result = rpc.get_latest_block().await.map_err(|e| {
-                    ApiError::ServiceUnavailable(format!("Node unreachable: {e}"))
-                })?;
+                let result = rpc
+                    .get_latest_block()
+                    .await
+                    .map_err(|e| ApiError::ServiceUnavailable(format!("Node unreachable: {e}")))?;
                 Ok(Json(result))
             } else {
                 Err(ApiError::ServiceUnavailable(

@@ -1,4 +1,4 @@
-use axum::http::{HeaderValue, Method, request::Parts as RequestParts};
+use axum::http::{request::Parts as RequestParts, HeaderValue, Method};
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 /// CORS for browser calls from the static site + local dev.
@@ -11,12 +11,7 @@ pub fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         // Accept any localhost dev port while keeping production origins explicit.
         .allow_origin(AllowOrigin::predicate(is_allowed_origin))
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::OPTIONS,
-            Method::HEAD,
-        ])
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS, Method::HEAD])
         .allow_headers(Any)
         .allow_credentials(false)
 }

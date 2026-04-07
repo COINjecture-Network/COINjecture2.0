@@ -323,10 +323,7 @@ impl SupabaseClient {
             .await
             .map_err(|e| SupabaseError::Unknown(e.to_string()))?;
 
-        let user_id = data["user"]["id"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let user_id = data["user"]["id"].as_str().unwrap_or("").to_string();
         let user_email = data["user"]["email"].as_str().map(String::from);
 
         Ok(AuthResult {
@@ -386,10 +383,7 @@ impl SupabaseClient {
             .await
             .map_err(|e| SupabaseError::Unknown(e.to_string()))?;
 
-        let user_id = data["user"]["id"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let user_id = data["user"]["id"].as_str().unwrap_or("").to_string();
 
         Ok(AuthResult {
             user_id,
@@ -432,10 +426,7 @@ impl SupabaseClient {
 
     /// Call the `get_user_stats()` RPC function via PostgREST.
     pub async fn get_user_stats(&self) -> Result<Value, SupabaseError> {
-        let key = self
-            .service_key
-            .as_deref()
-            .unwrap_or(&self.anon_key);
+        let key = self.service_key.as_deref().unwrap_or(&self.anon_key);
 
         let resp = self
             .http
@@ -481,11 +472,7 @@ impl SupabaseClient {
             .map_err(|e| SupabaseError::Unknown(e.to_string()))
     }
 
-    async fn postgrest_get_with_key(
-        &self,
-        path: &str,
-        key: &str,
-    ) -> Result<Value, SupabaseError> {
+    async fn postgrest_get_with_key(&self, path: &str, key: &str) -> Result<Value, SupabaseError> {
         let resp = self
             .http
             .get(format!("{}/rest/v1/{path}", self.url))
@@ -618,7 +605,10 @@ impl SupabaseClient {
             .post(format!("{}/rest/v1/{table}", self.url))
             .header("Authorization", format!("Bearer {key}"))
             .header("apikey", &self.anon_key)
-            .header("Prefer", "resolution=merge-duplicates,return=representation")
+            .header(
+                "Prefer",
+                "resolution=merge-duplicates,return=representation",
+            )
             .json(&body)
             .send()
             .await
@@ -627,7 +617,9 @@ impl SupabaseClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(SupabaseError::RequestFailed(text));
         }
-        resp.json().await.map_err(|e| SupabaseError::Unknown(e.to_string()))
+        resp.json()
+            .await
+            .map_err(|e| SupabaseError::Unknown(e.to_string()))
     }
 
     /// UPSERT multiple rows with explicit conflict columns.
@@ -646,7 +638,10 @@ impl SupabaseClient {
             ))
             .header("Authorization", format!("Bearer {key}"))
             .header("apikey", &self.anon_key)
-            .header("Prefer", "resolution=merge-duplicates,return=representation")
+            .header(
+                "Prefer",
+                "resolution=merge-duplicates,return=representation",
+            )
             .json(&body)
             .send()
             .await
@@ -655,7 +650,9 @@ impl SupabaseClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(SupabaseError::RequestFailed(text));
         }
-        resp.json().await.map_err(|e| SupabaseError::Unknown(e.to_string()))
+        resp.json()
+            .await
+            .map_err(|e| SupabaseError::Unknown(e.to_string()))
     }
 
     /// PATCH rows matching a filter.
@@ -699,10 +696,7 @@ impl SupabaseClient {
     }
 
     /// Get open PoUW tasks with optional class filter.
-    pub async fn get_open_tasks(
-        &self,
-        class_filter: Option<&str>,
-    ) -> Result<Value, SupabaseError> {
+    pub async fn get_open_tasks(&self, class_filter: Option<&str>) -> Result<Value, SupabaseError> {
         let filter = match class_filter {
             Some(c) => format!("&problem_class=eq.{c}"),
             None => String::new(),

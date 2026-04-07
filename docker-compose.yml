@@ -218,6 +218,8 @@ services:
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
       - RUST_LOG=info
       - COINJECTURE_NETWORK=testnet
+      # Required for /chain/info, /node-rpc, /chain/latest-block. Use .env or default to local bootnode.
+      - NODE_RPC_URL=${NODE_RPC_URL:-http://bootnode:9933}
     restart: unless-stopped
     networks:
       - coinject-rpc
