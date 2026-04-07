@@ -80,7 +80,15 @@ impl ProblemMarketplace {
             escrow: HashMap::new(),
         }
     }
+}
 
+impl Default for ProblemMarketplace {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProblemMarketplace {
     /// Submit a public problem with bounty (backward compatible helper)
     /// For private problems, use `submit_problem()` directly with `SubmissionMode::Private`
     pub fn submit_public_problem(
@@ -181,7 +189,7 @@ impl ProblemMarketplace {
         // Index by submitter
         self.submitter_index
             .entry(submitter)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(problem_id);
 
         println!(
