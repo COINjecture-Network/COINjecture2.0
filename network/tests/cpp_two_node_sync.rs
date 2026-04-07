@@ -81,8 +81,8 @@ async fn test_two_node_network_creation() {
     let peer_id2 = [2u8; 32];
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, peer_id2, genesis);
 
-    // Both networks created successfully
-    assert!(true);
+    // Both networks created successfully (no panic).
+    let _ = (_network1, _network2, _cmd_tx1, _cmd_tx2, _event_rx1, _event_rx2);
 }
 
 #[tokio::test]
@@ -96,14 +96,10 @@ async fn test_network_broadcast_block() {
     // Create a test block
     let block = create_test_block(1, genesis);
 
-    // Broadcast block
-    cmd_tx
+    // Broadcast block (full impl would await BlockReceived on the event channel).
+    assert!(cmd_tx
         .send(NetworkCommand::BroadcastBlock { block })
-        .unwrap();
-
-    // Note: In a full implementation, we'd wait for the block to be received
-    // For now, we just verify the command was sent successfully
-    assert!(true);
+        .is_ok());
 }
 
 #[tokio::test]
@@ -116,16 +112,12 @@ async fn test_network_update_chain_state() {
 
     let new_hash = Hash::new(b"test_block");
 
-    // Update chain state
-    cmd_tx
+    assert!(cmd_tx
         .send(NetworkCommand::UpdateChainState {
             best_height: 100,
             best_hash: new_hash,
         })
-        .unwrap();
-
-    // Command sent successfully
-    assert!(true);
+        .is_ok());
 }
 
 #[tokio::test]
@@ -138,18 +130,14 @@ async fn test_network_request_blocks() {
 
     let target_peer_id = [2u8; 32];
 
-    // Request blocks
-    cmd_tx
+    assert!(cmd_tx
         .send(NetworkCommand::RequestBlocks {
             peer_id: target_peer_id,
             from_height: 0,
             to_height: 100,
             request_id: 1,
         })
-        .unwrap();
-
-    // Command sent successfully
-    assert!(true);
+        .is_ok());
 }
 
 #[tokio::test]
@@ -182,6 +170,5 @@ async fn test_network_event_types() {
     let block = create_test_block(1, genesis);
     let _event4 = NetworkEvent::BlockReceived { block, peer_id };
 
-    // All events created successfully
-    assert!(true);
+    let _ = (_event1, _event2, _event3, _event4);
 }

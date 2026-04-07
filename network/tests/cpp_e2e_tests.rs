@@ -8,8 +8,6 @@ use coinject_network::cpp::{
     CppConfig, CppNetwork, NetworkCommand, NetworkEvent, NodeType as CppNodeType,
 };
 use std::net::SocketAddr;
-use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
 
 /// Helper to create a test block
 fn create_test_block(height: u64, prev_hash: Hash) -> Block {
@@ -60,19 +58,16 @@ async fn test_network_broadcast_and_receive_block() {
     // Create network
     let config = CppConfig::default();
     let peer_id = [1u8; 32];
-    let (_network, cmd_tx, mut event_rx) = CppNetwork::new(config, peer_id, genesis);
+    let (_network, cmd_tx, event_rx) = CppNetwork::new(config, peer_id, genesis);
 
-    // Create and broadcast a block
+    // Create and broadcast a block (full test with peers would await BlockReceived).
     let block = create_test_block(1, genesis);
-    cmd_tx
+    assert!(cmd_tx
         .send(NetworkCommand::BroadcastBlock {
             block: block.clone(),
         })
-        .unwrap();
-
-    // Note: In a full test with actual peers, we'd receive BlockReceived events
-    // For now, we verify the command was sent successfully
-    assert!(true);
+        .is_ok());
+    let _ = event_rx;
 }
 
 #[tokio::test]
@@ -83,17 +78,13 @@ async fn test_network_chain_state_update() {
 
     let (_network, cmd_tx, _event_rx) = CppNetwork::new(config, peer_id, genesis);
 
-    // Update chain state
     let new_hash = Hash::new(b"new_block");
-    cmd_tx
+    assert!(cmd_tx
         .send(NetworkCommand::UpdateChainState {
             best_height: 100,
             best_hash: new_hash,
         })
-        .unwrap();
-
-    // Command sent successfully
-    assert!(true);
+        .is_ok());
 }
 
 #[tokio::test]
@@ -107,17 +98,14 @@ async fn test_network_request_blocks() {
     let target_peer_id = [2u8; 32];
 
     // Request blocks
-    cmd_tx
+    assert!(cmd_tx
         .send(NetworkCommand::RequestBlocks {
             peer_id: target_peer_id,
             from_height: 0,
             to_height: 100,
             request_id: 1,
         })
-        .unwrap();
-
-    // Command sent successfully
-    assert!(true);
+        .is_ok());
 }
 
 #[tokio::test]
@@ -219,9 +207,6 @@ async fn test_network_command_handling() {
             reason: "test".to_string(),
         })
         .unwrap();
-
-    // All commands sent successfully
-    assert!(true);
 }
 
 #[tokio::test]
@@ -249,6 +234,5 @@ async fn test_network_multiple_peers() {
     };
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, [2u8; 32], genesis);
 
-    // Both networks created successfully
-    assert!(true);
+    let _ = (_network1, _network2, _cmd_tx1, _cmd_tx2, _event_rx1, _event_rx2);
 }

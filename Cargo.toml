@@ -111,3 +111,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# mobile-sdk: size-optimized release (profiles must live at workspace root)
+[profile.release.package.coinject-mobile-sdk]
+opt-level = "s"
+panic = "abort"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
