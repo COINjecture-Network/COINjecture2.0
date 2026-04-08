@@ -206,11 +206,13 @@ impl CoinjectNode {
         if let Some(parent) = chain_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let chain = Arc::new(ChainState::new(
-            chain_db_path,
-            &genesis,
-            config.block_cache_size,
-        )?);
+        let chain = Arc::new({
+            #[cfg(not(feature = "adzdb"))]
+            let cs = ChainState::new(chain_db_path, &genesis, config.block_cache_size)?;
+            #[cfg(feature = "adzdb")]
+            let cs = ChainState::new(chain_db_path, &genesis)?;
+            cs
+        });
         let best_height = chain.best_block_height().await;
         info!(best_height, "blockchain state initialized");
 
