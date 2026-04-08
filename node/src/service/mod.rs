@@ -2015,7 +2015,7 @@ impl CoinjectNode {
                     } => {
                         // TODO: Add transaction to pool
                         let mut pool = tx_pool_clone2.write().await;
-                        let _ = pool.add(transaction);
+                        let _ = pool.add(*transaction);
                     }
                     _ => {
                         // Handle other events

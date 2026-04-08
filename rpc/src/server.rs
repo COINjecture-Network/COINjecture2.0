@@ -868,7 +868,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .blockchain
             .get_block_by_height(height)
-            .map_err(|e| Self::internal_error(e))
+            .map_err(Self::internal_error)
     }
 
     async fn get_latest_block(&self) -> RpcResult<Option<Block>> {
@@ -876,14 +876,14 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .blockchain
             .get_block_by_height(best_height)
-            .map_err(|e| Self::internal_error(e))
+            .map_err(Self::internal_error)
     }
 
     async fn get_block_header(&self, height: u64) -> RpcResult<Option<BlockHeader>> {
         self.state
             .blockchain
             .get_header_by_height(height)
-            .map_err(|e| Self::internal_error(e))
+            .map_err(Self::internal_error)
     }
 
     async fn get_chain_info(&self) -> RpcResult<ChainInfo> {
@@ -930,7 +930,7 @@ impl CoinjectRpcServer for RpcServerImpl {
             .state
             .marketplace_state
             .get_open_problems()
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
         Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
     }
 
@@ -941,7 +941,7 @@ impl CoinjectRpcServer for RpcServerImpl {
             .state
             .marketplace_state
             .get_problem(&hash)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
         Ok(problem.map(|p| self.problem_to_info(&p)))
     }
 
@@ -949,7 +949,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .marketplace_state
             .get_stats()
-            .map_err(|e| Self::internal_error(e))
+            .map_err(Self::internal_error)
     }
 
     async fn submit_private_problem(&self, params: PrivateProblemParams) -> RpcResult<String> {
@@ -1032,7 +1032,7 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.min_work_score,
                 params.expiration_days,
             )
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         Ok(hex::encode(problem_id.as_bytes()))
     }
@@ -1096,7 +1096,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         let public_params = Self::problem_public_params(&params.problem, params.min_work_score);
         let (zk_wellformed_proof, commitment) =
             WellformednessProof::create(&params.problem, &salt, &public_params)
-                .map_err(|e| Self::internal_error(e))?;
+                .map_err(Self::internal_error)?;
 
         let submission_mode = SubmissionMode::Private {
             problem_commitment: commitment,
@@ -1114,13 +1114,13 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.min_work_score,
                 params.expiration_days,
             )
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         let new_balance = balance - params.bounty;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         Ok(PrivateProblemSubmissionResult {
             problem_id: hex::encode(problem_id.as_bytes()),
@@ -1175,7 +1175,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .marketplace_state
             .reveal_problem(problem_id, reveal)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         Ok(true)
     }
@@ -1230,13 +1230,13 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.min_work_score,
                 params.expiration_days,
             )
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         let new_balance = balance - params.bounty;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         Ok(hex::encode(problem_id.as_bytes()))
     }
@@ -1318,14 +1318,14 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.min_work_score,
                 params.expiration_days,
             )
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         // Deduct bounty from submitter's balance (escrow)
         let new_balance = balance - bounty;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         tracing::info!(problem_id = %hex::encode(problem_id.as_bytes()), bounty, "subset_sum_submitted");
 
@@ -1347,14 +1347,14 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .marketplace_state
             .submit_solution(problem_id, solver, params.solution)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         // Claim bounty and credit solver
         let (solver_addr, bounty) = self
             .state
             .marketplace_state
             .claim_bounty(problem_id)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         // Credit solver's account with bounty
         let current_balance = self.state.account_state.get_balance(&solver_addr);
@@ -1362,7 +1362,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .account_state
             .set_balance(&solver_addr, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         tracing::info!(solver = %hex::encode(solver_addr.as_bytes()), bounty, "solution_accepted");
 

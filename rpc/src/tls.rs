@@ -107,7 +107,7 @@ pub async fn run_tls_proxy(
     backend_addr: SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server_config = build_server_config(&tls_cfg)
-        .map_err(|e| Box::<dyn std::error::Error + Send + Sync>::from(e))?;
+        .map_err(Box::<dyn std::error::Error + Send + Sync>::from)?;
     let acceptor = TlsAcceptor::from(server_config);
     let listener = tokio::net::TcpListener::bind(tls_cfg.bind_addr).await?;
 
