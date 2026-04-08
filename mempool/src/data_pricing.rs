@@ -745,6 +745,10 @@ mod tests {
 
         let network_cost = engine.get_base_cost();
 
+        assert_ne!(
+            network_cost, bootstrap_cost,
+            "Cost should change after median fee update"
+        );
         assert_eq!(
             network_cost, 50000,
             "Should use network median when available: {}",
