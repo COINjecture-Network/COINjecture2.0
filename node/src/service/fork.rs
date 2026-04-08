@@ -8,6 +8,7 @@ use tracing::{debug, error, info, trace, warn};
 impl CoinjectNode {
     /// Check for chain reorganization opportunities
     /// When we have blocks that form a longer valid chain, reorganize to it
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn check_and_reorganize_chain(
         chain: &Arc<ChainState>,
         state: &Arc<AccountState>,
@@ -669,6 +670,7 @@ impl CoinjectNode {
 
     /// Attempt chain reorganization when we have a longer valid chain available
     /// This is called when we've received blocks that form a longer chain than our current best
+    #[allow(clippy::too_many_arguments)]
     async fn attempt_reorganization_if_longer_chain(
         new_chain_end_hash: coinject_core::Hash,
         new_chain_end_height: u64,
@@ -970,6 +972,7 @@ impl CoinjectNode {
     }
 
     /// Perform chain reorganization: unwind old chain and apply new chain
+    #[allow(clippy::too_many_arguments)]
     async fn reorganize_chain(
         old_chain_blocks: Vec<coinject_core::Block>,
         new_chain_blocks: Vec<coinject_core::Block>,
@@ -1330,6 +1333,7 @@ impl CoinjectNode {
 
     /// Perform complete chain reorganization from genesis
     /// Unwinds all blocks to genesis and applies new chain from genesis
+    #[allow(clippy::too_many_arguments)]
     async fn reorganize_chain_from_genesis(
         old_chain_blocks: Vec<coinject_core::Block>,
         new_chain_blocks: Vec<coinject_core::Block>,

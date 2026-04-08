@@ -7,6 +7,7 @@ use tracing::{debug, error, info, warn};
 
 impl CoinjectNode {
     /// Process buffered blocks sequentially
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn process_buffered_blocks(
         chain: &Arc<ChainState>,
         state: &Arc<AccountState>,
@@ -289,6 +290,7 @@ impl CoinjectNode {
 
     /// Apply block transactions to account state
     /// Returns a vector of successfully applied transaction hashes
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_block_transactions(
         block: &coinject_core::Block,
         state: &Arc<AccountState>,
@@ -347,6 +349,7 @@ impl CoinjectNode {
 
     /// Unwind block transactions (reverse apply_block_transactions)
     /// Used for chain reorganization
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn unwind_block_transactions(
         block: &coinject_core::Block,
         state: &Arc<AccountState>,
@@ -401,6 +404,7 @@ impl CoinjectNode {
     }
 
     /// Unwind a single transaction (reverse apply_single_transaction)
+    #[allow(clippy::too_many_arguments)]
     fn unwind_single_transaction(
         tx: &coinject_core::Transaction,
         state: &Arc<AccountState>,
@@ -757,6 +761,7 @@ impl CoinjectNode {
     }
 
     /// Apply a single transaction to state
+    #[allow(clippy::too_many_arguments)]
     fn apply_single_transaction(
         tx: &coinject_core::Transaction,
         state: &Arc<AccountState>,
