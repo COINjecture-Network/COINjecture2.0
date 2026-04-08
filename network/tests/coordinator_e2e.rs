@@ -33,11 +33,11 @@ struct TestNode {
     /// Coordinator command sender (to feed commands from bridge events).
     coord_cmd_tx: mpsc::UnboundedSender<CoordinatorCommand>,
     /// Bridge command sender (to send consensus payloads outbound).
-    bridge_cmd_tx: mpsc::UnboundedSender<BridgeCommand>,
+    _bridge_cmd_tx: mpsc::UnboundedSender<BridgeCommand>,
     /// Node identity (coordinator's [u8; 32]).
     node_id: [u8; 32],
     /// Mesh node ID (for display).
-    mesh_node_id: coinject_network::MeshNodeId,
+    _mesh_node_id: coinject_network::MeshNodeId,
     /// Collected events from the coordinator.
     events: Arc<RwLock<Vec<CoordinatorEvent>>>,
     /// Network service handle (for shutdown).
@@ -57,7 +57,7 @@ impl TestNode {
         let mesh_config = NetworkConfig {
             listen_addr: listen,
             seed_nodes: seeds,
-            data_dir: data_dir.into_path(),
+            data_dir: data_dir.keep(),
             ..Default::default()
         };
 
@@ -165,6 +165,7 @@ impl TestNode {
                                 epoch,
                                 commit: SolutionCommit {
                                     node_id: commit.node_id.0,
+                                    public_key: [0u8; 32],
                                     solution_hash: commit.solution_hash,
                                     work_score: commit.work_score,
                                     signature: commit.signature,
@@ -179,9 +180,9 @@ impl TestNode {
 
         TestNode {
             coord_cmd_tx,
-            bridge_cmd_tx,
+            _bridge_cmd_tx: bridge_cmd_tx,
             node_id,
-            mesh_node_id,
+            _mesh_node_id: mesh_node_id,
             events,
             mesh_service: Some(mesh_service),
         }
@@ -220,6 +221,7 @@ impl TestNode {
     }
 
     /// Count how many EpochSealed events have been received.
+    #[allow(dead_code)]
     async fn sealed_count(&self) -> usize {
         self.events
             .read()
