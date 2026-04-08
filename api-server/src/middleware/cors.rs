@@ -39,11 +39,7 @@ fn is_production_coinjecture_origin(origin: &str) -> bool {
         return false;
     }
 
-    let hostport = after_scheme
-        .split(|c| c == '/' || c == '?')
-        .next()
-        .unwrap_or("")
-        .trim();
+    let hostport = after_scheme.split(['/', '?']).next().unwrap_or("").trim();
 
     if hostport.is_empty() {
         return false;
