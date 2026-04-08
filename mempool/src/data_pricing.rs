@@ -738,6 +738,7 @@ mod tests {
 
         // Initially uses bootstrap pricing
         let bootstrap_cost = engine.get_base_cost();
+        assert!(bootstrap_cost > 0, "bootstrap cost should be non-zero");
 
         // Update with network median
         engine.update_median_fee(50000);
