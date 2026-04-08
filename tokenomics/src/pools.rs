@@ -283,7 +283,7 @@ mod tests {
 
         // At block 0, D1 (Genesis) should have some available (τ=0)
         manager.set_block(0);
-        let genesis_pool = manager.get_pool(PoolType::Genesis).unwrap();
+        let _genesis_pool = manager.get_pool(PoolType::Genesis).unwrap();
         // At exactly τ_n, unlock is 0, but immediately after it starts
 
         // At block 10000, all pools should have some unlock
