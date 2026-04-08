@@ -35,8 +35,10 @@ impl fmt::Display for NodeRpcError {
 }
 
 impl NodeRpcClient {
-    const TRANSPORT_RETRIES: usize = 10;
-    const RETRY_DELAY_MS: u64 = 250;
+    /// Cover brief Docker DNS / bootnode restarts without surfacing 503 to browsers (which may
+    /// label cross-origin failures as "access control checks").
+    const TRANSPORT_RETRIES: usize = 20;
+    const RETRY_DELAY_MS: u64 = 400;
 
     pub fn new(url: &str) -> Self {
         let urls = url
@@ -47,8 +49,9 @@ impl NodeRpcClient {
             .collect::<Vec<_>>();
         Self {
             urls,
+            // Busy mining nodes can take 10s+ for chain_getInfo / chain_getBlock; 5s caused /chain/info height=null.
             http: Client::builder()
-                .timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(90))
                 .pool_max_idle_per_host(0)
                 .build()
                 .unwrap_or_default(),

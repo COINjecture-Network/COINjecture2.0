@@ -82,7 +82,9 @@ async fn test_two_node_network_creation() {
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, peer_id2, genesis);
 
     // Both networks created successfully (no panic).
-    let _ = (_network1, _network2, _cmd_tx1, _cmd_tx2, _event_rx1, _event_rx2);
+    let _ = (
+        _network1, _network2, _cmd_tx1, _cmd_tx2, _event_rx1, _event_rx2,
+    );
 }
 
 #[tokio::test]

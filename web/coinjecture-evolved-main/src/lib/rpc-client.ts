@@ -185,20 +185,36 @@ async function fetchChainInfoFromApi(): Promise<ChainInfo> {
       'API /chain/info has no block height (check API NODE_RPC_URL and that the chain node RPC is up)',
     );
   }
-  const best_height =
-    typeof rawHeight === 'number' && Number.isFinite(rawHeight)
-      ? rawHeight
-      : Number(rawHeight) || 0;
+  let best_height: number;
+  if (typeof rawHeight === 'number' && Number.isFinite(rawHeight)) {
+    best_height = rawHeight;
+  } else if (typeof rawHeight === 'string' && rawHeight.trim() !== '') {
+    const n = Number(rawHeight);
+    if (!Number.isFinite(n)) {
+      throw new Error('API /chain/info height is not a valid number');
+    }
+    best_height = n;
+  } else {
+    throw new Error('API /chain/info has invalid block height');
+  }
+
+  const best_hash = typeof j.best_hash === 'string' ? j.best_hash : '';
+  const genesis_hash = typeof j.genesis_hash === 'string' ? j.genesis_hash : '';
 
   return {
     chain_id: typeof j.chain_id === 'string' ? j.chain_id : `coinjecture:${network}`,
     best_height,
-    best_hash: typeof j.best_hash === 'string' ? j.best_hash : '',
-    genesis_hash: typeof j.genesis_hash === 'string' ? j.genesis_hash : '',
+    best_hash,
+    genesis_hash,
     peer_count: typeof j.peer_count === 'number' ? j.peer_count : Number(j.peer_count ?? 0) || 0,
     total_work: typeof j.total_work === 'number' ? j.total_work : undefined,
     is_syncing: Boolean(j.syncing),
   };
+}
+
+/** True when API returned 200 but looks like no live tip (bad NODE_RPC vs real genesis with hashes). */
+function apiChainInfoLooksEmptyTip(info: ChainInfo): boolean {
+  return info.best_height === 0 && !info.best_hash && !info.genesis_hash;
 }
 
 export interface RpcError {
@@ -694,7 +710,13 @@ export class RpcClient {
     // Production: browser → API `/chain/info` (no public RPC CORS required for the landing metrics).
     if (!isDevelopment && import.meta.env.VITE_API_URL) {
       try {
-        return await fetchChainInfoFromApi();
+        const fromApi = await fetchChainInfoFromApi();
+        if (!apiChainInfoLooksEmptyTip(fromApi)) {
+          return fromApi;
+        }
+        console.warn(
+          '[rpc-client] /chain/info returned empty tip (height 0, no hashes); trying JSON-RPC',
+        );
       } catch (e) {
         console.warn('[rpc-client] /chain/info failed, falling back to JSON-RPC', e);
       }

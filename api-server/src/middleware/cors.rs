@@ -14,6 +14,8 @@ pub fn cors_layer() -> CorsLayer {
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS, Method::HEAD])
         .allow_headers(Any)
         .allow_credentials(false)
+        // Fewer preflights during bursts (e.g. metrics + wallet + node-rpc).
+        .max_age(std::time::Duration::from_secs(600))
 }
 
 fn is_allowed_origin(origin: &HeaderValue, _parts: &RequestParts) -> bool {
@@ -21,10 +23,40 @@ fn is_allowed_origin(origin: &HeaderValue, _parts: &RequestParts) -> bool {
         return false;
     };
 
+    is_production_coinjecture_origin(origin) || is_local_dev_origin(origin)
+}
+
+/// Match production site origins case-insensitively (host) and tolerate a trailing `/` on the
+/// serialized `Origin` header. Exact string matching misses `https://COINjecture.com` and
+/// `https://coinjecture.com/`, which yield HTTP 200 preflights **without** `Access-Control-Allow-Origin`.
+fn is_production_coinjecture_origin(origin: &str) -> bool {
+    let origin = origin.trim_end_matches('/');
+
+    let Some((scheme, after_scheme)) = origin.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+
+    let hostport = after_scheme
+        .split(|c| c == '/' || c == '?')
+        .next()
+        .unwrap_or("")
+        .trim();
+
+    if hostport.is_empty() {
+        return false;
+    }
+
+    let hostport_lower = hostport.to_ascii_lowercase();
     matches!(
-        origin,
-        "https://coinjecture.com" | "https://www.coinjecture.com"
-    ) || is_local_dev_origin(origin)
+        hostport_lower.as_str(),
+        "coinjecture.com"
+            | "www.coinjecture.com"
+            | "coinjecture.com:443"
+            | "www.coinjecture.com:443"
+    )
 }
 
 fn is_local_dev_origin(origin: &str) -> bool {

@@ -234,5 +234,7 @@ async fn test_network_multiple_peers() {
     };
     let (_network2, _cmd_tx2, _event_rx2) = CppNetwork::new(config2, [2u8; 32], genesis);
 
-    let _ = (_network1, _network2, _cmd_tx1, _cmd_tx2, _event_rx1, _event_rx2);
+    let _ = (
+        _network1, _network2, _cmd_tx1, _cmd_tx2, _event_rx1, _event_rx2,
+    );
 }

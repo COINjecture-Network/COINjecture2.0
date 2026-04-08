@@ -43,16 +43,22 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          # Mainnet-height nodes OOM at 512M; keep bootnode stable for RPC + mining.
+          memory: 2G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
+    # Require JSON-RPC (9933), not only metrics — otherwise api-server starts while /node-rpc and /chain/info still see "connection refused".
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://localhost:9090/health && curl -sf --max-time 15 -X POST http://127.0.0.1:9933/ -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"chain_getInfo\",\"params\":[],\"id\":1}' | grep -q '\"jsonrpc\"'",
+        ]
       interval: 15s
-      timeout: 5s
+      timeout: 20s
       retries: 5
-      start_period: 40s
+      start_period: 120s
 
   # ── Node 1 ────────────────────────────────────────────────────────────────
   node1:
@@ -201,6 +207,9 @@ services:
 
   # ── API Server ──────────────────────────────────────────────────────────────
   # Separate image from P2P nodes (`coinject-node:latest`). Build: docker build -f Dockerfile.api -t coinject-api:latest .
+  # Uses `coinject-rpc` + `NODE_RPC_URL=http://bootnode:9933`. Do not use `network_mode: service:bootnode`: if the bootnode
+  # container restarts, Docker recreates its netns while the API keeps the old one — REST then listens on the wrong namespace
+  # and host :3030/nginx get connection resets / 502.
   api-server:
     build:
       context: .
@@ -209,7 +218,9 @@ services:
     container_name: coinject-api
     ports:
       - "3030:3030"
-      - "9094:9090"  # metrics
+    depends_on:
+      bootnode:
+        condition: service_healthy
     environment:
       - COINJECTURE_API_HOST=0.0.0.0
       - COINJECTURE_API_PORT=3030
@@ -218,7 +229,6 @@ services:
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
       - RUST_LOG=info
       - COINJECTURE_NETWORK=testnet
-      # Required for /chain/info, /node-rpc, /chain/latest-block. Use .env or default to local bootnode.
       - NODE_RPC_URL=${NODE_RPC_URL:-http://bootnode:9933}
     restart: unless-stopped
     networks:

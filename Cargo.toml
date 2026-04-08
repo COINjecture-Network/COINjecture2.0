@@ -90,7 +90,8 @@ tempfile = "3"
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
 
 # Metrics
-prometheus = { version = "0.13", features = ["process"] }
+# 0.14+ pulls protobuf ^3.7.2 (fixes RUSTSEC-2024-0437 via prometheus 0.13 → protobuf 2.x).
+prometheus = { version = "0.14", features = ["process"] }
 lazy_static = "1.4"
 hyper = { version = "1.5", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
