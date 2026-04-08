@@ -584,7 +584,7 @@ mod tests {
 
         // Calculate expected: 0.8*0.4 + 0.95*0.3 + 0.5*0.2 + 0.1*0.1
         // = 0.32 + 0.285 + 0.1 + 0.01 = 0.715
-        assert!(score >= 0.0 && score <= 1.0);
+        assert!((0.0..=1.0).contains(&score));
         let expected: f64 = 0.715;
         assert!(
             (score - expected).abs() < 0.01_f64,

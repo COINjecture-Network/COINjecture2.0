@@ -211,7 +211,7 @@ pub mod timeouts {
             assert!(CONSENSUS_PEER_TIMEOUT_SECS > NETWORK_PEER_TIMEOUT_SECS as f64);
 
             // Stale threshold > Consensus timeout (final cutoff)
-            assert!(CONSENSUS_STALE_THRESHOLD_SECS > CONSENSUS_PEER_TIMEOUT_SECS);
+            const { assert!(CONSENSUS_STALE_THRESHOLD_SECS > CONSENSUS_PEER_TIMEOUT_SECS) };
         }
 
         #[test]
@@ -346,8 +346,8 @@ mod tests {
 
     #[test]
     fn test_equilibrium_constant() {
-        // Verify η = 1/√2 ≈ 0.7071
-        assert!((ETA - 0.7071).abs() < 0.0001);
+        // Verify η = 1/√2
+        assert_eq!(ETA, std::f64::consts::FRAC_1_SQRT_2);
         assert!((ETA * SQRT_2 - 1.0).abs() < 0.0001);
     }
 

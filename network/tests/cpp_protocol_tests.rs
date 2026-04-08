@@ -327,7 +327,7 @@ async fn test_cpp_block_broadcast_multiple_peers() {
     let selected = router.select_broadcast_peers();
 
     // Should select √n × η peers (for n=3: √3 × 0.707 ≈ 1.22 → 2 peers)
-    assert!(selected.len() >= 1 && selected.len() <= 3);
+    assert!(!selected.is_empty() && selected.len() <= 3);
 
     // Verify selected peers are valid
     for peer_id in &selected {

@@ -408,7 +408,7 @@ mod tests {
         // Small delta (10): chunk = 20 * (1 + (10 * η / 10)) = 20 * (1 + 0.707) ≈ 34
         let chunk = router.calculate_chunk_size(10, 20, 100);
         assert!(
-            chunk >= 30 && chunk <= 40,
+            (30..=40).contains(&chunk),
             "Expected chunk ~34 for delta=10, got {}",
             chunk
         );
@@ -454,7 +454,7 @@ mod tests {
         let router = EquilibriumRouter::new();
 
         // Verify η = 1/√2
-        assert!((router.eta - 0.7071).abs() < 0.0001);
+        assert!((router.eta - ETA).abs() < 1e-10);
 
         // Verify √n × η scaling
         for n in [4, 9, 16, 25, 36] {

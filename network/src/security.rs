@@ -725,9 +725,9 @@ mod tests {
             MessageSizePolicy::HANDSHAKE
         );
         // Sizes are in expected order
-        assert!(MessageSizePolicy::BLOCK > MessageSizePolicy::TRANSACTION);
-        assert!(MessageSizePolicy::TRANSACTION > MessageSizePolicy::CONSENSUS);
-        assert!(MessageSizePolicy::CONSENSUS > MessageSizePolicy::HANDSHAKE);
+        const { assert!(MessageSizePolicy::BLOCK > MessageSizePolicy::TRANSACTION) };
+        const { assert!(MessageSizePolicy::TRANSACTION > MessageSizePolicy::CONSENSUS) };
+        const { assert!(MessageSizePolicy::CONSENSUS > MessageSizePolicy::HANDSHAKE) };
     }
 
     // --- ConnectionLimiter ---

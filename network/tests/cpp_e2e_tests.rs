@@ -115,7 +115,7 @@ async fn test_network_event_handling() {
     let addr: SocketAddr = "127.0.0.1:707".parse().unwrap();
 
     // Test that all event types can be created and handled
-    let events = vec![
+    let events = [
         NetworkEvent::PeerConnected {
             peer_id,
             addr,
