@@ -105,6 +105,7 @@ impl NoiseConnection {
 
         let mut hs = Builder::new(params)
             .local_private_key(&local_keypair.private_key)
+            .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?
             .build_initiator()
             .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?;
 
@@ -163,6 +164,7 @@ impl NoiseConnection {
 
         let mut hs = Builder::new(params)
             .local_private_key(&local_keypair.private_key)
+            .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?
             .build_responder()
             .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?;
 
@@ -349,6 +351,7 @@ mod tests {
         let kp_i = builder_i.generate_keypair().unwrap();
         let mut initiator = builder_i
             .local_private_key(&kp_i.private)
+            .unwrap()
             .build_initiator()
             .unwrap();
 
@@ -356,6 +359,7 @@ mod tests {
         let kp_r = builder_r.generate_keypair().unwrap();
         let mut responder = builder_r
             .local_private_key(&kp_r.private)
+            .unwrap()
             .build_responder()
             .unwrap();
 
