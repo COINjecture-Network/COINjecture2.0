@@ -23,7 +23,7 @@ use coinject_consensus::{default_registry, Miner, MiningConfig};
 use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 // libp2p removed - using CPP protocol only
-use blake3;
+use blake3 as _;
 use coinject_huggingface::{
     DualFeedStreamer, EnergyConfig, EnergyMeasurementMethod, HuggingFaceConfig, HuggingFaceSync,
     StreamerConfig, SyncConfig,
@@ -41,8 +41,8 @@ use coinject_state::{
     AccountState, ChannelState, DimensionalPoolState, EscrowState, MarketplaceState, TimeLockState,
     TrustLineState,
 };
-use hex;
-use rand;
+use hex as _;
+use rand as _;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
