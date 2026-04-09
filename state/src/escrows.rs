@@ -427,7 +427,7 @@ const MAX_TIMESTAMP_SKEW_SECS: i64 = 300;
 /// Layout: `domain[23] || escrow_id[32] || action[1] || timestamp_le64[8]` = 64 bytes
 pub fn escrow_auth_message(escrow_id: &Hash, action: u8, timestamp: i64) -> [u8; 64] {
     let mut msg = [0u8; 64];
-    let d = AUTH_DOMAIN.len(); // 22
+    let d = AUTH_DOMAIN.len(); // 23
     msg[..d].copy_from_slice(AUTH_DOMAIN);
     msg[d..d + 32].copy_from_slice(escrow_id.as_bytes());
     msg[d + 32] = action;
