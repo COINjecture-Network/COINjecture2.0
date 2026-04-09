@@ -23,6 +23,8 @@
 //
 // These parameters are deliberately conservative for validator nodes
 // that restart infrequently. Tune down only if cold-start latency is critical.
+// Items used by binary only are unreachable from lib tests under --all-features
+#![allow(dead_code)]
 
 use aes_gcm::{
     aead::{Aead, KeyInit},

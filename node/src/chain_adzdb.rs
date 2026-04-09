@@ -6,6 +6,7 @@
 //! Enable with: --features adzdb
 
 #![cfg(feature = "adzdb")]
+#![allow(dead_code)]
 
 use adzdb::{Config as AdzConfig, Database as AdzDatabase, Error as AdzError};
 use coinject_core::{Block, BlockHeader, Hash};
