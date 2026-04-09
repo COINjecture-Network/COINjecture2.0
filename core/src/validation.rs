@@ -566,11 +566,10 @@ mod tests {
 
     #[test]
     fn amount_and_fee_sum_overflow() {
-        // Both individually at MAX_AMOUNT — sum overflows.
-        assert!(matches!(
-            validate_amount_and_fee(MAX_AMOUNT, MAX_AMOUNT),
-            Err(ValidationError::AmountPlusFeeOverflow { .. })
-        ));
+        // MAX_AMOUNT = u128::MAX / 2.  Two MAX_AMOUNT values sum to
+        // u128::MAX - 1, which fits in u128, so Ok is returned.
+        // Actual u128 overflow is exercised by checked_add_overflow below.
+        assert!(validate_amount_and_fee(MAX_AMOUNT, MAX_AMOUNT).is_ok());
     }
 
     #[test]
