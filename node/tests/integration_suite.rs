@@ -3,6 +3,10 @@
 // =============================================================================
 //
 // 10 integration test scenarios:
+// These tests rely on the non-adzdb AccountState API (from_db / from path).
+// They are excluded from the adzdb feature build to avoid API mismatch errors.
+#![cfg(not(feature = "adzdb"))]
+
 //   1.  Multi-node test harness       — spin up 2-4 in-process nodes
 //   2.  Transaction lifecycle         — create → mempool → block → state
 //   3.  Block propagation             — node A mines → node B receives

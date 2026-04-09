@@ -23,6 +23,8 @@
 //
 // These parameters are deliberately conservative for validator nodes
 // that restart infrequently. Tune down only if cold-start latency is critical.
+// Items used by binary only are unreachable from lib tests under --all-features
+#![allow(dead_code)]
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -31,7 +33,7 @@ use aes_gcm::{
 use argon2::{Algorithm, Argon2, Params, Version};
 use coinject_core::Address;
 use ed25519_dalek::SigningKey;
-use rand::{rngs::OsRng, Rng, RngCore};
+use rand::{rngs::OsRng, Rng};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -491,7 +491,7 @@ pub enum MarketplaceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coinject_core::{Address, ProblemType, Solution};
+    use coinject_core::{Address, Solution};
 
     #[test]
     fn test_submit_problem() {

@@ -1,6 +1,8 @@
 // Chain State Manager
 // Block storage, best chain tracking, and chain reorganization
 #![allow(dead_code)]
+// ChainError wraps large redb error types; boxing them would change the public API
+#![allow(clippy::result_large_err)]
 
 use coinject_core::{Block, BlockHeader, Hash};
 use lru::LruCache;
@@ -768,41 +770,6 @@ pub struct ChainStats {
     pub db_file_size_bytes: u64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::genesis::{create_genesis_block, GenesisConfig};
-
-    #[tokio::test]
-    async fn test_chain_initialization() {
-        let temp_dir = std::env::temp_dir().join("coinject-chain-test-init");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-
-        let genesis = create_genesis_block(GenesisConfig::default());
-        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
-
-        assert_eq!(chain.best_block_height().await, 0);
-        assert_eq!(chain.genesis_hash(), genesis.header.hash());
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    #[tokio::test]
-    async fn test_block_storage() {
-        let temp_dir = std::env::temp_dir().join("coinject-chain-test-storage");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-
-        let genesis = create_genesis_block(GenesisConfig::default());
-        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
-
-        // Retrieve genesis
-        let retrieved = chain.get_block_by_height(0).unwrap().unwrap();
-        assert_eq!(retrieved.header.height, 0);
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-}
-
 // Implement BlockchainReader trait for RPC access
 impl coinject_rpc::BlockchainReader for ChainState {
     fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, String> {
@@ -868,5 +835,40 @@ impl BlockProvider for ChainBlockProvider {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async { *self.best_height.read().await })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::genesis::{create_genesis_block, GenesisConfig};
+
+    #[tokio::test]
+    async fn test_chain_initialization() {
+        let temp_dir = std::env::temp_dir().join("coinject-chain-test-init");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let genesis = create_genesis_block(GenesisConfig::default());
+        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
+
+        assert_eq!(chain.best_block_height().await, 0);
+        assert_eq!(chain.genesis_hash(), genesis.header.hash());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_block_storage() {
+        let temp_dir = std::env::temp_dir().join("coinject-chain-test-storage");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let genesis = create_genesis_block(GenesisConfig::default());
+        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
+
+        // Retrieve genesis
+        let retrieved = chain.get_block_by_height(0).unwrap().unwrap();
+        assert_eq!(retrieved.header.height, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
