@@ -138,14 +138,14 @@ jobs:
 
       - name: Build release binaries
         run: |
-          cargo build --release --bin coinject-node
+          cargo build --release --bin coinject
           cargo build --release --bin coinject-wallet
 
       - name: Upload node binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: coinject-node-linux-amd64
-          path: target/release/coinject-node
+          path: target/release/coinject
           retention-days: 7
 
       - name: Upload wallet binary artifact
