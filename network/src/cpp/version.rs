@@ -226,7 +226,7 @@ pub enum ConnectionPolicy {
 
 impl ConnectionPolicy {
     pub fn evaluate(remote_version: u8) -> Self {
-        if remote_version < MIN_SUPPORTED_VERSION || remote_version > CURRENT_PROTOCOL_VERSION {
+        if !(MIN_SUPPORTED_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&remote_version) {
             ConnectionPolicy::Reject { remote_version }
         } else if remote_version < CURRENT_PROTOCOL_VERSION {
             ConnectionPolicy::AllowWithWarning { remote_version }
