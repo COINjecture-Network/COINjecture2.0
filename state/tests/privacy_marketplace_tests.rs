@@ -6,6 +6,8 @@ use coinject_core::{
     SubmissionMode, WellformednessProof,
 };
 use coinject_state::{MarketplaceState, ProblemStatus};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -321,7 +323,8 @@ fn test_commitment_determinism() {
         target: 21,
     };
 
-    let salt = [123u8; 32];
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
 
     let public_params = ProblemParameters {
         problem_type: "SubsetSum".to_string(),
