@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn extra_list_matches_normalized() {
-        let extra = vec!["https://D123.cloudfront.NET".to_string()];
+        let extra = ["https://D123.cloudfront.NET".to_string()];
         assert!(extra
             .iter()
             .any(|allowed| origins_equal_ignore_case("https://d123.cloudfront.net/", allowed)));
