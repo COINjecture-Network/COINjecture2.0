@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Redeploy on **two** servers over SSH without wiping chain data.
 #
+# Chain blocks live in Docker *named volumes* (e.g. bootnode-data, node1-data).
+# This script only runs: git pull + docker compose up -d --build
+# That recreates containers and keeps volumes. Blocks are lost only if someone runs:
+#   docker compose down -v
+#   docker volume rm …
+# Do not use those on production hosts.
+#
 # Prerequisites on each host:
 #   - Repo or deploy bundle at REMOTE_PATH
 #   - Docker + compose plugin
@@ -35,8 +42,9 @@ run_remote() {
   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$host" bash -s <<EOF
 set -e
 cd "$REMOTE_PATH"
+echo ">>> Chain safety: using up -d --build only (no compose down -v; volumes unchanged)"
 git pull --ff-only 2>/dev/null || true
-# Safe: rebuild images and recreate containers; volumes persist
+# Safe: rebuild images and recreate containers; named volumes keep existing blocks
 if [[ -n "$COMPOSE_EXTRA" ]]; then
   docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_EXTRA" up -d --build $SERVICES
   docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_EXTRA" ps

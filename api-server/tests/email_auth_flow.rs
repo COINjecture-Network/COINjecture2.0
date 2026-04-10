@@ -42,6 +42,7 @@ fn test_config() -> Config {
         indexer_enabled: false,
         indexer_poll_interval_secs: 5,
         indexer_confirmations: 6,
+        cors_extra_origins: vec![],
     }
 }
 

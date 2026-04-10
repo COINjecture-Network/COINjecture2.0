@@ -124,5 +124,5 @@ pub fn build_routes(state: AppState) -> Router {
         // Axum: last `.layer()` is outermost on the request path — CORS outside Compression so
         // preflight and responses (including errors) are handled before gzip.
         .layer(CompressionLayer::new())
-        .layer(cors::cors_layer())
+        .layer(cors::cors_layer(state.config.cors_extra_origins.clone()))
 }

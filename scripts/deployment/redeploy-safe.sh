@@ -22,6 +22,11 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 SERVICES="${SERVICES:-bootnode node1 node2}"
 WITH_FRONTEND="${WITH_FRONTEND:-0}"
 
+compose_args=(-f "$COMPOSE_FILE")
+if [[ -n "${COMPOSE_EXTRA:-}" ]]; then
+  compose_args+=(-f "$COMPOSE_EXTRA")
+fi
+
 echo "=========================================="
 echo "COINjecture safe redeploy (keeps volumes)"
 echo "=========================================="

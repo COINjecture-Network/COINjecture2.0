@@ -17,6 +17,8 @@ pub struct Config {
     pub indexer_enabled: bool,
     pub indexer_poll_interval_secs: u64,
     pub indexer_confirmations: u64,
+    /// Comma-separated full origins, e.g. `https://d111.cloudfront.net` (no path). Optional.
+    pub cors_extra_origins: Vec<String>,
 }
 
 impl Config {
@@ -47,6 +49,7 @@ impl Config {
             indexer_enabled: std::env::var("INDEXER_ENABLED").unwrap_or_else(|_| "true".into())
                 == "true",
             indexer_poll_interval_secs: std::env::var("INDEXER_POLL_INTERVAL")
+                .or_else(|_| std::env::var("INDEXER_POLL_INTERVAL_SECS"))
                 .unwrap_or_else(|_| "5".into())
                 .parse()
                 .unwrap_or(5),
@@ -54,6 +57,12 @@ impl Config {
                 .unwrap_or_else(|_| "6".into())
                 .parse()
                 .unwrap_or(6),
+            cors_extra_origins: std::env::var("CORS_EXTRA_ORIGINS")
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
         })
     }
 
