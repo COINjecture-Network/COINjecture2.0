@@ -317,8 +317,7 @@ impl NodeConfig {
         }
         // Hugging Face: token/dataset from env when not passed on CLI (Docker `.env` + compose).
         if config.hf_token.is_none() {
-            if let Ok(t) = std::env::var("HUGGINGFACE_TOKEN")
-                .or_else(|_| std::env::var("HF_TOKEN"))
+            if let Ok(t) = std::env::var("HUGGINGFACE_TOKEN").or_else(|_| std::env::var("HF_TOKEN"))
             {
                 if !t.is_empty() {
                     config.hf_token = Some(t);
