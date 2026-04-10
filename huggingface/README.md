@@ -44,6 +44,205 @@ Records are produced by **network nodes** (see `coinject_huggingface::DatasetRec
 
 English (problem descriptions and metadata)
 
+## Explorer-style layout (reference)
+
+The JSONL rows are the source of truth; the layout below is the **recommended human-readable presentation** for explorers, dashboards, and docs. Times like `15s ago` are computed from `timestamp` (Unix seconds) relative to “now” when rendering.
+
+### Example — SAT (consensus / mined block)
+
+```text
+Block #123525
+SAT
+15s ago
+
+Problem:
+Satisfy 78 clauses with 26 variables
+
+Solution:
+Satisfying assignment found
+
+Solver: 74446bf9...d77e15
+
+Reward (BEANS)
+124,324,271
+
+Work (bits)
+12.432
+
+Asymmetry
+5725.40×
+
+Quality
+1.000
+
+Δt: 28.6 ms solve / 0.01 ms verify
+Est. energy: 2.9 J
+```
+
+### Example — SubsetSum (consensus / mined block)
+
+```text
+Block #123524
+SubsetSum
+20s ago
+
+Problem:
+Find subset summing to 3938
+Values: [55, 683, 630, 222, 651, 376, 332, 38, 827, 191, 292, 485, 453, 744, 403, 283, 717, 823, 350, 55, 928, 967, 995, 384, 354, 979, 733, 488, 882, 708, 67, 309, 751, 831]
+
+Solution:
+Indices 9, 10, 18, 19, 23, 29, 30, 31, 32, 33 → Sum: 3938
+
+Solver: 74446bf9...d77e15
+
+Reward (BEANS)
+110,826,140
+
+Work (bits)
+11.083
+
+Asymmetry
+2845.00×
+
+Quality
+1.000
+
+Δt: 2.8 ms solve / 0.00 ms verify
+Est. energy: (from total_energy_joules when present)
+```
+
+### Precomputed `explorer_card`
+
+Current nodes set **`explorer_card`** on each emitted row to the same layout as below (UTC time line). For custom viewers you can print `record["explorer_card"]` directly, or rebuild from fields using the Python helper in this README.
+
+### Line-by-line mapping (JSONL → display)
+
+| Display | JSON fields / rule |
+|--------|----------------------|
+| **Block #…** | `block_height` |
+| **Type line** (SAT, SubsetSum, …) | `problem_type` |
+| **Relative time** | `timestamp` vs viewer clock (e.g. `format_relative(timestamp)`) |
+| **Problem:** | Derived from `problem_data` by type (see below) |
+| **Solution:** | Derived from `solution_data` + `problem_data` (see below) |
+| **Solver:** | `solver` or `submitter` (hex); show as `first8...last6` for privacy |
+| **Reward (BEANS)** | `bounty` (string u128) or formatted integer — native reward units on the network |
+| **Work (bits)** | `work_score` when set; format with fixed decimals (e.g. 3) |
+| **Asymmetry** | `time_asymmetry` (solve/verify time ratio); suffix `×` |
+| **Quality** | `solution_quality` when set (0–1 scale) |
+| **Δt:** | `solve_time_us`, `verify_time_us` → ms: `solve_time_us / 1000`, `verify_time_us / 1000` |
+| **Est. energy** | `total_energy_joules` (or sum of solve/verify energy fields) with one decimal and ` J` |
+
+**SAT — Problem line:** From `problem_data.clauses` length and `problem_data.variables` (or equivalent):  
+`Satisfy {n_clauses} clauses with {n_vars} variables`.
+
+**SAT — Solution line:** If `solution_data.assignments` exists: “Satisfying assignment found” (or list assignment preview for research dumps).
+
+**SubsetSum — Problem line:** `Find subset summing to {problem_data.target}` plus `Values: {problem_data.numbers}` (truncate with “…” if extremely long).
+
+**SubsetSum — Solution line:** `Indices {comma-separated} → Sum: {target}` where indices are `solution_data.indices` and target is `problem_data.target` (recompute sum for verification in tooling).
+
+**TSP / Custom:** Use the same block header; problem/solution lines should summarize `problem_data` / `solution_data` (tour length, custom label) — extend the same pattern.
+
+### Optional: Python sketch
+
+```python
+from __future__ import annotations
+
+import time
+from typing import Any, Mapping
+
+
+def _rel_ago(ts: int) -> str:
+    s = max(0, int(time.time()) - int(ts))
+    if s < 60:
+        return f"{s}s ago"
+    if s < 3600:
+        return f"{s // 60}m ago"
+    return f"{s // 3600}h ago"
+
+
+def _addr_short(hex64: str | None) -> str | None:
+    if not hex64 or len(hex64) < 16:
+        return hex64
+    return f"{hex64[:8]}...{hex64[-6:]}"
+
+
+def _fmt_int_string(s: str | None) -> str:
+    if not s:
+        return "—"
+    try:
+        return f"{int(s):,}"
+    except ValueError:
+        return s
+
+
+def problem_line(pt: str, pd: Mapping[str, Any]) -> str:
+    if pt == "SAT":
+        n_c = len(pd.get("clauses") or [])
+        n_v = int(pd.get("variables") or 0)
+        return f"Satisfy {n_c} clauses with {n_v} variables"
+    if pt == "SubsetSum":
+        nums = pd.get("numbers") or []
+        tgt = pd.get("target")
+        return f"Find subset summing to {tgt}\nValues: {nums}"
+    return str(pd)
+
+
+def solution_line(pt: str, pd: Mapping[str, Any], sd: Mapping[str, Any] | None) -> str:
+    if sd is None:
+        return "—"
+    if pt == "SAT":
+        return "Satisfying assignment found"
+    if pt == "SubsetSum":
+        idx = sd.get("indices") or []
+        tgt = pd.get("target")
+        return f"Indices {', '.join(str(i) for i in idx)} → Sum: {tgt}"
+    return str(sd)
+
+
+def format_block_card(r: Mapping[str, Any]) -> str:
+    pt = r.get("problem_type") or "?"
+    pd = r.get("problem_data") or {}
+    sd = r.get("solution_data")
+    ws = r.get("work_score")
+    ta = r.get("time_asymmetry")
+    q = r.get("solution_quality")
+    su = r.get("solve_time_us") or 0
+    vu = r.get("verify_time_us") or 0
+    ej = r.get("total_energy_joules")
+
+    lines = [
+        f"Block #{r.get('block_height', '?')}",
+        str(pt),
+        _rel_ago(int(r.get("timestamp") or 0)),
+        "",
+        "Problem:",
+        problem_line(pt, pd),
+        "",
+        "Solution:",
+        solution_line(pt, pd, sd),
+        "",
+        f"Solver: {_addr_short(r.get('solver') or r.get('submitter'))}",
+        "",
+        "Reward (BEANS)",
+        _fmt_int_string(r.get("bounty")),
+        "",
+        "Work (bits)",
+        f"{ws:.3f}" if isinstance(ws, (int, float)) else "—",
+        "",
+        "Asymmetry",
+        f"{ta:.2f}×" if isinstance(ta, (int, float)) else "—",
+        "",
+        "Quality",
+        f"{q:.3f}" if isinstance(q, (int, float)) else "—",
+        "",
+        f"Δt: {su / 1000:.1f} ms solve / {vu / 1000:.2f} ms verify",
+    ]
+    if isinstance(ej, (int, float)):
+        lines.append(f"Est. energy: {ej:.1f} J")
+    return "\n".join(lines)
+```
+
 ## Dataset Structure
 
 ### Data Instances
@@ -62,9 +261,10 @@ Each record in the dataset represents either:
 | `problem_type` | string | Type of problem: "SubsetSum", "SAT", "TSP", "Custom", or "Private" |
 | `problem_data` | object | Complete problem data (JSON object) |
 | `solution_data` | object (optional) | Solution data with normalized structure |
+| `explorer_card` | string | Preformatted explorer-style card (multi-line text). Uses **absolute UTC** from `timestamp` in the card (not “Ns ago”). Omitted or empty on legacy JSONL without this field. |
 | **IDENTIFIERS** |||
 | `block_height` | int64 | Block height when the record was created |
-| `timestamp` | int64 | Unix timestamp |
+| `timestamp` | int64 | Unix timestamp (consensus rows: block header time; marketplace rows may use ingest time — see `metrics_source`) |
 | `submitter` | string (optional) | Address of the problem submitter (hex encoded) |
 | `solver` | string (optional) | Address of the solution solver (hex encoded) |
 | **PERFORMANCE METRICS** |||
@@ -82,6 +282,12 @@ Each record in the dataset represents either:
 | `total_energy_joules` | float64 (optional) | Total energy consumption (joules) |
 | `energy_per_operation` | float64 (optional) | Energy per operation estimate |
 | `energy_efficiency` | float64 (optional) | Energy efficiency metric |
+| **TIMING (consensus / detailed rows)** |||
+| `solve_time_us` | uint64 (optional) | Solve duration in microseconds (→ ms in explorer) |
+| `verify_time_us` | uint64 (optional) | Verify duration in microseconds |
+| **MINING / CONSENSUS** |||
+| `difficulty_target` | uint32 (optional) | Minimum leading zero bits in block hash (node PoW setting) |
+| `nonce` | uint64 (optional) | Winning header nonce |
 | **METADATA** |||
 | `status` | string | Status: "Pending", "Solved", "Mined", "Validated", etc. |
 | `submission_mode` | string | Submission mode: "public", "private", or "mining" |
@@ -89,7 +295,7 @@ Each record in the dataset represents either:
 | **DATA PROVENANCE** |||
 | `metrics_source` | string | Source of metrics: "block_header_actual", "measured_marketplace", "estimated", or "not_applicable" |
 | `measurement_confidence` | string | Confidence level: "high" (from header), "medium" (proxy/measured), "low" (estimate), or "not_applicable" |
-| `data_version` | string | Dataset schema version (e.g. `v3.0` — see `huggingface/src/metrics.rs`) |
+| `data_version` | string | Dataset schema version (e.g. `v3.1` — see `huggingface/src/metrics.rs`) |
 
 Consensus and marketplace paths may populate **additional optional fields** (timing, memory, energy, network, mining, hardware, economics). The full schema is `DatasetRecord` in `huggingface/src/client.rs`.
 
@@ -165,7 +371,7 @@ Data is collected in real-time from running COINjecture Network nodes. Each node
 - **Data Format**: JSONL (newline-delimited JSON)
 - **Storage Location**: `/data/` directory in the repository
 - **Problem Types**: SubsetSum, SAT, TSP, Custom, Private (all in one dataset)
-- **Data Quality**: v3.0 institutional-grade records when emitted by current nodes (block header and extended metrics where available)
+- **Data Quality**: v3.1 institutional-grade records when emitted by current nodes (block header and extended metrics where available)
 
 ## Considerations for Using the Data
 
@@ -266,6 +472,10 @@ For questions or issues:
 - Open a discussion on the dataset page
 
 ## Changelog
+
+### 2026-04-10
+- **`explorer_card` field**: Each JSONL row includes a precomputed multi-line card (UTC time); implemented in `huggingface/src/explorer_card.rs`.
+- **Explorer layout**: Documented the block-card presentation (block #, type, time, problem/solution prose, solver, BEANS reward, work, asymmetry, quality, Δt, energy) with line-by-line JSON mapping and a Python `format_block_card` helper.
 
 ### 2025-11-23
 - **Unified Dataset**: Consolidated all problem types (SubsetSum, SAT, TSP, Custom) into a single continuous dataset

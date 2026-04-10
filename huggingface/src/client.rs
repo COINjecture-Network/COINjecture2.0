@@ -58,7 +58,7 @@ pub struct HuggingFaceClient {
     flush_interval_blocks: u64, // Flush every N blocks
 }
 
-/// Dataset record structure - INSTITUTIONAL GRADE v3.0
+/// Dataset record structure - INSTITUTIONAL GRADE v3.1
 /// Comprehensive metrics for academic research and transparency
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetRecord {
@@ -214,6 +214,10 @@ pub struct DatasetRecord {
     pub node_version: Option<String>, // NEW: Node software version
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>, // NEW: PeerId of recording node
+
+    /// Preformatted explorer-style card (UTC time; see dataset README).
+    #[serde(default)]
+    pub explorer_card: String,
 }
 
 impl HuggingFaceClient {

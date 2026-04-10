@@ -359,6 +359,7 @@ impl CoinjectNode {
                 batch_size: 10,
                 batch_interval: Duration::from_secs(60),
                 min_confirmations: 20, // k-confirmation guard for reorg safety
+                mining_difficulty_bits: config.difficulty,
             };
 
             match HuggingFaceSync::new(hf_config, energy_config, sync_config.clone()) {

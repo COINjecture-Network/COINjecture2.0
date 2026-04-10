@@ -12,11 +12,13 @@
 
 pub mod client;
 pub mod energy;
+pub mod explorer_card;
 pub mod metrics;
 pub mod serialize;
 pub mod streamer;
 
 pub use client::{DatasetRecord, HuggingFaceClient, HuggingFaceConfig};
+pub use explorer_card::render as render_explorer_card;
 pub use energy::{EnergyConfig, EnergyMeasurement, EnergyMeasurementMethod};
 pub use metrics::{HardwareContext, MetricsCollector, NetworkContext};
 pub use serialize::{serialize_problem, serialize_solution};
@@ -63,6 +65,9 @@ pub struct SyncConfig {
     /// This prevents publishing blocks that may be reorged away
     /// Default: 20 for testnet (conservative), can be lowered for mainnet
     pub min_confirmations: u64,
+    /// PoW rule: minimum leading zero bits in block hash (same semantics as node `--difficulty` / validator).
+    /// Emitted as `difficulty_target` on consensus records; must match the running node.
+    pub mining_difficulty_bits: u32,
 }
 
 impl Default for SyncConfig {
@@ -74,6 +79,7 @@ impl Default for SyncConfig {
             batch_size: 10,
             batch_interval: Duration::from_secs(5),
             min_confirmations: 20, // Conservative default for testnet
+            mining_difficulty_bits: 4,
         }
     }
 }
@@ -257,6 +263,7 @@ impl HuggingFaceSync {
                 &pb.block,
                 pb.is_mined,
                 pb.network_ctx.as_ref(),
+                self.config.mining_difficulty_bits,
             ) {
                 Ok(r) => r,
                 Err(e) => {

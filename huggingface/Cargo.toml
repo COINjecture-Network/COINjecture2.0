@@ -40,5 +40,8 @@ sysinfo = "0.31"
 # Logging
 tracing.workspace = true
 
+# Explorer card (UTC timestamps in precomputed text)
+chrono.workspace = true
+
 [dev-dependencies]
 tokio-test = "0.4"

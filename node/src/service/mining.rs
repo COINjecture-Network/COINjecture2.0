@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use super::*;
+use coinject_huggingface::NetworkContext;
 use tracing::{debug, error, info, trace, warn};
 
 impl CoinjectNode {
@@ -381,7 +382,23 @@ impl CoinjectNode {
                         block_height = block.header.height,
                         "uploading mined block to hugging face"
                     );
-                    match hf_sync.push_consensus_block(&block, true).await {
+                    let peer_n = *peer_count.read().await;
+                    let peer_best = *best_known_peer_height.read().await;
+                    let tip = block.header.height;
+                    let sync_lag_blocks = if peer_best > tip {
+                        (peer_best - tip) as i64
+                    } else {
+                        0
+                    };
+                    let net_ctx = NetworkContext {
+                        peer_count: peer_n as u32,
+                        sync_lag_blocks,
+                        propagation_time_ms: None,
+                    };
+                    match hf_sync
+                        .push_consensus_block_with_context(&block, true, Some(net_ctx))
+                        .await
+                    {
                         Ok(()) => debug!(
                             block_height = block.header.height,
                             "block queued for hugging face upload"
