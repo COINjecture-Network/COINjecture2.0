@@ -24,6 +24,9 @@ services:
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
       - RPC_MAX_BODY_BYTES=${RPC_MAX_BODY_BYTES:-67108864}
       - RPC_TIMEOUT_SECS=${RPC_TIMEOUT_SECS:-300}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+      - HF_DATASET_NAME=${HF_DATASET_NAME:-}
     ports:
       - "707:707"      # CPP P2P  — must be reachable by external peers
       - "9090:9090"    # Metrics + Health
@@ -75,6 +78,9 @@ services:
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
       - RPC_MAX_BODY_BYTES=${RPC_MAX_BODY_BYTES:-67108864}
       - RPC_TIMEOUT_SECS=${RPC_TIMEOUT_SECS:-300}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+      - HF_DATASET_NAME=${HF_DATASET_NAME:-}
     ports:
       - "708:707"      # CPP P2P (host 708 → container 707)
       - "9091:9090"    # Metrics + Health
@@ -122,6 +128,9 @@ services:
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+      - HF_DATASET_NAME=${HF_DATASET_NAME:-}
     ports:
       - "709:707"      # CPP P2P (host 709 → container 707)
       - "9092:9090"    # Metrics + Health
@@ -171,6 +180,9 @@ services:
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
       - RPC_MAX_BODY_BYTES=${RPC_MAX_BODY_BYTES:-67108864}
       - RPC_TIMEOUT_SECS=${RPC_TIMEOUT_SECS:-300}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+      - HF_DATASET_NAME=${HF_DATASET_NAME:-}
     ports:
       - "710:707"      # CPP P2P (host 710 → container 707)
       - "9093:9090"    # Metrics + Health
