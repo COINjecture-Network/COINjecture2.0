@@ -11,9 +11,11 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 pub fn cors_layer(extra_origins: Vec<String>) -> CorsLayer {
     let extra = Arc::new(extra_origins);
     CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(move |origin: &HeaderValue, parts: &RequestParts| {
-            is_allowed_origin(origin, parts, &extra)
-        }))
+        .allow_origin(AllowOrigin::predicate(
+            move |origin: &HeaderValue, parts: &RequestParts| {
+                is_allowed_origin(origin, parts, &extra)
+            },
+        ))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS, Method::HEAD])
         .allow_headers(Any)
         .allow_credentials(false)
@@ -21,11 +23,7 @@ pub fn cors_layer(extra_origins: Vec<String>) -> CorsLayer {
         .max_age(std::time::Duration::from_secs(600))
 }
 
-fn is_allowed_origin(
-    origin: &HeaderValue,
-    _parts: &RequestParts,
-    extra: &[String],
-) -> bool {
+fn is_allowed_origin(origin: &HeaderValue, _parts: &RequestParts, extra: &[String]) -> bool {
     let Ok(origin) = origin.to_str() else {
         return false;
     };
@@ -113,7 +111,9 @@ mod tests {
 
     #[test]
     fn production_allows_https_www() {
-        assert!(is_production_coinjecture_origin("https://www.coinjecture.com"));
+        assert!(is_production_coinjecture_origin(
+            "https://www.coinjecture.com"
+        ));
     }
 
     #[test]

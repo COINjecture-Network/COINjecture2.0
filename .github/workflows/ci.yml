@@ -18,11 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pinned to immutable commit (current v1 tag). Quoted toolchain avoids YAML edge cases.
       - name: Install Rust toolchain (stable + rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "stable"
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Cache cargo registry
@@ -51,9 +50,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "stable"
+          toolchain: stable
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -108,9 +107,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "stable"
+          toolchain: stable
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -164,9 +163,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "stable"
+          toolchain: stable
 
       - name: Cache cargo registry
         uses: actions/cache@v4
