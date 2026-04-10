@@ -316,7 +316,7 @@ impl HuggingFaceClient {
         // Use unified dataset name directly (single continuous dataset for all problem types)
         // If dataset_prefix contains "/", use it as full dataset name, otherwise append problem type
         let dataset_name = if self.config.dataset_prefix.contains('/') {
-            // Full dataset name provided (e.g., "COINjecture/NP_Solutions")
+            // Full dataset name provided (e.g., "COINjecture/NP-Solutions")
             self.config.dataset_prefix.clone()
         } else {
             // Legacy: prefix only, append problem type

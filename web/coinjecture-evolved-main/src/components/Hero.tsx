@@ -336,7 +336,7 @@ export const Hero = () => {
                       All solutions and metrics are publicly available on HuggingFace
                     </p>
                     <a 
-                      href="https://huggingface.co/datasets/COINjecture/NP_Solutions" 
+                      href="https://huggingface.co/datasets/COINjecture/NP-Solutions" 
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="text-sm text-primary hover:underline inline-flex items-center gap-1"

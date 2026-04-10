@@ -15,7 +15,7 @@ size_categories:
 - 1K<n<10K
 ---
 
-# COINjecture NP Solutions Dataset
+# COINjecture NP-Solutions Dataset
 
 ## Dataset Description
 
@@ -29,7 +29,9 @@ The COINjecture Network is a blockchain that replaces traditional proof-of-work 
 - **Solution Submissions**: Solutions to problems with verification metrics
 - **Consensus Blocks**: Complete block data including transactions, PoUW metrics, and energy measurements
 
-**All problem types are stored in a single continuous dataset** (`COINjecture/NP_Solutions`) to enable cross-problem-type analysis and unified research workflows.
+Records are produced by **network nodes** (see `coinject_huggingface::DatasetRecord` in this repo) and uploaded as JSONL to the Hub. They are **not** the same artifact as other exports (e.g. API index tables); use this dataset for raw node-emitted training and research corpora.
+
+**All problem types are stored in a single continuous dataset** (`COINjecture/NP-Solutions`) to enable cross-problem-type analysis and unified research workflows.
 
 ### Supported Tasks
 
@@ -87,7 +89,9 @@ Each record in the dataset represents either:
 | **DATA PROVENANCE** |||
 | `metrics_source` | string | Source of metrics: "block_header_actual", "measured_marketplace", "estimated", or "not_applicable" |
 | `measurement_confidence` | string | Confidence level: "high" (from header), "medium" (proxy/measured), "low" (estimate), or "not_applicable" |
-| `data_version` | string | Dataset schema version: "v2.0" (institutional-grade with actual metrics) |
+| `data_version` | string | Dataset schema version (e.g. `v3.0` — see `huggingface/src/metrics.rs`) |
+
+Consensus and marketplace paths may populate **additional optional fields** (timing, memory, energy, network, mining, hardware, economics). The full schema is `DatasetRecord` in `huggingface/src/client.rs`.
 
 ### Solution Data Structure
 
@@ -161,7 +165,7 @@ Data is collected in real-time from running COINjecture Network nodes. Each node
 - **Data Format**: JSONL (newline-delimited JSON)
 - **Storage Location**: `/data/` directory in the repository
 - **Problem Types**: SubsetSum, SAT, TSP, Custom, Private (all in one dataset)
-- **Data Quality**: v2.0 institutional-grade with actual block header metrics when available
+- **Data Quality**: v3.0 institutional-grade records when emitted by current nodes (block header and extended metrics where available)
 
 ## Considerations for Using the Data
 
@@ -181,10 +185,10 @@ If you use this dataset in your research, please cite:
 
 ```bibtex
 @dataset{coinjecture_np_solutions,
-  title={COINjecture NP Solutions Dataset},
+  title={COINjecture NP-Solutions Dataset},
   author={COINjecture Network},
   year={2024},
-  url={https://huggingface.co/datasets/COINjecture/NP_Solutions}
+  url={https://huggingface.co/datasets/COINjecture/NP-Solutions}
 }
 ```
 
@@ -196,7 +200,7 @@ If you use this dataset in your research, please cite:
 from datasets import load_dataset
 
 # Load the dataset
-dataset = load_dataset("COINjecture/NP_Solutions", split="train")
+dataset = load_dataset("COINjecture/NP-Solutions", split="train")
 
 # Access records
 for record in dataset:
@@ -214,8 +218,24 @@ The raw JSONL files are available in the `/data/` directory:
 ### API Access
 
 The dataset is accessible via the Hugging Face API:
-- Dataset viewer: https://huggingface.co/datasets/COINjecture/NP_Solutions
-- API endpoint: `https://huggingface.co/api/datasets/COINjecture/NP_Solutions`
+- Dataset viewer: https://huggingface.co/datasets/COINjecture/NP-Solutions
+- API endpoint: `https://huggingface.co/api/datasets/COINjecture/NP-Solutions`
+
+### Uploading with the Hugging Face CLI
+
+For manual pushes (exports, Parquet/JSONL, README updates), use the [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli):
+
+```bash
+brew install hf
+
+# Optional: interactive login (or rely on HF_TOKEN in the environment)
+hf auth login
+
+# From the directory that contains the files you want on the Hub:
+hf upload COINjecture/NP-Solutions . --repo-type=dataset
+```
+
+Set `HF_DATASET_NAME` / `--hf-dataset-name` to this repo’s Hub id (`COINjecture/NP-Solutions`). Hyphen vs underscore are different Hub repositories if both exist.
 
 ## Additional Information
 
@@ -242,7 +262,7 @@ The dataset is accessible via the Hugging Face API:
 ## Contact
 
 For questions or issues:
-- Dataset repository: https://huggingface.co/datasets/COINjecture/NP_Solutions
+- Dataset repository: https://huggingface.co/datasets/COINjecture/NP-Solutions
 - Open a discussion on the dataset page
 
 ## Changelog
