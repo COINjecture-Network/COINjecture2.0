@@ -24,6 +24,8 @@ use crate::AppState;
 /// SSE routes are separated from API routes so the 30 s timeout doesn't
 /// kill long-lived event streams.
 pub fn build_routes(state: AppState) -> Router {
+    let cors_origins = state.config.cors_extra_origins.clone();
+
     // ── Public chain/RPC routes (NO rate limiter) ───────────────────────
     let open_routes = Router::new()
         // Health + chain data
@@ -124,5 +126,5 @@ pub fn build_routes(state: AppState) -> Router {
         // Axum: last `.layer()` is outermost on the request path — CORS outside Compression so
         // preflight and responses (including errors) are handled before gzip.
         .layer(CompressionLayer::new())
-        .layer(cors::cors_layer(state.config.cors_extra_origins.clone()))
+        .layer(cors::cors_layer(cors_origins))
 }
