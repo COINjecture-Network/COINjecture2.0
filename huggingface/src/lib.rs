@@ -18,8 +18,8 @@ pub mod serialize;
 pub mod streamer;
 
 pub use client::{DatasetRecord, HuggingFaceClient, HuggingFaceConfig};
-pub use explorer_card::render as render_explorer_card;
 pub use energy::{EnergyConfig, EnergyMeasurement, EnergyMeasurementMethod};
+pub use explorer_card::render as render_explorer_card;
 pub use metrics::{HardwareContext, MetricsCollector, NetworkContext};
 pub use serialize::{serialize_problem, serialize_solution};
 pub use streamer::{
