@@ -52,22 +52,40 @@ pub async fn chain_info(State(state): State<AppState>) -> Json<ChainInfoResponse
     let mut best_hash = None;
     let mut genesis_hash = None;
     let mut total_work = None;
-
     let (height, syncing, peer_count) = if let Some(ref rpc) = state.node_rpc {
-        match rpc.get_chain_info().await {
-            Ok(info) => {
-                chain_id = info["chain_id"].as_str().map(str::to_owned);
-                best_hash = info["best_hash"].as_str().map(str::to_owned);
-                genesis_hash = info["genesis_hash"].as_str().map(str::to_owned);
-                total_work = info["total_work"].as_u64();
-                (
-                    info["best_height"].as_u64(),
-                    info["is_syncing"].as_bool().unwrap_or(false),
-                    info["peer_count"].as_u64(),
-                )
+        // Serve from cache when available and fresh (5-second TTL).
+        let info = if let Some(cached) = state.broadcaster.get_cached_chain_info().await {
+            cached
+        } else {
+            match rpc.get_chain_info().await {
+                Ok(fresh) => {
+                    state.broadcaster.set_cached_chain_info(fresh.clone()).await;
+                    fresh
+                }
+                Err(_) => {
+                    return Json(ChainInfoResponse {
+                        network: state.config.network.clone(),
+                        height: None,
+                        syncing: false,
+                        peer_count: None,
+                        version: env!("CARGO_PKG_VERSION").to_string(),
+                        chain_id: None,
+                        best_hash: None,
+                        genesis_hash: None,
+                        total_work: None,
+                    });
+                }
             }
-            Err(_) => (None, false, None),
-        }
+        };
+        chain_id = info["chain_id"].as_str().map(str::to_owned);
+        best_hash = info["best_hash"].as_str().map(str::to_owned);
+        genesis_hash = info["genesis_hash"].as_str().map(str::to_owned);
+        total_work = info["total_work"].as_u64();
+        (
+            info["best_height"].as_u64(),
+            info["is_syncing"].as_bool().unwrap_or(false),
+            info["peer_count"].as_u64(),
+        )
     } else {
         (None, false, None)
     };

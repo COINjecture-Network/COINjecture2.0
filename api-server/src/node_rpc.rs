@@ -50,15 +50,17 @@ impl NodeRpcClient {
         Self {
             urls,
             // Busy mining nodes can take 10s+ for chain_getInfo / chain_getBlock; 5s caused /chain/info height=null.
+            // Connection pool re-enabled (8 idle); TRANSPORT_RETRIES handles stale-connection errors
+            // from Docker DNS restarts without surfacing errors to browsers.
             http: Client::builder()
                 .timeout(Duration::from_secs(90))
-                .pool_max_idle_per_host(0)
+                .pool_max_idle_per_host(8)
                 .build()
                 .unwrap_or_default(),
             // Block submission (`chain_submitBlock`) can be large + slow; browser → /node-rpc → node.
             http_proxy: Client::builder()
                 .timeout(Duration::from_secs(300))
-                .pool_max_idle_per_host(0)
+                .pool_max_idle_per_host(8)
                 .build()
                 .unwrap_or_default(),
         }

@@ -42,20 +42,17 @@ impl EventProcessor {
             .await
             .map_err(|e| format!("failed to upsert block {height}: {e}"))?;
 
-        self.supabase
-            .delete_rows(&format!(
-                "marketplace_block_events?block_height=eq.{height}"
-            ))
-            .await
-            .map_err(|e| format!("failed to clear block events at {height}: {e}"))?;
-        self.supabase
-            .delete_rows(&format!("solution_sets?block_height=eq.{height}"))
-            .await
-            .map_err(|e| format!("failed to clear solution sets at {height}: {e}"))?;
-        self.supabase
-            .delete_rows(&format!("block_transactions?block_height=eq.{height}"))
-            .await
-            .map_err(|e| format!("failed to clear block transactions at {height}: {e}"))?;
+        let events_path = format!("marketplace_block_events?block_height=eq.{height}");
+        let solutions_path = format!("solution_sets?block_height=eq.{height}");
+        let txs_path = format!("block_transactions?block_height=eq.{height}");
+        let (del_events, del_solutions, del_txs) = tokio::join!(
+            self.supabase.delete_rows(&events_path),
+            self.supabase.delete_rows(&solutions_path),
+            self.supabase.delete_rows(&txs_path),
+        );
+        del_events.map_err(|e| format!("failed to clear block events at {height}: {e}"))?;
+        del_solutions.map_err(|e| format!("failed to clear solution sets at {height}: {e}"))?;
+        del_txs.map_err(|e| format!("failed to clear block transactions at {height}: {e}"))?;
 
         let mut tx_rows = Vec::with_capacity(tx_count);
         let mut event_rows = Vec::new();
@@ -134,20 +131,18 @@ impl EventProcessor {
             .await
             .map_err(|e| format!("failed to unfinalize trades above fork: {e}"))?;
 
-        self.supabase
-            .delete_rows(&format!(
-                "marketplace_block_events?block_height=gt.{fork_height}"
-            ))
-            .await
-            .map_err(|e| format!("failed to delete reorged marketplace events: {e}"))?;
-        self.supabase
-            .delete_rows(&format!("solution_sets?block_height=gt.{fork_height}"))
-            .await
-            .map_err(|e| format!("failed to delete reorged solution sets: {e}"))?;
-        self.supabase
-            .delete_rows(&format!("block_transactions?block_height=gt.{fork_height}"))
-            .await
-            .map_err(|e| format!("failed to delete reorged transactions: {e}"))?;
+        let reorg_events_path =
+            format!("marketplace_block_events?block_height=gt.{fork_height}");
+        let reorg_solutions_path = format!("solution_sets?block_height=gt.{fork_height}");
+        let reorg_txs_path = format!("block_transactions?block_height=gt.{fork_height}");
+        let (del_events, del_solutions, del_txs) = tokio::join!(
+            self.supabase.delete_rows(&reorg_events_path),
+            self.supabase.delete_rows(&reorg_solutions_path),
+            self.supabase.delete_rows(&reorg_txs_path),
+        );
+        del_events.map_err(|e| format!("failed to delete reorged marketplace events: {e}"))?;
+        del_solutions.map_err(|e| format!("failed to delete reorged solution sets: {e}"))?;
+        del_txs.map_err(|e| format!("failed to delete reorged transactions: {e}"))?;
         self.supabase
             .delete_rows(&format!("blocks?height=gt.{fork_height}"))
             .await
