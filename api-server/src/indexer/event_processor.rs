@@ -131,8 +131,7 @@ impl EventProcessor {
             .await
             .map_err(|e| format!("failed to unfinalize trades above fork: {e}"))?;
 
-        let reorg_events_path =
-            format!("marketplace_block_events?block_height=gt.{fork_height}");
+        let reorg_events_path = format!("marketplace_block_events?block_height=gt.{fork_height}");
         let reorg_solutions_path = format!("solution_sets?block_height=gt.{fork_height}");
         let reorg_txs_path = format!("block_transactions?block_height=gt.{fork_height}");
         let (del_events, del_solutions, del_txs) = tokio::join!(
