@@ -52,6 +52,23 @@ else
   docker compose -f "$COMPOSE_FILE" up -d --build $SERVICES
   docker compose -f "$COMPOSE_FILE" ps
 fi
+# Right after recreate, host :3030 can RST until the new process binds; /chain/info can
+# also exceed a short curl timeout on cold RPC. Only probe /health with retries.
+if [[ "$SERVICES" == *api-server* ]]; then
+  echo ">>> Probing http://127.0.0.1:3030/health (up to ~30s; ignore transient RST)..."
+  succeeded=0
+  for _ in \$(seq 1 15); do
+    if curl -sfS -m 2 http://127.0.0.1:3030/health >/dev/null 2>&1; then
+      succeeded=1
+      echo ">>> /health OK"
+      break
+    fi
+    sleep 2
+  done
+  if [[ "\$succeeded" -ne 1 ]]; then
+    echo ">>> WARN: /health not ready in time — check: docker logs coinject-api"
+  fi
+fi
 EOF
 }
 
