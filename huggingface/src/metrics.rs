@@ -578,7 +578,7 @@ impl MetricsCollector {
             solve_time_us: Some(solve_time_us),
             verify_time_us: Some(verify_time_us),
             block_time_seconds: None, // Requires previous block timestamp
-            mining_attempts: None, // Actual attempt counts are not on-chain; see `nonce`
+            mining_attempts: None,    // Actual attempt counts are not on-chain; see `nonce`
 
             // Asymmetry metrics
             time_asymmetry: Some(time_asymmetry),

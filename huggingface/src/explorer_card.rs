@@ -10,10 +10,7 @@ pub fn render(record: &DatasetRecord) -> String {
         .map(|dt| dt.format("Time (UTC): %Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_else(|| format!("Time: unix {}", record.timestamp));
 
-    let solver_hex = record
-        .solver
-        .as_deref()
-        .or(record.submitter.as_deref());
+    let solver_hex = record.solver.as_deref().or(record.submitter.as_deref());
     let solver_line = addr_short(solver_hex).unwrap_or_else(|| "—".to_string());
 
     let reward = format_u128_commas(record.bounty);
@@ -95,7 +92,7 @@ fn format_u128_commas(n: u128) -> String {
     let len = chars.len();
     let mut result = String::new();
     for (i, c) in chars.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(*c);
@@ -111,10 +108,7 @@ fn problem_line(problem_type: &str, pd: &Value) -> String {
             .and_then(|c| c.as_array())
             .map(|a| a.len())
             .unwrap_or(0);
-        let n_vars = pd
-            .get("variables")
-            .and_then(json_u64)
-            .unwrap_or(0);
+        let n_vars = pd.get("variables").and_then(json_u64).unwrap_or(0);
         return format!("Satisfy {n_clauses} clauses with {n_vars} variables");
     }
     if pt == "SubsetSum" || pt.starts_with("SubsetSum") {
@@ -128,7 +122,11 @@ fn problem_line(problem_type: &str, pd: &Value) -> String {
         }
     }
     if pt == "TSP" || pt.starts_with("TSP") {
-        let cities = pd.get("cities").and_then(|c| c.as_array()).map(|a| a.len()).unwrap_or(0);
+        let cities = pd
+            .get("cities")
+            .and_then(|c| c.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
         return format!("TSP with {cities} cities (see problem_data)");
     }
     if pt == "Private" || pt.starts_with("Private") {
@@ -190,9 +188,7 @@ mod tests {
 
     #[test]
     fn sat_card_includes_clauses_line() {
-        let clauses: Vec<Value> = (0..78)
-            .map(|_| json!({"literals": [1, -2]}))
-            .collect();
+        let clauses: Vec<Value> = (0..78).map(|_| json!({"literals": [1, -2]})).collect();
         let mut r = DatasetRecord {
             problem_id: "x".into(),
             problem_type: "SAT".into(),
@@ -203,9 +199,7 @@ mod tests {
             block_hash: None,
             prev_block_hash: None,
             submitter: None,
-            solver: Some(
-                "74446bf9abcd00000000000000000000000000000000000000000000d77e15".into(),
-            ),
+            solver: Some("74446bf9abcd00000000000000000000000000000000000000000000d77e15".into()),
             work_score: Some(12.432),
             solution_quality: Some(1.0),
             problem_complexity: 1.0,
@@ -254,7 +248,9 @@ mod tests {
         };
         r.explorer_card = render(&r);
         assert!(r.explorer_card.contains("Block #123525"));
-        assert!(r.explorer_card.contains("Satisfy 78 clauses with 26 variables"));
+        assert!(r
+            .explorer_card
+            .contains("Satisfy 78 clauses with 26 variables"));
         assert!(r.explorer_card.contains("74446bf9...d77e15"));
         assert!(r.explorer_card.contains("124,324,271"));
     }
