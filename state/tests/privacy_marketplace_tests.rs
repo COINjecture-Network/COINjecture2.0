@@ -6,6 +6,8 @@ use coinject_core::{
     SubmissionMode, WellformednessProof,
 };
 use coinject_state::{MarketplaceState, ProblemStatus};
+use rand::RngCore;
+use rand::rngs::OsRng;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -24,7 +26,8 @@ fn create_test_private_problem() -> (ProblemType, [u8; 32], WellformednessProof,
         target: 60,
     };
 
-    let salt = [42u8; 32];
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
 
     let public_params = ProblemParameters {
         problem_type: "SubsetSum".to_string(),
@@ -263,7 +266,8 @@ fn test_reveal_public_problem_fails() {
         .expect("Failed to submit public problem");
 
     // Try to reveal a public problem (should fail)
-    let salt = [99u8; 32];
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
     let reveal = ProblemReveal::new(problem, salt);
 
     let result = marketplace.reveal_problem(problem_id, reveal);
@@ -321,7 +325,8 @@ fn test_commitment_determinism() {
         target: 21,
     };
 
-    let salt = [123u8; 32];
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
 
     let public_params = ProblemParameters {
         problem_type: "SubsetSum".to_string(),
@@ -340,7 +345,8 @@ fn test_commitment_determinism() {
 
 #[test]
 fn test_different_problems_different_commitments() {
-    let salt = [123u8; 32];
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
 
     let problem1 = ProblemType::SubsetSum {
         numbers: vec![1, 2, 3],
