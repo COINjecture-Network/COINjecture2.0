@@ -4,6 +4,9 @@
 
 use super::*;
 use coinject_huggingface::NetworkContext;
+use coinject_mempool::{
+    BLOCK_TEMPLATE_MAX_TRANSACTIONS, BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
+};
 use tracing::{debug, error, info, trace, warn};
 
 impl CoinjectNode {
@@ -196,10 +199,13 @@ impl CoinjectNode {
             // Ready to mine!
             debug!(block_height = best_height + 1, "mining block");
 
-            // Select transactions from pool (top 100 by fee)
+            // Select transactions: fee-priority plus reserved FIFO slots for zero-fee transfers
             let pool = tx_pool.read().await;
             let pool_size = pool.len();
-            let transactions = pool.get_top_n(100);
+            let transactions = pool.get_block_template_transactions(
+                BLOCK_TEMPLATE_MAX_TRANSACTIONS,
+                BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
+            );
             drop(pool);
 
             debug!(

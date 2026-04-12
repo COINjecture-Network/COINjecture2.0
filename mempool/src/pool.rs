@@ -111,6 +111,13 @@ pub struct TransactionPool {
     current_size: usize,
 }
 
+/// Max transactions pulled from the pool into one mined block template (`mining_loop`).
+pub const BLOCK_TEMPLATE_MAX_TRANSACTIONS: usize = 100;
+
+/// FIFO slots for simple `Transfer` transactions with `fee == 0`, so they are not permanently
+/// starved when fee-only `get_top_n` would only ever pick higher-fee transactions.
+pub const BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS: usize = 10;
+
 impl TransactionPool {
     pub fn new() -> Self {
         Self::with_config(PoolConfig::default())
@@ -208,6 +215,61 @@ impl TransactionPool {
         let mut sorted: Vec<_> = self.queue.iter().cloned().collect();
         sorted.sort_by(|a, b| b.cmp(a)); // Descending order
         sorted.into_iter().take(n).map(|p| p.tx).collect()
+    }
+
+    /// Build a block template: fee-priority base (same ordering as [`Self::get_top_n`]), then up to
+    /// `zero_fee_transfer_slots` oldest zero-fee simple transfers not already included, then fill
+    /// any remaining capacity up to `max_total` with the next highest-fee pending transactions.
+    pub fn get_block_template_transactions(
+        &self,
+        max_total: usize,
+        zero_fee_transfer_slots: usize,
+    ) -> Vec<Transaction> {
+        if max_total == 0 {
+            return Vec::new();
+        }
+
+        let fee_priority_cap = max_total.saturating_sub(zero_fee_transfer_slots);
+        let mut out = self.get_top_n(fee_priority_cap);
+
+        let mut selected_hashes: HashSet<Hash> = out.iter().map(|tx| tx.hash()).collect();
+
+        let mut zero_candidates: Vec<PooledTransaction> = self
+            .queue
+            .iter()
+            .filter(|p| {
+                matches!(&p.tx, Transaction::Transfer(_))
+                    && p.fee == 0
+                    && !selected_hashes.contains(&p.tx_hash)
+            })
+            .cloned()
+            .collect();
+        zero_candidates.sort_by_key(|p| p.received_at);
+
+        let slot_budget = max_total.saturating_sub(out.len());
+        let take_zero = zero_fee_transfer_slots
+            .min(slot_budget)
+            .min(zero_candidates.len());
+        for p in zero_candidates.into_iter().take(take_zero) {
+            selected_hashes.insert(p.tx_hash);
+            out.push(p.tx);
+        }
+
+        if out.len() < max_total {
+            let mut rest: Vec<PooledTransaction> = self
+                .queue
+                .iter()
+                .filter(|p| !selected_hashes.contains(&p.tx_hash))
+                .cloned()
+                .collect();
+            rest.sort_by(|a, b| b.cmp(a));
+            for p in rest.into_iter().take(max_total.saturating_sub(out.len())) {
+                selected_hashes.insert(p.tx_hash);
+                out.push(p.tx);
+            }
+        }
+
+        out
     }
 
     /// Get transaction by hash

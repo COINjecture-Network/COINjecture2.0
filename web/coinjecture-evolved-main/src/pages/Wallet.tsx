@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useWallet } from "@/contexts/WalletContext";
@@ -17,8 +18,8 @@ import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
-/** Matches default mempool `min_fee` on nodes that have not enabled zero-fee transfers yet. */
-const TRANSFER_FEE_FALLBACK_BEANS = 1000;
+/** Optional miner tip for higher fee-priority in the block template (legacy mempools may require at least this). */
+const TRANSFER_PRIORITY_FEE_BEANS = 1000;
 
 function isPoolFeeTooLowMessage(message: string): boolean {
   const m = message.toLowerCase();
@@ -565,6 +566,8 @@ interface SendTransactionModalProps {
 function SendTransactionModal({ accountName, keyPair, onClose }: SendTransactionModalProps) {
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
+  /** When on, sign with a tip only (skips zero-fee attempt). When off, try zero fee first, then tip if the pool rejects. */
+  const [priorityTip, setPriorityTip] = useState(false);
   const queryClient = useQueryClient();
 
   const {
@@ -584,36 +587,25 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
       const { address: from, privateKey, publicKey } = keyPair;
       const { nonce } = accountInfo;
 
-      let signedTx = createSignedTransferTransaction(
-        from,
-        recipient,
-        amountNum,
-        0,
-        nonce,
-        privateKey,
-        publicKey
-      );
+      const sign = (fee: number) =>
+        createSignedTransferTransaction(from, recipient, amountNum, fee, nonce, privateKey, publicKey);
+
+      if (priorityTip) {
+        return rpcClient.submitTransaction(sign(TRANSFER_PRIORITY_FEE_BEANS));
+      }
 
       try {
-        return await rpcClient.submitTransaction(signedTx);
-      } catch (firstErr) {
-        const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
-        if (!isPoolFeeTooLowMessage(msg)) throw firstErr;
-
-        signedTx = createSignedTransferTransaction(
-          from,
-          recipient,
-          amountNum,
-          TRANSFER_FEE_FALLBACK_BEANS,
-          nonce,
-          privateKey,
-          publicKey
-        );
-        return await rpcClient.submitTransaction(signedTx);
+        return await rpcClient.submitTransaction(sign(0));
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!isPoolFeeTooLowMessage(msg)) throw e;
+        return rpcClient.submitTransaction(sign(TRANSFER_PRIORITY_FEE_BEANS));
       }
     },
     onSuccess: (txHash) => {
-      toast.success(`Transaction submitted! Hash: ${txHash.slice(0, 16)}...`);
+      toast.success("Transfer queued in mempool", {
+        description: `Hash ${txHash.slice(0, 16)}… Balances change after a miner includes this transaction in a block (not when you see this message).`,
+      });
       queryClient.invalidateQueries({ queryKey: ['accountInfo', keyPair.address] });
       queryClient.invalidateQueries({ queryKey: ['balance', keyPair.address] });
       queryClient.invalidateQueries({ queryKey: ['walletTxs', keyPair.address] });
@@ -650,6 +642,12 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
       toast.error("Insufficient balance for this amount");
       return;
     }
+    if (priorityTip && accountInfo.balance < amountNum + TRANSFER_PRIORITY_FEE_BEANS) {
+      toast.error(
+        `Need at least ${(amountNum + TRANSFER_PRIORITY_FEE_BEANS).toLocaleString()} BEANS (amount + ${TRANSFER_PRIORITY_FEE_BEANS.toLocaleString()} tip)`
+      );
+      return;
+    }
     sendMutation.mutate();
   };
 
@@ -665,9 +663,10 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
         <DialogHeader>
           <DialogTitle>Send Transaction</DialogTitle>
           <DialogDescription>
-            Send BEANS tokens from {accountName}. Updated networks accept zero-fee transfers; public nodes may still
-            require a small mempool minimum (up to {TRANSFER_FEE_FALLBACK_BEANS.toLocaleString()} BEANS), applied
-            automatically if needed. Posting a marketplace bounty has its own fee on the bounty form.
+            Send BEANS from {accountName}. By default the wallet tries a <strong>zero-fee</strong> transfer (supported
+            on updated nodes with fair block templates). Turn on the tip below to attach{" "}
+            {TRANSFER_PRIORITY_FEE_BEANS.toLocaleString()} BEANS for stronger fee-priority or for older nodes that
+            reject zero-fee submits.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -690,6 +689,17 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
               onChange={(e) => setAmount(e.target.value)}
               min="1"
             />
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+            <div className="space-y-0.5">
+              <Label htmlFor="priority-tip" className="text-sm font-medium">
+                Faster confirmation ({TRANSFER_PRIORITY_FEE_BEANS.toLocaleString()} BEANS tip)
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Skip zero-fee and pay the miner tip up front. Optional on networks that already accept free transfers.
+              </p>
+            </div>
+            <Switch id="priority-tip" checked={priorityTip} onCheckedChange={setPriorityTip} />
           </div>
           {accountInfoError && (
             <p className="text-sm text-destructive">Failed to load account info. Close and try again.</p>

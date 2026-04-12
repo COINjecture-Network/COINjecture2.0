@@ -4,7 +4,10 @@
 //! signature validation inside the pool is exercised correctly.
 
 use coinject_core::{Address, KeyPair, Transaction};
-use coinject_mempool::{PoolConfig, PoolError, TransactionPool};
+use coinject_mempool::{
+    PoolConfig, PoolError, TransactionPool, BLOCK_TEMPLATE_MAX_TRANSACTIONS,
+    BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -218,6 +221,32 @@ fn test_get_top_n_larger_than_pool_returns_all() {
 
     let top10 = pool.get_top_n(10);
     assert_eq!(top10.len(), 2, "top_n capped at pool size");
+}
+
+#[test]
+fn test_block_template_includes_zero_fee_transfers_when_congested() {
+    let mut pool = TransactionPool::with_config(PoolConfig {
+        min_fee: 1,
+        max_transactions: 500,
+        max_size_bytes: 10 * 1024 * 1024,
+    });
+    for i in 1..=95u64 {
+        pool.add(make_tx(1_000, 2_000, i)).unwrap();
+    }
+    for i in 96..=100u64 {
+        pool.add(make_tx(1_000, 0, i)).unwrap();
+    }
+
+    let tpl = pool.get_block_template_transactions(
+        BLOCK_TEMPLATE_MAX_TRANSACTIONS,
+        BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
+    );
+    assert_eq!(tpl.len(), BLOCK_TEMPLATE_MAX_TRANSACTIONS);
+    let zero_n = tpl.iter().filter(|t| t.fee() == 0).count();
+    assert_eq!(
+        zero_n, 5,
+        "all zero-fee transfers must be included despite fee congestion"
+    );
 }
 
 // ---------------------------------------------------------------------------
