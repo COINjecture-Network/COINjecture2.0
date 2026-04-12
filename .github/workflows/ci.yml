@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # For shell steps / guards. dtolnay/rust-toolchain `with.toolchain` uses the literal `stable` — `${{ env.RUST_TOOLCHAIN }}` can be empty for composite inputs.
+  # Used both in shell guards and passed to dtolnay/rust-toolchain with a fallback so it can never be empty.
   RUST_TOOLCHAIN: stable
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
       - name: Install Rust toolchain (stable + rustfmt + clippy)
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN || 'stable' }}
           components: rustfmt, clippy
 
       - name: Verify Rust toolchain
@@ -72,7 +72,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN || 'stable' }}
 
       - name: Verify Rust toolchain
         run: |
@@ -140,7 +140,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN || 'stable' }}
 
       - name: Verify Rust toolchain
         run: |
@@ -207,7 +207,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN || 'stable' }}
 
       - name: Verify Rust toolchain
         run: |
