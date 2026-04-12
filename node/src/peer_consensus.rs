@@ -58,6 +58,29 @@ impl PeerState {
     }
 }
 
+/// Largest subset of sorted heights where `max - min ≤ 1` (single-block propagation skew).
+/// Returns `(cluster_size, representative_height)` using the median index of the best window.
+fn largest_height_cluster_within_one_block(heights: &[u64]) -> (usize, u64) {
+    if heights.is_empty() {
+        return (0, 0);
+    }
+    let mut best_len = 0usize;
+    let mut best_height = 0u64;
+    let mut i = 0usize;
+    for j in 0..heights.len() {
+        while heights[j].saturating_sub(heights[i]) > 1 {
+            i += 1;
+        }
+        let len = j - i + 1;
+        if len > best_len {
+            best_len = len;
+            let mid = (i + j) / 2;
+            best_height = heights[mid];
+        }
+    }
+    (best_len, best_height)
+}
+
 /// Configuration for consensus decisions
 #[derive(Debug, Clone)]
 pub struct ConsensusConfig {
@@ -279,20 +302,12 @@ impl PeerConsensus {
         // Get adaptive threshold based on network size
         let (threshold, _mode) = self.config.get_adaptive_threshold(peer_count);
 
-        // Count how many peers agree on each height (within 1 block tolerance)
-        let mut height_votes: HashMap<u64, usize> = HashMap::new();
-        for (_, state) in &active {
-            // Group heights within 1 block of each other
-            let normalized_height = state.best_height;
-            *height_votes.entry(normalized_height).or_insert(0) += 1;
-        }
-
-        // Find the height with most agreement
-        let (consensus_height, max_votes) = height_votes
-            .iter()
-            .max_by_key(|(_, votes)| *votes)
-            .map(|(h, v)| (*h, *v))
-            .unwrap_or((0, 0));
+        // Count agreement using a **≤1 block** spread (propagation skew: 100 vs 101 is normal).
+        // Previously we bucketed exact heights only, which split votes and made `should_mine`
+        // fail on most nodes while one peer cluster still passed — only that node appeared to mine.
+        let mut heights: Vec<u64> = active.iter().map(|(_, s)| s.best_height).collect();
+        heights.sort_unstable();
+        let (max_votes, consensus_height) = largest_height_cluster_within_one_block(&heights);
 
         let agreement = max_votes as f64 / peer_count as f64;
         let has_consensus = agreement >= threshold; // Use adaptive threshold!
@@ -481,6 +496,33 @@ impl WorkScoreCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn largest_cluster_within_one_block() {
+        assert_eq!(largest_height_cluster_within_one_block(&[]), (0, 0));
+        assert_eq!(largest_height_cluster_within_one_block(&[100]), (1, 100));
+        assert_eq!(
+            largest_height_cluster_within_one_block(&[100, 100, 101]),
+            (3, 100)
+        );
+        assert_eq!(
+            largest_height_cluster_within_one_block(&[100, 102, 104]),
+            (1, 100)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_consensus_one_block_skew() {
+        let consensus = PeerConsensus::with_defaults();
+        consensus.update_peer("a".to_string(), 100, [0; 32]).await;
+        consensus.update_peer("b".to_string(), 101, [0; 32]).await;
+        consensus.update_peer("c".to_string(), 100, [0; 32]).await;
+
+        let (has, height, agreement) = consensus.check_consensus().await;
+        assert!(has, "100/101 skew should not split the quorum");
+        assert_eq!(height, 100);
+        assert!((agreement - 1.0).abs() < f64::EPSILON);
+    }
 
     #[tokio::test]
     async fn test_peer_consensus_basic() {
