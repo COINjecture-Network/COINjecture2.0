@@ -596,7 +596,25 @@ for ip in 193.203.164.13 76.13.101.67; do
 done
 ```
 
-If **`best_height`** on a host stops increasing while peers are far ahead, inspect sync on that machine (for example `docker logs coinject-bootnode`). A **guarded** wipe of node data volumes and recreate (destructive: local chain state is lost) is scripted as [`scripts/deployment/destructive-chain-resync-remote.sh`](scripts/deployment/destructive-chain-resync-remote.sh) — read the header comment for required environment variables and what is kept vs removed.
+If **`best_height`** on a host stops increasing while peers are far ahead, inspect sync on that machine (for example `docker logs coinject-bootnode`). Logs such as **`historical sync block conflicts with local chain`**, **`Block hash mismatch`**, or **`sync batch made no progress`** usually mean the node extended a **local fork** (often because it was **mining** while still far behind). Fix: wipe volumes, then bring the stack up **without** `--mine` until the tip is near peers.
+
+**Destructive wipe (guarded SSH script):** [`scripts/deployment/destructive-chain-resync-remote.sh`](scripts/deployment/destructive-chain-resync-remote.sh) — read the header for `DESTRUCTIVE_CHAIN_RESYNC_CONFIRM` and what is kept vs removed.
+
+**Sync-only overlay (no mining):** [`docker-compose.sync-follower.yml`](docker-compose.sync-follower.yml) overrides `bootnode` / `node1` / `node2` / `node3` commands to drop `--mine` so nodes only validate and follow the network.
+
+After a volume wipe, on the recovering host (example: three chain services + API):
+
+```bash
+cd /opt/coinjecture-src   # your clone path
+docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode node1 node2 api-server
+```
+
+Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Then **re-enable mining** (same volumes — do not pass `-v` on `down` here):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml down
+docker compose -f docker-compose.yml up -d --build bootnode node1 node2 api-server
+```
 
 ---
 

@@ -1,0 +1,44 @@
+# Overlay: run full nodes **without** `--mine` so they only validate + sync.
+# Use after a volume wipe (or on a new host) until `chain_getInfo.best_height` is
+# within ~10 blocks of your canonical peers — then remove this file from the
+# compose command line and `up -d` again with the base `docker-compose.yml` only
+# to re-enable mining.
+#
+# Example (HOST2-style stack, no node3):
+#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode node1 node2 api-server
+#
+# Re-enable mining (same volumes, keep chain data):
+#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml down
+#   docker compose -f docker-compose.yml up -d --build bootnode node1 node2 api-server
+
+services:
+  bootnode:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+
+  node1:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
+
+  node2:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
+
+  node3:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
