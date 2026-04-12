@@ -609,6 +609,8 @@ cd /opt/coinjecture-src   # your clone path
 docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode node1 node2 api-server
 ```
 
+If sync **repeatedly stalls** in the same height band with fork / “missing block” warnings in `docker logs coinject-bootnode`, try a **single chain database** on that host: bring up only **`bootnode`** and **`api-server`** (omit `node1` / `node2`) with the same overlay — one volume (`bootnode-data`), one P2P view — then widen the stack once caught up.
+
 Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Then **re-enable mining** (same volumes — do not pass `-v` on `down` here):
 
 ```bash
