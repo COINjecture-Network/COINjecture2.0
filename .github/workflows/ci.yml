@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUST_TOOLCHAIN: stable
 
 jobs:
   # ─── Stage 1: Lint ──────────────────────────────────────────────────────────
@@ -18,10 +19,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard — ensure toolchain is set
+        run: |
+          set -euo pipefail
+          : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+
       - name: Install Rust toolchain (stable + rustfmt + clippy)
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
 
       - name: Verify Rust toolchain
@@ -57,10 +63,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard — ensure toolchain is set
+        run: |
+          set -euo pipefail
+          : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Verify Rust toolchain
         run: |
@@ -120,10 +131,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard — ensure toolchain is set
+        run: |
+          set -euo pipefail
+          : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Verify Rust toolchain
         run: |
@@ -182,10 +198,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Guard — ensure toolchain is set
+        run: |
+          set -euo pipefail
+          : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: stable
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Verify Rust toolchain
         run: |
