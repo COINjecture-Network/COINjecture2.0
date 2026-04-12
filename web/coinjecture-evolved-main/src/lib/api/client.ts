@@ -29,18 +29,29 @@ export async function apiFetch<T = any>(
   return res.json();
 }
 
-export interface WalletTransaction {
-  tx_hash: string;
-  tx_type: string;
+/** Unified activity row from `GET /wallet/transactions` (signed txs, receives, mining, marketplace). */
+export interface WalletActivityItem {
+  id: string;
+  kind: string;
+  label: string;
   block_height: number;
-  signer: string | null;
-  payload: unknown;
+  block_timestamp: string | null;
+  tx_hash: string | null;
+  tx_index: number | null;
+  amount: string | null;
+  fee: string | null;
+  /** Truncated hex address or display string */
+  counterparty: string | null | unknown;
+  tx_type: string;
+  event_type: string | null;
+  problem_id?: string | null;
+  detail?: unknown;
 }
 
 export async function getWalletTransactions(
   address: string,
-  limit = 20,
-): Promise<WalletTransaction[]> {
+  limit = 40,
+): Promise<WalletActivityItem[]> {
   const q = new URLSearchParams({ address, limit: String(limit) });
   const res = await fetch(`${API_BASE}/wallet/transactions?${q.toString()}`, {
     headers: { Accept: 'application/json' },
@@ -59,7 +70,7 @@ export async function getWalletTransactions(
   if (!Array.isArray(raw)) {
     return [];
   }
-  return raw as WalletTransaction[];
+  return raw as WalletActivityItem[];
 }
 
 export { API_BASE };

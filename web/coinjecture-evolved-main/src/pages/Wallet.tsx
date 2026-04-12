@@ -345,8 +345,35 @@ interface AccountDetailsProps {
   onSend: () => void;
 }
 
+function formatBeansLabel(raw: string | null | undefined): string | null {
+  if (raw == null || raw === '') return null;
+  try {
+    const n = BigInt(raw);
+    if (n > BigInt(Number.MAX_SAFE_INTEGER)) return `${raw} BEANS`;
+    return `${Number(raw).toLocaleString()} BEANS`;
+  } catch {
+    return `${raw} BEANS`;
+  }
+}
+
+function activityKindStyles(kind: string): string {
+  switch (kind) {
+    case 'receive':
+      return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400';
+    case 'send':
+    case 'self_transfer':
+      return 'bg-sky-500/15 text-sky-800 dark:text-sky-300';
+    case 'mining_reward':
+      return 'bg-amber-500/15 text-amber-900 dark:text-amber-300';
+    case 'marketplace':
+      return 'bg-violet-500/15 text-violet-800 dark:text-violet-300';
+    default:
+      return 'bg-muted text-muted-foreground';
+  }
+}
+
 function TransactionHistory({ address }: { address: string }) {
-  const { data: txs, isLoading, isError } = useQuery({
+  const { data: items, isLoading, isError } = useQuery({
     queryKey: ['walletTxs', address],
     queryFn: () => getWalletTransactions(address),
     refetchInterval: 15_000,
@@ -359,31 +386,82 @@ function TransactionHistory({ address }: { address: string }) {
   if (isError) {
     return (
       <div className="text-sm text-muted-foreground">
-        Could not load transaction history (check API / Supabase).
+        Could not load activity (check API / Supabase indexer).
       </div>
     );
   }
-  if (!txs?.length) {
-    return <div className="text-sm text-muted-foreground">No transactions yet</div>;
+  if (!items?.length) {
+    return <div className="text-sm text-muted-foreground">No on-chain activity yet</div>;
   }
 
   return (
     <div className="space-y-2">
       <Label className="text-muted-foreground">Recent activity</Label>
-      {txs.map((tx) => (
-        <div
-          key={tx.tx_hash}
-          className="flex items-center justify-between gap-2 text-sm p-2 rounded-md bg-muted/30"
-        >
-          <div className="min-w-0">
-            <span className="font-mono text-xs">{tx.tx_hash.slice(0, 12)}...</span>
-            <span className="ml-2 text-muted-foreground capitalize">{tx.tx_type}</span>
-          </div>
-          <span className="text-muted-foreground text-xs shrink-0">
-            Block {typeof tx.block_height === "number" ? tx.block_height : String(tx.block_height ?? "")}
-          </span>
-        </div>
-      ))}
+      <p className="text-xs text-muted-foreground">
+        Sends, receives, block rewards when you mine, and marketplace / bounty actions indexed from the chain.
+      </p>
+      <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
+        {items.map((row) => {
+          const amt = formatBeansLabel(row.amount);
+          const fee = formatBeansLabel(row.fee);
+          const cp =
+            typeof row.counterparty === 'string'
+              ? row.counterparty
+              : row.counterparty != null
+                ? String(row.counterparty)
+                : null;
+          const txRef =
+            row.tx_hash && row.tx_hash.length > 14
+              ? `${row.tx_hash.slice(0, 10)}…${row.tx_hash.slice(-6)}`
+              : row.tx_hash || '—';
+          return (
+            <div
+              key={row.id}
+              className="text-sm p-3 rounded-md bg-muted/30 border border-border/40 space-y-1.5"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
+                  <span
+                    className={`text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded-md shrink-0 ${activityKindStyles(row.kind)}`}
+                  >
+                    {row.kind.replace(/_/g, ' ')}
+                  </span>
+                  <span className="font-medium leading-snug">{row.label}</span>
+                </div>
+                <span className="text-muted-foreground text-xs shrink-0 tabular-nums">
+                  Block {row.block_height}
+                </span>
+              </div>
+              {(amt || fee || cp) && (
+                <div className="text-xs text-muted-foreground space-y-0.5">
+                  {amt && (
+                    <div>
+                      <span className="text-foreground/80 font-medium">{amt}</span>
+                      {fee && row.kind === 'send' && (
+                        <span className="ml-2">(fee {fee})</span>
+                      )}
+                    </div>
+                  )}
+                  {cp && (row.kind === 'send' || row.kind === 'receive') && (
+                    <div className="font-mono">
+                      {row.kind === 'send' ? 'To' : 'From'}: {cp}
+                    </div>
+                  )}
+                  {row.kind === 'marketplace' && row.event_type && (
+                    <div className="capitalize">Event: {row.event_type.replace(/_/g, ' ')}</div>
+                  )}
+                  {row.kind === 'marketplace' && row.problem_id != null && String(row.problem_id) !== '' && (
+                    <div className="font-mono break-all">Problem: {String(row.problem_id)}</div>
+                  )}
+                </div>
+              )}
+              <div className="font-mono text-[11px] text-muted-foreground/90 break-all">
+                {row.tx_hash ? `Tx ${txRef}` : 'No transaction hash (block reward)'}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

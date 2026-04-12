@@ -597,14 +597,56 @@ impl SupabaseClient {
         self.postgrest_get(path).await
     }
 
-    /// Indexed transactions signed by `address` (primarily outgoing transfers from that wallet).
+    /// Indexed transactions signed by `address` (outgoing / authored on-chain actions).
     pub async fn get_wallet_transactions(
         &self,
         address: &str,
         limit: u32,
     ) -> Result<Value, SupabaseError> {
-        let path =
-            format!("block_transactions?signer=eq.{address}&order=block_height.desc&limit={limit}");
+        let path = format!(
+            "block_transactions?signer=eq.{address}&select=block_height,tx_index,tx_hash,tx_type,signer,payload&order=block_height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
+    /// Transfer txs where `payload.Transfer.to` matches `address` (hex-encoded pubkey bytes).
+    /// Uses JSONB `@>` (PostgREST `cs`) so receivers see inbound transfers.
+    pub async fn get_wallet_incoming_transfers(
+        &self,
+        address_hex: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let needle = crate::wallet_activity::transfer_to_contains_filter(address_hex)
+            .map_err(SupabaseError::RequestFailed)?;
+        let filter_value = format!("cs.{}", needle);
+        let enc = crate::wallet_activity::encode_uri_query_value(&filter_value);
+        let path = format!(
+            "block_transactions?tx_type=eq.Transfer&payload={enc}&select=block_height,tx_index,tx_hash,tx_type,signer,payload&order=block_height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
+    /// Blocks this address mined (coinbase rewards).
+    pub async fn get_wallet_mined_blocks(
+        &self,
+        address: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let path = format!(
+            "blocks?miner=eq.{address}&select=height,hash,block_timestamp,miner,raw_block&order=height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
+    /// Marketplace / PoUW events where this wallet is the actor (bounty submit, etc.).
+    pub async fn get_wallet_marketplace_events(
+        &self,
+        address: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let path = format!(
+            "marketplace_block_events?actor_wallet=eq.{address}&select=block_height,tx_hash,tx_index,event_index,event_type,problem_id,amount,event_payload&order=block_height.desc&limit={limit}"
+        );
         self.postgrest_get_public(&path).await
     }
 
