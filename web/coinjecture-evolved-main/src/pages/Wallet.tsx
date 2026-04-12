@@ -553,7 +553,6 @@ interface SendTransactionModalProps {
 function SendTransactionModal({ accountName, keyPair, onClose }: SendTransactionModalProps) {
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
-  const [fee, setFee] = useState("1500");
   const queryClient = useQueryClient();
 
   const {
@@ -573,7 +572,7 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
         keyPair.address,
         recipient,
         parseInt(amount),
-        parseInt(fee),
+        0,
         accountInfo.nonce,
         keyPair.privateKey,
         keyPair.publicKey
@@ -643,27 +642,15 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
               className="font-mono text-xs"
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="amount">Amount</Label>
-              <Input
-                id="amount"
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                min="1"
-              />
-            </div>
-            <div>
-              <Label htmlFor="fee">Fee</Label>
-              <Input
-                id="fee"
-                type="number"
-                value={fee}
-                onChange={(e) => setFee(e.target.value)}
-                min="0"
-              />
-            </div>
+          <div>
+            <Label htmlFor="amount">Amount</Label>
+            <Input
+              id="amount"
+              type="number"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              min="1"
+            />
           </div>
           {accountInfoError && (
             <p className="text-sm text-destructive">Failed to load account info. Close and try again.</p>

@@ -603,9 +603,8 @@ impl SupabaseClient {
         address: &str,
         limit: u32,
     ) -> Result<Value, SupabaseError> {
-        let path = format!(
-            "block_transactions?signer=eq.{address}&order=block_height.desc&limit={limit}"
-        );
+        let path =
+            format!("block_transactions?signer=eq.{address}&order=block_height.desc&limit={limit}");
         self.postgrest_get_public(&path).await
     }
 

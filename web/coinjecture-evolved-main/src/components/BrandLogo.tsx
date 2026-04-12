@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 
 const outerSize: Record<"sm" | "md" | "lg", string> = {
@@ -17,23 +18,39 @@ type BrandLogoProps = {
   size?: "sm" | "md" | "lg";
 };
 
+const symbolGlow: CSSProperties = {
+  filter: [
+    "drop-shadow(0 0 1px hsl(var(--primary) / 0.9))",
+    "drop-shadow(0 0 6px hsl(var(--primary) / 0.45))",
+    "drop-shadow(0 0 14px hsl(var(--accent-purple) / 0.4))",
+    "drop-shadow(0 0 24px hsl(var(--glow-primary) / 0.28))",
+  ].join(" "),
+};
+
 export function BrandLogo({ className, size = "md" }: BrandLogoProps) {
   return (
     <div
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-xl",
-        "ring-2 ring-primary/40 ring-offset-2 ring-offset-background",
-        "bg-gradient-to-br from-primary/15 via-accent-purple/12 to-transparent",
-        "shadow-[0_0_20px_hsl(var(--glow-primary)/0.28)]",
+        "inline-flex shrink-0 items-center justify-center overflow-visible rounded-xl",
+        "ring-2 ring-primary/50 ring-offset-2 ring-offset-background",
+        "shadow-[0_0_28px_hsl(var(--glow-primary)/0.35)]",
         outerSize[size],
         className,
       )}
     >
-      <img
-        src="/coinjecture-mark.png"
-        alt="COINjecture"
-        className={cn("rounded-md object-contain", imgSize[size])}
-      />
+      <div
+        className={cn(
+          "flex items-center justify-center overflow-visible rounded-md",
+          imgSize[size],
+        )}
+      >
+        <img
+          src="/COINjecture.png"
+          alt="COINjecture"
+          className="h-full w-full object-contain"
+          style={symbolGlow}
+        />
+      </div>
     </div>
   );
 }
