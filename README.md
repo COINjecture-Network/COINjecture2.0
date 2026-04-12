@@ -27,6 +27,7 @@
 - [Institutional-Grade Infrastructure](#institutional-grade-infrastructure)
 - [Mathematical Foundation](#mathematical-foundation)
 - [Quick Start](#quick-start)
+- [Production deployment and chain health](#production-deployment-and-chain-health)
 - [For AI Research Labs](#for-ai-research-labs)
 - [Development Status](#development-status)
 - [License](#license)
@@ -578,6 +579,24 @@ cargo test -p coinject-state marketplace
 # Verbose output
 cargo test --all -- --nocapture
 ```
+
+---
+
+## Production deployment and chain health
+
+For Docker stacks on multiple hosts, confirm everyone is on the **same chain** before worrying about block height: `chain_getInfo` must report the same **`chain_id`** and **`genesis_hash`**. **`best_height`** then catches up as sync runs (often minutes to hours depending on peer count and history).
+
+**Compare bootnodes** (default JSON-RPC is host port **9933**; adjust IPs for your fleet):
+
+```bash
+for ip in 193.203.164.13 76.13.101.67; do
+  curl -sS -m 15 -X POST "http://$ip:9933/" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"chain_getInfo","params":[],"id":1}'
+  echo
+done
+```
+
+If **`best_height`** on a host stops increasing while peers are far ahead, inspect sync on that machine (for example `docker logs coinject-bootnode`). A **guarded** wipe of node data volumes and recreate (destructive: local chain state is lost) is scripted as [`scripts/deployment/destructive-chain-resync-remote.sh`](scripts/deployment/destructive-chain-resync-remote.sh) — read the header comment for required environment variables and what is kept vs removed.
 
 ---
 
