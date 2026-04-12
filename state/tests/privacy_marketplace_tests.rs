@@ -6,8 +6,8 @@ use coinject_core::{
     SubmissionMode, WellformednessProof,
 };
 use coinject_state::{MarketplaceState, ProblemStatus};
-use rand::RngCore;
 use rand::rngs::OsRng;
+use rand::RngCore;
 use std::sync::Arc;
 use tempfile::TempDir;
 
