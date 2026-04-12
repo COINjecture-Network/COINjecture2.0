@@ -1340,8 +1340,7 @@ impl CoinjectNode {
                             let effective_peer_tip = peer_height.max(highest_received);
                             if effective_peer_tip > current_height {
                                 let delayed_from = current_height + 1;
-                                let delayed_to =
-                                    effective_peer_tip.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
+                                let delayed_to = effective_peer_tip.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
                                 if delayed_from <= delayed_to {
                                     let cpp_tx = cpp_network_cmd_tx_for_events.clone();
                                     let peer_id_delayed = peer_id;
