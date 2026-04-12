@@ -27,7 +27,7 @@ jobs:
           : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
       - uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          toolchain: stable
           components: rustfmt, clippy
       - name: Verify Rust toolchain
         run: |

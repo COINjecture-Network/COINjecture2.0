@@ -62,7 +62,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Verify Rust toolchain
