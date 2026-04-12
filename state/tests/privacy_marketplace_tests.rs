@@ -6,8 +6,7 @@ use coinject_core::{
     SubmissionMode, WellformednessProof,
 };
 use coinject_state::{MarketplaceState, ProblemStatus};
-use rand::rngs::OsRng;
-use rand::RngCore;
+
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -26,8 +25,7 @@ fn create_test_private_problem() -> (ProblemType, [u8; 32], WellformednessProof,
         target: 60,
     };
 
-    let mut salt = [0u8; 32];
-    OsRng.fill_bytes(&mut salt);
+    let salt: [u8; 32] = rand::random();
 
     let public_params = ProblemParameters {
         problem_type: "SubsetSum".to_string(),
@@ -324,8 +322,7 @@ fn test_commitment_determinism() {
         target: 21,
     };
 
-    let mut salt = [0u8; 32];
-    OsRng.fill_bytes(&mut salt);
+    let salt: [u8; 32] = rand::random();
 
     let public_params = ProblemParameters {
         problem_type: "SubsetSum".to_string(),
@@ -344,8 +341,7 @@ fn test_commitment_determinism() {
 
 #[test]
 fn test_different_problems_different_commitments() {
-    let mut salt = [0u8; 32];
-    OsRng.fill_bytes(&mut salt);
+    let salt: [u8; 32] = rand::random();
 
     let problem1 = ProblemType::SubsetSum {
         numbers: vec![1, 2, 3],
