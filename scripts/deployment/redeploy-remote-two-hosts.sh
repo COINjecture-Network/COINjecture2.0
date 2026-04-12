@@ -17,6 +17,7 @@
 #   export HOST1=user@node-a.example
 #   export HOST2=user@node-b.example
 #   export REMOTE_PATH=/opt/COINjecture2.0-main   # path to repo on server
+#   export REMOTE_PATH2=/opt/other-path           # optional: HOST2 if different from HOST1
 #   ./scripts/deployment/redeploy-remote-two-hosts.sh
 #
 # Bootnode host with existing chain volume (see docker-compose.bootnode-external-chain.yml):
@@ -28,6 +29,7 @@ set -euo pipefail
 HOST1="${HOST1:-}"
 HOST2="${HOST2:-}"
 REMOTE_PATH="${REMOTE_PATH:-/opt/COINjecture2.0-main}"
+REMOTE_PATH2="${REMOTE_PATH2:-$REMOTE_PATH}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 COMPOSE_EXTRA="${COMPOSE_EXTRA:-}"
 SERVICES="${SERVICES:-bootnode node1 node2}"
@@ -39,9 +41,10 @@ fi
 
 run_remote() {
   local host="$1"
+  local rpath="$2"
   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$host" bash -s <<EOF
 set -e
-cd "$REMOTE_PATH"
+cd "$rpath"
 echo ">>> Chain safety: using up -d --build only (no compose down -v; volumes unchanged)"
 git pull --ff-only 2>/dev/null || true
 # Safe: rebuild images and recreate containers; named volumes keep existing blocks
@@ -72,11 +75,11 @@ fi
 EOF
 }
 
-echo "=== Redeploying $HOST1 ==="
-run_remote "$HOST1"
+echo "=== Redeploying $HOST1 (REMOTE_PATH=$REMOTE_PATH) ==="
+run_remote "$HOST1" "$REMOTE_PATH"
 echo ""
-echo "=== Redeploying $HOST2 ==="
-run_remote "$HOST2"
+echo "=== Redeploying $HOST2 (REMOTE_PATH2=$REMOTE_PATH2) ==="
+run_remote "$HOST2" "$REMOTE_PATH2"
 echo ""
 echo "Done. If you use different compose topology per host, run commands manually"
 echo "on each machine with the correct COMPOSE_FILE and SERVICES."
