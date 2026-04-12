@@ -42,7 +42,20 @@ export async function getWalletTransactions(
   limit = 20,
 ): Promise<WalletTransaction[]> {
   const q = new URLSearchParams({ address, limit: String(limit) });
-  const raw = await apiFetch<unknown>(`/wallet/transactions?${q.toString()}`);
+  const res = await fetch(`${API_BASE}/wallet/transactions?${q.toString()}`, {
+    headers: { Accept: 'application/json' },
+  });
+  // Older API builds or edge configs without `GET /wallet/transactions` return 404 — treat as empty history.
+  if (res.status === 404) {
+    return [];
+  }
+  if (!res.ok) {
+    const error = await res
+      .json()
+      .catch(() => ({ error: { message: res.statusText } }));
+    throw new Error(error.error?.message || `API error: ${res.status}`);
+  }
+  const raw: unknown = await res.json();
   if (!Array.isArray(raw)) {
     return [];
   }

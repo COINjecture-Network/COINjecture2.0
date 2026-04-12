@@ -690,6 +690,13 @@ impl CoinjectNode {
 
         // Only reorganize if new chain is actually longer
         if new_chain_end_height <= current_best_height {
+            warn!(
+                new_tip_height = new_chain_end_height,
+                current_best_height,
+                current_best_hash = ?current_best_hash,
+                new_tip_hash = ?new_chain_end_hash,
+                "skipping reorganization attempt: candidate tip not above current best height"
+            );
             return Ok(false);
         }
 
