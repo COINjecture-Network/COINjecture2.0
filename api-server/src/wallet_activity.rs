@@ -8,7 +8,9 @@ pub fn encode_uri_query_value(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for &b in s.as_bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -18,10 +20,7 @@ pub fn encode_uri_query_value(s: &str) -> String {
 /// JSONB `@>` filter fragment: `Transfer.to` equals this address as a 32-byte JSON array.
 pub fn transfer_to_contains_filter(addr_hex: &str) -> Result<Value, String> {
     let bytes = hex_to_32(addr_hex)?;
-    let arr: Vec<Value> = bytes
-        .iter()
-        .map(|b| Value::from(u64::from(*b)))
-        .collect();
+    let arr: Vec<Value> = bytes.iter().map(|b| Value::from(u64::from(*b))).collect();
     Ok(json!({ "Transfer": { "to": arr } }))
 }
 
@@ -193,11 +192,7 @@ pub fn merge_wallet_activity(
                         Value::String(addr.to_string()),
                     )
                 } else if from == addr {
-                    (
-                        "send",
-                        "Sent BEANS",
-                        truncate_hex(&to, 12),
-                    )
+                    ("send", "Sent BEANS", truncate_hex(&to, 12))
                 } else {
                     continue;
                 };
@@ -295,11 +290,7 @@ pub fn merge_wallet_activity(
         .collect();
     entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
-    let out: Vec<Value> = entries
-        .into_iter()
-        .map(|(_, _, v)| v)
-        .take(limit)
-        .collect();
+    let out: Vec<Value> = entries.into_iter().map(|(_, _, v)| v).take(limit).collect();
     Value::Array(out)
 }
 
