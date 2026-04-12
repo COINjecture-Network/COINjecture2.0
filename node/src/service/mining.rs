@@ -4,9 +4,7 @@
 
 use super::*;
 use coinject_huggingface::NetworkContext;
-use coinject_mempool::{
-    BLOCK_TEMPLATE_MAX_TRANSACTIONS, BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
-};
+use coinject_mempool::{BLOCK_TEMPLATE_MAX_TRANSACTIONS, BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS};
 use tracing::{debug, error, info, trace, warn};
 
 impl CoinjectNode {
