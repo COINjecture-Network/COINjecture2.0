@@ -11,7 +11,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useWallet } from "@/contexts/WalletContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { rpcClient } from "@/lib/rpc-client";
-import { getWalletTransactions } from "@/lib/api/client";
+import { getWalletTransactions, type WalletActivityItem } from "@/lib/api/client";
 import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
@@ -356,6 +356,27 @@ function formatBeansLabel(raw: string | null | undefined): string | null {
   }
 }
 
+/** API may return legacy block_transaction rows without `kind` / `label`. */
+function normalizeActivityKind(row: Partial<WalletActivityItem>): string {
+  const k = row.kind;
+  if (typeof k === 'string' && k.length > 0) return k;
+  const t = row.tx_type;
+  if (typeof t === 'string' && t.length > 0) return t.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  return 'chain_tx';
+}
+
+function normalizeActivityLabel(row: Partial<WalletActivityItem>): string {
+  if (typeof row.label === 'string' && row.label.length > 0) return row.label;
+  if (typeof row.tx_type === 'string' && row.tx_type.length > 0) return row.tx_type;
+  return 'On-chain activity';
+}
+
+function activityRowKey(row: Partial<WalletActivityItem>, index: number): string {
+  if (typeof row.id === 'string' && row.id.length > 0) return row.id;
+  if (typeof row.tx_hash === 'string' && row.tx_hash.length > 0) return row.tx_hash;
+  return `activity-${index}`;
+}
+
 function activityKindStyles(kind: string): string {
   switch (kind) {
     case 'receive':
@@ -401,7 +422,10 @@ function TransactionHistory({ address }: { address: string }) {
         Sends, receives, block rewards when you mine, and marketplace / bounty actions indexed from the chain.
       </p>
       <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
-        {items.map((row) => {
+        {items.map((row, index) => {
+          if (row == null || typeof row !== 'object') return null;
+          const kind = normalizeActivityKind(row);
+          const label = normalizeActivityLabel(row);
           const amt = formatBeansLabel(row.amount);
           const fee = formatBeansLabel(row.fee);
           const cp =
@@ -414,22 +438,29 @@ function TransactionHistory({ address }: { address: string }) {
             row.tx_hash && row.tx_hash.length > 14
               ? `${row.tx_hash.slice(0, 10)}…${row.tx_hash.slice(-6)}`
               : row.tx_hash || '—';
+          const eventTypeStr = typeof row.event_type === 'string' ? row.event_type : '';
+          const blockLabel =
+            typeof row.block_height === 'number'
+              ? row.block_height
+              : row.block_height != null
+                ? String(row.block_height)
+                : '—';
           return (
             <div
-              key={row.id}
+              key={activityRowKey(row, index)}
               className="text-sm p-3 rounded-md bg-muted/30 border border-border/40 space-y-1.5"
             >
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="flex flex-wrap items-center gap-2 min-w-0">
                   <span
-                    className={`text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded-md shrink-0 ${activityKindStyles(row.kind)}`}
+                    className={`text-[10px] uppercase tracking-wide font-semibold px-2 py-0.5 rounded-md shrink-0 ${activityKindStyles(kind)}`}
                   >
-                    {row.kind.replace(/_/g, ' ')}
+                    {kind.replace(/_/g, ' ')}
                   </span>
-                  <span className="font-medium leading-snug">{row.label}</span>
+                  <span className="font-medium leading-snug">{label}</span>
                 </div>
                 <span className="text-muted-foreground text-xs shrink-0 tabular-nums">
-                  Block {row.block_height}
+                  Block {blockLabel}
                 </span>
               </div>
               {(amt || fee || cp) && (
@@ -437,20 +468,22 @@ function TransactionHistory({ address }: { address: string }) {
                   {amt && (
                     <div>
                       <span className="text-foreground/80 font-medium">{amt}</span>
-                      {fee && row.kind === 'send' && (
+                      {fee && kind === 'send' && (
                         <span className="ml-2">(fee {fee})</span>
                       )}
                     </div>
                   )}
-                  {cp && (row.kind === 'send' || row.kind === 'receive') && (
+                  {cp && (kind === 'send' || kind === 'receive') && (
                     <div className="font-mono">
-                      {row.kind === 'send' ? 'To' : 'From'}: {cp}
+                      {kind === 'send' ? 'To' : 'From'}: {cp}
                     </div>
                   )}
-                  {row.kind === 'marketplace' && row.event_type && (
-                    <div className="capitalize">Event: {row.event_type.replace(/_/g, ' ')}</div>
+                  {kind === 'marketplace' && eventTypeStr && (
+                    <div className="capitalize">
+                      Event: {eventTypeStr.replace(/_/g, ' ')}
+                    </div>
                   )}
-                  {row.kind === 'marketplace' && row.problem_id != null && String(row.problem_id) !== '' && (
+                  {kind === 'marketplace' && row.problem_id != null && String(row.problem_id) !== '' && (
                     <div className="font-mono break-all">Problem: {String(row.problem_id)}</div>
                   )}
                 </div>

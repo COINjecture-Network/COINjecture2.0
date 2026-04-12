@@ -30,20 +30,21 @@ export async function apiFetch<T = any>(
 }
 
 /** Unified activity row from `GET /wallet/transactions` (signed txs, receives, mining, marketplace). */
+/** Older APIs return flat `block_transactions` rows without `kind` / `label` — fields optional where needed. */
 export interface WalletActivityItem {
-  id: string;
-  kind: string;
-  label: string;
-  block_height: number;
-  block_timestamp: string | null;
-  tx_hash: string | null;
-  tx_index: number | null;
-  amount: string | null;
-  fee: string | null;
+  id?: string;
+  kind?: string;
+  label?: string;
+  block_height?: number;
+  block_timestamp?: string | null;
+  tx_hash?: string | null;
+  tx_index?: number | null;
+  amount?: string | null;
+  fee?: string | null;
   /** Truncated hex address or display string */
-  counterparty: string | null | unknown;
-  tx_type: string;
-  event_type: string | null;
+  counterparty?: string | null | unknown;
+  tx_type?: string;
+  event_type?: string | null;
   problem_id?: string | null;
   detail?: unknown;
 }
