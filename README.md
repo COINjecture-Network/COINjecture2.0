@@ -611,7 +611,7 @@ docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d -
 
 If sync **repeatedly stalls** in the same height band with fork / “missing block” warnings in `docker logs coinject-bootnode`, try a **single chain database** on that host: bring up only **`bootnode`** and **`api-server`** (omit `node1` / `node2`) with the same overlay — one volume (`bootnode-data`), one P2P view — then widen the stack once caught up.
 
-Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Optional watch loop from your laptop: [`scripts/deployment/watch-sync-gap.sh`](scripts/deployment/watch-sync-gap.sh) (set `CANONICAL_RPC` / `FOLLOWER_RPC` or pass two URLs; `ONE_SHOT=1` for a single sample). Then **re-enable mining** (same volumes — do not pass `-v` on `down` here):
+Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Optional watch loop from your laptop: [`scripts/deployment/watch-sync-gap.sh`](scripts/deployment/watch-sync-gap.sh) (set `CANONICAL_RPC` / `FOLLOWER_RPC` or pass two URLs; `ONE_SHOT=1` for a single sample). To find the first height where **`prev_hash`** differs between two RPC URLs, use [`scripts/compare-fork-blocks.sh`](scripts/compare-fork-blocks.sh). Then **re-enable mining** (same volumes — do not pass `-v` on `down` here):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml down

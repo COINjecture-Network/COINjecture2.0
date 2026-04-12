@@ -263,7 +263,7 @@ impl CoinjectNode {
                                             // Backfill multiple earlier windows per cycle so complete-fork
                                             // validation can reach a sufficiently anchored competing branch
                                             // without waiting for one stalled validation round per chunk.
-                                            const MAX_RECOVERY_WINDOWS_PER_CYCLE: u64 = 4;
+                                            const MAX_RECOVERY_WINDOWS_PER_CYCLE: u64 = 32;
                                             let mut recovery_cursor = ancestor_probe_height;
 
                                             for recovery_step in 0..MAX_RECOVERY_WINDOWS_PER_CYCLE {

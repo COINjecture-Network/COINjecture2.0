@@ -1331,6 +1331,31 @@ impl CoinjectNode {
                                 &peer_consensus_clone,
                             )
                             .await;
+
+                            // After reorg attempt, schedule a delayed sync continuation so we re-request
+                            // blocks instead of waiting only for the next periodic tick. Use the max of
+                            // tracker height and this batch's highest block so we still request when
+                            // peer_height is briefly stale. The delay lets in-flight reorg work finish
+                            // and avoids tight-looping the bootnode rate limiter.
+                            let effective_peer_tip = peer_height.max(highest_received);
+                            if effective_peer_tip > current_height {
+                                let delayed_from = current_height + 1;
+                                let delayed_to =
+                                    effective_peer_tip.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
+                                if delayed_from <= delayed_to {
+                                    let cpp_tx = cpp_network_cmd_tx_for_events.clone();
+                                    let peer_id_delayed = peer_id;
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(Duration::from_secs(5)).await;
+                                        let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+                                            peer_id: peer_id_delayed,
+                                            from_height: delayed_from,
+                                            to_height: delayed_to,
+                                            request_id: rand::random(),
+                                        });
+                                    });
+                                }
+                            }
                         }
 
                         if peer_height > current_height {
@@ -2073,7 +2098,7 @@ impl CoinjectNode {
         // CPP network handles status updates internally
         // TODO: Re-enable with CPP network status broadcasting
 
-        // Spawn periodic reorganization check task (every 60 seconds)
+        // Spawn periodic reorganization check task (every 15 seconds)
         let chain_periodic = Arc::clone(&self.chain);
         let state_periodic = Arc::clone(&self.state);
         let timelock_periodic = Arc::clone(&self.timelock_state);
@@ -2089,7 +2114,7 @@ impl CoinjectNode {
         let peer_consensus_periodic = Arc::clone(&peer_consensus);
 
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(60)); // Check every minute
+            let mut interval = time::interval(Duration::from_secs(15));
             loop {
                 interval.tick().await;
                 debug!("periodic reorganization check triggered");
