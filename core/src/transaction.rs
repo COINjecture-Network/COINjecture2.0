@@ -363,6 +363,20 @@ impl Transaction {
             _ => None,
         }
     }
+
+    /// Minimum fee required for this transaction to enter a pool with default `pool_min`.
+    /// Simple transfers and most marketplace ops are free; posting a new bounty uses `pool_min`.
+    #[must_use]
+    pub fn required_minimum_fee(&self, pool_min: Balance) -> Balance {
+        match self {
+            Transaction::Transfer(_) => 0,
+            Transaction::Marketplace(m) => match &m.operation {
+                MarketplaceOperation::SubmitProblem { .. } => pool_min,
+                _ => 0,
+            },
+            _ => pool_min,
+        }
+    }
 }
 
 impl TransferTransaction {
@@ -1079,8 +1093,15 @@ impl MarketplaceTransaction {
             return false;
         }
 
-        // 3. Fee must be valid
-        if crate::validation::validate_fee(self.fee).is_err() {
+        // 3. Fee rules: bounty posts pay at least MIN_FEE_BOUNTY_SUBMISSION; other marketplace ops may be free.
+        let fee_ok = match &self.operation {
+            MarketplaceOperation::SubmitProblem { .. } => {
+                self.fee >= crate::validation::MIN_FEE_BOUNTY_SUBMISSION
+                    && self.fee <= crate::validation::MAX_AMOUNT
+            }
+            _ => crate::validation::validate_fee_allow_zero(self.fee).is_ok(),
+        };
+        if !fee_ok {
             return false;
         }
 
@@ -1150,6 +1171,16 @@ mod tests {
 
         assert!(tx.verify_signature());
         assert!(tx.is_valid());
+    }
+
+    #[test]
+    fn test_transfer_zero_fee_valid() {
+        let keypair = KeyPair::generate();
+        let from = keypair.address();
+        let to = Address::from_bytes([1u8; 32]);
+        let tx = Transaction::new_transfer(from, to, 1000, 0, 1, &keypair);
+        assert!(tx.is_valid());
+        assert_eq!(tx.required_minimum_fee(1000), 0);
     }
 
     #[test]

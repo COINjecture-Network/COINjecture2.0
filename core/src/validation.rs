@@ -23,8 +23,12 @@ use std::path::Path;
 /// Maximum amount in a single field (half of u128::MAX prevents amount+fee overflow)
 pub const MAX_AMOUNT: Balance = u128::MAX / 2;
 
-/// Minimum transaction fee (non-zero prevents spam)
+/// Minimum transaction fee for types that still charge a network fee (e.g. time-locks).
 pub const MIN_FEE: Balance = 1;
+
+/// Minimum fee for posting a new marketplace bounty (`SubmitProblem`).
+/// Keep aligned with default `coinject_mempool::PoolConfig::min_fee` for that path.
+pub const MIN_FEE_BOUNTY_SUBMISSION: Balance = 1000;
 
 /// Maximum transaction data payload (64 KB)
 pub const MAX_TX_DATA_SIZE: usize = 64 * 1024;
@@ -175,6 +179,15 @@ pub fn validate_fee(fee: Balance) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Fee may be zero (e.g. simple transfers); must not exceed [`MAX_AMOUNT`].
+#[inline]
+pub fn validate_fee_allow_zero(fee: Balance) -> Result<(), ValidationError> {
+    if fee > MAX_AMOUNT {
+        return Err(ValidationError::AmountOverflow(fee));
+    }
+    Ok(())
+}
+
 /// Overflow-safe addition for Balance values.
 #[inline]
 pub fn checked_add(a: Balance, b: Balance) -> Result<Balance, ValidationError> {
@@ -204,9 +217,14 @@ pub fn validate_amount_and_fee(amount: Balance, fee: Balance) -> Result<(), Vali
 // Transaction field validation
 // =============================================================================
 
-/// Validate Transfer transaction fields.
+/// Validate Transfer transaction fields (amount > 0; fee may be zero).
 pub fn validate_transfer_fields(amount: Balance, fee: Balance) -> Result<(), ValidationError> {
-    validate_amount_and_fee(amount, fee)
+    validate_amount(amount)?;
+    validate_fee_allow_zero(fee)?;
+    amount
+        .checked_add(fee)
+        .ok_or(ValidationError::AmountPlusFeeOverflow { amount, fee })?;
+    Ok(())
 }
 
 /// Validate TimeLock transaction fields.
@@ -562,6 +580,17 @@ mod tests {
     #[test]
     fn fee_minimum_valid() {
         assert!(validate_fee(MIN_FEE).is_ok());
+    }
+
+    #[test]
+    fn fee_allow_zero_ok() {
+        assert!(validate_fee_allow_zero(0).is_ok());
+        assert!(validate_fee_allow_zero(MAX_AMOUNT).is_ok());
+    }
+
+    #[test]
+    fn transfer_fields_zero_fee_ok() {
+        assert!(validate_transfer_fields(1_000, 0).is_ok());
     }
 
     #[test]

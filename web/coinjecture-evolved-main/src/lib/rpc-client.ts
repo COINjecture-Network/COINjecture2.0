@@ -538,9 +538,9 @@ export class RpcClient {
       }
     }
 
-    // All URLs failed
+    // All URLs failed (includes JSON-RPC errors like invalid tx, not only network failures)
     const errorMessages = errors.map(e => e.message).join('; ');
-    throw new Error(`Cannot connect to any RPC server. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
+    throw new Error(`All RPC endpoints failed. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
   }
 
   /**
@@ -593,7 +593,7 @@ export class RpcClient {
 
     if (successful.length === 0) {
       const errorMessages = results.map(r => (r as any).error?.message || 'Unknown error').join('; ');
-      throw new Error(`Cannot connect to any RPC server. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
+      throw new Error(`All RPC endpoints failed. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
     }
 
     // Use selector if provided, otherwise return first successful result

@@ -23,6 +23,20 @@ fn make_tx(amount: u128, fee: u128, nonce: u64) -> Transaction {
     )
 }
 
+/// Time-lock still uses the pool minimum fee (unlike transfers).
+fn make_timelock_tx(amount: u128, fee: u128, nonce: u64) -> Transaction {
+    let kp = KeyPair::generate();
+    Transaction::new_timelock(
+        kp.address(),
+        Address::from_bytes([0xAB; 32]),
+        amount,
+        i64::MAX / 4,
+        fee,
+        nonce,
+        &kp,
+    )
+}
+
 /// Create a pool with a small min_fee for most tests.
 fn small_pool() -> TransactionPool {
     TransactionPool::with_config(PoolConfig {
@@ -132,9 +146,21 @@ fn test_fee_below_minimum_rejected() {
         max_size_bytes: 10 * 1024 * 1024,
     };
     let mut pool = TransactionPool::with_config(pool_config);
-    let tx = make_tx(5_000, 999, 1); // fee 999 < min_fee 10_000
+    // Transfers may be zero-fee; use a time-lock which still requires pool min fee.
+    let tx = make_timelock_tx(5_000, 999, 1); // fee 999 < min_fee 10_000
     let err = pool.add(tx).unwrap_err();
     assert_eq!(err, PoolError::FeeTooLow);
+}
+
+#[test]
+fn test_transfer_zero_fee_accepted() {
+    let mut pool = small_pool();
+    let tx = make_tx(5_000, 0, 1);
+    assert!(
+        pool.add(tx).is_ok(),
+        "Signed transfers with zero fee must be accepted"
+    );
+    assert_eq!(pool.len(), 1);
 }
 
 #[test]

@@ -17,6 +17,18 @@ import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
+/** Matches default mempool `min_fee` on nodes that have not enabled zero-fee transfers yet. */
+const TRANSFER_FEE_FALLBACK_BEANS = 1000;
+
+function isPoolFeeTooLowMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("fee below minimum") ||
+    m.includes("feetoolow") ||
+    m.includes("transaction fee below")
+  );
+}
+
 export default function WalletPage() {
   const { accounts, selectedAccount, setSelectedAccount, createAccount, importAccount, deleteAccount } = useWallet();
   const [showNewAccount, setShowNewAccount] = useState(false);
@@ -568,17 +580,37 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
     mutationFn: async () => {
       if (!accountInfo) throw new Error("Account info not loaded");
 
-      const signedTx = createSignedTransferTransaction(
-        keyPair.address,
+      const amountNum = parseInt(amount, 10);
+      const { address: from, privateKey, publicKey } = keyPair;
+      const { nonce } = accountInfo;
+
+      let signedTx = createSignedTransferTransaction(
+        from,
         recipient,
-        parseInt(amount),
+        amountNum,
         0,
-        accountInfo.nonce,
-        keyPair.privateKey,
-        keyPair.publicKey
+        nonce,
+        privateKey,
+        publicKey
       );
 
-      return rpcClient.submitTransaction(signedTx);
+      try {
+        return await rpcClient.submitTransaction(signedTx);
+      } catch (firstErr) {
+        const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+        if (!isPoolFeeTooLowMessage(msg)) throw firstErr;
+
+        signedTx = createSignedTransferTransaction(
+          from,
+          recipient,
+          amountNum,
+          TRANSFER_FEE_FALLBACK_BEANS,
+          nonce,
+          privateKey,
+          publicKey
+        );
+        return await rpcClient.submitTransaction(signedTx);
+      }
     },
     onSuccess: (txHash) => {
       toast.success(`Transaction submitted! Hash: ${txHash.slice(0, 16)}...`);
@@ -609,8 +641,13 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
       toast.error("Invalid recipient address (must be 64-character hex)");
       return;
     }
-    if (!amount || parseInt(amount) <= 0) {
+    const amountNum = parseInt(amount, 10);
+    if (!amount || amountNum <= 0) {
       toast.error("Invalid amount");
+      return;
+    }
+    if (accountInfo.balance < amountNum) {
+      toast.error("Insufficient balance for this amount");
       return;
     }
     sendMutation.mutate();
@@ -628,7 +665,9 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
         <DialogHeader>
           <DialogTitle>Send Transaction</DialogTitle>
           <DialogDescription>
-            Send BEANS tokens from {accountName}
+            Send BEANS tokens from {accountName}. Updated networks accept zero-fee transfers; public nodes may still
+            require a small mempool minimum (up to {TRANSFER_FEE_FALLBACK_BEANS.toLocaleString()} BEANS), applied
+            automatically if needed. Posting a marketplace bounty has its own fee on the bounty form.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">

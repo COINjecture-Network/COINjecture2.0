@@ -16,6 +16,7 @@ import { useWallet } from "@/contexts/WalletContext";
 
 /** Must match `STORAGE_KEY` in `NpPlayground.tsx` (Solver Lab → Bounty draft). */
 const SOLVER_LAB_BOUNTY_KEY = "solverLabBountyPayload";
+/** Must match on-chain `MIN_FEE_BOUNTY_SUBMISSION` (see `core/src/validation.rs`). */
 const TRANSACTION_FEE = 1000;
 
 type ConfirmedSubmission = {

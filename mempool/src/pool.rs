@@ -48,7 +48,8 @@ pub struct PoolConfig {
     pub max_transactions: usize,
     /// Maximum total size in bytes
     pub max_size_bytes: usize,
-    /// Minimum fee per transaction
+    /// Minimum fee for transaction types that charge one (see `Transaction::required_minimum_fee`).
+    /// Transfers are exempt (zero fee). Bounty posts use this minimum.
     pub min_fee: Balance,
 }
 
@@ -139,8 +140,9 @@ impl TransactionPool {
             return Err(PoolError::DuplicateTransaction);
         }
 
-        // Validate fee
-        if tx.fee() < self.config.min_fee {
+        // Validate fee (transfers / most marketplace ops may be zero-fee)
+        let required = tx.required_minimum_fee(self.config.min_fee);
+        if tx.fee() < required {
             self.stats.transactions_rejected += 1;
             return Err(PoolError::FeeTooLow);
         }
