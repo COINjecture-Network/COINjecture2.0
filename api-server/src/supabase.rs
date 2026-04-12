@@ -597,6 +597,18 @@ impl SupabaseClient {
         self.postgrest_get(path).await
     }
 
+    /// Indexed transactions signed by `address` (primarily outgoing transfers from that wallet).
+    pub async fn get_wallet_transactions(
+        &self,
+        address: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let path = format!(
+            "block_transactions?signer=eq.{address}&order=block_height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
     /// UPSERT a row (for sync_state, etc.).
     pub async fn upsert_row(&self, table: &str, body: Value) -> Result<Value, SupabaseError> {
         let key = self.write_key()?;

@@ -7,6 +7,7 @@ pub mod health;
 pub mod jsonrpc_proxy;
 pub mod marketplace;
 pub mod peers;
+pub mod wallet;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
@@ -64,6 +65,7 @@ pub fn build_routes(state: AppState) -> Router {
             post(email_auth::verify_magic_link),
         )
         .route("/auth/email/bind-wallet", post(email_auth::bind_wallet))
+        .route("/wallet/transactions", get(wallet::get_transactions))
         // Marketplace
         .route("/marketplace/pairs", get(marketplace::get_pairs))
         .route(

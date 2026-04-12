@@ -1,4 +1,5 @@
 import { Github, Twitter, MessageCircle } from "lucide-react";
+import { BrandLogo } from "@/components/BrandLogo";
 
 export const Footer = () => {
   return (
@@ -6,7 +7,10 @@ export const Footer = () => {
       <div className="container mx-auto px-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
           <div>
-            <div className="text-xl font-brand font-extrabold gradient-text mb-4 tracking-tight">COINjecture</div>
+            <div className="flex items-center gap-3 mb-4">
+              <BrandLogo size="md" />
+              <div className="text-xl font-brand font-extrabold gradient-text tracking-tight">COINjecture</div>
+            </div>
             <p className="text-sm text-muted-foreground">
               Utility-based computational work blockchain powered by $BEANS
             </p>

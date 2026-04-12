@@ -1,14 +1,17 @@
 import { Navigation } from "@/components/Navigation";
 import { Footer } from "@/components/Footer";
+import { BrandLogo } from "@/components/BrandLogo";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useWallet } from "@/contexts/WalletContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { rpcClient } from "@/lib/rpc-client";
-import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check } from "lucide-react";
+import { getWalletTransactions } from "@/lib/api/client";
+import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import { toast } from "sonner";
@@ -83,7 +86,9 @@ export default function WalletPage() {
         <div className="max-w-6xl mx-auto">
           <div className="market-surface-strong p-6 md:p-8 mb-8">
             <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
-              <div>
+              <div className="flex flex-col sm:flex-row sm:items-start gap-5">
+                <BrandLogo size="lg" className="hidden sm:inline-flex" />
+                <div className="min-w-0 flex-1">
                 <div className="signal-kicker">Miner activation</div>
                 <h1 className="text-4xl font-bold mt-2">Wallet</h1>
                 <p className="text-muted-foreground mt-3 max-w-2xl">
@@ -97,6 +102,7 @@ export default function WalletPage() {
                   <span>Open Solver Lab</span>
                   <span>•</span>
                   <span>Submit block</span>
+                </div>
                 </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -326,8 +332,52 @@ interface AccountDetailsProps {
   onSend: () => void;
 }
 
+function TransactionHistory({ address }: { address: string }) {
+  const { data: txs, isLoading, isError } = useQuery({
+    queryKey: ['walletTxs', address],
+    queryFn: () => getWalletTransactions(address),
+    refetchInterval: 15_000,
+    retry: 1,
+  });
+
+  if (isLoading) {
+    return <div className="text-sm text-muted-foreground">Loading history...</div>;
+  }
+  if (isError) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        Could not load transaction history (check API / Supabase).
+      </div>
+    );
+  }
+  if (!txs?.length) {
+    return <div className="text-sm text-muted-foreground">No transactions yet</div>;
+  }
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-muted-foreground">Recent activity</Label>
+      {txs.map((tx) => (
+        <div
+          key={tx.tx_hash}
+          className="flex items-center justify-between gap-2 text-sm p-2 rounded-md bg-muted/30"
+        >
+          <div className="min-w-0">
+            <span className="font-mono text-xs">{tx.tx_hash.slice(0, 12)}...</span>
+            <span className="ml-2 text-muted-foreground capitalize">{tx.tx_type}</span>
+          </div>
+          <span className="text-muted-foreground text-xs shrink-0">
+            Block {typeof tx.block_height === "number" ? tx.block_height : String(tx.block_height ?? "")}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AccountDetails({ accountName, keyPair, onSend }: AccountDetailsProps) {
   const [showPrivateKey, setShowPrivateKey] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -344,6 +394,7 @@ function AccountDetails({ accountName, keyPair, onSend }: AccountDetailsProps) {
         toast.success(`${response.message}`);
         queryClient.invalidateQueries({ queryKey: ['accountInfo', keyPair.address] });
         queryClient.invalidateQueries({ queryKey: ['balance', keyPair.address] });
+        queryClient.invalidateQueries({ queryKey: ['walletTxs', keyPair.address] });
       } else {
         toast.error(response.message);
       }
@@ -377,89 +428,117 @@ function AccountDetails({ accountName, keyPair, onSend }: AccountDetailsProps) {
           <div className="font-mono text-sm mt-1">{accountInfo?.nonce ?? 'Loading...'}</div>
         </div>
 
-        <div>
-          <Label className="text-muted-foreground">Address</Label>
-          <div className="flex items-center gap-2 mt-1">
-            <code className="flex-1 text-xs font-mono break-all">{keyPair.address}</code>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => copyToClipboard(keyPair.address, 'address')}
-            >
-              {copied === 'address' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
-        </div>
-
-        <div>
-          <Label className="text-muted-foreground">Public Key</Label>
-          <div className="flex items-center gap-2 mt-1">
-            <code className="flex-1 text-xs font-mono break-all">{keyPair.publicKey}</code>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => copyToClipboard(keyPair.publicKey, 'public')}
-            >
-              {copied === 'public' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <Label className="text-muted-foreground">Private Key</Label>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowPrivateKey(!showPrivateKey)}
-            >
-              {showPrivateKey ? (
-                <>
-                  <EyeOff className="h-4 w-4 mr-2" />
-                  Hide
-                </>
-              ) : (
-                <>
-                  <Eye className="h-4 w-4 mr-2" />
-                  Show
-                </>
-              )}
-            </Button>
-          </div>
-          {showPrivateKey ? (
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs font-mono break-all bg-destructive/10 p-2 rounded">
-                {keyPair.privateKey}
+        <div className="space-y-6 pt-4 border-t border-border/60">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-base font-semibold">Receive BEANS</Label>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Share your address to receive BEANS from others
+            </p>
+            <div className="flex items-start gap-2 p-3 bg-muted/50 rounded-lg">
+              <code className="flex-1 text-xs font-mono break-all leading-relaxed min-w-0">
+                {keyPair.address}
               </code>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                onClick={() => copyToClipboard(keyPair.privateKey, 'private')}
+                className="shrink-0"
+                onClick={() => copyToClipboard(keyPair.address, 'receive-address')}
               >
-                {copied === 'private' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copied === 'receive-address' ? (
+                  <Check className="h-4 w-4" />
+                ) : (
+                  <Copy className="h-4 w-4" />
+                )}
               </Button>
             </div>
-          ) : (
-            <code className="text-xs font-mono">••••••••••••••••••••••••••••••••</code>
-          )}
-          {showPrivateKey && (
-            <p className="text-xs text-destructive mt-2">⚠️ Never share your private key!</p>
-          )}
+          </div>
+
+          <div className="flex gap-2">
+            <Button onClick={onSend} className="flex-1">
+              <Send className="h-4 w-4 mr-2" />
+              Send BEANS
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => faucetMutation.mutate()}
+              disabled={faucetMutation.isPending}
+            >
+              💧 {faucetMutation.isPending ? 'Requesting...' : 'Faucet'}
+            </Button>
+          </div>
         </div>
 
-        <div className="flex gap-2 pt-4">
-          <Button onClick={onSend} className="flex-1">
-            <Send className="h-4 w-4 mr-2" />
-            Send Transaction
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => faucetMutation.mutate()}
-            disabled={faucetMutation.isPending}
-          >
-            💧 {faucetMutation.isPending ? 'Requesting...' : 'Faucet'}
-          </Button>
+        <div className="pt-2">
+          <TransactionHistory address={keyPair.address} />
         </div>
+
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" className="w-full justify-between px-0 text-muted-foreground hover:text-foreground">
+              <span className="text-sm font-medium">Advanced — keys and raw address</span>
+              <ChevronDown
+                className={`h-4 w-4 shrink-0 transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
+              />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-4 pt-2">
+            <div>
+              <Label className="text-muted-foreground">Address</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <code className="flex-1 text-xs font-mono break-all">{keyPair.address}</code>
+                <Button variant="ghost" size="sm" onClick={() => copyToClipboard(keyPair.address, 'address')}>
+                  {copied === 'address' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-muted-foreground">Public Key</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <code className="flex-1 text-xs font-mono break-all">{keyPair.publicKey}</code>
+                <Button variant="ghost" size="sm" onClick={() => copyToClipboard(keyPair.publicKey, 'public')}>
+                  {copied === 'public' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label className="text-muted-foreground">Private Key</Label>
+                <Button variant="ghost" size="sm" onClick={() => setShowPrivateKey(!showPrivateKey)}>
+                  {showPrivateKey ? (
+                    <>
+                      <EyeOff className="h-4 w-4 mr-2" />
+                      Hide
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-4 w-4 mr-2" />
+                      Show
+                    </>
+                  )}
+                </Button>
+              </div>
+              {showPrivateKey ? (
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs font-mono break-all bg-destructive/10 p-2 rounded">
+                    {keyPair.privateKey}
+                  </code>
+                  <Button variant="ghost" size="sm" onClick={() => copyToClipboard(keyPair.privateKey, 'private')}>
+                    {copied === 'private' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  </Button>
+                </div>
+              ) : (
+                <code className="text-xs font-mono">••••••••••••••••••••••••••••••••</code>
+              )}
+              {showPrivateKey && (
+                <p className="text-xs text-destructive mt-2">⚠️ Never share your private key!</p>
+              )}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </div>
   );
@@ -477,7 +556,11 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
   const [fee, setFee] = useState("1500");
   const queryClient = useQueryClient();
 
-  const { data: accountInfo } = useQuery({
+  const {
+    data: accountInfo,
+    isPending: accountInfoPending,
+    isError: accountInfoError,
+  } = useQuery({
     queryKey: ['accountInfo', keyPair.address],
     queryFn: () => rpcClient.getAccountInfo(keyPair.address),
   });
@@ -485,7 +568,7 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
   const sendMutation = useMutation({
     mutationFn: async () => {
       if (!accountInfo) throw new Error("Account info not loaded");
-      
+
       const signedTx = createSignedTransferTransaction(
         keyPair.address,
         recipient,
@@ -502,6 +585,7 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
       toast.success(`Transaction submitted! Hash: ${txHash.slice(0, 16)}...`);
       queryClient.invalidateQueries({ queryKey: ['accountInfo', keyPair.address] });
       queryClient.invalidateQueries({ queryKey: ['balance', keyPair.address] });
+      queryClient.invalidateQueries({ queryKey: ['walletTxs', keyPair.address] });
       onClose();
     },
     onError: (error: any) => {
@@ -509,7 +593,19 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
     },
   });
 
+  const accountInfoLoading = accountInfoPending && !accountInfo;
+  const sendDisabled =
+    sendMutation.isPending || !accountInfo || accountInfoLoading || accountInfoError;
+
   const handleSubmit = () => {
+    if (!accountInfo) {
+      if (accountInfoError) {
+        toast.error("Could not load account info. Check your connection and try again.");
+      } else {
+        toast.error("Account info is still loading — please wait a moment.");
+      }
+      return;
+    }
     if (!recipient.match(/^[0-9a-f]{64}$/i)) {
       toast.error("Invalid recipient address (must be 64-character hex)");
       return;
@@ -520,6 +616,12 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
     }
     sendMutation.mutate();
   };
+
+  const sendLabel = sendMutation.isPending
+    ? "Sending..."
+    : accountInfoLoading
+      ? "Loading..."
+      : "Send";
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
@@ -563,14 +665,17 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
               />
             </div>
           </div>
+          {accountInfoError && (
+            <p className="text-sm text-destructive">Failed to load account info. Close and try again.</p>
+          )}
           {accountInfo && (
             <div className="text-sm text-muted-foreground">
               Balance: {accountInfo.balance.toLocaleString()} BEANS | Nonce: {accountInfo.nonce}
             </div>
           )}
           <div className="flex gap-2">
-            <Button onClick={handleSubmit} disabled={sendMutation.isPending} className="flex-1">
-              {sendMutation.isPending ? "Sending..." : "Send"}
+            <Button onClick={handleSubmit} disabled={sendDisabled} className="flex-1">
+              {sendLabel}
             </Button>
             <Button variant="outline" onClick={onClose}>
               Cancel

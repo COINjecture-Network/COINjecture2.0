@@ -29,4 +29,24 @@ export async function apiFetch<T = any>(
   return res.json();
 }
 
+export interface WalletTransaction {
+  tx_hash: string;
+  tx_type: string;
+  block_height: number;
+  signer: string | null;
+  payload: unknown;
+}
+
+export async function getWalletTransactions(
+  address: string,
+  limit = 20,
+): Promise<WalletTransaction[]> {
+  const q = new URLSearchParams({ address, limit: String(limit) });
+  const raw = await apiFetch<unknown>(`/wallet/transactions?${q.toString()}`);
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw as WalletTransaction[];
+}
+
 export { API_BASE };

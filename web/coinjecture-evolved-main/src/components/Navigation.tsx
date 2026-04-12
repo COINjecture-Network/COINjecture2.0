@@ -2,8 +2,11 @@ import { NavLink } from "@/components/NavLink";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { BrandLogo } from "@/components/BrandLogo";
 import { Menu, Wallet, Pickaxe, BadgeDollarSign, ChevronDown } from "lucide-react";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { rpcClient } from "@/lib/rpc-client";
 import { useWallet } from "@/contexts/WalletContext";
 import { AuthSettingsButton, UserMenu } from "@/lib/auth";
 import {
@@ -22,11 +25,21 @@ export const Navigation = () => {
   const location = useLocation();
   const { accounts, selectedAccount, setSelectedAccount } = useWallet();
   const selectedKeyPair = selectedAccount ? accounts[selectedAccount] : null;
+
+  const { data: navBalance } = useQuery({
+    queryKey: ["balance", selectedKeyPair?.address],
+    queryFn: () => rpcClient.getBalance(selectedKeyPair!.address),
+    enabled: Boolean(selectedKeyPair),
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
+
   const desktopNavItems = [
     { to: "/solver-lab", label: "Solver Lab" },
     { to: "/api", label: "API Docs" },
     { to: "/metrics", label: "Metrics" },
     { to: "/marketplace", label: "Marketplace" },
+    { to: "/wallet", label: "Wallet" },
     { to: "/whitepaper", label: "Whitepaper" },
   ];
   const activeDesktopNavItem = desktopNavItems.find(({ to }) => location.pathname === to);
@@ -36,6 +49,7 @@ export const Navigation = () => {
       <div className="container mx-auto px-4 sm:px-6 py-3 sm:py-4">
         <div className="flex items-center justify-between gap-2 min-w-0">
           <NavLink to="/" className="flex min-w-0 shrink items-center gap-1.5 sm:gap-2">
+            <BrandLogo size="sm" className="hidden sm:inline-flex" />
             <div className="text-lg sm:text-xl md:text-2xl font-brand font-extrabold text-primary tracking-tight truncate">
               COINjecture
             </div>
@@ -92,9 +106,16 @@ export const Navigation = () => {
             {selectedKeyPair ? (
               <DropdownMenu modal={false}>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="default" size="sm" className="glow-hover gentle-animation">
-                    <Wallet className="h-4 w-4 mr-2" />
-                    {selectedAccount}
+                  <Button variant="default" size="sm" className="glow-hover gentle-animation max-w-[14rem]">
+                    <Wallet className="h-4 w-4 mr-2 shrink-0" />
+                    <span className="flex min-w-0 flex-col items-start leading-tight text-left">
+                      <span className="truncate w-full">{selectedAccount}</span>
+                      {navBalance !== undefined && (
+                        <span className="text-[10px] font-normal opacity-80 tabular-nums">
+                          {navBalance.toLocaleString()} BEANS
+                        </span>
+                      )}
+                    </span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" side="bottom" sideOffset={8}>
@@ -198,6 +219,13 @@ export const Navigation = () => {
               Marketplace
             </NavLink>
             <NavLink
+              to="/wallet"
+              className="rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              Wallet
+            </NavLink>
+            <NavLink
               to="/whitepaper"
               className="rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => setMobileMenuOpen(false)}
@@ -213,9 +241,16 @@ export const Navigation = () => {
             {selectedKeyPair ? (
               <DropdownMenu modal={false}>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="default" size="sm" className="w-full justify-start gentle-animation">
+                  <Button variant="default" size="sm" className="w-full justify-start gentle-animation min-w-0">
                     <Wallet className="h-4 w-4 mr-2 shrink-0" />
-                    <span className="truncate">{selectedAccount}</span>
+                    <span className="flex min-w-0 flex-col items-start leading-tight text-left">
+                      <span className="truncate w-full">{selectedAccount}</span>
+                      {navBalance !== undefined && (
+                        <span className="text-[10px] font-normal opacity-80 tabular-nums">
+                          {navBalance.toLocaleString()} BEANS
+                        </span>
+                      )}
+                    </span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" side="top" sideOffset={8} className="min-w-[12rem]">
