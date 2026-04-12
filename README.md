@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/ci.yml)
 
-*Proof of Useful Work (PoUW) blockchain with autonomous NP-complete problem marketplace*
+*Proof of Useful Work (PoUW) blockchain with autonomous NP problem marketplace*
 
 </div>
 
