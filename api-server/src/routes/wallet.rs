@@ -66,13 +66,7 @@ pub async fn get_transactions(
         }
     };
 
-    let merged = wallet_activity::merge_wallet_activity(
-        &addr,
-        limit,
-        signed,
-        incoming,
-        mined,
-        marketplace,
-    );
+    let merged =
+        wallet_activity::merge_wallet_activity(&addr, limit, signed, incoming, mined, marketplace);
     Ok(Json(merged))
 }
