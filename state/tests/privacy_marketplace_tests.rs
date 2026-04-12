@@ -266,8 +266,7 @@ fn test_reveal_public_problem_fails() {
         .expect("Failed to submit public problem");
 
     // Try to reveal a public problem (should fail)
-    let mut salt = [0u8; 32];
-    OsRng.fill_bytes(&mut salt);
+    let salt: [u8; 32] = rand::random();
     let reveal = ProblemReveal::new(problem, salt);
 
     let result = marketplace.reveal_problem(problem_id, reveal);
