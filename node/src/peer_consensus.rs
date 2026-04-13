@@ -88,6 +88,9 @@ pub struct ConsensusConfig {
     pub min_peers_for_mining: usize,
     /// How many blocks behind peers we can be and still mine
     pub sync_threshold_blocks: u64,
+    /// If our tip is more than this many blocks **above** the peer median, refuse to mine.
+    /// Prevents extending a local fork when the mesh agrees on a lower canonical tip.
+    pub max_ahead_of_peers_blocks: u64,
     /// Percentage of peers that must agree (0.0-1.0)
     pub consensus_threshold: f64,
     /// How long before a peer is considered stale
@@ -102,6 +105,9 @@ impl Default for ConsensusConfig {
             // Minimum 1 peer to mine (allows 2-node bootstrap)
             min_peers_for_mining: 1,
             sync_threshold_blocks: 10, // Within 10 blocks
+            // Allow normal propagation skew (we may be one or a few blocks ahead briefly).
+            // Anything larger vs peer median is almost certainly a fork / partition.
+            max_ahead_of_peers_blocks: 96,
             // ADAPTIVE CONSENSUS: Threshold adjusts based on peer count
             // BOOTSTRAP MODE (peers < 4): 50% - prioritizes liveness
             // SECURE MODE (peers >= 4): 80% - prioritizes safety (BFT)
@@ -172,6 +178,10 @@ impl PeerConsensus {
     /// Get sync threshold from config
     pub fn sync_threshold_blocks(&self) -> u64 {
         self.config.sync_threshold_blocks
+    }
+
+    pub fn max_ahead_of_peers_blocks(&self) -> u64 {
+        self.config.max_ahead_of_peers_blocks
     }
 
     /// Update a peer's state when we receive a StatusUpdate
@@ -368,6 +378,23 @@ impl PeerConsensus {
                 format!(
                     "Behind peers: {} blocks (our: {}, median: {})",
                     blocks_behind, our_height, median_height
+                ),
+            );
+        }
+
+        // Check 2b: Not far *ahead* of peer-reported tips (local fork / eclipse)
+        if median_height > 0
+            && our_height > median_height.saturating_add(self.config.max_ahead_of_peers_blocks)
+        {
+            let ahead = our_height - median_height;
+            return (
+                false,
+                format!(
+                    "Ahead of peers: {} blocks above median (our: {}, median: {}, max allowed: {}) — pause mining until reorg/sync",
+                    ahead,
+                    our_height,
+                    median_height,
+                    self.config.max_ahead_of_peers_blocks
                 ),
             );
         }
@@ -577,6 +604,11 @@ mod tests {
         let (should, reason) = consensus.should_mine(50).await;
         assert!(!should);
         assert!(reason.contains("Behind peers"));
+
+        // Peers at 100, we're far ahead on a local fork — should NOT mine
+        let (should, reason) = consensus.should_mine(250).await;
+        assert!(!should);
+        assert!(reason.contains("Ahead of peers"));
     }
 
     #[test]

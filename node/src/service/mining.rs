@@ -46,6 +46,7 @@ impl CoinjectNode {
             // STABLE_HEIGHT_THRESHOLD: Dimensionless count, but could be ETA-scaled
             // 3 checks ensures stability without excessive delay
             const STABLE_HEIGHT_THRESHOLD: u32 = 3; // Height must be stable for 3 checks (6 seconds)
+            let mut warned_no_peer_after_timeout = false;
 
             loop {
                 sync_wait_interval.tick().await;
@@ -112,12 +113,30 @@ impl CoinjectNode {
                 }
 
                 if sync_attempts >= MAX_SYNC_WAIT_ATTEMPTS {
-                    warn!(
-                        elapsed_secs = sync_attempts * 2,
-                        block_height = best_height,
-                        "sync wait timeout, starting mining anyway"
-                    );
-                    break;
+                    if current_peers == 0 {
+                        // Never start solo-mining after timeout: that produces a guaranteed private fork.
+                        if !warned_no_peer_after_timeout {
+                            warn!(
+                                elapsed_secs = sync_attempts * 2,
+                                block_height = best_height,
+                                "sync wait elapsed with zero peers; refusing to mine until at least one CPP peer connects (open :707 / check COINJECT_BOOTNODES)"
+                            );
+                            warned_no_peer_after_timeout = true;
+                        } else if sync_attempts % 75 == 0 {
+                            warn!(
+                                block_height = best_height,
+                                "still no CPP peers; mining remains disabled"
+                            );
+                        }
+                    } else {
+                        warn!(
+                            elapsed_secs = sync_attempts * 2,
+                            block_height = best_height,
+                            peer_count = current_peers,
+                            "sync wait timeout, starting mining anyway"
+                        );
+                        break;
+                    }
                 }
             }
         } // end of else block (non-dev mode peer sync)
