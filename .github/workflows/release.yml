@@ -97,6 +97,7 @@ jobs:
 
       - name: Build binaries (native)
         if: '!matrix.use_cross'
+        shell: bash
         run: |
           cargo build --release \
             --target ${{ matrix.target }} \
