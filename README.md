@@ -600,6 +600,8 @@ If **`best_height`** on a host stops increasing while peers are far ahead, inspe
 
 **Destructive wipe (guarded SSH script):** [`scripts/deployment/destructive-chain-resync-remote.sh`](scripts/deployment/destructive-chain-resync-remote.sh) — read the header for `DESTRUCTIVE_CHAIN_RESYNC_CONFIRM` and what is kept vs removed.
 
+**New DigitalOcean mesh peer (wipe + clone + sync-follower):** [`scripts/deployment/bootstrap-digitalocean-mesh-node.sh`](scripts/deployment/bootstrap-digitalocean-mesh-node.sh) — set `HOST`, `WIPE_CONFIRM=I_WIPE_DROPLET_CHAIN_DATA`, `MESH_BOOTNODES` (CPP `host:707` list), and either `DEPLOY_BOOTNODE_ONLY=1` or Supabase vars for `api-server`. Open inbound **707/tcp** on the droplet firewall.
+
 **Sync-only overlay (no mining):** [`docker-compose.sync-follower.yml`](docker-compose.sync-follower.yml) overrides `bootnode` / `node1` / `node2` / `node3` commands to drop `--mine` so nodes only validate and follow the network.
 
 **Prove the running container is not mining:** [`scripts/deployment/verify-follower-not-mining.sh`](scripts/deployment/verify-follower-not-mining.sh) — set `HOST=root@…` (SSH) or `VERIFY_LOCAL=1` on the server; optional `CONTAINERS="coinject-bootnode …"`. **Peer diversity:** add stable bootnode peers in `.env` / compose so `chain_getInfo.peer_count` is not stuck at 1. **CPU:** a larger VPS raises validation throughput; sync batch size is protocol-capped (see network CPP config), not a compose knob.
