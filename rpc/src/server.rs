@@ -736,10 +736,7 @@ impl RpcServerImpl {
                 }
             };
 
-        let solver = problem
-            .solver
-            .as_ref()
-            .map(|a| hex::encode(a.as_bytes()));
+        let solver = problem.solver.as_ref().map(|a| hex::encode(a.as_bytes()));
         let solution = problem.solution.clone();
 
         ProblemInfo {
