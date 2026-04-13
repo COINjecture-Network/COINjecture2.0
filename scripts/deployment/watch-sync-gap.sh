@@ -9,9 +9,10 @@
 #     SYNC_WATCH_INTERVAL=120 SYNC_GAP_OK=10 ./scripts/deployment/watch-sync-gap.sh
 #   ./scripts/deployment/watch-sync-gap.sh http://HOST1:9933/ http://HOST2:9933/
 #   ONE_SHOT=1 ./scripts/deployment/watch-sync-gap.sh   # print once and exit
+#   EXIT_WHEN_CAUGHT_UP=1 ./scripts/deployment/watch-sync-gap.sh   # exit 0 as soon as gap <= SYNC_GAP_OK (genesis ok)
 #
 # When gap <= SYNC_GAP_OK, the script prints a reminder to switch compose (see README).
-# Press Ctrl+C to stop.
+# Press Ctrl+C to stop (unless EXIT_WHEN_CAUGHT_UP exited already).
 #
 set -euo pipefail
 
@@ -20,6 +21,7 @@ FOLLOWER_RPC="${FOLLOWER_RPC:-http://76.13.101.67:9933/}"
 SYNC_WATCH_INTERVAL="${SYNC_WATCH_INTERVAL:-60}"
 SYNC_GAP_OK="${SYNC_GAP_OK:-10}"
 ONE_SHOT="${ONE_SHOT:-0}"
+EXIT_WHEN_CAUGHT_UP="${EXIT_WHEN_CAUGHT_UP:-0}"
 
 if [[ "${1:-}" ]]; then
   CANONICAL_RPC="$1"
@@ -72,6 +74,9 @@ while true; do
     echo "[$ts] canonical h=$hc peers=${pc:-?} | follower h=$hf peers=${pf:-?} | gap=$gap | genesis $gen_ok"
     if [[ "$gen_ok" == ok && "$gap" -le "$SYNC_GAP_OK" && "$gap" -ge 0 ]]; then
       echo ">>> Gap <= ${SYNC_GAP_OK}: switch to base compose without -v (see README \"Production deployment and chain health\")."
+      if [[ "$EXIT_WHEN_CAUGHT_UP" == 1 ]]; then
+        exit 0
+      fi
     fi
   fi
 
