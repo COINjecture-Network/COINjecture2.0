@@ -600,7 +600,7 @@ If **`best_height`** on a host stops increasing while peers are far ahead, inspe
 
 **Destructive wipe (guarded SSH script):** [`scripts/deployment/destructive-chain-resync-remote.sh`](scripts/deployment/destructive-chain-resync-remote.sh) — read the header for `DESTRUCTIVE_CHAIN_RESYNC_CONFIRM` and what is kept vs removed.
 
-**New DigitalOcean mesh peer (wipe + clone + sync-follower):** [`scripts/deployment/bootstrap-digitalocean-mesh-node.sh`](scripts/deployment/bootstrap-digitalocean-mesh-node.sh) — set `HOST`, `WIPE_CONFIRM=I_WIPE_DROPLET_CHAIN_DATA`, `MESH_BOOTNODES` (CPP `host:707` list), and either `DEPLOY_BOOTNODE_ONLY=1` or Supabase vars for `api-server`. Open inbound **707/tcp** on the droplet firewall.
+**New DigitalOcean mesh peer (wipe + clone + sync-follower):** [`scripts/deployment/bootstrap-digitalocean-mesh-node.sh`](scripts/deployment/bootstrap-digitalocean-mesh-node.sh) — set `HOST`, `WIPE_CONFIRM=I_WIPE_DROPLET_CHAIN_DATA`, `MESH_BOOTNODES` (CPP `host:707` list), and either `DEPLOY_BOOTNODE_ONLY=1` or Supabase vars for `api-server`. If SSH needs a specific key: `SSH_IDENTITY=$HOME/.ssh/id_ed25519`. Open inbound **707/tcp** on the droplet firewall.
 
 **Sync-only overlay (no mining):** [`docker-compose.sync-follower.yml`](docker-compose.sync-follower.yml) overrides `bootnode` / `node1` / `node2` / `node3` commands to drop `--mine` so nodes only validate and follow the network.
 

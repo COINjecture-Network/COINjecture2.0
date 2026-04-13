@@ -10,6 +10,7 @@
 #   export WIPE_CONFIRM=I_WIPE_DROPLET_CHAIN_DATA
 #   export MESH_BOOTNODES=193.203.164.13:707,76.13.101.67:707
 #   export DEPLOY_BOOTNODE_ONLY=1
+#   export SSH_IDENTITY="$HOME/.ssh/id_ed25519"   # private key that matches the key on the droplet
 #   ./scripts/deployment/bootstrap-digitalocean-mesh-node.sh
 #
 # With api-server:
@@ -28,6 +29,7 @@ GIT_REF="${GIT_REF:-main}"
 WIPE_CONFIRM="${WIPE_CONFIRM:-}"
 MESH_BOOTNODES="${MESH_BOOTNODES:-193.203.164.13:707,76.13.101.67:707}"
 DEPLOY_BOOTNODE_ONLY="${DEPLOY_BOOTNODE_ONLY:-0}"
+SSH_IDENTITY="${SSH_IDENTITY:-}"
 
 if [[ -z "$HOST" ]]; then
   echo "Set HOST=root@<droplet-ip>"
@@ -51,7 +53,16 @@ echo "HOST=$HOST REMOTE_PATH=$REMOTE_PATH"
 echo "MESH_BOOTNODES=$MESH_BOOTNODES DEPLOY_BOOTNODE_ONLY=$DEPLOY_BOOTNODE_ONLY"
 echo ""
 
-ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" \
+ssh_args=( -o BatchMode=yes -o StrictHostKeyChecking=accept-new )
+if [[ -n "$SSH_IDENTITY" ]]; then
+  if [[ ! -f "$SSH_IDENTITY" ]]; then
+    echo "SSH_IDENTITY file not found: $SSH_IDENTITY"
+    exit 1
+  fi
+  ssh_args+=( -i "$SSH_IDENTITY" -o IdentitiesOnly=yes )
+fi
+
+ssh "${ssh_args[@]}" "$HOST" \
   REMOTE_PATH="$REMOTE_PATH" \
   REPO_URL="$REPO_URL" \
   GIT_REF="$GIT_REF" \
