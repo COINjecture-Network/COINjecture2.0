@@ -1,0 +1,77 @@
+name: Create v0.2.0 Release
+
+on:
+  push:
+    branches:
+      - copilot/create-new-tag-release
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag-and-release:
+    name: Create v0.2.0 tag and GitHub Release
+    runs-on: ubuntu-latest
+    # Only run once — skip if the tag already exists
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          if git ls-remote --tags origin refs/tags/v0.2.0 | grep -q v0.2.0; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v0.2.0 already exists — skipping creation."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create v0.2.0 tag on latest successful main build
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: a92a10cee2fabeb17d7e891c3a00a3d47c5e6477
+        run: |
+          # Create lightweight tag via the GitHub API
+          gh api repos/${{ github.repository }}/git/refs \
+            --method POST \
+            --field ref="refs/tags/v0.2.0" \
+            --field sha="${TARGET_SHA}"
+          echo "Created tag v0.2.0 at ${TARGET_SHA}"
+
+      - name: Generate release notes
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          cat > release_notes.md << 'NOTES'
+          ## COINjecture v0.2.0
+
+          First versioned release of COINjecture 2.0 — a mathematics-backed peer-to-peer network.
+
+          ### Highlights
+
+          - **Cross-platform builds**: Linux (amd64/arm64), macOS (Intel/Apple Silicon), Windows (amd64)
+          - **Phase 18 — Consensus Work Score Rewrite**: log₂ bit-equivalent scoring with `ProblemRegistry`
+          - **Phase 12 — Web Wallet Security & UX**: AES-256-GCM encrypted storage, CSP headers, ARIA landmarks
+          - **Phase 8 — Unit Testing**: 665 tests passing across 29 binaries
+          - Mesh-friendly CPP security limits and bootnode environment merge
+          - `reqwest` switched to `rustls-tls` for cross-compilation support
+
+          ### What's Changed
+
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full history.
+
+          **Commit**: `a92a10cee2fabeb17d7e891c3a00a3d47c5e6477`
+          NOTES
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v0.2.0 \
+            --title "COINjecture v0.2.0" \
+            --notes-file release_notes.md \
+            --target a92a10cee2fabeb17d7e891c3a00a3d47c5e6477
+          echo "GitHub Release v0.2.0 created."
