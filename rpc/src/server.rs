@@ -110,6 +110,12 @@ pub struct ProblemInfo {
     pub problem_size: Option<usize>,
     pub is_revealed: bool,
     pub problem: Option<ProblemType>,
+    /// Set when the listing has been solved (hex-encoded solver address).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver: Option<String>,
+    /// Winning on-chain solution payload when status is solved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solution: Option<Solution>,
 }
 
 /// Private problem submission parameters
@@ -295,6 +301,14 @@ pub trait CoinjectRpc {
     /// Get problem by ID
     #[method(name = "marketplace_getProblem")]
     async fn get_problem(&self, problem_id: String) -> RpcResult<Option<ProblemInfo>>;
+
+    /// All bounties posted by this address (hex-encoded 32-byte pubkey hash).
+    #[method(name = "marketplace_getProblemsBySubmitter")]
+    async fn get_problems_by_submitter(&self, address: String) -> RpcResult<Vec<ProblemInfo>>;
+
+    /// Bounties this address solved (accepted winning solution).
+    #[method(name = "marketplace_getProblemsBySolver")]
+    async fn get_problems_by_solver(&self, address: String) -> RpcResult<Vec<ProblemInfo>>;
 
     /// Get marketplace statistics
     #[method(name = "marketplace_getStats")]
@@ -722,6 +736,12 @@ impl RpcServerImpl {
                 }
             };
 
+        let solver = problem
+            .solver
+            .as_ref()
+            .map(|a| hex::encode(a.as_bytes()));
+        let solution = problem.solution.clone();
+
         ProblemInfo {
             problem_id: hex::encode(problem.problem_id.as_bytes()),
             submitter: hex::encode(problem.submitter.as_bytes()),
@@ -735,6 +755,8 @@ impl RpcServerImpl {
             problem_size,
             is_revealed,
             problem: revealed_problem,
+            solver,
+            solution,
         }
     }
 }
@@ -943,6 +965,28 @@ impl CoinjectRpcServer for RpcServerImpl {
             .get_problem(&hash)
             .map_err(Self::internal_error)?;
         Ok(problem.map(|p| self.problem_to_info(&p)))
+    }
+
+    async fn get_problems_by_submitter(&self, address: String) -> RpcResult<Vec<ProblemInfo>> {
+        Self::validate_str_len(&address, 256, "address")?;
+        let addr = self.parse_address(&address)?;
+        let problems = self
+            .state
+            .marketplace_state
+            .list_problems_for_submitter(addr)
+            .map_err(Self::internal_error)?;
+        Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
+    }
+
+    async fn get_problems_by_solver(&self, address: String) -> RpcResult<Vec<ProblemInfo>> {
+        Self::validate_str_len(&address, 256, "address")?;
+        let addr = self.parse_address(&address)?;
+        let problems = self
+            .state
+            .marketplace_state
+            .list_problems_for_solver(addr)
+            .map_err(Self::internal_error)?;
+        Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
     }
 
     async fn get_marketplace_stats(&self) -> RpcResult<MarketplaceStats> {
