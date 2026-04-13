@@ -2,7 +2,7 @@
 # Wipe chain Docker state (optional) and deploy a COINjecture **mesh peer** on a fresh Ubuntu droplet.
 # Dials existing CPP peers via COINJECT_BOOTNODES (port **707**).
 #
-# Default stack: **bootnode + api-server** with **sync-follower** overlay (no --mine).
+# Default stack: **bootnode + api-server** with **sync-follower** overlay (mesh bootnodes + `--mine`).
 # api-server needs Supabase — use DEPLOY_BOOTNODE_ONLY=1 for **bootnode only** (pure P2P + RPC 9933).
 #
 # Usage:

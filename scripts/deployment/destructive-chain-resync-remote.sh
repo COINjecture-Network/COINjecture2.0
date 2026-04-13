@@ -11,8 +11,8 @@
 #   - Containers for the services you stop with `docker compose down -v`
 #
 # After wipe, nodes re-sync from P2P peers using your .env bootnode list (must reach canonical network).
-# Recommended: bring the stack up with docker-compose.sync-follower.yml (no --mine) until best_height
-# matches peers, then `compose down` and `up` with only docker-compose.yml to re-enable mining — see README.
+# Recommended: bring the stack up with docker-compose.sync-follower.yml until best_height matches peers
+# (mining is enabled; the node gates production until sync/consensus). See README.
 #
 # Usage (from your laptop; requires SSH key):
 #   export DESTRUCTIVE_CHAIN_RESYNC_CONFIRM=I_UNDERSTAND_WIPE_CHAIN_DATA

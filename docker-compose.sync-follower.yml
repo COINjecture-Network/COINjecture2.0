@@ -1,19 +1,20 @@
-# Overlay: run full nodes **without** `--mine` so they only validate + sync.
-# Use after a volume wipe (or on a new host) until `chain_getInfo.best_height` is
-# within ~10 blocks of your canonical peers — then remove this file from the
-# compose command line and `up -d` again with the base `docker-compose.yml` only
-# to re-enable mining.
+# Overlay: same mesh topology as the base file, but followers use `--bootnodes bootnode:707`
+# instead of only public mesh peers from `.env`. **Mining is enabled** (`--mine`) on every
+# node service; before the tip is caught up, the binary still waits for peers/sync and
+# `peer_consensus.should_mine()` gates actual block production — you do not need a second
+# compose switch to turn mining on after sync.
 #
-# Example (HOST2-style stack, no node3):
-#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode node1 node2 api-server
+# Example (mesh peer + api):
+#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode api-server
 #
-# Re-enable mining (same volumes, keep chain data):
-#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml down
-#   docker compose -f docker-compose.yml up -d --build bootnode node1 node2 api-server
+# Legacy cold-start (empty volume, avoid competing blocks until RPC tip is close): run this
+# overlay first, then temporarily scale mining down only if you use a custom no-mine overlay;
+# for normal operation, mining stays on as above.
 
 services:
   bootnode:
     command: >
+      --mine
       --data-dir /data
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
@@ -21,6 +22,7 @@ services:
 
   node1:
     command: >
+      --mine
       --data-dir /data
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
@@ -29,6 +31,7 @@ services:
 
   node2:
     command: >
+      --mine
       --data-dir /data
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
@@ -37,6 +40,7 @@ services:
 
   node3:
     command: >
+      --mine
       --data-dir /data
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090

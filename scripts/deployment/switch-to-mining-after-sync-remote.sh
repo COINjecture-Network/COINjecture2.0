@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Stop sync-follower overlay and start the base compose stack with mining enabled.
-# Intended to run **only after** the follower tip is within SYNC_GAP_OK blocks of canonical.
+# After the follower tip is within SYNC_GAP_OK blocks of canonical, refresh the stack with
+# the sync-follower overlay (mining is enabled there too; this script mainly enforces the gap check).
+# Intended to run **only after** the follower is caught up (unless SWITCH_TO_MINING_FORCE=1).
 #
 # Usage (from your laptop; requires SSH key):
 #   export HOST=root@76.13.101.67
@@ -70,13 +71,12 @@ else
   echo "WARN: SWITCH_TO_MINING_FORCE=1 — skipping RPC gap/genesis checks."
 fi
 
-echo ">>> $HOST: cd $REMOTE_PATH — down sync overlay (no -v), up mining stack: $MINING_SERVICES"
+echo ">>> $HOST: cd $REMOTE_PATH — compose up with overlay (mining + mesh bootnode): $MINING_SERVICES"
 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$HOST" bash -s <<EOF
 set -eux
 cd "$REMOTE_PATH"
-docker compose -f "$COMPOSE_FILE" -f "$SYNC_OVERLAY" down
-docker compose -f "$COMPOSE_FILE" up -d --build $MINING_SERVICES
-docker compose -f "$COMPOSE_FILE" ps
+docker compose -f "$COMPOSE_FILE" -f "$SYNC_OVERLAY" up -d --build $MINING_SERVICES
+docker compose -f "$COMPOSE_FILE" -f "$SYNC_OVERLAY" ps
 EOF
 
 echo "Done. Verify: curl ... chain_getInfo on follower; check docker logs for mining."
