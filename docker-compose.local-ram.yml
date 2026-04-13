@@ -1,0 +1,48 @@
+# Overlay for a **single public mesh peer** per host with extra local followers.
+#
+# Clears COINJECT_BOOTNODES / BOOTNODES for node1–node3 so only **bootnode** dials public
+# `IP:707` peers from `.env`. Followers use `--bootnodes bootnode:707` from the base compose.
+# This avoids many CPP connections from the same public IPv4 (rate limits / per-IP caps).
+#
+# Usage (e.g. Hostinger fleet with one public IP):
+#   docker compose -f docker-compose.yml -f docker-compose.local-ram.yml up -d
+#
+# See docs/CPP_DEPLOYMENT.md — "Reliable multi-site mesh".
+
+services:
+  node1:
+    environment:
+      - COINJECT_BOOTNODES=
+      - BOOTNODES=
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+  node2:
+    environment:
+      - COINJECT_BOOTNODES=
+      - BOOTNODES=
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1536M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+  node3:
+    environment:
+      - COINJECT_BOOTNODES=
+      - BOOTNODES=
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M

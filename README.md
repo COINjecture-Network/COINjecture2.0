@@ -604,6 +604,8 @@ If **`best_height`** on a host stops increasing while peers are far ahead, inspe
 
 **Mesh / follower overlay (mining on):** [`docker-compose.sync-follower.yml`](docker-compose.sync-follower.yml) overrides node commands so followers dial **`bootnode:707`** while keeping **`--mine`** on every chain service. Before the tip is caught up, the node still waits for peers/sync and **`peer_consensus.should_mine()`** limits who actually produces a block — you do not need a second compose step to “turn mining on” after sync.
 
+**One public CPP IP per host (fleet on one VPS):** [`docker-compose.local-ram.yml`](docker-compose.local-ram.yml) clears env bootnodes for **node1–node3** so only **bootnode** dials the public mesh. **`.env` bootlists:** omit self — [`scripts/deployment/print-mesh-bootnodes.sh`](scripts/deployment/print-mesh-bootnodes.sh). Full checklist: [`docs/CPP_DEPLOYMENT.md`](docs/CPP_DEPLOYMENT.md) (section *Reliable multi-site mesh*).
+
 **Prove chain containers have `--mine`:** [`scripts/deployment/verify-node-mining-enabled.sh`](scripts/deployment/verify-node-mining-enabled.sh) — set `HOST=root@…` (SSH) or `VERIFY_LOCAL=1` on the server; optional `CONTAINERS="coinject-bootnode …"`. (`verify-follower-not-mining.sh` is a thin wrapper and deprecated.) **Peer diversity:** add stable bootnode peers in `.env` / compose so `chain_getInfo.peer_count` is not stuck at 1. **CPU:** a larger VPS raises validation throughput; sync batch size is protocol-capped (see network CPP config), not a compose knob.
 
 After a volume wipe, on the recovering host (example: three chain services + API):

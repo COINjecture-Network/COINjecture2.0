@@ -201,6 +201,30 @@ coinject_block_propagation_time_seconds
 rate(coinject_network_errors_total[5m])
 ```
 
+## Reliable multi-site mesh (recommended production shape)
+
+Treat the CPP mesh as **one public `IP:707` endpoint per site**. That keeps connectivity **boring and stable**.
+
+1. **One mesh face per public IPv4**  
+   Run **one** `bootnode` (or one process) that dials peers from `COINJECT_BOOTNODES` / `BOOTNODES`.  
+   If you run **node1–node3** on the **same** host, they must **not** inherit the same public bootnode list, or every outbound CPP dial shares one NAT address and hits **per-IP limits / rate limits** on peers.  
+   Use **`docker-compose.local-ram.yml`** with base compose: it clears env bootnodes for **node1–node3** so they only use `--bootnodes bootnode:707` to the local bootnode.
+
+2. **Symmetric bootnode lists, never self**  
+   On each machine, `.env` should list **every other** mesh member as `IPv4:707` only (omit this host’s own public IP).  
+   Helper: `scripts/deployment/print-mesh-bootnodes.sh` with `SELF_IP` and `PEERS` (comma list of all mesh IPs).
+
+3. **707/tcp everywhere**  
+   Open **inbound and outbound** **707** on every host (cloud firewall + `ufw`). RPC **9933** alone is not enough for P2P.
+
+4. **Resync stragglers before “protocol” debugging**  
+   If one host’s `best_height` is far behind or logs show **HelloAck reset / timeout** after TCP connects, wipe and resync that host (see `scripts/deployment/destructive-chain-resync-remote.sh`) so its chain matches the mesh.
+
+5. **Stagger restarts**  
+   Avoid restarting all public peers in the same minute (handshake storms).
+
+**Note:** Bootnode strings are **`Host:707`** (TCP). Multiaddr `/p2p/…` in config is currently reduced to **IP:PORT** for CPP dialing in the node — see `node/src/service/mod.rs` bootnode parsing.
+
 ## Troubleshooting
 
 ### Node Won't Start
