@@ -216,17 +216,21 @@ rate(coinject_network_errors_total[5m])
    ```bash
    export COINJECT_BOOTNODES=203.0.113.11:707,203.0.113.12:707
    ```
-   The node merges CLI `--bootnodes` with these env vars at startup.
+   The node merges CLI `--bootnodes` with these env vars at startup **only when** the CLI did not already set `--bootnodes` (Docker followers that pass `--bootnodes bootnode:707` skip env merge on purpose).
 
-2. **Firewall / security groups:** **707/tcp** must be **open inbound** on every peer that should accept P2P (not only 9933 for RPC). Check Hostinger panel, `ufw`, or cloud SGs.
+   **Symmetric mesh:** On each host, set `COINJECT_BOOTNODES` (and `BOOTNODES`) to the **same comma list on every machine is OK only if you omit this host’s own `PublicIP:707`**. Listing your own address causes redundant self-connections and competes for `SECURITY_MAX_CONNS_PER_IP` against your other containers on the same NAT.
 
-3. Verify bootnode is listening: `ss -tlnp | grep 707` (or `netstat`).
+2. **Handshake works but `peer_count` stays 0** (or logs show `HelloAck` timeout / **connection reset by peer** after TCP connect): often a **stale or forked local chain** (this node’s `best_height` far below the rest of the mesh). Align tips with `chain_getInfo` across hosts; if one machine is hundreds of blocks behind with no peers, prefer a **guarded volume wipe + resync** (see `scripts/deployment/destructive-chain-resync-remote.sh`) rather than chasing P2P in a bad state.
 
-4. Check logs for `connecting to bootnode` and handshake errors: `docker logs coinject-node` or `journalctl`.
+3. **Firewall / security groups:** **707/tcp** must be **open inbound** on every peer that should accept P2P (not only 9933 for RPC). Check Hostinger panel, `ufw`, or cloud SGs.
 
-5. Check network connectivity: `nc -zv OTHER_IP 707` from each host.
+4. Verify bootnode is listening: `ss -tlnp | grep 707` (or `netstat`).
 
-6. Legacy multi-node docs mention 7071 for a **second** local port; on separate servers both often use **707** inside the container with `-p 707:707`.
+5. Check logs for `connecting to bootnode` and handshake errors: `docker logs coinject-node` or `journalctl`.
+
+6. Check network connectivity: `nc -zv OTHER_IP 707` from each host.
+
+7. Legacy multi-node docs mention 7071 for a **second** local port; on separate servers both often use **707** inside the container with `-p 707:707`.
 
 ### WebSocket Not Working
 
