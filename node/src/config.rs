@@ -305,13 +305,19 @@ impl NodeConfig {
             .ok()
             .or_else(|| std::env::var("BOOTNODES").ok());
         if let Some(raw) = from_env {
-            for part in raw.split(',') {
-                let s = part.trim();
-                if s.is_empty() {
-                    continue;
-                }
-                if !config.bootnodes.iter().any(|b| b == s) {
-                    config.bootnodes.push(s.to_string());
+            // If `--bootnodes` was set on the CLI (non-empty after clap parse), do not merge env.
+            // Otherwise Docker followers that use `--bootnodes bootnode:707` would also inherit
+            // COINJECT_BOOTNODES from `.env` and dial every public mesh IP — many connections share
+            // one host public IP, hitting CPP per-IP limits (default 3) and triggering rate bans.
+            if config.bootnodes.is_empty() {
+                for part in raw.split(',') {
+                    let s = part.trim();
+                    if s.is_empty() {
+                        continue;
+                    }
+                    if !config.bootnodes.iter().any(|b| b == s) {
+                        config.bootnodes.push(s.to_string());
+                    }
                 }
             }
         }
