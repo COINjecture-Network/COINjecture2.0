@@ -2,6 +2,7 @@ import { Navigation } from "@/components/Navigation";
 import { Footer } from "@/components/Footer";
 import { BrandLogo } from "@/components/BrandLogo";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,10 +11,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useWallet } from "@/contexts/WalletContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { rpcClient } from "@/lib/rpc-client";
+import { rpcClient, type ProblemInfo } from "@/lib/rpc-client";
+import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { getWalletTransactions, type WalletActivityItem } from "@/lib/api/client";
 import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check, ChevronDown } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
@@ -276,6 +278,16 @@ export default function WalletPage() {
             </Card>
           </div>
 
+          {selectedKeyPair && (
+            <WalletMarketplaceSection
+              address={selectedKeyPair.address}
+              onCopy={(text, label) => {
+                navigator.clipboard.writeText(text);
+                toast.success(label);
+              }}
+            />
+          )}
+
           {/* Send Transaction Modal */}
           {showSend && selectedKeyPair && (
             <SendTransactionModal
@@ -375,6 +387,247 @@ function activityRowKey(row: Partial<WalletActivityItem>, index: number): string
   if (typeof row.id === 'string' && row.id.length > 0) return row.id;
   if (typeof row.tx_hash === 'string' && row.tx_hash.length > 0) return row.tx_hash;
   return `activity-${index}`;
+}
+
+function shortProblemId(hex: string): string {
+  if (hex.length <= 22) return hex;
+  return `${hex.slice(0, 12)}…${hex.slice(-8)}`;
+}
+
+function marketplaceStatusBadgeVariant(
+  status: string,
+): "default" | "secondary" | "destructive" | "outline" {
+  const s = (status ?? "").toLowerCase();
+  if (s === "open") return "default";
+  if (s === "solved") return "secondary";
+  if (s === "cancelled") return "destructive";
+  return "outline";
+}
+
+function WalletMarketplaceSection({
+  address,
+  onCopy,
+}: {
+  address: string;
+  onCopy: (text: string, label: string) => void;
+}) {
+  const posted = useQuery({
+    queryKey: ["walletBountiesPosted", address],
+    queryFn: () => rpcClient.getProblemsBySubmitter(address),
+    refetchInterval: 20_000,
+    retry: 1,
+  });
+  const solvedMine = useQuery({
+    queryKey: ["walletBountiesSolved", address],
+    queryFn: () => rpcClient.getProblemsBySolver(address),
+    refetchInterval: 20_000,
+    retry: 1,
+  });
+
+  return (
+    <Card className="p-6 mt-6">
+      <h2 className="text-2xl font-semibold mb-1">Your bounties & solutions</h2>
+      <p className="text-sm text-muted-foreground mb-6 max-w-3xl">
+        Problems you posted on the marketplace (any status), winning solutions attached to those
+        listings when solved, and bounties where this wallet was the accepted solver.
+      </p>
+      <div className="grid gap-8 lg:grid-cols-2">
+        <div>
+          <h3 className="text-lg font-medium mb-3">Posted by you</h3>
+          <BountyListColumn
+            query={posted}
+            emptyHint={
+              <>
+                No listings yet.{" "}
+                <Link to="/bounty-submit" className="text-primary underline-offset-4 hover:underline">
+                  Post a bounty
+                </Link>{" "}
+                or browse the{" "}
+                <Link to="/marketplace" className="text-primary underline-offset-4 hover:underline">
+                  live market
+                </Link>
+                .
+              </>
+            }
+            mode="poster"
+            onCopy={onCopy}
+          />
+        </div>
+        <div>
+          <h3 className="text-lg font-medium mb-3">You solved (repo)</h3>
+          <BountyListColumn
+            query={solvedMine}
+            emptyHint={
+              <>
+                No accepted solutions yet. Open{" "}
+                <Link to="/solver-lab" className="text-primary underline-offset-4 hover:underline">
+                  Solver Lab
+                </Link>{" "}
+                from a live marketplace card.
+              </>
+            }
+            mode="solver"
+            onCopy={onCopy}
+          />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function BountyListColumn({
+  query,
+  emptyHint,
+  mode,
+  onCopy,
+}: {
+  query: {
+    data: ProblemInfo[] | undefined;
+    isLoading: boolean;
+    isError: boolean;
+    error: unknown;
+  };
+  emptyHint: ReactNode;
+  mode: "poster" | "solver";
+  onCopy: (text: string, label: string) => void;
+}) {
+  const { data, isLoading, isError, error } = query;
+  const errMsg = error instanceof Error ? error.message : String(error ?? "");
+
+  if (isLoading) {
+    return <div className="text-sm text-muted-foreground">Loading…</div>;
+  }
+  if (isError) {
+    return (
+      <div className="text-sm text-muted-foreground space-y-1">
+        <p>Could not load marketplace data from the node.</p>
+        <p className="text-xs font-mono opacity-80">{errMsg || "Unknown error"}</p>
+        <p className="text-xs">
+          If the RPC method is missing, update the node to a build that includes{" "}
+          <code className="text-[11px]">marketplace_getProblemsBySubmitter</code>.
+        </p>
+      </div>
+    );
+  }
+  if (!data?.length) {
+    return <div className="text-sm text-muted-foreground">{emptyHint}</div>;
+  }
+
+  return (
+    <div className="space-y-3 max-h-[32rem] overflow-y-auto pr-1">
+      {data.map((p) => (
+        <div
+          key={p.problem_id}
+          className="rounded-lg border border-border/50 bg-muted/20 p-3 space-y-2 text-sm"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="space-y-1 min-w-0">
+              <div className="font-medium truncate">
+                {p.problem_type ?? (p.is_private ? "Private bounty" : "Bounty")}
+              </div>
+              <div className="text-xs text-muted-foreground font-mono break-all">
+                ID {shortProblemId(p.problem_id)}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 ml-1"
+                  onClick={() => onCopy(p.problem_id, "Problem ID copied")}
+                >
+                  <Copy className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+            <Badge variant={marketplaceStatusBadgeVariant(p.status)}>{p.status}</Badge>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              <span className="text-foreground/80 font-medium">{p.bounty.toLocaleString()}</span>{" "}
+              BEANS
+            </span>
+            {p.is_private && <span>{p.is_revealed ? "Revealed" : "Hidden until reveal"}</span>}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to="/marketplace">Market</Link>
+            </Button>
+            {mode === "poster" &&
+              isMarketplaceListingOpen(p.status) &&
+              Boolean(p.problem) &&
+              (!p.is_private || p.is_revealed) && (
+                <Button asChild size="sm">
+                  <Link
+                    to={`/solver-lab?problemId=${encodeURIComponent(p.problem_id)}`}
+                    state={{ selectedBounty: p }}
+                  >
+                    Solver Lab
+                  </Link>
+                </Button>
+              )}
+          </div>
+          {mode === "poster" && p.status.toLowerCase() === "solved" && (p.solver || p.solution) && (
+            <Collapsible>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-8 px-2 -ml-2 text-xs w-full justify-start">
+                  <ChevronDown className="h-3.5 w-3.5 mr-1 shrink-0" />
+                  Winning solution on your bounty
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-2 pt-1">
+                {p.solver && (
+                  <div className="text-xs text-muted-foreground break-all">
+                    Solver: <span className="font-mono text-foreground/90">{p.solver}</span>
+                  </div>
+                )}
+                {p.solution && (
+                  <pre className="text-[11px] leading-relaxed font-mono bg-muted/50 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">
+                    {JSON.stringify(p.solution, null, 2)}
+                  </pre>
+                )}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="text-xs"
+                  disabled={!p.solution}
+                  onClick={() =>
+                    p.solution &&
+                    onCopy(JSON.stringify(p.solution), "Solution JSON copied")
+                  }
+                >
+                  Copy solution JSON
+                </Button>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+          {mode === "solver" && p.solution && (
+            <Collapsible>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-8 px-2 -ml-2 text-xs w-full justify-start">
+                  <ChevronDown className="h-3.5 w-3.5 mr-1 shrink-0" />
+                  Your submitted solution
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="space-y-2 pt-1">
+                <pre className="text-[11px] leading-relaxed font-mono bg-muted/50 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">
+                  {JSON.stringify(p.solution, null, 2)}
+                </pre>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => onCopy(JSON.stringify(p.solution), "Solution JSON copied")}
+                >
+                  Copy solution JSON
+                </Button>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function activityKindStyles(kind: string): string {

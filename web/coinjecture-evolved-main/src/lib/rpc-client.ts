@@ -230,6 +230,14 @@ export interface RpcResponse<T> {
   error?: RpcError;
 }
 
+// Solution payload (same shape as block solution_reveal) — referenced by ProblemInfo
+export interface SolutionType {
+  SubsetSum?: number[];
+  SAT?: boolean[];
+  TSP?: number[];
+  Custom?: string;
+}
+
 // Problem marketplace response - matches ProblemInfo in rpc/src/server.rs
 export interface ProblemInfo {
   problem_id: string;
@@ -244,6 +252,10 @@ export interface ProblemInfo {
   problem_size: number | null; // usize
   is_revealed: boolean;
   problem?: ProblemType | null;
+  /** Hex-encoded solver address when the listing is solved */
+  solver?: string | null;
+  /** Winning solution attached on-chain when solved */
+  solution?: SolutionType | null;
 }
 
 // Marketplace statistics - matches MarketplaceStats in state/src/marketplace.rs
@@ -339,14 +351,6 @@ export interface ProblemType {
   SAT?: { variables: number; clauses: any[] };
   TSP?: { cities: number; distances: number[][] };
   Custom?: { problem_id: string; data: string };
-}
-
-// Solution type from solution_reveal
-export interface SolutionType {
-  SubsetSum?: number[];
-  SAT?: boolean[];
-  TSP?: number[];
-  Custom?: string;
 }
 
 // Block header
@@ -826,6 +830,14 @@ export class RpcClient {
 
   async getProblem(problemId: string): Promise<ProblemInfo | null> {
     return this.call<ProblemInfo | null>('marketplace_getProblem', [problemId]);
+  }
+
+  async getProblemsBySubmitter(address: string): Promise<ProblemInfo[]> {
+    return this.call<ProblemInfo[]>('marketplace_getProblemsBySubmitter', [address]);
+  }
+
+  async getProblemsBySolver(address: string): Promise<ProblemInfo[]> {
+    return this.call<ProblemInfo[]>('marketplace_getProblemsBySolver', [address]);
   }
 
   async getMarketplaceStats(): Promise<MarketplaceStats> {
