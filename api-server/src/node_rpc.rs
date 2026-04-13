@@ -190,8 +190,7 @@ impl NodeRpcClient {
             if let Some(ip) = x_forwarded_for.filter(|s| !s.trim().is_empty()) {
                 req = req.header("X-Forwarded-For", ip.trim());
             }
-            match req.send().await
-            {
+            match req.send().await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
                     last_error = Some(e.to_string());
