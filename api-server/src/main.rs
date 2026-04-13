@@ -15,6 +15,7 @@ use coinjecture_api_server::{
     supabase::SupabaseClient,
     AppState,
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -158,5 +159,10 @@ async fn main() {
         .unwrap_or_else(|e| panic!("Failed to bind to {addr}: {e}"));
 
     tracing::info!("Listening on {addr}");
-    axum::serve(listener, app).await.expect("server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("server error");
 }

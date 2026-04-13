@@ -63,18 +63,26 @@ const defaultFormData = {
 
 const PRIVATE_REVEAL_KITS_KEY = "coinjecturePrivateRevealKits";
 
-function extractCandidateJson(description: string): string | null {
-  const fencedMatch = description.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fencedMatch?.[1]) {
-    return fencedMatch[1].trim();
+/** Every ``` / ```json fenced block (in order). Strict JSON only inside fences. */
+function extractAllFencedJsonBlocks(description: string): string[] {
+  const out: string[] = [];
+  const re = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(description)) !== null) {
+    const t = m[1].trim();
+    if (t) {
+      out.push(t);
+    }
   }
+  return out;
+}
 
+function extractBraceJson(description: string): string | null {
   const firstBrace = description.indexOf("{");
   const lastBrace = description.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) {
     return description.slice(firstBrace, lastBrace + 1).trim();
   }
-
   return null;
 }
 
@@ -82,19 +90,43 @@ function parseProblemFromDescription(
   description: string,
   problemType: string,
 ): ProblemType {
-  const candidateJson = extractCandidateJson(description);
-  if (!candidateJson) {
+  const fencedBlocks = extractAllFencedJsonBlocks(description);
+  const braceJson = extractBraceJson(description);
+  const candidates = [...fencedBlocks, ...(braceJson ? [braceJson] : [])];
+
+  if (candidates.length === 0) {
     throw new Error(`Paste a ${problemType} instance JSON block into the description before submitting.`);
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(candidateJson);
-  } catch {
-    throw new Error(`The problem description must include valid JSON for the live ${problemType} instance.`);
+  let lastParseError: string | null = null;
+  for (const candidateJson of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidateJson);
+    } catch {
+      lastParseError = "JSON.parse failed (strict JSON only — no // comments or trailing commas in fenced blocks).";
+      continue;
+    }
+
+    try {
+      return problemRecordToProblemType(parsed as Record<string, unknown>, problemType);
+    } catch (e) {
+      lastParseError = e instanceof Error ? e.message : String(e);
+      continue;
+    }
   }
 
-  const record = parsed as Record<string, unknown>;
+  if (lastParseError) {
+    throw new Error(
+      lastParseError.startsWith("JSON.parse")
+        ? `The problem description must include valid JSON for the live ${problemType} instance. ${lastParseError}`
+        : lastParseError,
+    );
+  }
+  throw new Error(`The problem description must include valid JSON for the live ${problemType} instance.`);
+}
+
+function problemRecordToProblemType(record: Record<string, unknown>, problemType: string): ProblemType {
   if (problemType === "SubsetSum") {
     if (!Array.isArray(record.numbers) || typeof record.target !== "number") {
       throw new Error("Subset Sum submissions require JSON with `numbers` and `target` fields.");
@@ -482,19 +514,19 @@ Return the shortest tour visiting all cities exactly once and returning to start
 - Clauses: CNF formula with clauses of up to 3 literals each
 - Number of clauses: m
 
-**Example Input:**
+**Example Input (strict JSON — no \`//\` comments inside the block):**
 \`\`\`json
 {
   "variables": 4,
   "clauses": [
-    [1, -2, 3],    // (x₁ ∨ ¬x₂ ∨ x₃)
-    [-1, 2, -3],   // (¬x₁ ∨ x₂ ∨ ¬x₃)
-    [2, 3, 4],     // (x₂ ∨ x₃ ∨ x₄)
-    [-2, -3, 4]    // (¬x₂ ∨ ¬x₃ ∨ x₄)
+    [1, -2, 3],
+    [-1, 2, -3],
+    [2, 3, 4],
+    [-2, -3, 4]
   ]
 }
 \`\`\`
-Note: Positive numbers = variable, negative = negation
+Literal sign: positive integer = variable xₖ, negative = ¬xₖ (e.g. \`-2\` is ¬x₂).
 
 **Expected Output:**
 Return a satisfying assignment or proof of unsatisfiability.

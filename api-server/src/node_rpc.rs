@@ -67,7 +67,15 @@ impl NodeRpcClient {
     }
 
     /// Forward a raw JSON-RPC POST body to the node; returns upstream status + body bytes.
-    pub async fn forward_jsonrpc_body(&self, body: Bytes) -> Result<(u16, Bytes), NodeRpcError> {
+    ///
+    /// `x_forwarded_for` should be the browser (or edge) client IP when the API proxies browser
+    /// traffic — the node's JSON-RPC rate limiter keys on `X-Forwarded-For` / `X-Real-IP`.
+    /// Without this, every proxied request appears as the same peer and shares one ~100 RPM bucket.
+    pub async fn forward_jsonrpc_body(
+        &self,
+        body: Bytes,
+        x_forwarded_for: Option<&str>,
+    ) -> Result<(u16, Bytes), NodeRpcError> {
         if self.urls.is_empty() {
             return Err(NodeRpcError::Unavailable(
                 "no upstream RPC URLs configured".to_string(),
@@ -77,7 +85,10 @@ impl NodeRpcClient {
         let mut errors = Vec::new();
 
         for url in &self.urls {
-            let resp = match self.send_proxy_with_retry(url, body.clone()).await {
+            let resp = match self
+                .send_proxy_with_retry(url, body.clone(), x_forwarded_for)
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => {
                     errors.push(format!("{url}: {e}"));
@@ -166,17 +177,20 @@ impl NodeRpcClient {
         &self,
         url: &str,
         body: Bytes,
+        x_forwarded_for: Option<&str>,
     ) -> Result<reqwest::Response, NodeRpcError> {
         let mut last_error = None;
 
         for attempt in 0..Self::TRANSPORT_RETRIES {
-            match self
+            let mut req = self
                 .http_proxy
                 .post(url)
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body.clone())
-                .send()
-                .await
+                .body(body.clone());
+            if let Some(ip) = x_forwarded_for.filter(|s| !s.trim().is_empty()) {
+                req = req.header("X-Forwarded-For", ip.trim());
+            }
+            match req.send().await
             {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
