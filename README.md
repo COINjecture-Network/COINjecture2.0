@@ -611,12 +611,14 @@ docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d -
 
 If sync **repeatedly stalls** in the same height band with fork / “missing block” warnings in `docker logs coinject-bootnode`, try a **single chain database** on that host: bring up only **`bootnode`** and **`api-server`** (omit `node1` / `node2`) with the same overlay — one volume (`bootnode-data`), one P2P view — then widen the stack once caught up.
 
-Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Optional watch loop from your laptop: [`scripts/deployment/watch-sync-gap.sh`](scripts/deployment/watch-sync-gap.sh) (set `CANONICAL_RPC` / `FOLLOWER_RPC` or pass two URLs; `ONE_SHOT=1` for a single sample). To find the first height where **`prev_hash`** differs between two RPC URLs, use [`scripts/compare-fork-blocks.sh`](scripts/compare-fork-blocks.sh). Then **re-enable mining** (same volumes — do not pass `-v` on `down` here):
+Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Optional watch loop from your laptop: [`scripts/deployment/watch-sync-gap.sh`](scripts/deployment/watch-sync-gap.sh) (set `CANONICAL_RPC` / `FOLLOWER_RPC` or pass two URLs; `ONE_SHOT=1` for a single sample). To find the first height where **`prev_hash`** differs between two RPC URLs, use [`scripts/compare-fork-blocks.sh`](scripts/compare-fork-blocks.sh). Then **re-enable mining on all chain services** (same volumes — do not pass `-v` on `down` here). By default [`docker-compose.yml`](docker-compose.yml) defines **`bootnode`**, **`node1`**, **`node2`**, **`node3`**, and **`api-server`**; include every chain service you actually run so they all mine again after catch-up:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml down
-docker compose -f docker-compose.yml up -d --build bootnode node1 node2 api-server
+docker compose -f docker-compose.yml up -d --build bootnode node1 node2 node3 api-server
 ```
+
+Guarded SSH helper (checks gap + `genesis_hash` before switching): [`scripts/deployment/switch-to-mining-after-sync-remote.sh`](scripts/deployment/switch-to-mining-after-sync-remote.sh) (`MINING_SERVICES` overrides the service list if you omit `node3`).
 
 ---
 
