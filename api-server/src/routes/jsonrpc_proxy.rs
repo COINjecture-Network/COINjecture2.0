@@ -64,9 +64,9 @@ pub async fn proxy(
         .forward_jsonrpc_body(body, Some(xff.as_str()))
         .await
         .map_err(|e| {
-        tracing::warn!(error = %e, body_len, "/node-rpc forward to node failed");
-        ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
-    })?;
+            tracing::warn!(error = %e, body_len, "/node-rpc forward to node failed");
+            ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
+        })?;
 
     let status = StatusCode::from_u16(status_u16).unwrap_or(StatusCode::BAD_GATEWAY);
 
