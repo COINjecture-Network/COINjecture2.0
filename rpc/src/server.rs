@@ -448,8 +448,7 @@ pub struct MiningDifficultyTip {
 
 pub type MiningDifficultyTipFuture =
     Pin<Box<dyn Future<Output = Result<MiningDifficultyTip, String>> + Send>>;
-pub type MiningDifficultyTipProvider =
-    Arc<dyn Fn() -> MiningDifficultyTipFuture + Send + Sync>;
+pub type MiningDifficultyTipProvider = Arc<dyn Fn() -> MiningDifficultyTipFuture + Send + Sync>;
 
 /// RPC server state
 pub struct RpcServerState {

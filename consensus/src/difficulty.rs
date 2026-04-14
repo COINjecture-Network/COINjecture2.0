@@ -88,8 +88,7 @@ impl DifficultyAdjuster {
             return HIGH_VARIANCE_RATIO_BOOTSTRAP;
         }
         let t = (sample_count as f64 / DIFFICULTY_WINDOW as f64).clamp(0.0, 1.0);
-        HIGH_VARIANCE_RATIO_BOOTSTRAP
-            + t * (HIGH_VARIANCE_RATIO - HIGH_VARIANCE_RATIO_BOOTSTRAP)
+        HIGH_VARIANCE_RATIO_BOOTSTRAP + t * (HIGH_VARIANCE_RATIO - HIGH_VARIANCE_RATIO_BOOTSTRAP)
     }
 
     /// Create new difficulty adjuster without network metrics (uses defaults).

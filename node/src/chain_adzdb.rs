@@ -101,8 +101,7 @@ impl AdzdbChainState {
             db.entry_count()
         );
 
-        let best_cumulative_work =
-            Self::compute_cumulative_tip_work(&db, best_hash).unwrap_or(0);
+        let best_cumulative_work = Self::compute_cumulative_tip_work(&db, best_hash).unwrap_or(0);
         let best_total_minted_rewards =
             Self::compute_total_minted_tip(&db, best_hash).unwrap_or(genesis_block.coinbase.reward);
 
@@ -559,17 +558,11 @@ impl coinject_rpc::BlockchainReader for AdzdbChainState {
     }
 
     fn best_cumulative_work_decimal(&self) -> Option<String> {
-        Some(
-            futures::executor::block_on(self.best_cumulative_work.read())
-                .to_string(),
-        )
+        Some(futures::executor::block_on(self.best_cumulative_work.read()).to_string())
     }
 
     fn total_minted_rewards_decimal(&self) -> Option<String> {
-        Some(
-            futures::executor::block_on(self.best_total_minted_rewards.read())
-                .to_string(),
-        )
+        Some(futures::executor::block_on(self.best_total_minted_rewards.read()).to_string())
     }
 }
 

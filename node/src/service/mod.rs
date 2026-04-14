@@ -31,16 +31,18 @@ use coinject_network::cpp::{
     BlockProvider, CppConfig, CppNetwork, NetworkCommand as CppNetworkCommand,
     NetworkEvent as CppNetworkEvent, NodeType as CppNodeType, PeerId as CppPeerId,
 };
-use coinject_rpc::server::{MiningDifficultyTip, MiningDifficultyTipFuture, MiningWork, MiningWorkFuture};
+use coinject_rpc::server::{
+    MiningDifficultyTip, MiningDifficultyTipFuture, MiningWork, MiningWorkFuture,
+};
 use coinject_rpc::websocket::{
     RpcCommand as WebSocketRpcCommand, RpcEvent as WebSocketRpcEvent, WebSocketRpc,
 };
 use coinject_rpc::{MiningDifficultyTipProvider, MiningWorkProvider, RpcServer, RpcServerState};
-use coinject_tokenomics::NetworkMetrics;
 use coinject_state::{
     AccountState, ChannelState, DimensionalPoolState, EscrowState, MarketplaceState, TimeLockState,
     TrustLineState,
 };
+use coinject_tokenomics::NetworkMetrics;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1346,9 +1348,9 @@ impl CoinjectNode {
                                         let emission_w = if block.header.height == 0 {
                                             None
                                         } else {
-                                            match chain_clone.cumulative_work_at_tip_hash(
-                                                block.header.prev_hash,
-                                            ) {
+                                            match chain_clone
+                                                .cumulative_work_at_tip_hash(block.header.prev_hash)
+                                            {
                                                 Ok(w) => Some(w),
                                                 Err(_) => continue,
                                             }
@@ -2051,19 +2053,15 @@ impl CoinjectNode {
                                         let emission_w = if block.header.height == 0 {
                                             None
                                         } else {
-                                            match chain_for_mesh.cumulative_work_at_tip_hash(
-                                                block.header.prev_hash,
-                                            ) {
+                                            match chain_for_mesh
+                                                .cumulative_work_at_tip_hash(block.header.prev_hash)
+                                            {
                                                 Ok(w) => Some(w),
                                                 Err(_) => continue,
                                             }
                                         };
                                         match validator_for_mesh.validate_block_with_options(
-                                            &block,
-                                            &best_hash,
-                                            expected,
-                                            false,
-                                            emission_w,
+                                            &block, &best_hash, expected, false, emission_w,
                                         ) {
                                             Ok(()) => {
                                                 match chain_for_mesh.store_block(&block).await {
@@ -2268,13 +2266,13 @@ impl CoinjectNode {
                             );
                             continue;
                         }
-                        if let Some((peer_id_str, peer_state)) = active_peers.iter().max_by(
-                            |(_, a), (_, b)| {
+                        if let Some((peer_id_str, peer_state)) =
+                            active_peers.iter().max_by(|(_, a), (_, b)| {
                                 a.cumulative_work
                                     .cmp(&b.cumulative_work)
                                     .then_with(|| a.best_height.cmp(&b.best_height))
-                            },
-                        ) {
+                            })
+                        {
                             if let Ok(peer_id_bytes) = hex::decode(peer_id_str) {
                                 if peer_id_bytes.len() == 32 {
                                     let mut peer_id = [0u8; 32];
@@ -2303,7 +2301,10 @@ impl CoinjectNode {
                                         );
                                     }
                                 } else {
-                                    warn!(peer_len = peer_id_bytes.len(), "legacy RequestBlocks: bad peer id length");
+                                    warn!(
+                                        peer_len = peer_id_bytes.len(),
+                                        "legacy RequestBlocks: bad peer id length"
+                                    );
                                 }
                             } else {
                                 warn!(peer = %peer_id_str, "legacy RequestBlocks: peer id hex decode failed");
@@ -2316,14 +2317,14 @@ impl CoinjectNode {
                         to_height,
                     } => {
                         let request_id: u64 = rand::random();
-                        if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
-                            CppNetworkCommand::RequestBlocks {
+                        if let Err(e) =
+                            cpp_network_cmd_tx_for_legacy.send(CppNetworkCommand::RequestBlocks {
                                 peer_id: peer,
                                 from_height,
                                 to_height,
                                 request_id,
-                            },
-                        ) {
+                            })
+                        {
                             error!(
                                 error = %e,
                                 from_height,

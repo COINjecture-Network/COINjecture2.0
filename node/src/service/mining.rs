@@ -285,13 +285,13 @@ impl CoinjectNode {
                 }
 
                 // EMPIRICAL MEASUREMENT: Record work score for convergence analysis
-                let block_time = match chain.get_block_by_height(block.header.height.saturating_sub(1))
-                {
-                    Ok(Some(parent)) if block.header.height > 0 => {
-                        (block.header.timestamp - parent.header.timestamp).max(0) as f64
-                    }
-                    _ => 0.0,
-                };
+                let block_time =
+                    match chain.get_block_by_height(block.header.height.saturating_sub(1)) {
+                        Ok(Some(parent)) if block.header.height > 0 => {
+                            (block.header.timestamp - parent.header.timestamp).max(0) as f64
+                        }
+                        _ => 0.0,
+                    };
 
                 if let Err(e) = dimensional_pool_state.record_work_score(
                     block.header.height,

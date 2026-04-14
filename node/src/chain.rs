@@ -125,8 +125,7 @@ impl ChainState {
                 metadata_table.insert("genesis_hash", genesis_hash.as_bytes() as &[u8])?;
                 metadata_table.insert("best_height", 0u64.to_le_bytes().as_ref())?;
                 metadata_table.insert("best_hash", genesis_hash.as_bytes() as &[u8])?;
-                let genesis_work =
-                    (genesis_block.header.work_score.max(0.0) as u64) as u128;
+                let genesis_work = (genesis_block.header.work_score.max(0.0) as u64) as u128;
                 metadata_table.insert(CUM_WORK_META_KEY, genesis_work.to_le_bytes().as_ref())?;
                 metadata_table.insert(
                     TOTAL_MINTED_META_KEY,
@@ -183,8 +182,7 @@ impl ChainState {
                 let mut table = write_txn.open_table(METADATA_TABLE)?;
                 table.insert("best_height", best_height.to_le_bytes().as_ref())?;
                 table.insert("best_hash", best_hash.as_bytes() as &[u8])?;
-                let genesis_work =
-                    (genesis_block.header.work_score.max(0.0) as u64) as u128;
+                let genesis_work = (genesis_block.header.work_score.max(0.0) as u64) as u128;
                 table.insert(CUM_WORK_META_KEY, genesis_work.to_le_bytes().as_ref())?;
                 table.insert(
                     TOTAL_MINTED_META_KEY,
@@ -227,7 +225,10 @@ impl ChainState {
         Ok(Some(u128::from_le_bytes(arr)))
     }
 
-    fn compute_cumulative_work_tip_db(db: &Arc<Database>, mut tip: Hash) -> Result<u128, ChainError> {
+    fn compute_cumulative_work_tip_db(
+        db: &Arc<Database>,
+        mut tip: Hash,
+    ) -> Result<u128, ChainError> {
         let mut sum = 0u128;
         loop {
             let Some(block) = Self::load_block_from_db(db, &tip)? else {
