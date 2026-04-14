@@ -19,10 +19,8 @@
 // coinject_core::fixed_point::isqrt so that the size decision is deterministic
 // across platforms. f64 is used only at the display/monitoring boundary.
 //
-// ALL values derived from network state via NetworkMetrics oracle:
-// - Optimal solve time: median_block_time * η (from network)
-// - Min/Max targets: Optimal * PHI_INV / PHI (mathematical bounds)
-// - Problem size limits: Percentiles from historical solve times
+// With `NetworkMetrics`, async retarget uses `median_block_time()` (seconds→μs) as the empirical
+// pacing target; min/max bands still use φ bounds around that optimal where applicable.
 
 use crate::problem_registry::SharedRegistry;
 use coinject_core::fixed_point::isqrt;
