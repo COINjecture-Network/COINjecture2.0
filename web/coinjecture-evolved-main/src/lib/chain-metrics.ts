@@ -1,7 +1,8 @@
 /**
  * Display helpers aligned with consensus + tokenomics (Rust):
  * - Work score: consensus/src/work_score.rs — bits = log₂(solve/verify) × quality
- * - Block reward: tokenomics/src/rewards.rs — `⌊w_trunc / W_parent⌋` (same trunc as chain cumulative W).
+ * - Block reward: tokenomics v1.0 — dimensionless `work_score / W` → on-chain `⌊w_trunc / W_parent⌋`
+ *   (same trunc as chain cumulative W; no separate issuance parameter).
  */
 
 /** Match `consensus/src/work_score.rs` — same floors as the f64 `calculate` path. */
@@ -27,7 +28,7 @@ export function workScoreBitsFromPouw(
 
 /**
  * Same as Rust `RewardCalculator::calculate_block_reward(work_score, W)`:
- * `⌊w_trunc / W_parent⌋` for `W_parent > 0`, else `0`.
+ * `⌊w_trunc / W_parent⌋` for `W_parent > 0`, else `0` (whitepaper `work_score / W`, integer floor).
  */
 export function blockRewardFromTruncWorkAndParentW(
   blockWorkTrunc: bigint,
