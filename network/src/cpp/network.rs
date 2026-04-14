@@ -1667,9 +1667,8 @@ impl CppNetwork {
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
-        let status = StatusMessage::decode_bincode_compat(&envelope.payload).map_err(|e| {
-            NetworkError::Protocol(ProtocolError::DeserializationError(e))
-        })?;
+        let status = StatusMessage::decode_bincode_compat(&envelope.payload)
+            .map_err(|e| NetworkError::Protocol(ProtocolError::DeserializationError(e)))?;
 
         let node_type = NodeType::from_u8(status.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;

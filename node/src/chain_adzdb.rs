@@ -101,8 +101,7 @@ impl AdzdbChainState {
             db.entry_count()
         );
 
-        let best_cumulative_work =
-            Self::compute_cumulative_tip_work(&db, best_hash).unwrap_or(0);
+        let best_cumulative_work = Self::compute_cumulative_tip_work(&db, best_hash).unwrap_or(0);
         let best_total_minted_rewards =
             Self::compute_total_minted_tip(&db, best_hash).unwrap_or(genesis_block.coinbase.reward);
 
@@ -155,7 +154,7 @@ impl AdzdbChainState {
     /// Cumulative work through `tip_hash` (inclusive).
     pub fn cumulative_work_at_tip_hash(&self, tip_hash: Hash) -> Result<u128, ChainError> {
         let db = futures::executor::block_on(self.db.read());
-        Self::compute_cumulative_tip_work(&*db, tip_hash)
+        Self::compute_cumulative_tip_work(&db, tip_hash)
     }
 
     pub async fn best_total_minted_rewards_value(&self) -> u128 {
@@ -186,13 +185,13 @@ impl AdzdbChainState {
 
             let cum = {
                 let db = self.db.read().await;
-                Self::compute_cumulative_tip_work(&*db, block_hash).unwrap_or(0)
+                Self::compute_cumulative_tip_work(&db, block_hash).unwrap_or(0)
             };
             *self.best_cumulative_work.write().await = cum;
 
             let minted = {
                 let db = self.db.read().await;
-                Self::compute_total_minted_tip(&*db, block_hash).unwrap_or(0)
+                Self::compute_total_minted_tip(&db, block_hash).unwrap_or(0)
             };
             *self.best_total_minted_rewards.write().await = minted;
 
@@ -454,13 +453,13 @@ impl AdzdbChainState {
 
         let cum = {
             let db = self.db.read().await;
-            Self::compute_cumulative_tip_work(&*db, new_best_hash).unwrap_or(0)
+            Self::compute_cumulative_tip_work(&db, new_best_hash).unwrap_or(0)
         };
         *self.best_cumulative_work.write().await = cum;
 
         let minted = {
             let db = self.db.read().await;
-            Self::compute_total_minted_tip(&*db, new_best_hash).unwrap_or(0)
+            Self::compute_total_minted_tip(&db, new_best_hash).unwrap_or(0)
         };
         *self.best_total_minted_rewards.write().await = minted;
 
@@ -559,17 +558,11 @@ impl coinject_rpc::BlockchainReader for AdzdbChainState {
     }
 
     fn best_cumulative_work_decimal(&self) -> Option<String> {
-        Some(
-            futures::executor::block_on(self.best_cumulative_work.read())
-                .to_string(),
-        )
+        Some(futures::executor::block_on(self.best_cumulative_work.read()).to_string())
     }
 
     fn total_minted_rewards_decimal(&self) -> Option<String> {
-        Some(
-            futures::executor::block_on(self.best_total_minted_rewards.read())
-                .to_string(),
-        )
+        Some(futures::executor::block_on(self.best_total_minted_rewards.read()).to_string())
     }
 }
 

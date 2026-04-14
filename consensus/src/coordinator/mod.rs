@@ -478,9 +478,9 @@ impl EpochCoordinator {
                             // Update our chain tip
                             self.chain_height = height;
                             self.chain_hash = block_hash;
-                            self.tip_cumulative_work = self.tip_cumulative_work.saturating_add(
-                                (block.header.work_score.max(0.0) as u64) as u128,
-                            );
+                            self.tip_cumulative_work = self
+                                .tip_cumulative_work
+                                .saturating_add((block.header.work_score.max(0.0) as u64) as u128);
 
                             let _ = event_tx.send(CoordinatorEvent::BlockProduced { block, epoch });
                         } else {

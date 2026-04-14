@@ -169,13 +169,13 @@ impl CoinjectNode {
                                 // Get best peer from peer_consensus (highest height)
                                 let active_peers = peer_consensus.active_peers().await;
 
-                                if let Some((peer_id_str, peer_state)) = active_peers.iter().max_by(
-                                    |(_, a), (_, b)| {
+                                if let Some((peer_id_str, peer_state)) =
+                                    active_peers.iter().max_by(|(_, a), (_, b)| {
                                         a.cumulative_work
                                             .cmp(&b.cumulative_work)
                                             .then_with(|| a.best_height.cmp(&b.best_height))
-                                    },
-                                ) {
+                                    })
+                                {
                                     // Parse peer_id from hex string
                                     if let Ok(peer_id_bytes) = hex::decode(peer_id_str) {
                                         if peer_id_bytes.len() == 32 {
@@ -1247,10 +1247,8 @@ impl CoinjectNode {
                 None
             } else {
                 let mut w = 0u128;
-                for j in 0..i {
-                    w = w.saturating_add(
-                        (chain_blocks[j].header.work_score.max(0.0) as u64) as u128,
-                    );
+                for block_j in &chain_blocks[..i] {
+                    w = w.saturating_add((block_j.header.work_score.max(0.0) as u64) as u128);
                 }
                 Some(w)
             };
