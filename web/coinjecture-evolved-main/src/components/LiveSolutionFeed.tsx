@@ -130,7 +130,8 @@ function applyTokenomicsRewardsToSolutions(
     const parentW = wTip - wSelf - tail;
     if (parentW < 0n) continue;
     s.parent_w_emission = parentW;
-    s.reward_beans = blockRewardFromTruncWorkAndParentW(wSelf, parentW);
+    // Integer ⌊w/W⌋ is often 0 once W ≫ w_trunc — do not replace on-chain coinbase in `reward_beans`.
+    s.formula_reward_beans = blockRewardFromTruncWorkAndParentW(wSelf, parentW);
   }
 }
 
@@ -149,8 +150,10 @@ interface Solution {
   block_height: number;
   problem_type: "SubsetSum" | "TSP" | "SAT" | "Custom";
   solver: string;
-  /** Block emission (BEANS): `⌊w_trunc/W_parent⌋` when tip W + per-height work map are complete; genesis uses coinbase. */
+  /** Parsed on-chain coinbase `reward` (authoritative mint for this block). */
   reward_beans: bigint;
+  /** Integer model `⌊w_trunc/W_parent⌋` when parent W is derivable from tip cumulative work; informational only. */
+  formula_reward_beans: bigint | null;
   /**
    * Integer truncated from on-chain `header.work_score` — this is what the node sums into cumulative W
    * (`work_score.max(0) as u64`). When this is 0, parent W does not grow and rewards can repeat.
@@ -263,6 +266,7 @@ export const LiveSolutionFeed = () => {
           problem_type: "Custom",
           solver: formatMinerShort(header.miner),
           reward_beans: rewardBeans,
+          formula_reward_beans: null,
           w_contrib_chain: wRow,
           parent_w_emission: null,
           coinbase_beans: fromCb,
@@ -418,6 +422,7 @@ export const LiveSolutionFeed = () => {
           problem_type: problemType,
           solver,
           reward_beans: rewardBeans,
+          formula_reward_beans: null,
           w_contrib_chain: wRow,
           parent_w_emission: null,
           coinbase_beans: fromCb,
@@ -669,22 +674,24 @@ export const LiveSolutionFeed = () => {
                   <span className="font-semibold text-primary tabular-nums">
                     {formatBeans(solution.reward_beans)}
                   </span>
-                  {solution.parent_w_emission != null ? (
+                  {solution.parent_w_emission != null && solution.formula_reward_beans != null ? (
                     <span
                       className="text-[10px] text-muted-foreground leading-tight"
-                      title="Tokenomics: ⌊w_trunc ÷ W_parent⌋; w_trunc = truncated header.work_score; W_parent = Σ w_trunc on parent chain."
+                      title="Integer work/W model (truncated header.work_score ÷ parent ΣW). Often 0 when W ≫ w; main line is on-chain coinbase."
                     >
-                      ⌊{solution.w_contrib_chain.toString()}÷W_parent={solution.parent_w_emission.toString()}⌋
+                      Model ⌊w÷W⌋ = {formatBeans(solution.formula_reward_beans)} (w=
+                      {solution.w_contrib_chain.toString()}, W_parent={solution.parent_w_emission.toString()})
                     </span>
                   ) : solution.block_height > 0 ? (
                     <span className="text-[10px] text-muted-foreground leading-tight">
-                      W_parent not derived (tip/window mismatch); showing coinbase or 0.
+                      W_parent not derived (tip/window mismatch); reward from block coinbase only.
                     </span>
                   ) : null}
                   {solution.coinbase_beans != null &&
-                  solution.coinbase_beans !== solution.reward_beans ? (
+                  solution.formula_reward_beans != null &&
+                  solution.coinbase_beans !== solution.formula_reward_beans ? (
                     <span className="text-[10px] text-amber-600/90 dark:text-amber-400/90 leading-tight">
-                      On-chain coinbase: {formatBeans(solution.coinbase_beans)}
+                      Differs from integer ⌊w÷W⌋ (legacy scale or pre-fork blocks).
                     </span>
                   ) : null}
                 </div>
