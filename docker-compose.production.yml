@@ -1,6 +1,14 @@
 # COINjecture 2.0 — Full Production Stack
 # Usage: docker compose -f docker-compose.production.yml up -d
 # Requires: .env.production with Supabase credentials
+#
+# Node image from GHCR (optional — avoids local `cargo build` on the host):
+#   COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0:latest
+# Digest pin (same value as docker-compose.yml header when rolling together):
+#   COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0@sha256:575e023fd9508d5bbec27cb0ece08a515153cbde760e0d12257549e87ddac3ba
+#   docker compose -f docker-compose.production.yml pull node
+#   docker compose -f docker-compose.production.yml up -d --no-build
+# See docker-compose.yml header for full notes (docker login ghcr.io, digest pins).
 
 services:
   # ── COINjecture Node ──────────────────────────────────────────────────────

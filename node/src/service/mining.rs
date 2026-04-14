@@ -145,6 +145,8 @@ impl CoinjectNode {
         info!("starting mining loop");
         let mut last_mined_height = chain.best_block_height().await;
         debug!(block_height = last_mined_height, "mining loop initialized");
+        // Bump each mining tick; rate-limit `warn!` when peer consensus blocks mining.
+        let mut mining_gate_log_counter: u32 = 0;
 
         loop {
             // Use blocking sleep to bypass Tokio timer issues
@@ -189,7 +191,17 @@ impl CoinjectNode {
             if !dev_mode {
                 let (should_mine, reason) = peer_consensus.should_mine(best_height).await;
                 if !should_mine {
-                    debug!(reason = %reason, "mining paused");
+                    mining_gate_log_counter = mining_gate_log_counter.wrapping_add(1);
+                    // Default RUST_LOG=info hides `debug!`; surface gate reason periodically during forks.
+                    if mining_gate_log_counter % 6 == 1 {
+                        warn!(
+                            reason = %reason,
+                            height = best_height,
+                            "mining paused (peer consensus / sync gate); mesh heights disagree or reorg incomplete — see CPP fork / historical-sync warnings"
+                        );
+                    } else {
+                        debug!(reason = %reason, "mining paused");
+                    }
 
                     // Fallback: Also check simple best-peer height (for bootstrap with <5 peers)
                     let peer_best = *best_known_peer_height.read().await;

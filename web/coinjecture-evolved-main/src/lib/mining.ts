@@ -5,7 +5,11 @@
 
 import { blake3 } from '@noble/hashes/blake3';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
-import { blockRewardFromParentCumulativeWork, workScoreBitsFromPouw } from './chain-metrics';
+import {
+  blockRewardFromTruncWorkAndParentW,
+  truncatedHeaderWorkScoreU128,
+  workScoreBitsFromPouw,
+} from './chain-metrics';
 import { ProblemType, SolutionType, Block, BlockHeader } from './rpc-client';
 
 // Types matching Rust implementation
@@ -46,6 +50,13 @@ function normalizeHeaderFloat(value: number, decimals: number = 12): number {
   }
 
   return Number(value.toFixed(decimals));
+}
+
+/** Coinbase `reward` in JSON-RPC must be a safe integer. */
+function rewardAsNumber(reward: bigint): number | null {
+  if (reward < 0n) return null;
+  if (reward > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(reward);
 }
 
 function shouldLogMiningDebug(): boolean {
@@ -722,7 +733,8 @@ export async function createBlock(
   minerAddress: string,
   transactions: any[] = [],
   problemSize: number = 10,
-  difficulty: number = DEFAULT_DIFFICULTY
+  difficulty: number = DEFAULT_DIFFICULTY,
+  parentCumulativeWork: bigint = 0n
 ): Promise<Block | null> {
   console.log(`⛏️  Mining block #${height}...`);
   
@@ -833,7 +845,10 @@ export async function createBlock(
   
   // 8. Create coinbase transaction (must match Rust CoinbaseTransaction: { to: Address, reward: Balance, height: u64 })
   // Note: Address and Hash serialize as byte arrays [u8; 32] in JSON
-  const rewardBn = blockRewardFromParentCumulativeWork(parentCumulativeWork);
+  const rewardBn = blockRewardFromTruncWorkAndParentW(
+    truncatedHeaderWorkScoreU128(header.work_score),
+    parentCumulativeWork
+  );
   const rewardNum = rewardAsNumber(rewardBn);
   if (rewardNum === null) return null;
   const coinbase = {
@@ -866,6 +881,7 @@ export async function createBlockFromSolvedProblem(
   problem: ProblemType,
   solution: Solution,
   solveTimeMs: number,
+  parentCumulativeWork: bigint,
   transactions: any[] = [],
   difficulty: number = DEFAULT_DIFFICULTY
 ): Promise<Block | null> {
@@ -951,7 +967,10 @@ export async function createBlockFromSolvedProblem(
     },
   };
 
-  const rewardBn = blockRewardFromParentCumulativeWork(parentCumulativeWork);
+  const rewardBn = blockRewardFromTruncWorkAndParentW(
+    truncatedHeaderWorkScoreU128(header.work_score),
+    parentCumulativeWork
+  );
   const rewardNum = rewardAsNumber(rewardBn);
   if (rewardNum === null) return null;
   const coinbase = {

@@ -86,7 +86,7 @@ impl BlockValidator {
         expected_height: u64,
         skip_timestamp_age_check: bool,
         // Σ truncated `work_score` through the parent block (`W`). When `Some`, coinbase must match
-        // `RewardCalculator::calculate_block_reward(W)` for `height > 0`.
+        // `RewardCalculator::calculate_block_reward(header.work_score, W)` = `⌊w_trunc / W⌋` for `height > 0`.
         parent_cumulative_work_for_emission: Option<u128>,
     ) -> Result<(), ValidationError> {
         // 1. Validate block height
@@ -175,7 +175,8 @@ impl BlockValidator {
 
         if block.header.height > 0 {
             if let Some(w) = parent_cumulative_work_for_emission {
-                let expected = RewardCalculator::new().calculate_block_reward(w);
+                let expected =
+                    RewardCalculator::new().calculate_block_reward(block.header.work_score, w);
                 if block.coinbase.reward != expected {
                     return Err(ValidationError::InvalidCoinbaseAmount {
                         expected,

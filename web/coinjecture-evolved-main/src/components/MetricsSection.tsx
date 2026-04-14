@@ -10,7 +10,7 @@ export const MetricsSection = () => {
   const { data: chainInfo, isLoading: chainLoading, isError: chainError } = useQuery({
     queryKey: ['chain-info'],
     queryFn: () => rpcClient.getChainInfo(),
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 5000, // Keep mining / W / minted close to RPC tip
   });
 
   const { data: marketplaceStats, isLoading: statsLoading, isError: statsError } = useQuery({

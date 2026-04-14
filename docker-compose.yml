@@ -2,14 +2,30 @@ version: '3.8'
 
 # COINjecture Custom P2P Network — Docker Testnet
 # Uses CPP protocol on port 707 (NOT libp2p)
+# Follower hosts (no mining): add `-f docker-compose.follower-no-mine.yml` — see that file.
 # Health endpoint: GET /health on metrics port (9090)
 #
 # Environment: copy .env.example to .env and fill in values before running.
 # Secrets: sensitive values come from .env file — never hardcode in this file.
 #
-# Multi-host: set COINJECT_NODE_IMAGE in .env to the same digest on every machine, e.g.
-#   COINJECT_NODE_IMAGE=coinject-node@sha256:abc123...
-# so `latest` is not silently different per host after `docker compose pull`.
+# ── Node image: local build vs GHCR (bootnode, node1, node2, node3) ─────────
+# All four services use `image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}`.
+#
+# Local build (default): omit COINJECT_NODE_IMAGE → tag `coinject-node:latest`; use `docker compose up -d --build`.
+#
+# Prebuilt image from GitHub Container Registry (saves disk / compile time on VPS):
+#   1. In .env (same on every host):
+#        COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0:latest
+#   2. If the package is private: `docker login ghcr.io` (PAT with read:packages).
+#   3. Pull and start without compiling the node image:
+#        docker compose pull bootnode node1 node2 node3
+#        docker compose up -d --no-build bootnode node1 node2 node3 api-server
+# Package UI: https://github.com/COINjecture-Network/COINjecture2.0/pkgs/container/coinjecture2.0
+#
+# Pin by digest instead of :latest (recommended for production); refresh when CI publishes a new image:
+#   COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0@sha256:575e023fd9508d5bbec27cb0ece08a515153cbde760e0d12257549e87ddac3ba
+#
+# api-server still uses Dockerfile.api → `coinject-api:latest` (build once or supply a prebuilt image).
 
 services:
   # ── Bootnode ─────────────────────────────────────────────────────────────

@@ -245,6 +245,49 @@ function apiChainInfoLooksEmptyTip(info: ChainInfo): boolean {
   return info.best_height === 0 && !info.best_hash && !info.genesis_hash;
 }
 
+function finiteOrUndef(n: number | undefined): number | undefined {
+  return n != null && Number.isFinite(n) ? n : undefined;
+}
+
+/** Prefer API for identity fields; fill mining / W / minted from JSON-RPC when the API omits them. */
+function mergeChainInfoFromRpc(api: ChainInfo, rpc: ChainInfo): ChainInfo {
+  const bcwApi = api.best_cumulative_work?.trim();
+  const bcwRpc = rpc.best_cumulative_work?.trim();
+  const tmrApi = api.total_minted_rewards?.trim();
+  const tmrRpc = rpc.total_minted_rewards?.trim();
+  return {
+    ...api,
+    total_work: api.total_work ?? rpc.total_work,
+    is_syncing: api.is_syncing ?? rpc.is_syncing,
+    header_pow_difficulty:
+      finiteOrUndef(api.header_pow_difficulty) ?? finiteOrUndef(rpc.header_pow_difficulty),
+    np_problem_size: finiteOrUndef(api.np_problem_size) ?? finiteOrUndef(rpc.np_problem_size),
+    best_cumulative_work: bcwApi || bcwRpc || undefined,
+    total_minted_rewards: tmrApi || tmrRpc || undefined,
+  };
+}
+
+/** Best-effort NP “size” from `chain_getMiningWork` for dashboard when `np_problem_size` is absent. */
+export function npProblemSizeFromMiningProblem(problem: ProblemType | null | undefined): number | undefined {
+  if (!problem || typeof problem !== 'object') return undefined;
+  if (problem.SubsetSum?.numbers && Array.isArray(problem.SubsetSum.numbers)) {
+    const n = problem.SubsetSum.numbers.length;
+    return n > 0 ? n : undefined;
+  }
+  if (problem.SAT) {
+    const clauses = problem.SAT.clauses;
+    const clen = Array.isArray(clauses) ? clauses.length : 0;
+    const v = typeof problem.SAT.variables === 'number' ? problem.SAT.variables : 0;
+    const prod = v * clen;
+    return prod > 0 ? prod : undefined;
+  }
+  if (problem.TSP?.cities != null) {
+    const c = Number(problem.TSP.cities);
+    return Number.isFinite(c) && c > 0 ? c : undefined;
+  }
+  return undefined;
+}
+
 export interface RpcError {
   code: number;
   message: string;
@@ -746,32 +789,69 @@ export class RpcClient {
     return this.call<BlockHeader | null>('chain_getBlockHeader', [height]);
   }
 
-  async getChainInfo(): Promise<ChainInfo> {
-    // Production: browser → API `/chain/info` (no public RPC CORS required for the landing metrics).
-    if (!isDevelopment && import.meta.env.VITE_API_URL) {
-      try {
-        const fromApi = await fetchChainInfoFromApi();
-        if (!apiChainInfoLooksEmptyTip(fromApi)) {
-          return fromApi;
-        }
-        console.warn(
-          '[rpc-client] /chain/info returned empty tip (height 0, no hashes); trying JSON-RPC',
-        );
-      } catch (e) {
-        console.warn('[rpc-client] /chain/info failed, falling back to JSON-RPC', e);
-      }
-    }
-    // Prefer the highest reported height across nodes; if parallel probes all fail, fall back to
-    // sequential failover (longer timeout) so the dashboard still loads when one path is flaky.
+  /** Prefer max `best_height` across RPC URLs (same as previous `getChainInfo` JSON-RPC path). */
+  private async fetchChainInfoViaJsonRpc(): Promise<ChainInfo> {
     try {
-      return await this.callAll<ChainInfo>('chain_getInfo', [], (results) => {
-        return results.reduce((best, current) =>
-          current.best_height > best.best_height ? current : best
-        );
-      });
+      return await this.callAll<ChainInfo>('chain_getInfo', [], (results) =>
+        results.reduce((best, current) =>
+          current.best_height > best.best_height ? current : best,
+        ),
+      );
     } catch {
       return this.call<ChainInfo>('chain_getInfo', []);
     }
+  }
+
+  /** When `chain_getInfo` omits mining tips, try `chain_getMiningWork` (mining-enabled nodes only). */
+  private async supplementChainInfoMiningFields(info: ChainInfo): Promise<ChainInfo> {
+    const havePow = finiteOrUndef(info.header_pow_difficulty) != null;
+    const haveNp = finiteOrUndef(info.np_problem_size) != null;
+    if (havePow && haveNp) return info;
+    try {
+      const mw = await this.getMiningWork();
+      let out = info;
+      if (!havePow && Number.isFinite(mw.difficulty)) {
+        out = { ...out, header_pow_difficulty: mw.difficulty };
+      }
+      if (!haveNp) {
+        const n = npProblemSizeFromMiningProblem(mw.problem);
+        if (n != null) out = { ...out, np_problem_size: n };
+      }
+      return out;
+    } catch {
+      return info;
+    }
+  }
+
+  /**
+   * Merge `GET /chain/info` with live `chain_getInfo` from JSON-RPC so mining / W / minted fields
+   * are not stuck empty when the API’s `NODE_RPC_URL` points at a non-mining or older node.
+   */
+  async getChainInfo(): Promise<ChainInfo> {
+    const rpcPromise = this.fetchChainInfoViaJsonRpc();
+
+    if (!isDevelopment) {
+      const base = apiBaseTrimmed();
+      if (base) {
+        try {
+          const [fromApi, rpcInfo] = await Promise.all([
+            fetchChainInfoFromApi(),
+            rpcPromise,
+          ]);
+          if (!apiChainInfoLooksEmptyTip(fromApi)) {
+            return await this.supplementChainInfoMiningFields(mergeChainInfoFromRpc(fromApi, rpcInfo));
+          }
+          console.warn(
+            '[rpc-client] /chain/info returned empty tip (height 0, no hashes); using JSON-RPC',
+          );
+        } catch (e) {
+          console.warn('[rpc-client] /chain/info failed; using JSON-RPC', e);
+        }
+        return await this.supplementChainInfoMiningFields(await rpcPromise);
+      }
+    }
+
+    return await this.supplementChainInfoMiningFields(await rpcPromise);
   }
 
   /** Next mining template from nodes with mining enabled (longest `next_height` wins in multi-RPC). */

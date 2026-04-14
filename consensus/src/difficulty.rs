@@ -1,11 +1,11 @@
 // Dynamic Difficulty Adjustment (EMPIRICAL VERSION)
 // Scales problem size to maintain target solve times for meaningful asymmetry
 //
-// **Small networks / few samples:** With a short history, measured solve-time variance is often
-// high relative to the mean. Using the same σ/μ gate as the full 20-sample window can defer
-// almost every adjustment and make the NP size feel “stuck”. The adjuster relaxes the σ/μ gate
-// until the deque approaches `DIFFICULTY_WINDOW`, then converges to `HIGH_VARIANCE_RATIO`.
-// Growth/shrink caps (`SCALE_CLAMP_*`, global max, stall ratios) still bound how fast size moves.
+// **Window N = 20, first move at N/2 = 10 samples:** No retarget until at least half the window is
+// filled (`adjust_difficulty` returns current size when `len < 10`).
+//
+// **Variance deferral (whitepaper):** If σ > 0.8 μ over the window (solve-time mean μ, std σ),
+// retarget is skipped for that interval — statistical stability over ~200s of history at 10s/block.
 //
 // COMPLIANCE: Empirical ✓ | Self-referential ✓ | Dimensionless ✓
 //
@@ -38,18 +38,16 @@ use tokio::sync::RwLock;
 /// See docs/BOOTSTRAP.md for the full bootstrap → empirical transition.
 const DIFFICULTY_WINDOW: usize = 20;
 
-/// Stall and stability tuning (dimensionless ratios)
-const HIGH_VARIANCE_RATIO: f64 = 0.8; // σ close to μ ⇒ defer (full-window strict threshold)
-/// When sample count is below [`DIFFICULTY_WINDOW`], allow a looser σ/μ ratio so tiny meshes still retarget.
-const HIGH_VARIANCE_RATIO_BOOTSTRAP: f64 = 1.25;
+/// Defer difficulty change when **σ > HIGH_VARIANCE_RATIO × μ** (strict 0.8 from tokenomics spec).
+const HIGH_VARIANCE_RATIO: f64 = 0.8;
 const RECOVERY_STABLE_RATIO: f64 = 1.2;
 const RECOVERY_STEP: usize = 1;
 
 /// Absolute minimum problem size — must never reach 0 (would halt the chain).
 const ABSOLUTE_MIN_SIZE: usize = 1;
 
-/// Bootstrap default target solve time in microseconds (5 seconds).
-const DEFAULT_TARGET_US: u64 = 5_000_000;
+/// Default optimal solve / block pacing target (10 seconds) — matches tokenomics difficulty spec.
+const DEFAULT_TARGET_US: u64 = 10_000_000;
 
 /// Scale factor clamp expressed as a fraction: new_size stays in
 /// [current × MIN_SCALE_NUM/DENOM, current × MAX_SCALE_NUM/DENOM].
@@ -82,15 +80,6 @@ pub struct DifficultyAdjuster {
 }
 
 impl DifficultyAdjuster {
-    /// σ/μ threshold for deferring a size change: stricter at full window, looser with few samples.
-    fn variance_ratio_threshold(sample_count: usize) -> f64 {
-        if sample_count == 0 {
-            return HIGH_VARIANCE_RATIO_BOOTSTRAP;
-        }
-        let t = (sample_count as f64 / DIFFICULTY_WINDOW as f64).clamp(0.0, 1.0);
-        HIGH_VARIANCE_RATIO_BOOTSTRAP + t * (HIGH_VARIANCE_RATIO - HIGH_VARIANCE_RATIO_BOOTSTRAP)
-    }
-
     /// Create new difficulty adjuster without network metrics (uses defaults).
     pub fn new() -> Self {
         DifficultyAdjuster {
@@ -149,9 +138,8 @@ impl DifficultyAdjuster {
     async fn optimal_solve_time_us(&self) -> u64 {
         if let Some(ref metrics) = self.network_metrics {
             let metrics = metrics.read().await;
-            // Optimal = median_block_time * η (mathematical scaling).
-            // Convert seconds → microseconds.
-            let secs = metrics.median_block_time() * ETA;
+            // Empirical inter-block / pacing target (seconds) → μs; aligns with median block time oracle.
+            let secs = metrics.median_block_time().max(0.1);
             (secs * 1_000_000.0) as u64
         } else {
             DEFAULT_TARGET_US
@@ -304,12 +292,11 @@ impl DifficultyAdjuster {
             );
         }
         let std_dev = self.solve_time_std_dev(avg_secs);
-        let var_thresh = Self::variance_ratio_threshold(self.recent_solve_times_us.len());
-
-        if std_dev > avg_secs * var_thresh {
+        if std_dev > avg_secs * HIGH_VARIANCE_RATIO {
             println!(
-                "🔁 High variance detected (σ={:.2}s, threshold {:.2}×μ). Deferring difficulty adjustment.",
-                std_dev, var_thresh
+                "🔁 High variance detected (σ={:.2}s > {:.2}μ). Deferring difficulty adjustment.",
+                std_dev,
+                avg_secs * HIGH_VARIANCE_RATIO
             );
             return self.current_size();
         }
@@ -389,12 +376,11 @@ impl DifficultyAdjuster {
             );
         }
         let std_dev = self.solve_time_std_dev(avg_secs);
-        let var_thresh = Self::variance_ratio_threshold(self.recent_solve_times_us.len());
-
-        if std_dev > avg_secs * var_thresh {
+        if std_dev > avg_secs * HIGH_VARIANCE_RATIO {
             println!(
-                "🔁 High variance detected (σ={:.2}s, threshold {:.2}×μ). Deferring difficulty adjustment.",
-                std_dev, var_thresh
+                "🔁 High variance detected (σ={:.2}s > {:.2}μ). Deferring difficulty adjustment.",
+                std_dev,
+                avg_secs * HIGH_VARIANCE_RATIO
             );
             return self.current_size();
         }
@@ -726,9 +712,9 @@ mod tests {
     fn test_difficulty_stable_at_target() {
         let mut adjuster = DifficultyAdjuster::new();
 
-        // Simulate 20 blocks solved at target time (5 seconds each)
+        // Simulate 20 blocks solved at target time (10 seconds each — DEFAULT_TARGET_US)
         for _ in 0..20 {
-            adjuster.record_solve_time(Duration::from_secs(5));
+            adjuster.record_solve_time(Duration::from_secs(10));
         }
 
         let original_size = adjuster.current_size();

@@ -76,7 +76,8 @@ pub fn create_genesis_block(config: GenesisConfig) -> Block {
         transactions_root: Hash::ZERO,
         solutions_root: Hash::new(&bincode::serialize(&solution).unwrap_or_default()),
         commitment: commitment.clone(),
-        work_score: 1.0, // Genesis has minimal work score
+        // Minimal header work (feeds cumulative W); mined rewards use `⌊w_trunc / W_parent⌋` in tokenomics.
+        work_score: 1.0,
         miner: config.genesis_address,
         nonce: 0,
         // Genesis block has nominal PoUW metrics (trivially solvable)

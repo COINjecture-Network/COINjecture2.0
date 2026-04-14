@@ -1,7 +1,7 @@
 /**
  * Display helpers aligned with consensus + tokenomics (Rust):
  * - Work score: consensus/src/work_score.rs — bits = log₂(solve/verify) × quality
- * - Block reward: tokenomics/src/rewards.rs — `⌊base_reward / W⌋` with `W` = parent-chain cumulative work
+ * - Block reward: tokenomics/src/rewards.rs — `⌊w_trunc / W_parent⌋` (same trunc as chain cumulative W).
  */
 
 /** Match `consensus/src/work_score.rs` — same floors as the f64 `calculate` path. */
@@ -25,15 +25,42 @@ export function workScoreBitsFromPouw(
   return Math.log2(ratio) * q;
 }
 
-/** `RewardCalculator::new().base_reward` in tokenomics/src/rewards.rs */
-export const REWARD_BASE_REWARD = 10_000_000n;
+/**
+ * Same as Rust `RewardCalculator::calculate_block_reward(work_score, W)`:
+ * `⌊w_trunc / W_parent⌋` for `W_parent > 0`, else `0`.
+ */
+export function blockRewardFromTruncWorkAndParentW(
+  blockWorkTrunc: bigint,
+  parentCumulativeWork: bigint
+): bigint {
+  if (parentCumulativeWork <= 0n) return 0n;
+  return blockWorkTrunc / parentCumulativeWork;
+}
 
 /**
- * Same as Rust `RewardCalculator::calculate_block_reward`: `⌊base_reward / W⌋` for `W > 0`, else `0`.
+ * Work units summed into chain cumulative W (`node/src/chain.rs`):
+ * `(header.work_score.max(0.0) as u64) as u128` — uses the **stored** header field only
+ * (not the PoUW recompute used for display bits).
  */
-export function blockRewardFromParentCumulativeWork(parentCumulativeWork: bigint): bigint {
-  if (parentCumulativeWork <= 0n) return 0n;
-  return REWARD_BASE_REWARD / parentCumulativeWork;
+export function truncatedHeaderWorkScoreU128(workScore: unknown): bigint {
+  if (workScore == null) return 0n;
+  const x =
+    typeof workScore === 'number'
+      ? workScore
+      : typeof workScore === 'string' && workScore.trim() !== ''
+        ? Number(workScore)
+        : NaN;
+  if (!Number.isFinite(x) || x <= 0) return 0n;
+  const t = Math.trunc(x);
+  if (t <= 0) return 0n;
+  if (t > Number.MAX_SAFE_INTEGER) {
+    try {
+      return BigInt(Math.floor(x));
+    } catch {
+      return 0n;
+    }
+  }
+  return BigInt(t);
 }
 
 export function parseBalance(raw: unknown): bigint | null {

@@ -1163,10 +1163,11 @@ impl Miner {
         let header = mined_header; // Use the mined header with correct nonce
         println!("Header mined: {:?}", header_hash);
 
-        // 9. Block reward: base_reward × (1/W) with W = parent-chain cumulative work
-        let reward_amount = self
-            .reward_calculator
-            .calculate_block_reward(parent_cumulative_work);
+        // 9. Block reward: ⌊w_trunc / W_parent⌋ (whitepaper work_score / W, same trunc as chain W)
+        let reward_amount = self.reward_calculator.calculate_block_reward(
+            header.work_score,
+            parent_cumulative_work,
+        );
         let coinbase = CoinbaseTransaction::new(self.config.miner_address, reward_amount, height);
         println!("Block reward: {} tokens", reward_amount);
 
@@ -1402,9 +1403,8 @@ pub fn build_block_from_solution(
     // Mine header nonce (find hash meeting difficulty target)
     let (mined_header, _hash) = mine_header_blocking(header, difficulty)?;
 
-    // Block reward: base_reward × (1/W)
     let reward_calculator = coinject_tokenomics::RewardCalculator::new();
-    let reward = reward_calculator.calculate_block_reward(parent_cumulative_work);
+    let reward = reward_calculator.calculate_block_reward(mined_header.work_score, parent_cumulative_work);
     let coinbase = CoinbaseTransaction::new(miner_address, reward, height);
 
     let solution_reveal = SolutionReveal {
