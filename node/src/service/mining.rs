@@ -231,10 +231,26 @@ impl CoinjectNode {
                 "fetching transactions for block"
             );
 
+            let parent_cumulative_work = match chain.cumulative_work_at_tip_hash(best_hash) {
+                Ok(w) => w,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "could not read parent cumulative work for emission; skipping mining round"
+                    );
+                    continue;
+                }
+            };
+
             // Mine block
             let mut miner_lock = miner.write().await;
             if let Some(block) = miner_lock
-                .mine_block(best_hash, best_height + 1, transactions.clone())
+                .mine_block(
+                    best_hash,
+                    best_height + 1,
+                    parent_cumulative_work,
+                    transactions.clone(),
+                )
                 .await
             {
                 info!(block_height = block.header.height, block_hash = ?block.header.hash(), "mined new block");
@@ -269,12 +285,12 @@ impl CoinjectNode {
                 }
 
                 // EMPIRICAL MEASUREMENT: Record work score for convergence analysis
-                let block_time = if block.header.height > 1 {
-                    // Approximate block time from timestamp difference
-                    // In full implementation, track previous block timestamp
-                    60.0 // Default to ~60s target block time
-                } else {
-                    0.0
+                let block_time = match chain.get_block_by_height(block.header.height.saturating_sub(1))
+                {
+                    Ok(Some(parent)) if block.header.height > 0 => {
+                        (block.header.timestamp - parent.header.timestamp).max(0) as f64
+                    }
+                    _ => 0.0,
                 };
 
                 if let Err(e) = dimensional_pool_state.record_work_score(
@@ -382,6 +398,9 @@ impl CoinjectNode {
                 }
                 drop(pool);
 
+                Self::retarget_header_pow_from_stored_block(&Some(miner.clone()), &chain, &block)
+                    .await;
+
                 // Broadcast to network
                 if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block.clone())) {
                     error!(block_height = block.header.height, error = %e, "failed to broadcast block");
@@ -390,10 +409,12 @@ impl CoinjectNode {
                 }
 
                 // Update CPP network chain state so it broadcasts correct height to peers
+                let cum = chain.best_cumulative_work().await;
                 if let Err(e) =
                     cpp_network_tx.send(coinject_network::cpp::NetworkCommand::UpdateChainState {
                         best_height: block.header.height,
                         best_hash: block.header.hash(),
+                        cumulative_work: cum,
                     })
                 {
                     warn!(block_height = block.header.height, error = %e, "failed to update cpp chain state");

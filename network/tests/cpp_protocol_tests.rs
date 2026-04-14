@@ -159,6 +159,7 @@ async fn test_cpp_handshake_success() {
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
         flock_state: None,
+        cumulative_work: 0,
     };
     MessageCodec::send_status(&mut client_stream, &status)
         .await

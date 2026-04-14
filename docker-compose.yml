@@ -6,6 +6,10 @@ version: '3.8'
 #
 # Environment: copy .env.example to .env and fill in values before running.
 # Secrets: sensitive values come from .env file — never hardcode in this file.
+#
+# Multi-host: set COINJECT_NODE_IMAGE in .env to the same digest on every machine, e.g.
+#   COINJECT_NODE_IMAGE=coinject-node@sha256:abc123...
+# so `latest` is not silently different per host after `docker compose pull`.
 
 services:
   # ── Bootnode ─────────────────────────────────────────────────────────────
@@ -14,7 +18,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-bootnode
     restart: unless-stopped
     env_file:
@@ -45,11 +49,11 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          # Mainnet-height nodes OOM at 512M; keep bootnode stable for RPC + mining.
-          memory: 2G
+          # Sync + HF + many peers can exceed ~2G RSS; cgroup OOM otherwise restarts the fleet.
+          memory: 4G
         reservations:
           cpus: '0.25'
-          memory: 256M
+          memory: 512M
     # Require JSON-RPC (9933), not only metrics — otherwise api-server starts while /node-rpc and /chain/info still see "connection refused".
     healthcheck:
       test:
@@ -67,7 +71,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node1
     restart: unless-stopped
     env_file:
@@ -100,10 +104,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: 3G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 15s
@@ -116,7 +120,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node2
     restart: unless-stopped
     env_file:
@@ -149,10 +153,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: 3G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 15s
@@ -165,7 +169,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node3
     restart: unless-stopped
     env_file:
@@ -198,10 +202,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: 3G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 15s

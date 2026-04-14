@@ -1,6 +1,6 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, Users, Activity, Target, Award, BarChart3, Network, Loader2 } from "lucide-react";
+import { TrendingUp, Users, Activity, Target, Award, BarChart3, Network, Loader2, Binary, Layers } from "lucide-react";
 import { LiveSolutionFeed } from "./LiveSolutionFeed";
 import { useQuery } from "@tanstack/react-query";
 import { rpcClient } from "@/lib/rpc-client";
@@ -140,6 +140,64 @@ export const MetricsSection = () => {
                 {chainInfo.genesis_hash.length >= 16
                   ? `${chainInfo.genesis_hash.slice(0, 16)}...`
                   : chainInfo.genesis_hash || "—"}
+              </p>
+            </Card>
+          </div>
+        )}
+
+        {chainInfo && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-12">
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <Binary className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">Header PoW (leading hex zeros)</p>
+              </div>
+              <p className="text-xl font-bold tabular-nums">
+                {chainInfo.header_pow_difficulty != null && Number.isFinite(chainInfo.header_pow_difficulty)
+                  ? chainInfo.header_pow_difficulty
+                  : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Each +1 is one more required leading <code className="rounded bg-muted px-1">0</code> in{" "}
+                <code className="rounded bg-muted px-1">hex(header_hash)</code> (max 64).
+              </p>
+            </Card>
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <Layers className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">NP problem size (adjuster)</p>
+              </div>
+              <p className="text-xl font-bold tabular-nums">
+                {chainInfo.np_problem_size != null && Number.isFinite(chainInfo.np_problem_size)
+                  ? chainInfo.np_problem_size.toLocaleString()
+                  : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Post-block empirical size target for the next block template (shown when the node exposes mining tips).
+              </p>
+            </Card>
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <BarChart3 className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">Cumulative work (W)</p>
+              </div>
+              <p className="text-lg font-bold font-mono break-all">
+                {chainInfo.best_cumulative_work?.trim() ? chainInfo.best_cumulative_work : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Σ truncated header work on the canonical tip (parent work for the next block reward).
+              </p>
+            </Card>
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <Award className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">Total minted (coinbase)</p>
+              </div>
+              <p className="text-lg font-bold font-mono break-all">
+                {chainInfo.total_minted_rewards?.trim() ? chainInfo.total_minted_rewards : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Sum of coinbase rewards on the current best chain (from node when supported).
               </p>
             </Card>
           </div>

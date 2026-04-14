@@ -201,6 +201,28 @@ async function fetchChainInfoFromApi(): Promise<ChainInfo> {
   const best_hash = typeof j.best_hash === 'string' ? j.best_hash : '';
   const genesis_hash = typeof j.genesis_hash === 'string' ? j.genesis_hash : '';
 
+  const header_pow_difficulty =
+    typeof j.header_pow_difficulty === 'number'
+      ? j.header_pow_difficulty
+      : j.header_pow_difficulty != null
+        ? Number(j.header_pow_difficulty)
+        : undefined;
+  const np_problem_size =
+    typeof j.np_problem_size === 'number'
+      ? j.np_problem_size
+      : j.np_problem_size != null
+        ? Number(j.np_problem_size)
+        : undefined;
+
+  const best_cumulative_work =
+    typeof j.best_cumulative_work === 'string' && j.best_cumulative_work.trim() !== ''
+      ? j.best_cumulative_work.trim()
+      : undefined;
+  const total_minted_rewards =
+    typeof j.total_minted_rewards === 'string' && j.total_minted_rewards.trim() !== ''
+      ? j.total_minted_rewards.trim()
+      : undefined;
+
   return {
     chain_id: typeof j.chain_id === 'string' ? j.chain_id : `coinjecture:${network}`,
     best_height,
@@ -209,6 +231,12 @@ async function fetchChainInfoFromApi(): Promise<ChainInfo> {
     peer_count: typeof j.peer_count === 'number' ? j.peer_count : Number(j.peer_count ?? 0) || 0,
     total_work: typeof j.total_work === 'number' ? j.total_work : undefined,
     is_syncing: Boolean(j.syncing),
+    header_pow_difficulty: Number.isFinite(header_pow_difficulty)
+      ? header_pow_difficulty
+      : undefined,
+    np_problem_size: Number.isFinite(np_problem_size) ? np_problem_size : undefined,
+    best_cumulative_work,
+    total_minted_rewards,
   };
 }
 
@@ -277,6 +305,14 @@ export interface ChainInfo {
   peer_count: number; // usize
   total_work?: number;
   is_syncing?: boolean;
+  /** Leading hex `0` nibbles on header hash (node mining / RPC). */
+  header_pow_difficulty?: number;
+  /** NP post-block adjuster size for the next template. */
+  np_problem_size?: number;
+  /** Canonical cumulative work `W` at best tip (decimal string, u128). */
+  best_cumulative_work?: string;
+  /** Sum of coinbase rewards on the best chain (decimal string, u128). */
+  total_minted_rewards?: string;
 }
 
 /** `chain_getMiningWork` — deterministic instance for the next block (same as node miner). */

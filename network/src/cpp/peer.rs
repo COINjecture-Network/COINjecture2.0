@@ -59,6 +59,9 @@ pub struct Peer {
     /// Best block hash
     pub best_hash: Hash,
 
+    /// Cumulative work on peer's advertised best chain (from Status); `0` until first status.
+    pub cumulative_work: u128,
+
     /// Genesis hash (for chain validation)
     pub genesis_hash: Hash,
 
@@ -218,6 +221,7 @@ impl Peer {
             node_type,
             best_height,
             best_hash,
+            cumulative_work: 0,
             genesis_hash,
             flow_control: FlowControl::new(),
             quality: 1.0, // Start with perfect quality
@@ -266,11 +270,18 @@ impl Peer {
         }
     }
 
-    /// Update peer status
-    pub fn update_status(&mut self, height: u64, hash: Hash, node_type: NodeType) {
+    /// Update peer status (height/hash/type and optional cumulative work from Status).
+    pub fn update_status(
+        &mut self,
+        height: u64,
+        hash: Hash,
+        node_type: NodeType,
+        cumulative_work: u128,
+    ) {
         self.best_height = height;
         self.best_hash = hash;
         self.node_type = node_type;
+        self.cumulative_work = cumulative_work;
         self.last_seen = Instant::now();
     }
 

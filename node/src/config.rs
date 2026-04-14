@@ -168,7 +168,7 @@ pub struct NodeConfig {
     pub difficulty: u32,
 
     /// Target block time in seconds
-    #[arg(long, default_value = "60")]
+    #[arg(long, default_value = "10")]
     pub block_time: u64,
 
     /// Maximum number of peers
@@ -651,7 +651,7 @@ mod tests {
             bootnodes: vec![],
             chain_id: "test".to_string(),
             difficulty: 4,
-            block_time: 60,
+            block_time: 10,
             max_peers: 50,
             verbose: false,
             enable_faucet: false,

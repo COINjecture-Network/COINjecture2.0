@@ -97,7 +97,7 @@ impl TestNode {
         let (coord_event_tx, mut coord_event_rx) = mpsc::unbounded_channel::<CoordinatorEvent>();
 
         let (coordinator, _shared_state) =
-            EpochCoordinator::new(node_id, coord_config, 0, Hash::from_bytes([0; 32]));
+            EpochCoordinator::new(node_id, coord_config, 0, Hash::from_bytes([0; 32]), 0);
 
         // Spawn coordinator
         tokio::spawn(async move {

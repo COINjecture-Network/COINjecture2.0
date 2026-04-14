@@ -387,10 +387,44 @@ pub struct StatusMessage {
     /// Flock state for murmuration coordination (optional for backwards compat)
     #[serde(default)]
     pub flock_state: Option<FlockStateCompact>,
+    /// Sum of `work_score` along this peer's advertised best chain (genesis → tip).
+    /// Omitted on the wire by pre-v2 nodes; deserializer fills `0` for legacy payloads.
+    #[serde(default)]
+    pub cumulative_work: u128,
+}
+
+/// Legacy bincode layout (no `cumulative_work` field) for interop with older binaries.
+#[derive(Deserialize)]
+struct StatusMessageLegacy {
+    best_height: u64,
+    best_hash: Hash,
+    node_type: u8,
+    timestamp: u64,
+    #[serde(default)]
+    flock_state: Option<FlockStateCompact>,
 }
 
 impl StatusMessage {
-    /// Validate structural constraints of a received StatusMessage.
+    /// Deserialize from bincode bytes, accepting both new payloads and legacy (shorter) ones.
+    pub fn decode_bincode_compat(bytes: &[u8]) -> Result<Self, String> {
+        match ::bincode::deserialize::<StatusMessage>(bytes) {
+            Ok(m) => Ok(m),
+            Err(_) => {
+                let leg: StatusMessageLegacy =
+                    ::bincode::deserialize(bytes).map_err(|e| e.to_string())?;
+                Ok(StatusMessage {
+                    best_height: leg.best_height,
+                    best_hash: leg.best_hash,
+                    node_type: leg.node_type,
+                    timestamp: leg.timestamp,
+                    flock_state: leg.flock_state,
+                    cumulative_work: 0,
+                })
+            }
+        }
+    }
+
+    /// Validate structural constraints for a received StatusMessage.
     pub fn validate(&self) -> Result<(), String> {
         validate_node_type_byte(self.node_type).map_err(|e| e.to_string())
     }

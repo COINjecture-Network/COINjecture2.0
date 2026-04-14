@@ -169,10 +169,13 @@ impl CoinjectNode {
                                 // Get best peer from peer_consensus (highest height)
                                 let active_peers = peer_consensus.active_peers().await;
 
-                                if let Some((peer_id_str, peer_state)) = active_peers
-                                    .iter()
-                                    .max_by_key(|(_, state)| state.best_height)
-                                {
+                                if let Some((peer_id_str, peer_state)) = active_peers.iter().max_by(
+                                    |(_, a), (_, b)| {
+                                        a.cumulative_work
+                                            .cmp(&b.cumulative_work)
+                                            .then_with(|| a.best_height.cmp(&b.best_height))
+                                    },
+                                ) {
                                     // Parse peer_id from hex string
                                     if let Ok(peer_id_bytes) = hex::decode(peer_id_str) {
                                         if peer_id_bytes.len() == 32 {
@@ -1052,12 +1055,27 @@ impl CoinjectNode {
                 ));
             }
 
+            let emission_w = if block.header.height == 0 {
+                None
+            } else {
+                match chain.cumulative_work_at_tip_hash(block.header.prev_hash) {
+                    Ok(w) => Some(w),
+                    Err(e) => {
+                        return Err(format!(
+                            "Emission parent work at height {}: {}",
+                            block.header.height, e
+                        ));
+                    }
+                }
+            };
+
             // Validate block (skip timestamp age check during chain reorganization/sync)
             match validator.validate_block_with_options(
                 block,
                 &prev_hash,
                 block.header.height,
                 true,
+                emission_w,
             ) {
                 Ok(()) => {
                     prev_hash = block.header.hash();
@@ -1225,10 +1243,26 @@ impl CoinjectNode {
             let block = &chain_blocks[i];
             let prev_hash = chain_blocks[i - 1].header.hash();
 
+            let emission_w = if block.header.height == 0 {
+                None
+            } else {
+                let mut w = 0u128;
+                for j in 0..i {
+                    w = w.saturating_add(
+                        (chain_blocks[j].header.work_score.max(0.0) as u64) as u128,
+                    );
+                }
+                Some(w)
+            };
+
             // Validate block (skip timestamp age check during chain validation)
-            if let Err(e) =
-                validator.validate_block_with_options(block, &prev_hash, block.header.height, true)
-            {
+            if let Err(e) = validator.validate_block_with_options(
+                block,
+                &prev_hash,
+                block.header.height,
+                true,
+                emission_w,
+            ) {
                 return Err(format!(
                     "Block {} validation failed: {}",
                     block.header.height, e

@@ -1,6 +1,12 @@
 // Dynamic Difficulty Adjustment (EMPIRICAL VERSION)
 // Scales problem size to maintain target solve times for meaningful asymmetry
 //
+// **Small networks / few samples:** With a short history, measured solve-time variance is often
+// high relative to the mean. Using the same σ/μ gate as the full 20-sample window can defer
+// almost every adjustment and make the NP size feel “stuck”. The adjuster relaxes the σ/μ gate
+// until the deque approaches `DIFFICULTY_WINDOW`, then converges to `HIGH_VARIANCE_RATIO`.
+// Growth/shrink caps (`SCALE_CLAMP_*`, global max, stall ratios) still bound how fast size moves.
+//
 // COMPLIANCE: Empirical ✓ | Self-referential ✓ | Dimensionless ✓
 //
 // Principles (from whitepaper):
@@ -33,7 +39,9 @@ use tokio::sync::RwLock;
 const DIFFICULTY_WINDOW: usize = 20;
 
 /// Stall and stability tuning (dimensionless ratios)
-const HIGH_VARIANCE_RATIO: f64 = 0.8; // σ close to μ ⇒ widen window
+const HIGH_VARIANCE_RATIO: f64 = 0.8; // σ close to μ ⇒ defer (full-window strict threshold)
+/// When sample count is below [`DIFFICULTY_WINDOW`], allow a looser σ/μ ratio so tiny meshes still retarget.
+const HIGH_VARIANCE_RATIO_BOOTSTRAP: f64 = 1.25;
 const RECOVERY_STABLE_RATIO: f64 = 1.2;
 const RECOVERY_STEP: usize = 1;
 
@@ -74,6 +82,16 @@ pub struct DifficultyAdjuster {
 }
 
 impl DifficultyAdjuster {
+    /// σ/μ threshold for deferring a size change: stricter at full window, looser with few samples.
+    fn variance_ratio_threshold(sample_count: usize) -> f64 {
+        if sample_count == 0 {
+            return HIGH_VARIANCE_RATIO_BOOTSTRAP;
+        }
+        let t = (sample_count as f64 / DIFFICULTY_WINDOW as f64).clamp(0.0, 1.0);
+        HIGH_VARIANCE_RATIO_BOOTSTRAP
+            + t * (HIGH_VARIANCE_RATIO - HIGH_VARIANCE_RATIO_BOOTSTRAP)
+    }
+
     /// Create new difficulty adjuster without network metrics (uses defaults).
     pub fn new() -> Self {
         DifficultyAdjuster {
@@ -287,11 +305,12 @@ impl DifficultyAdjuster {
             );
         }
         let std_dev = self.solve_time_std_dev(avg_secs);
+        let var_thresh = Self::variance_ratio_threshold(self.recent_solve_times_us.len());
 
-        if std_dev > avg_secs * HIGH_VARIANCE_RATIO {
+        if std_dev > avg_secs * var_thresh {
             println!(
-                "🔁 High variance detected (σ={:.2}s). Deferring difficulty adjustment.",
-                std_dev
+                "🔁 High variance detected (σ={:.2}s, threshold {:.2}×μ). Deferring difficulty adjustment.",
+                std_dev, var_thresh
             );
             return self.current_size();
         }
@@ -371,11 +390,12 @@ impl DifficultyAdjuster {
             );
         }
         let std_dev = self.solve_time_std_dev(avg_secs);
+        let var_thresh = Self::variance_ratio_threshold(self.recent_solve_times_us.len());
 
-        if std_dev > avg_secs * HIGH_VARIANCE_RATIO {
+        if std_dev > avg_secs * var_thresh {
             println!(
-                "🔁 High variance detected (σ={:.2}s). Deferring difficulty adjustment.",
-                std_dev
+                "🔁 High variance detected (σ={:.2}s, threshold {:.2}×μ). Deferring difficulty adjustment.",
+                std_dev, var_thresh
             );
             return self.current_size();
         }

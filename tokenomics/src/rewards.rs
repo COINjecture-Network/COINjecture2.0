@@ -1,11 +1,14 @@
-// Block reward calculation
-// block_reward = base_constant × (work_score / epoch_average_work)
+// Block reward (asymptotic decay, no emission floors)
+//
+// Canonical law: `block_reward = base_reward × (1/W)` with `W` = parent-chain cumulative work
+// (Σ truncated header.work_score through the parent block). Over ℤ, this is implemented as
+// `⌊base_reward / W⌋` = `base_reward.checked_div(W)` for `W > 0`; `W == 0` ⇒ 0 (safety only).
 
-use coinject_core::{Balance, WorkScore};
+use coinject_core::Balance;
 
 pub struct RewardCalculator {
-    base_constant: f64,
-    epoch_average_work: f64,
+    /// Scale constant `B` in `B × (1/W)` (same units as `Balance` / on-chain amounts).
+    base_reward: u128,
 }
 
 impl Default for RewardCalculator {
@@ -17,20 +20,18 @@ impl Default for RewardCalculator {
 impl RewardCalculator {
     pub fn new() -> Self {
         RewardCalculator {
-            base_constant: 10_000_000.0, // 10 million base reward for testing
-            epoch_average_work: 1.0,
+            base_reward: 10_000_000, // 10M — matches prior test scale order of magnitude
         }
     }
 
-    /// Calculate block reward from work score
-    pub fn calculate_reward(&self, work_score: WorkScore) -> Balance {
-        let reward = self.base_constant * (work_score / self.epoch_average_work);
-        reward as Balance
-    }
-
-    /// Update epoch average (called after each epoch)
-    pub fn update_epoch_average(&mut self, average_work: f64) {
-        self.epoch_average_work = average_work;
+    /// `block_reward = base_reward × (1/W)` as `⌊base_reward / W⌋` for `W > 0`; `W == 0` ⇒ 0.
+    pub fn calculate_block_reward(&self, parent_cumulative_work: u128) -> Balance {
+        if parent_cumulative_work == 0 {
+            return 0;
+        }
+        self.base_reward
+            .checked_div(parent_cumulative_work)
+            .unwrap_or(0)
     }
 }
 
@@ -39,9 +40,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_reward_calculation() {
-        let calculator = RewardCalculator::new();
-        let reward = calculator.calculate_reward(10.0);
-        assert!(reward > 0);
+    fn w_zero_yields_zero() {
+        let c = RewardCalculator::new();
+        assert_eq!(c.calculate_block_reward(0), 0);
+    }
+
+    #[test]
+    fn decay_matches_floor_div() {
+        let c = RewardCalculator::new();
+        assert_eq!(c.calculate_block_reward(1), 10_000_000);
+        assert_eq!(c.calculate_block_reward(2), 5_000_000);
+        assert_eq!(c.calculate_block_reward(10_000_000), 1);
+        assert_eq!(c.calculate_block_reward(10_000_001), 0);
     }
 }

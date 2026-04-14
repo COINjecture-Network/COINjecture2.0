@@ -5,7 +5,7 @@
 
 import { blake3 } from '@noble/hashes/blake3';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
-import { blockRewardFromWorkScore, workScoreBitsFromPouw } from './chain-metrics';
+import { blockRewardFromParentCumulativeWork, workScoreBitsFromPouw } from './chain-metrics';
 import { ProblemType, SolutionType, Block, BlockHeader } from './rpc-client';
 
 // Types matching Rust implementation
@@ -833,10 +833,12 @@ export async function createBlock(
   
   // 8. Create coinbase transaction (must match Rust CoinbaseTransaction: { to: Address, reward: Balance, height: u64 })
   // Note: Address and Hash serialize as byte arrays [u8; 32] in JSON
+  const rewardBn = blockRewardFromParentCumulativeWork(parentCumulativeWork);
+  const rewardNum = rewardAsNumber(rewardBn);
+  if (rewardNum === null) return null;
   const coinbase = {
     to: Array.from(minerAddressBytes), // Address as byte array (reuse from above)
-    // tokenomics/src/rewards.rs: base_constant × (work_score / epoch_average_work)
-    reward: Number(blockRewardFromWorkScore(workScore)),
+    reward: rewardNum,
     height
   };
   
@@ -949,9 +951,12 @@ export async function createBlockFromSolvedProblem(
     },
   };
 
+  const rewardBn = blockRewardFromParentCumulativeWork(parentCumulativeWork);
+  const rewardNum = rewardAsNumber(rewardBn);
+  if (rewardNum === null) return null;
   const coinbase = {
     to: Array.from(minerAddressBytes),
-    reward: Number(blockRewardFromWorkScore(workScore)),
+    reward: rewardNum,
     height,
   };
 

@@ -370,6 +370,7 @@ async fn test_3_block_propagation() {
         .send(NetworkCommand::UpdateChainState {
             best_height: 1,
             best_hash: block_hash,
+            cumulative_work: 0,
         })
         .expect("UpdateChainState send");
 
@@ -402,7 +403,7 @@ async fn test_4_consensus_round() {
         failover_depth: 2,
     };
 
-    let (coordinator, _shared) = EpochCoordinator::new(node_id, config, 0, Hash::ZERO);
+    let (coordinator, _shared) = EpochCoordinator::new(node_id, config, 0, Hash::ZERO, 0);
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<CoordinatorCommand>();
     let (evt_tx, mut evt_rx) = tokio::sync::mpsc::unbounded_channel::<CoordinatorEvent>();
@@ -611,6 +612,7 @@ async fn test_6_peer_discovery() {
         .send(NetworkCommand::UpdateChainState {
             best_height: 42,
             best_hash: peer_block_hash,
+            cumulative_work: 0,
         })
         .expect("UpdateChainState");
 
@@ -688,6 +690,7 @@ async fn test_7_rpc_integration() {
         listen_addresses: Arc::new(RwLock::new(vec![])),
         is_syncing: Arc::new(RwLock::new(false)),
         mining_work_provider: None,
+        mining_difficulty_tip_provider: None,
     });
 
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();

@@ -83,6 +83,7 @@ async fn test_network_chain_state_update() {
         .send(NetworkCommand::UpdateChainState {
             best_height: 100,
             best_hash: new_hash,
+            cumulative_work: 0,
         })
         .is_ok());
 }
@@ -132,6 +133,7 @@ async fn test_network_event_handling() {
             best_height: 100,
             best_hash: genesis,
             node_type: CppNodeType::Full,
+            cumulative_work: 0,
         },
         NetworkEvent::BlockReceived {
             block: create_test_block(1, genesis),
@@ -180,6 +182,7 @@ async fn test_network_command_handling() {
         .send(NetworkCommand::UpdateChainState {
             best_height: 100,
             best_hash: genesis,
+            cumulative_work: 0,
         })
         .unwrap();
 

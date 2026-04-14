@@ -110,8 +110,13 @@ pub enum CoordinatorCommand {
     /// A peer left the mesh.
     PeerLeft { node_id: NodeId },
 
-    /// Update the chain tip (for salt derivation).
-    ChainTipUpdated { height: u64, hash: Hash },
+    /// Update the chain tip (for salt derivation and emission `W` at parent).
+    ChainTipUpdated {
+        height: u64,
+        hash: Hash,
+        /// Σ truncated `work_score` on the canonical best chain through `hash` (inclusive).
+        best_cumulative_work: u128,
+    },
 }
 
 // ─── Coordinator Shared State ────────────────────────────────────────────────
@@ -153,6 +158,8 @@ pub struct EpochCoordinator {
     /// Current chain tip.
     chain_height: u64,
     chain_hash: Hash,
+    /// Cumulative work through `chain_hash` (inclusive); used as parent `W` for the next block reward.
+    tip_cumulative_work: u128,
     /// Our miner address for block production.
     miner_address: Address,
     /// Cached local solution for the current epoch (if we solved it).
@@ -174,12 +181,14 @@ impl EpochCoordinator {
         config: CoordinatorConfig,
         chain_height: u64,
         chain_hash: Hash,
+        tip_cumulative_work: u128,
     ) -> (Self, Arc<RwLock<CoordinatorState>>) {
         Self::with_miner_address(
             our_id,
             config,
             chain_height,
             chain_hash,
+            tip_cumulative_work,
             Address::from_bytes(our_id),
         )
     }
@@ -190,6 +199,7 @@ impl EpochCoordinator {
         config: CoordinatorConfig,
         chain_height: u64,
         chain_hash: Hash,
+        tip_cumulative_work: u128,
         miner_address: Address,
     ) -> (Self, Arc<RwLock<CoordinatorState>>) {
         Self::with_signing_key(
@@ -197,6 +207,7 @@ impl EpochCoordinator {
             config,
             chain_height,
             chain_hash,
+            tip_cumulative_work,
             miner_address,
             None,
         )
@@ -212,6 +223,7 @@ impl EpochCoordinator {
         config: CoordinatorConfig,
         chain_height: u64,
         chain_hash: Hash,
+        tip_cumulative_work: u128,
         miner_address: Address,
         signing_key: Option<SigningKey>,
     ) -> (Self, Arc<RwLock<CoordinatorState>>) {
@@ -231,6 +243,7 @@ impl EpochCoordinator {
             collector: CommitCollector::new(0),
             chain_height,
             chain_hash,
+            tip_cumulative_work,
             miner_address,
             local_solution: None,
             consecutive_stalls: 0,
@@ -439,6 +452,7 @@ impl EpochCoordinator {
 
                         tracing::info!(epoch, height, "we won! building block...");
 
+                        let parent_w = self.tip_cumulative_work;
                         let block = crate::build_block_from_solution(
                             prev_hash,
                             height,
@@ -447,6 +461,7 @@ impl EpochCoordinator {
                             local.solution,
                             local.solve_time,
                             local.work_score,
+                            parent_w,
                             difficulty,
                             Vec::new(), // No pending transactions yet
                         );
@@ -463,6 +478,9 @@ impl EpochCoordinator {
                             // Update our chain tip
                             self.chain_height = height;
                             self.chain_hash = block_hash;
+                            self.tip_cumulative_work = self.tip_cumulative_work.saturating_add(
+                                (block.header.work_score.max(0.0) as u64) as u128,
+                            );
 
                             let _ = event_tx.send(CoordinatorEvent::BlockProduced { block, epoch });
                         } else {
@@ -642,9 +660,14 @@ impl EpochCoordinator {
                 );
             }
 
-            CoordinatorCommand::ChainTipUpdated { height, hash } => {
+            CoordinatorCommand::ChainTipUpdated {
+                height,
+                hash,
+                best_cumulative_work,
+            } => {
                 self.chain_height = height;
                 self.chain_hash = hash;
+                self.tip_cumulative_work = best_cumulative_work;
                 tracing::debug!(height, "chain tip updated");
             }
         }
@@ -695,7 +718,7 @@ mod tests {
         };
 
         let (coordinator, _state) =
-            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]), 0);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -735,7 +758,7 @@ mod tests {
         };
 
         let (coordinator, _state) =
-            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]), 0);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
@@ -775,7 +798,7 @@ mod tests {
         };
 
         let (coordinator, state) =
-            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]), 0);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
@@ -831,7 +854,7 @@ mod tests {
         };
 
         let (coordinator, state) =
-            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]), 0);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
@@ -901,7 +924,7 @@ mod tests {
         };
 
         let (coordinator, _state) =
-            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]));
+            EpochCoordinator::new(our_id, config, 0, Hash::from_bytes([0; 32]), 0);
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();

@@ -18,6 +18,12 @@ const BLOCKS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("bl
 const METADATA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 const HEIGHT_INDEX_TABLE: TableDefinition<u64, &[u8; 32]> = TableDefinition::new("height_index");
 
+/// Metadata key: sum of `header.work_score` along the canonical best chain (genesis → tip).
+const CUM_WORK_META_KEY: &str = "cum_work";
+
+/// Metadata key: sum of `coinbase.reward` on the canonical best chain (genesis → tip).
+const TOTAL_MINTED_META_KEY: &str = "total_minted_rewards";
+
 // v4.7.46: Maximum reasonable height to detect database corruption
 // If height exceeds this, it's likely corrupted bytes being interpreted as u64
 // 10 million blocks at 30s each = ~9.5 years of blocks
@@ -119,6 +125,13 @@ impl ChainState {
                 metadata_table.insert("genesis_hash", genesis_hash.as_bytes() as &[u8])?;
                 metadata_table.insert("best_height", 0u64.to_le_bytes().as_ref())?;
                 metadata_table.insert("best_hash", genesis_hash.as_bytes() as &[u8])?;
+                let genesis_work =
+                    (genesis_block.header.work_score.max(0.0) as u64) as u128;
+                metadata_table.insert(CUM_WORK_META_KEY, genesis_work.to_le_bytes().as_ref())?;
+                metadata_table.insert(
+                    TOTAL_MINTED_META_KEY,
+                    genesis_block.coinbase.reward.to_le_bytes().as_ref(),
+                )?;
             }
             write_txn.commit()?;
 
@@ -170,12 +183,22 @@ impl ChainState {
                 let mut table = write_txn.open_table(METADATA_TABLE)?;
                 table.insert("best_height", best_height.to_le_bytes().as_ref())?;
                 table.insert("best_hash", best_hash.as_bytes() as &[u8])?;
+                let genesis_work =
+                    (genesis_block.header.work_score.max(0.0) as u64) as u128;
+                table.insert(CUM_WORK_META_KEY, genesis_work.to_le_bytes().as_ref())?;
+                table.insert(
+                    TOTAL_MINTED_META_KEY,
+                    genesis_block.coinbase.reward.to_le_bytes().as_ref(),
+                )?;
             }
             write_txn.commit()?;
 
             eprintln!("   ✅ Database auto-fixed: Reset to genesis block (height 0)");
             eprintln!("   The node will re-sync from peers.");
         }
+
+        Self::ensure_cumulative_work_meta(&db, best_hash)?;
+        Self::ensure_total_minted_meta(&db, best_hash, genesis_block)?;
 
         let cache_cap = NonZeroUsize::new(block_cache_size.max(1)).unwrap();
         Ok(ChainState {
@@ -186,6 +209,125 @@ impl ChainState {
             genesis_hash,
             block_cache: Arc::new(Mutex::new(LruCache::new(cache_cap))),
         })
+    }
+
+    fn read_cumulative_work_meta(db: &Arc<Database>) -> Result<Option<u128>, ChainError> {
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(METADATA_TABLE)?;
+        let Some(v) = table.get(CUM_WORK_META_KEY)? else {
+            return Ok(None);
+        };
+        let bytes = v.value();
+        if bytes.len() != 16 {
+            return Ok(None);
+        }
+        let arr: [u8; 16] = bytes[..16]
+            .try_into()
+            .map_err(|_| ChainError::InvalidHeight)?;
+        Ok(Some(u128::from_le_bytes(arr)))
+    }
+
+    fn compute_cumulative_work_tip_db(db: &Arc<Database>, mut tip: Hash) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let Some(block) = Self::load_block_from_db(db, &tip)? else {
+                return Err(ChainError::BlockNotFound);
+            };
+            sum = sum.saturating_add((block.header.work_score.max(0.0) as u64) as u128);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    /// Σ `coinbase.reward` from genesis through `tip` (inclusive), walking `prev_hash`.
+    fn compute_total_minted_tip_db(db: &Arc<Database>, mut tip: Hash) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let Some(block) = Self::load_block_from_db(db, &tip)? else {
+                return Err(ChainError::BlockNotFound);
+            };
+            sum = sum.saturating_add(block.coinbase.reward);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    fn read_total_minted_meta(db: &Arc<Database>) -> Result<Option<u128>, ChainError> {
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(METADATA_TABLE)?;
+        let Some(v) = table.get(TOTAL_MINTED_META_KEY)? else {
+            return Ok(None);
+        };
+        let bytes = v.value();
+        if bytes.len() != 16 {
+            return Ok(None);
+        }
+        let arr: [u8; 16] = bytes[..16]
+            .try_into()
+            .map_err(|_| ChainError::InvalidHeight)?;
+        Ok(Some(u128::from_le_bytes(arr)))
+    }
+
+    /// Backfill `total_minted_rewards` for databases created before this metadata existed.
+    fn ensure_total_minted_meta(
+        db: &Arc<Database>,
+        tip: Hash,
+        genesis_block: &Block,
+    ) -> Result<(), ChainError> {
+        if Self::read_total_minted_meta(db)?.is_some() {
+            return Ok(());
+        }
+        let m = Self::compute_total_minted_tip_db(db, tip).unwrap_or(genesis_block.coinbase.reward);
+        let write_txn = db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(METADATA_TABLE)?;
+            table.insert(TOTAL_MINTED_META_KEY, m.to_le_bytes().as_ref())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Cumulative work (Σ truncated `work_score`) from genesis through `tip_hash` (inclusive).
+    pub fn cumulative_work_at_tip_hash(&self, tip_hash: Hash) -> Result<u128, ChainError> {
+        Self::compute_cumulative_work_tip_db(&self.db, tip_hash)
+    }
+
+    /// Sum of coinbase rewards on the canonical best chain to the current tip (metadata).
+    pub fn best_total_minted_rewards(&self) -> u128 {
+        Self::read_total_minted_meta(&self.db)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
+    fn load_block_from_db(db: &Arc<Database>, hash: &Hash) -> Result<Option<Block>, ChainError> {
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(BLOCKS_TABLE)?;
+        match table.get(hash.as_bytes())? {
+            Some(bytes_ref) => Ok(Some(bincode::deserialize(bytes_ref.value())?)),
+            None => Ok(None),
+        }
+    }
+
+    /// If `cum_work` is missing (pre-upgrade DB), compute from the stored tip and persist.
+    fn ensure_cumulative_work_meta(db: &Arc<Database>, tip: Hash) -> Result<(), ChainError> {
+        if Self::read_cumulative_work_meta(db)?.is_some() {
+            return Ok(());
+        }
+        let w = Self::compute_cumulative_work_tip_db(db, tip)?;
+        let write_txn = db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(METADATA_TABLE)?;
+            table.insert(CUM_WORK_META_KEY, w.to_le_bytes().as_ref())?;
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 
     /// Store a block in the database
@@ -241,11 +383,20 @@ impl ChainState {
             *self.best_height.write().await = block_height;
             *self.best_hash.write().await = block_hash;
 
+            let prev_cum = Self::read_cumulative_work_meta(&self.db)?.unwrap_or(0);
+            let inc = (block.header.work_score.max(0.0) as u64) as u128;
+            let new_cum = prev_cum.saturating_add(inc);
+
+            let prev_minted = Self::read_total_minted_meta(&self.db)?.unwrap_or(0);
+            let new_minted = prev_minted.saturating_add(block.coinbase.reward);
+
             let write_txn = self.db.begin_write()?;
             {
                 let mut table = write_txn.open_table(METADATA_TABLE)?;
                 table.insert("best_height", block_height.to_le_bytes().as_ref())?;
                 table.insert("best_hash", block_hash.as_bytes() as &[u8])?;
+                table.insert(CUM_WORK_META_KEY, new_cum.to_le_bytes().as_ref())?;
+                table.insert(TOTAL_MINTED_META_KEY, new_minted.to_le_bytes().as_ref())?;
             }
             write_txn.commit()?;
 
@@ -314,6 +465,14 @@ impl ChainState {
     /// Get the best block hash
     pub async fn best_block_hash(&self) -> Hash {
         *self.best_hash.read().await
+    }
+
+    /// Cumulative work (Σ `header.work_score`) on the canonical best chain to the current tip.
+    pub async fn best_cumulative_work(&self) -> u128 {
+        Self::read_cumulative_work_meta(&self.db)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
     }
 
     /// Get the best block
@@ -601,11 +760,16 @@ impl ChainState {
         *self.best_height.write().await = new_best_height;
         *self.best_hash.write().await = new_best_hash;
 
+        let new_cum = Self::compute_cumulative_work_tip_db(&self.db, new_best_hash)?;
+        let new_minted = Self::compute_total_minted_tip_db(&self.db, new_best_hash)?;
+
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(METADATA_TABLE)?;
             table.insert("best_height", new_best_height.to_le_bytes().as_ref())?;
             table.insert("best_hash", new_best_hash.as_bytes() as &[u8])?;
+            table.insert(CUM_WORK_META_KEY, new_cum.to_le_bytes().as_ref())?;
+            table.insert(TOTAL_MINTED_META_KEY, new_minted.to_le_bytes().as_ref())?;
         }
         write_txn.commit()?;
 
@@ -782,6 +946,20 @@ impl coinject_rpc::BlockchainReader for ChainState {
 
     fn get_header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, String> {
         self.get_header_by_height(height).map_err(|e| e.to_string())
+    }
+
+    fn best_cumulative_work_decimal(&self) -> Option<String> {
+        Some(
+            Self::read_cumulative_work_meta(&self.db)
+                .ok()
+                .flatten()
+                .unwrap_or(0)
+                .to_string(),
+        )
+    }
+
+    fn total_minted_rewards_decimal(&self) -> Option<String> {
+        Some(self.best_total_minted_rewards().to_string())
     }
 }
 

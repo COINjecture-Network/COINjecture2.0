@@ -27,8 +27,8 @@ pub struct PeerState {
     pub best_height: u64,
     /// Last known block hash from this peer
     pub best_hash: [u8; 32],
-    /// Cumulative work score (for chain comparison)
-    pub work_score: u64,
+    /// Cumulative work on peer's advertised best chain (`0` = unknown / legacy status).
+    pub cumulative_work: u128,
     /// Last time we received a status update
     pub last_seen: Instant,
     /// Number of consensus rounds this peer missed
@@ -42,7 +42,7 @@ impl PeerState {
         Self {
             best_height: height,
             best_hash: hash,
-            work_score: height, // Simplified: work = height for now
+            cumulative_work: 0,
             last_seen: Instant::now(),
             missed_rounds: 0,
             is_filtered: false,
@@ -184,15 +184,21 @@ impl PeerConsensus {
         self.config.max_ahead_of_peers_blocks
     }
 
-    /// Update a peer's state when we receive a StatusUpdate
-    pub async fn update_peer(&self, peer_id: String, height: u64, hash: [u8; 32]) {
+    /// Update a peer's state when we receive a StatusUpdate (or handshake with `cumulative_work = 0`).
+    pub async fn update_peer(
+        &self,
+        peer_id: String,
+        height: u64,
+        hash: [u8; 32],
+        cumulative_work: u128,
+    ) {
         let mut peers = self.peers.write().await;
 
         if let Some(peer) = peers.get_mut(&peer_id) {
             let old_height = peer.best_height;
             peer.best_height = height;
             peer.best_hash = hash;
-            peer.work_score = height; // TODO: Implement proper work score
+            peer.cumulative_work = cumulative_work;
             peer.last_seen = Instant::now();
             peer.missed_rounds = 0; // Reset missed rounds on update
 
@@ -541,9 +547,15 @@ mod tests {
     #[tokio::test]
     async fn test_check_consensus_one_block_skew() {
         let consensus = PeerConsensus::with_defaults();
-        consensus.update_peer("a".to_string(), 100, [0; 32]).await;
-        consensus.update_peer("b".to_string(), 101, [0; 32]).await;
-        consensus.update_peer("c".to_string(), 100, [0; 32]).await;
+        consensus
+            .update_peer("a".to_string(), 100, [0; 32], 0)
+            .await;
+        consensus
+            .update_peer("b".to_string(), 101, [0; 32], 0)
+            .await;
+        consensus
+            .update_peer("c".to_string(), 100, [0; 32], 0)
+            .await;
 
         let (has, height, agreement) = consensus.check_consensus().await;
         assert!(has, "100/101 skew should not split the quorum");
@@ -557,13 +569,13 @@ mod tests {
 
         // Add some peers
         consensus
-            .update_peer("peer1".to_string(), 100, [0; 32])
+            .update_peer("peer1".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer2".to_string(), 100, [0; 32])
+            .update_peer("peer2".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer3".to_string(), 100, [0; 32])
+            .update_peer("peer3".to_string(), 100, [0; 32], 0)
             .await;
 
         // Should have 3 active peers
@@ -587,13 +599,13 @@ mod tests {
 
         // Add 3 peers at height 100
         consensus
-            .update_peer("peer1".to_string(), 100, [0; 32])
+            .update_peer("peer1".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer2".to_string(), 100, [0; 32])
+            .update_peer("peer2".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer3".to_string(), 100, [0; 32])
+            .update_peer("peer3".to_string(), 100, [0; 32], 0)
             .await;
 
         // We're at 100, peers at 100 - should mine

@@ -3,9 +3,31 @@
 #![allow(dead_code)]
 
 use super::*;
+use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 impl CoinjectNode {
+    /// Retarget header PoW difficulty from parent→child header timestamps after a stored block.
+    pub(crate) async fn retarget_header_pow_from_stored_block(
+        miner: &Option<Arc<RwLock<Miner>>>,
+        chain: &Arc<ChainState>,
+        block: &coinject_core::Block,
+    ) {
+        let Some(miner) = miner.as_ref() else {
+            return;
+        };
+        if block.header.height == 0 {
+            return;
+        }
+        let parent = match chain.get_block_by_hash(&block.header.prev_hash) {
+            Ok(Some(p)) => p,
+            _ => return,
+        };
+        let spacing_secs = (block.header.timestamp - parent.header.timestamp).max(0) as u64;
+        let mut m = miner.write().await;
+        m.adjust_difficulty(Duration::from_secs(spacing_secs));
+    }
+
     /// Process buffered blocks sequentially
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn process_buffered_blocks(
@@ -50,6 +72,22 @@ impl CoinjectNode {
                     // FORK HANDLING FIX: Check if buffered block extends our current chain or is a fork block
                     let extends_best_chain = block.header.prev_hash == best_hash;
 
+                    let emission_parent_w = if block.header.height == 0 {
+                        None
+                    } else {
+                        match chain.cumulative_work_at_tip_hash(block.header.prev_hash) {
+                            Ok(w) => Some(w),
+                            Err(e) => {
+                                error!(
+                                    block_height = block.header.height,
+                                    error = %e,
+                                    "could not compute parent cumulative work for emission check"
+                                );
+                                continue;
+                            }
+                        }
+                    };
+
                     let validation_result = if extends_best_chain {
                         // Normal case: block extends our best chain
                         validator.validate_block_with_options(
@@ -57,6 +95,7 @@ impl CoinjectNode {
                             &best_hash,
                             next_height,
                             skip_age_check,
+                            emission_parent_w,
                         )
                     } else {
                         // Fork case: check if we have the parent block
@@ -76,6 +115,7 @@ impl CoinjectNode {
                                     &block.header.prev_hash,
                                     next_height,
                                     skip_age_check,
+                                    emission_parent_w,
                                 )
                             }
                             Ok(false) => {

@@ -43,6 +43,10 @@ pub struct AdzdbChainState {
     best_height: Arc<RwLock<u64>>,
     /// Best block hash (cached)
     best_hash: Arc<RwLock<Hash>>,
+    /// Σ `work_score` on canonical path to tip (recomputed on tip change).
+    best_cumulative_work: Arc<RwLock<u128>>,
+    /// Σ `coinbase.reward` on canonical path to tip (recomputed on tip change).
+    best_total_minted_rewards: Arc<RwLock<u128>>,
     /// Genesis hash
     genesis_hash: Hash,
 }
@@ -97,12 +101,65 @@ impl AdzdbChainState {
             db.entry_count()
         );
 
+        let best_cumulative_work =
+            Self::compute_cumulative_tip_work(&db, best_hash).unwrap_or(0);
+        let best_total_minted_rewards =
+            Self::compute_total_minted_tip(&db, best_hash).unwrap_or(genesis_block.coinbase.reward);
+
         Ok(AdzdbChainState {
             db: Arc::new(RwLock::new(db)),
             best_height: Arc::new(RwLock::new(best_height)),
             best_hash: Arc::new(RwLock::new(best_hash)),
+            best_cumulative_work: Arc::new(RwLock::new(best_cumulative_work)),
+            best_total_minted_rewards: Arc::new(RwLock::new(best_total_minted_rewards)),
             genesis_hash,
         })
+    }
+
+    fn compute_cumulative_tip_work(db: &AdzDatabase, mut tip: Hash) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let block_bytes = match db.get(tip.as_bytes()) {
+                Ok(b) => b,
+                Err(AdzError::NotFound) => return Err(ChainError::BlockNotFound),
+                Err(e) => return Err(ChainError::from(e)),
+            };
+            let block: Block = bincode::deserialize(&block_bytes)?;
+            sum = sum.saturating_add((block.header.work_score.max(0.0) as u64) as u128);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    fn compute_total_minted_tip(db: &AdzDatabase, mut tip: Hash) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let block_bytes = match db.get(tip.as_bytes()) {
+                Ok(b) => b,
+                Err(AdzError::NotFound) => return Err(ChainError::BlockNotFound),
+                Err(e) => return Err(ChainError::from(e)),
+            };
+            let block: Block = bincode::deserialize(&block_bytes)?;
+            sum = sum.saturating_add(block.coinbase.reward);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    /// Cumulative work through `tip_hash` (inclusive).
+    pub fn cumulative_work_at_tip_hash(&self, tip_hash: Hash) -> Result<u128, ChainError> {
+        let db = futures::executor::block_on(self.db.read());
+        Self::compute_cumulative_tip_work(&*db, tip_hash)
+    }
+
+    pub async fn best_total_minted_rewards_value(&self) -> u128 {
+        *self.best_total_minted_rewards.read().await
     }
 
     /// Store a block and update best chain if needed
@@ -126,6 +183,18 @@ impl AdzdbChainState {
             // New best block
             *self.best_height.write().await = block_height;
             *self.best_hash.write().await = block_hash;
+
+            let cum = {
+                let db = self.db.read().await;
+                Self::compute_cumulative_tip_work(&*db, block_hash).unwrap_or(0)
+            };
+            *self.best_cumulative_work.write().await = cum;
+
+            let minted = {
+                let db = self.db.read().await;
+                Self::compute_total_minted_tip(&*db, block_hash).unwrap_or(0)
+            };
+            *self.best_total_minted_rewards.write().await = minted;
 
             println!(
                 "🗄️  ADZDB: New best block height={} hash={:?}",
@@ -180,6 +249,10 @@ impl AdzdbChainState {
     /// Get the best block hash
     pub async fn best_block_hash(&self) -> Hash {
         *self.best_hash.read().await
+    }
+
+    pub async fn best_cumulative_work(&self) -> u128 {
+        *self.best_cumulative_work.read().await
     }
 
     /// Get the best block
@@ -379,6 +452,18 @@ impl AdzdbChainState {
         *self.best_height.write().await = new_best_height;
         *self.best_hash.write().await = new_best_hash;
 
+        let cum = {
+            let db = self.db.read().await;
+            Self::compute_cumulative_tip_work(&*db, new_best_hash).unwrap_or(0)
+        };
+        *self.best_cumulative_work.write().await = cum;
+
+        let minted = {
+            let db = self.db.read().await;
+            Self::compute_total_minted_tip(&*db, new_best_hash).unwrap_or(0)
+        };
+        *self.best_total_minted_rewards.write().await = minted;
+
         // Sync database
         {
             let mut db = self.db.write().await;
@@ -471,6 +556,20 @@ impl coinject_rpc::BlockchainReader for AdzdbChainState {
 
     fn get_header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, String> {
         self.get_header_by_height(height).map_err(|e| e.to_string())
+    }
+
+    fn best_cumulative_work_decimal(&self) -> Option<String> {
+        Some(
+            futures::executor::block_on(self.best_cumulative_work.read())
+                .to_string(),
+        )
+    }
+
+    fn total_minted_rewards_decimal(&self) -> Option<String> {
+        Some(
+            futures::executor::block_on(self.best_total_minted_rewards.read())
+                .to_string(),
+        )
     }
 }
 

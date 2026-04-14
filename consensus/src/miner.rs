@@ -438,6 +438,12 @@ impl Miner {
         self.difficulty
     }
 
+    /// Current NP instance size from the post-block difficulty adjuster (subset count, etc. driver).
+    pub async fn current_np_problem_size(&self) -> usize {
+        let adjuster = self.difficulty_adjuster.read().await;
+        adjuster.current_size()
+    }
+
     /// Generate a deterministic NP-hard problem for mining
     /// RUNTIME INTEGRATION: Uses dimensional complexity |ψ(τ)| to modulate difficulty
     /// DETERMINISM: Seeded by parent hash + height to ensure all nodes generate the same problem
@@ -979,6 +985,7 @@ impl Miner {
         &mut self,
         prev_hash: Hash,
         height: u64,
+        parent_cumulative_work: u128,
         transactions: Vec<Transaction>,
     ) -> Option<Block> {
         use coinject_core::{ConsensusState, TAU_C};
@@ -1156,8 +1163,10 @@ impl Miner {
         let header = mined_header; // Use the mined header with correct nonce
         println!("Header mined: {:?}", header_hash);
 
-        // 9. Calculate block reward and create coinbase transaction
-        let reward_amount = self.reward_calculator.calculate_reward(work_score);
+        // 9. Block reward: base_reward × (1/W) with W = parent-chain cumulative work
+        let reward_amount = self
+            .reward_calculator
+            .calculate_block_reward(parent_cumulative_work);
         let coinbase = CoinbaseTransaction::new(self.config.miner_address, reward_amount, height);
         println!("Block reward: {} tokens", reward_amount);
 
@@ -1258,7 +1267,11 @@ impl Miner {
         let (new_size, diff_stats) = {
             let mut adjuster = self.difficulty_adjuster.write().await;
             adjuster.record_solve_time(solve_time);
-            let new_size = adjuster.adjust_difficulty();
+            let new_size = if adjuster.has_metrics() {
+                adjuster.adjust_difficulty_async().await
+            } else {
+                adjuster.adjust_difficulty()
+            };
             (new_size, adjuster.stats())
         };
 
@@ -1323,6 +1336,7 @@ pub fn build_block_from_solution(
     solution: Solution,
     solve_time: Duration,
     work_score_value: f64,
+    parent_cumulative_work: u128,
     difficulty: u32,
     transactions: Vec<Transaction>,
 ) -> Option<Block> {
@@ -1388,9 +1402,9 @@ pub fn build_block_from_solution(
     // Mine header nonce (find hash meeting difficulty target)
     let (mined_header, _hash) = mine_header_blocking(header, difficulty)?;
 
-    // Block reward
+    // Block reward: base_reward × (1/W)
     let reward_calculator = coinject_tokenomics::RewardCalculator::new();
-    let reward = reward_calculator.calculate_reward(work_score_value);
+    let reward = reward_calculator.calculate_block_reward(parent_cumulative_work);
     let coinbase = CoinbaseTransaction::new(miner_address, reward, height);
 
     let solution_reveal = SolutionReveal {

@@ -8,8 +8,20 @@
 #   docker compose -f docker-compose.yml -f docker-compose.local-ram.yml up -d
 #
 # See docs/CPP_DEPLOYMENT.md — "Reliable multi-site mesh".
+#
+# Raises follower RAM vs base compose; bootnode limits come from docker-compose.yml (4G).
 
 services:
+  bootnode:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
   node1:
     environment:
       - COINJECT_BOOTNODES=
@@ -18,7 +30,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1536M
+          memory: 3G
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -30,7 +42,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 1536M
+          memory: 3G
         reservations:
           cpus: "0.25"
           memory: 256M
@@ -42,7 +54,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 2G
+          memory: 3G
         reservations:
           cpus: "0.25"
           memory: 256M

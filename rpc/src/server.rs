@@ -49,6 +49,16 @@ pub trait BlockchainReader: Send + Sync {
         }
         Ok(total)
     }
+
+    /// Σ truncated `work_score` on the canonical best chain to tip (`u128` as decimal string for JSON).
+    fn best_cumulative_work_decimal(&self) -> Option<String> {
+        None
+    }
+
+    /// Σ `coinbase.reward` on the canonical best chain to tip (`u128` as decimal string).
+    fn total_minted_rewards_decimal(&self) -> Option<String> {
+        None
+    }
 }
 
 /// RPC error codes
@@ -68,6 +78,18 @@ pub struct ChainInfo {
     pub total_work: u64,
     /// Whether the node is currently syncing
     pub is_syncing: bool,
+    /// Header PoW: leading hex `0` nibbles on `hex(header_hash)` when mining is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_pow_difficulty: Option<u32>,
+    /// NP post-block adjuster size for the next instance (when mining is enabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub np_problem_size: Option<usize>,
+    /// Canonical cumulative work `W` at best tip (`u128` decimal string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_cumulative_work: Option<String>,
+    /// Sum of coinbase rewards on the best chain to tip (`u128` decimal string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_minted_rewards: Option<String>,
 }
 
 /// Network information response (for P2P debugging)
@@ -417,6 +439,18 @@ pub struct MiningWork {
 pub type MiningWorkFuture = Pin<Box<dyn Future<Output = Result<MiningWork, String>> + Send>>;
 pub type MiningWorkProvider = Arc<dyn Fn() -> MiningWorkFuture + Send + Sync>;
 
+/// Live mining difficulty levers for dashboards (`chain_getInfo` when mining is enabled).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiningDifficultyTip {
+    pub header_pow_difficulty: u32,
+    pub np_problem_size: usize,
+}
+
+pub type MiningDifficultyTipFuture =
+    Pin<Box<dyn Future<Output = Result<MiningDifficultyTip, String>> + Send>>;
+pub type MiningDifficultyTipProvider =
+    Arc<dyn Fn() -> MiningDifficultyTipFuture + Send + Sync>;
+
 /// RPC server state
 pub struct RpcServerState {
     pub account_state: Arc<AccountState>,
@@ -443,6 +477,8 @@ pub struct RpcServerState {
     pub is_syncing: Arc<RwLock<bool>>,
     /// When set (nodes with consensus miner), serves [`chain_getMiningWork`].
     pub mining_work_provider: Option<MiningWorkProvider>,
+    /// When set, enriches [`ChainInfo`] with header PoW nibbles and NP problem size.
+    pub mining_difficulty_tip_provider: Option<MiningDifficultyTipProvider>,
 }
 
 /// RPC server implementation
@@ -920,6 +956,22 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Check if syncing (simplified: syncing if we have peers but recent blocks are slow)
         let is_syncing = *self.state.is_syncing.read().await;
 
+        let (header_pow_difficulty, np_problem_size) =
+            if let Some(provider) = &self.state.mining_difficulty_tip_provider {
+                match provider().await {
+                    Ok(tip) => (Some(tip.header_pow_difficulty), Some(tip.np_problem_size)),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "mining difficulty tip provider failed");
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            };
+
+        let best_cumulative_work = self.state.blockchain.best_cumulative_work_decimal();
+        let total_minted_rewards = self.state.blockchain.total_minted_rewards_decimal();
+
         Ok(ChainInfo {
             chain_id: self.state.chain_id.clone(),
             best_height,
@@ -928,6 +980,10 @@ impl CoinjectRpcServer for RpcServerImpl {
             peer_count,
             total_work,
             is_syncing,
+            header_pow_difficulty,
+            np_problem_size,
+            best_cumulative_work,
+            total_minted_rewards,
         })
     }
 
@@ -1746,6 +1802,7 @@ mod tests {
             listen_addresses: Arc::new(RwLock::new(vec![])),
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
+            mining_difficulty_tip_provider: None,
         });
 
         let rpc = RpcServerImpl::new(state);
@@ -1789,6 +1846,7 @@ mod tests {
             listen_addresses: Arc::new(RwLock::new(vec![])),
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
+            mining_difficulty_tip_provider: None,
         });
 
         let rpc = RpcServerImpl::new(state);

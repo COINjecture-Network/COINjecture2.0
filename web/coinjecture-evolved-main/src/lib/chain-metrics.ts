@@ -1,7 +1,7 @@
 /**
  * Display helpers aligned with consensus + tokenomics (Rust):
  * - Work score: consensus/src/work_score.rs — bits = log₂(solve/verify) × quality
- * - Block reward: tokenomics/src/rewards.rs — reward = base_constant × (work_score / epoch_average_work)
+ * - Block reward: tokenomics/src/rewards.rs — `⌊base_reward / W⌋` with `W` = parent-chain cumulative work
  */
 
 /** Match `consensus/src/work_score.rs` — same floors as the f64 `calculate` path. */
@@ -25,17 +25,15 @@ export function workScoreBitsFromPouw(
   return Math.log2(ratio) * q;
 }
 
-/** `RewardCalculator::new()` in tokenomics/src/rewards.rs */
-export const REWARD_BASE_CONSTANT = 10_000_000;
+/** `RewardCalculator::new().base_reward` in tokenomics/src/rewards.rs */
+export const REWARD_BASE_REWARD = 10_000_000n;
 
-/** Default epoch average when not tuned */
-export const DEFAULT_EPOCH_AVG_WORK = 1.0;
-
-/** Same formula as `RewardCalculator::calculate_reward` (truncates to integer Balance). */
-export function blockRewardFromWorkScore(workScore: number): bigint {
-  if (!Number.isFinite(workScore) || workScore <= 0) return 0n;
-  const reward = REWARD_BASE_CONSTANT * (workScore / DEFAULT_EPOCH_AVG_WORK);
-  return BigInt(Math.floor(reward));
+/**
+ * Same as Rust `RewardCalculator::calculate_block_reward`: `⌊base_reward / W⌋` for `W > 0`, else `0`.
+ */
+export function blockRewardFromParentCumulativeWork(parentCumulativeWork: bigint): bigint {
+  if (parentCumulativeWork <= 0n) return 0n;
+  return REWARD_BASE_REWARD / parentCumulativeWork;
 }
 
 export function parseBalance(raw: unknown): bigint | null {
@@ -47,6 +45,11 @@ export function parseBalance(raw: unknown): bigint | null {
     if (/^\d+$/.test(s)) return BigInt(s);
   }
   return null;
+}
+
+/** Decimal string `u128` from RPC/API (digits only). */
+export function parseU128DecimalString(raw: unknown): bigint | null {
+  return parseBalance(raw);
 }
 
 export function formatBeans(n: bigint): string {

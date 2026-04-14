@@ -58,6 +58,7 @@ import {
   getClientHeaderHashDebug,
   type Solution as MiningSolution,
 } from "@/lib/mining";
+import { parseU128DecimalString } from "@/lib/chain-metrics";
 
 /** Alias for `<Editor />` — must stay after all imports (ES modules forbid statements between imports). */
 const Editor = SolverCodeEditor;
@@ -508,6 +509,19 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     setSubmittingChain(true);
     try {
       const work = await rpcClient.getMiningWork();
+      const chainTip = await rpcClient.getChainInfo();
+      const parentW = parseU128DecimalString(chainTip.best_cumulative_work);
+      if (work.next_height > 0 && parentW === null) {
+        setConsoleLines((prev) => [
+          ...prev,
+          "[error] Chain info missing best_cumulative_work — update the node/API to compute emission W.",
+          "",
+        ]);
+        toast.error("Cannot build coinbase", {
+          description: "The chain tip did not report cumulative work (W).",
+        });
+        return;
+      }
       if (!problemTypesEqual(parsed.value, work.problem)) {
         const msg =
           "instance.json must match chain_getMiningWork (next block template). Click “Sync from chain”, then solve and submit.";
@@ -552,6 +566,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         parsed.value,
         miningSolution,
         out.timeMs,
+        parentW ?? 0n,
         [],
         work.difficulty
       );

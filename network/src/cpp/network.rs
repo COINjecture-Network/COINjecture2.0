@@ -63,6 +63,8 @@ pub enum NetworkEvent {
         best_height: u64,
         best_hash: Hash,
         node_type: NodeType,
+        /// Total work on peer's advertised tip chain (`0` if peer uses legacy status only).
+        cumulative_work: u128,
     },
 
     /// New block received
@@ -121,7 +123,11 @@ pub enum NetworkCommand {
     DisconnectPeer { peer_id: PeerId, reason: String },
 
     /// Update local chain state
-    UpdateChainState { best_height: u64, best_hash: Hash },
+    UpdateChainState {
+        best_height: u64,
+        best_hash: Hash,
+        cumulative_work: u128,
+    },
 }
 
 // =============================================================================
@@ -134,6 +140,8 @@ pub struct ChainState {
     pub best_height: u64,
     pub best_hash: Hash,
     pub genesis_hash: Hash,
+    /// Sum of header work scores on our canonical chain to `best_hash` (advertised in Status).
+    pub cumulative_work: u128,
 }
 
 impl ChainState {
@@ -142,6 +150,7 @@ impl ChainState {
             best_height: 0,
             best_hash: genesis_hash,
             genesis_hash,
+            cumulative_work: 0,
         }
     }
 }
@@ -262,6 +271,7 @@ impl CppNetwork {
             best_height: initial_height,
             best_hash: initial_hash,
             genesis_hash,
+            cumulative_work: 0,
         }));
 
         let connection_limiter =
@@ -326,6 +336,7 @@ impl CppNetwork {
             best_height: initial_height,
             best_hash: initial_hash,
             genesis_hash,
+            cumulative_work: 0,
         }));
 
         let connection_limiter =
@@ -1621,10 +1632,12 @@ impl CppNetwork {
             NetworkCommand::UpdateChainState {
                 best_height,
                 best_hash,
+                cumulative_work,
             } => {
                 let mut state = self.chain_state.write().await;
                 state.best_height = best_height;
                 state.best_hash = best_hash;
+                state.cumulative_work = cumulative_work;
                 let genesis = state.genesis_hash;
                 drop(state);
 
@@ -1654,7 +1667,9 @@ impl CppNetwork {
         event_tx: mpsc::UnboundedSender<NetworkEvent>,
         _block_provider: Arc<dyn BlockProvider>,
     ) -> Result<(), NetworkError> {
-        let status: StatusMessage = envelope.deserialize().map_err(NetworkError::Protocol)?;
+        let status = StatusMessage::decode_bincode_compat(&envelope.payload).map_err(|e| {
+            NetworkError::Protocol(ProtocolError::DeserializationError(e))
+        })?;
 
         let node_type = NodeType::from_u8(status.node_type)
             .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
@@ -1663,7 +1678,12 @@ impl CppNetwork {
         {
             let mut peers_guard = peers.write().await;
             if let Some(peer) = peers_guard.get_mut(&peer_id) {
-                peer.update_status(status.best_height, status.best_hash, node_type);
+                peer.update_status(
+                    status.best_height,
+                    status.best_hash,
+                    node_type,
+                    status.cumulative_work,
+                );
             }
         }
 
@@ -1689,6 +1709,7 @@ impl CppNetwork {
             best_height: status.best_height,
             best_hash: status.best_hash,
             node_type,
+            cumulative_work: status.cumulative_work,
         });
 
         Ok(())
@@ -2259,6 +2280,7 @@ impl CppNetwork {
         let chain_state = self.chain_state.read().await;
         let best_height = chain_state.best_height;
         let best_hash = chain_state.best_hash;
+        let cumulative_work = chain_state.cumulative_work;
         drop(chain_state);
 
         let peers = self.peers.read().await;
@@ -2289,6 +2311,7 @@ impl CppNetwork {
                 .unwrap_or_default()
                 .as_secs(),
             flock_state: Some(flock_compact),
+            cumulative_work,
         };
 
         let envelope = match MessageEnvelope::new(MessageType::Status, &status) {
@@ -2349,10 +2372,14 @@ impl CppNetwork {
                 delta_h
             );
 
-            // Select best peer (highest height with good quality)
+            // Select best peer: most cumulative chain work, then highest height (fork tie-break).
             let best_peer = peers
                 .iter()
-                .max_by_key(|(_, p)| p.best_height)
+                .max_by(|(_, a), (_, b)| {
+                    a.cumulative_work
+                        .cmp(&b.cumulative_work)
+                        .then_with(|| a.best_height.cmp(&b.best_height))
+                })
                 .map(|(id, p)| (*id, p.best_height));
 
             drop(peers);

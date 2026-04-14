@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Copy, Check, Loader2 } from "lucide-react";
 import { useWallet } from "@/contexts/WalletContext";
 import { rpcClient } from "@/lib/rpc-client";
-import { formatBeans, parseBalance } from "@/lib/chain-metrics";
+import { formatBeans, parseBalance, parseU128DecimalString } from "@/lib/chain-metrics";
 import {
   createBlockFromSolvedProblem,
   extractHashHex,
@@ -235,6 +235,15 @@ Peers: ${chainInfo.peer_count}`;
                 appendLines([`coinjectured$ ${cmd}`, "No blocks found. Cannot submit block without chain state.", ""]);
               } else {
                 const nextHeight = work.next_height;
+                const parentW = parseU128DecimalString(chainInfo.best_cumulative_work);
+                if (nextHeight > 0 && parentW === null) {
+                  appendLines([
+                    `coinjectured$ ${cmd}`,
+                    "Cannot mine: chain info missing best_cumulative_work (W). Update the node/API.",
+                    "",
+                  ]);
+                  break;
+                }
 
                 appendLines([
                   `coinjectured$ ${cmd}`,
@@ -263,6 +272,7 @@ Your address: ${selectedKeyPair.address.slice(0, 16)}...${selectedKeyPair.addres
                     work.problem,
                     solved.solution,
                     solved.solveTimeMs,
+                    parentW ?? 0n,
                     [],
                     work.difficulty,
                   );

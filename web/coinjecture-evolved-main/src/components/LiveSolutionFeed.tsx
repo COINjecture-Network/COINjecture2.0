@@ -6,7 +6,6 @@ import { useQuery } from "@tanstack/react-query";
 import { rpcClient } from "@/lib/rpc-client";
 import { bytesToHex } from "@noble/hashes/utils";
 import {
-  blockRewardFromWorkScore,
   formatBeans,
   formatWorkScoreBits,
   parseBalance,
@@ -203,8 +202,7 @@ export const LiveSolutionFeed = () => {
       ) => {
         const bits = effectiveHeaderWorkScoreBits(header);
         const fromCb = blockRaw ? coinbaseRewardBeansFromBlock(blockRaw) : null;
-        const rewardBeans =
-          fromCb !== null && fromCb > 0n ? fromCb : blockRewardFromWorkScore(bits);
+        const rewardBeans = fromCb !== null ? fromCb : 0n;
         newSolutions.push({
           block_height: height,
           problem_type: "Custom",
@@ -263,8 +261,7 @@ export const LiveSolutionFeed = () => {
 
         const bits = effectiveHeaderWorkScoreBits(headerRaw);
         const fromCb = coinbaseRewardBeansFromBlock(raw);
-        const rewardBeans =
-          fromCb !== null && fromCb > 0n ? fromCb : blockRewardFromWorkScore(bits);
+        const rewardBeans = fromCb !== null ? fromCb : 0n;
 
         let problemType: "SubsetSum" | "TSP" | "SAT" | "Custom" | null = null;
         let problemData: Solution['problem_data'] = {};
