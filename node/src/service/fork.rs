@@ -1247,9 +1247,9 @@ impl CoinjectNode {
                 None
             } else {
                 let mut w = 0u128;
-                for j in 0..i {
+                for block_j in &chain_blocks[..i] {
                     w = w.saturating_add(
-                        (chain_blocks[j].header.work_score.max(0.0) as u64) as u128,
+                        (block_j.header.work_score.max(0.0) as u64) as u128,
                     );
                 }
                 Some(w)
