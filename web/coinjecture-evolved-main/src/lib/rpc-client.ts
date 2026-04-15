@@ -60,9 +60,8 @@ const parseRpcUrls = (): string[] => {
   return raw.split(',').map((url) => url.trim()).filter((url) => url.length > 0);
 };
 
-// In development, use Vite proxy to avoid CORS issues
-// In production (CloudFront), use relative /api/rpc path that CloudFront will proxy
-// The RPC client can specify target node via query parameter or header
+// In development, use Vite proxy to avoid CORS issues.
+// In production, call rpcN.coinjecture.com directly over HTTPS.
 const isDevelopment = import.meta.env.DEV;
 const isHTTPS = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
