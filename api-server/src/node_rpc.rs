@@ -20,10 +20,7 @@ fn try_next_upstream_after_jsonrpc_error(request_method: Option<&str>, response:
     let Some(err) = response.get("error") else {
         return false;
     };
-    let msg = err
-        .get("message")
-        .and_then(|m| m.as_str())
-        .unwrap_or("");
+    let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
     msg.contains("mining disabled") || msg.contains("Mining work not available")
 }
 
