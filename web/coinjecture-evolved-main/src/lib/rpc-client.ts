@@ -884,15 +884,13 @@ export class RpcClient {
     return await this.supplementChainInfoMiningFields(await rpcPromise);
   }
 
-  /** Next mining template from nodes with mining enabled (longest `next_height` wins in multi-RPC). */
+  /**
+   * Next mining template from nodes with mining enabled.
+   * Uses sequential failover (`call`), not `callAll`: followers often return "mining disabled";
+   * waiting on every parallel host would still yield zero successes when only one URL is the API tunnel.
+   */
   async getMiningWork(): Promise<MiningWork> {
-    try {
-      return await this.callAll<MiningWork>('chain_getMiningWork', [], (results) =>
-        results.reduce((best, cur) => (cur.next_height > best.next_height ? cur : best)),
-      );
-    } catch {
-      return this.call<MiningWork>('chain_getMiningWork', []);
-    }
+    return this.call<MiningWork>('chain_getMiningWork', [], 10_000);
   }
 
   async submitBlock(block: Block): Promise<string> {

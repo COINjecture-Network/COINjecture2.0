@@ -10,6 +10,28 @@ use std::fmt;
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// `POST /node-rpc` returns the first upstream HTTP response. If that body is JSON-RPC `error`
+/// for `chain_getMiningWork` on a follower (mining disabled), try the next `NODE_RPC_URL` so
+/// browsers see the same failover as [`NodeRpcClient::call`].
+fn try_next_upstream_after_jsonrpc_error(request_method: Option<&str>, response: &Value) -> bool {
+    if request_method != Some("chain_getMiningWork") {
+        return false;
+    }
+    let Some(err) = response.get("error") else {
+        return false;
+    };
+    let msg = err
+        .get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("");
+    msg.contains("mining disabled") || msg.contains("Mining work not available")
+}
+
+fn jsonrpc_method_from_request_body(body: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(body).ok()?;
+    v.get("method")?.as_str().map(str::to_string)
+}
+
 pub struct NodeRpcClient {
     urls: Vec<String>,
     http: Client,
@@ -83,6 +105,7 @@ impl NodeRpcClient {
         }
 
         let mut errors = Vec::new();
+        let request_method = jsonrpc_method_from_request_body(&body);
 
         for url in &self.urls {
             let resp = match self
@@ -101,6 +124,22 @@ impl NodeRpcClient {
                 .bytes()
                 .await
                 .map_err(|e| NodeRpcError::RequestFailed(format!("{url}: {e}")))?;
+
+            if status == 200 && self.urls.len() > 1 {
+                if let Ok(val) = serde_json::from_slice::<Value>(&bytes) {
+                    if val.get("error").is_some()
+                        && try_next_upstream_after_jsonrpc_error(request_method.as_deref(), &val)
+                    {
+                        let hint = val
+                            .pointer("/error/message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("jsonrpc error");
+                        errors.push(format!("{url}: {hint}"));
+                        continue;
+                    }
+                }
+            }
+
             return Ok((status, bytes));
         }
 
