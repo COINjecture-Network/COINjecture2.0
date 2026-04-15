@@ -25,10 +25,7 @@ fn try_next_upstream_after_jsonrpc_error(request_method: Option<&str>, response:
         return false;
     };
     let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
-    let msg = err
-        .get("message")
-        .and_then(|m| m.as_str())
-        .unwrap_or("");
+    let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
     if msg.contains("mining disabled") || msg.contains("Mining work not available") {
         return true;
     }
