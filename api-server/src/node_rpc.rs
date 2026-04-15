@@ -13,6 +13,10 @@ use tokio::time::sleep;
 /// `POST /node-rpc` returns the first upstream HTTP response. If that body is JSON-RPC `error`
 /// for `chain_getMiningWork` on a follower (mining disabled), try the next `NODE_RPC_URL` so
 /// browsers see the same failover as [`NodeRpcClient::call`].
+///
+/// Also retries on JSON-RPC **Invalid params** (-32602) for that method only: some public RPC
+/// stacks surface version skew or strict param parsing that way; the mining-enabled bootnode may
+/// still accept the same body.
 fn try_next_upstream_after_jsonrpc_error(request_method: Option<&str>, response: &Value) -> bool {
     if request_method != Some("chain_getMiningWork") {
         return false;
@@ -20,8 +24,12 @@ fn try_next_upstream_after_jsonrpc_error(request_method: Option<&str>, response:
     let Some(err) = response.get("error") else {
         return false;
     };
+    let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
     let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
-    msg.contains("mining disabled") || msg.contains("Mining work not available")
+    if msg.contains("mining disabled") || msg.contains("Mining work not available") {
+        return true;
+    }
+    code == -32602
 }
 
 fn jsonrpc_method_from_request_body(body: &[u8]) -> Option<String> {

@@ -305,6 +305,20 @@ export interface RpcResponse<T> {
   error?: RpcError;
 }
 
+/** `chain_getBlock` / `chain_getBlockHeader` expect a JSON number; reject bad values before RPC (avoids `params:[null]` → "Invalid params"). */
+function coerceBlockHeightParam(height: unknown): number | null {
+  if (typeof height === 'number') {
+    if (!Number.isFinite(height) || height < 0 || height > Number.MAX_SAFE_INTEGER) return null;
+    return Math.floor(height);
+  }
+  if (typeof height === 'string' && height.trim() !== '') {
+    const n = Number(height.trim());
+    if (!Number.isFinite(n) || n < 0 || n > Number.MAX_SAFE_INTEGER) return null;
+    return Math.floor(n);
+  }
+  return null;
+}
+
 // Solution payload (same shape as block solution_reveal) — referenced by ProblemInfo
 export interface SolutionType {
   SubsetSum?: number[];
@@ -584,7 +598,20 @@ export class RpcClient {
     timeoutMs: number = RPC_FETCH_TIMEOUT_MS,
   ): Promise<T> {
     const errors: Error[] = [];
-    
+    const rpcParams = Array.isArray(params) ? [...params] : [];
+    if (rpcParams.some((p) => p === undefined)) {
+      throw new Error(
+        `RPC ${method}: undefined parameter (would serialize as null). Params: ${JSON.stringify(rpcParams)}`,
+      );
+    }
+    if (method === 'chain_getBlock' || method === 'chain_getBlockHeader') {
+      const h = coerceBlockHeightParam(rpcParams[0]);
+      if (h === null) {
+        throw new Error(`RPC ${method}: invalid block height ${String(rpcParams[0])}`);
+      }
+      rpcParams[0] = h;
+    }
+
     // Try each URL in order (failover)
     for (let i = 0; i < this.baseUrls.length; i++) {
       const url = this.baseUrls[i];
@@ -600,7 +627,7 @@ export class RpcClient {
               jsonrpc: '2.0',
               id: this.requestId++,
               method,
-              params,
+              params: rpcParams,
             }),
           },
           timeoutMs,
@@ -632,7 +659,9 @@ export class RpcClient {
 
     // All URLs failed (includes JSON-RPC errors like invalid tx, not only network failures)
     const errorMessages = errors.map(e => e.message).join('; ');
-    throw new Error(`All RPC endpoints failed. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
+    throw new Error(
+      `All RPC endpoints failed for ${method}. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`,
+    );
   }
 
   /**
@@ -690,7 +719,9 @@ export class RpcClient {
 
     if (successful.length === 0) {
       const errorMessages = results.map(r => (r as any).error?.message || 'Unknown error').join('; ');
-      throw new Error(`All RPC endpoints failed. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`);
+      throw new Error(
+        `All RPC endpoints failed for ${method}. Tried: ${this.baseUrls.join(', ')}. Errors: ${errorMessages}`,
+      );
     }
 
     // Use selector if provided, otherwise return first successful result
@@ -735,9 +766,11 @@ export class RpcClient {
    * parallel avoids one slow/failing node hiding another that has data.
    */
   async getBlock(height: number): Promise<Block | null> {
+    const h = coerceBlockHeightParam(height);
+    if (h === null) return null;
     const outcomes = await Promise.all(
       this.baseUrls.map((url) =>
-        this.jsonRpcRequest<Block | null>(url, 'chain_getBlock', [height], RPC_BLOCK_BODY_TIMEOUT_MS),
+        this.jsonRpcRequest<Block | null>(url, 'chain_getBlock', [h], RPC_BLOCK_BODY_TIMEOUT_MS),
       ),
     );
     return outcomes.find((b) => b != null) ?? null;
@@ -786,6 +819,13 @@ export class RpcClient {
     timeoutMs: number = RPC_FETCH_TIMEOUT_MS,
   ): Promise<T | null> {
     try {
+      const rpcParams = Array.isArray(params) ? [...params] : [];
+      if (rpcParams.some((p) => p === undefined)) return null;
+      if (method === 'chain_getBlock' || method === 'chain_getBlockHeader') {
+        const h = coerceBlockHeightParam(rpcParams[0]);
+        if (h === null) return null;
+        rpcParams[0] = h;
+      }
       const response = await fetchWithTimeout(
         url,
         {
@@ -795,7 +835,7 @@ export class RpcClient {
             jsonrpc: '2.0',
             id: this.requestId++,
             method,
-            params,
+            params: rpcParams,
           }),
         },
         timeoutMs,
