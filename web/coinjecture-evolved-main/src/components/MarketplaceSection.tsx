@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { rpcClient, type ProblemInfo } from "@/lib/rpc-client";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
 import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { formatDistanceToNow } from "date-fns";
 import { Link } from "react-router-dom";
@@ -547,7 +548,11 @@ export const MarketplaceSection = () => {
                     />
                     <MetricPill
                       label="Bounty pool"
-                      value={stats && typeof stats.total_bounty_pool === "number" ? `${(stats.total_bounty_pool / 1e9).toFixed(2)}B` : "Live"}
+                      value={
+                        statsLoading ? "Loading" : stats
+                          ? formatBeans(parseBalance(stats.total_bounty_pool) ?? 0n)
+                          : "Live"
+                      }
                     />
                     <MetricPill
                       label="Expired"

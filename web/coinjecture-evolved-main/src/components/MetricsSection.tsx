@@ -5,6 +5,7 @@ import { LiveSolutionFeed } from "./LiveSolutionFeed";
 import { useQuery } from "@tanstack/react-query";
 import { rpcClient } from "@/lib/rpc-client";
 import { Link } from "react-router-dom";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
 
 export const MetricsSection = () => {
   const { data: chainInfo, isLoading: chainLoading, isError: chainError } = useQuery({
@@ -185,7 +186,8 @@ export const MetricsSection = () => {
                 {chainInfo.best_cumulative_work?.trim() ? chainInfo.best_cumulative_work : "—"}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                Σ truncated header work on the canonical tip (parent work for the next block reward).
+                Σ truncated integer work from headers (same units as w_trunc in rewards). Not display BEANS; not
+                ledger atoms.
               </p>
             </Card>
             <Card className="signal-card">
@@ -193,11 +195,24 @@ export const MetricsSection = () => {
                 <Award className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Total minted (coinbase)</p>
               </div>
-              <p className="text-lg font-bold font-mono break-all">
-                {chainInfo.total_minted_rewards?.trim() ? chainInfo.total_minted_rewards : "—"}
+              <p className="text-xl font-bold tabular-nums">
+                {(() => {
+                  const s = chainInfo.total_minted_rewards?.trim();
+                  if (!s) return "—";
+                  const atoms = parseBalance(s);
+                  return atoms !== null ? formatBeans(atoms) : s;
+                })()}
               </p>
+              {chainInfo.total_minted_rewards?.trim() ? (
+                <p className="text-xs text-muted-foreground font-mono break-all mt-0.5">
+                  {(() => {
+                    const a = parseBalance(chainInfo.total_minted_rewards!.trim());
+                    return a !== null ? `${a.toLocaleString()} atoms raw` : chainInfo.total_minted_rewards;
+                  })()}
+                </p>
+              ) : null}
               <p className="text-xs text-muted-foreground mt-1">
-                Sum of coinbase rewards on the current best chain (from node when supported).
+                Sum of coinbase rewards on the best chain — values are ledger atoms; main figure is BEANS (÷10¹²).
               </p>
             </Card>
           </div>
@@ -239,7 +254,10 @@ export const MetricsSection = () => {
                 <TrendingUp className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Bounty Pool</p>
               </div>
-              <p className="text-2xl font-bold">{(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B</p>
+              <p className="text-2xl font-bold tabular-nums">
+                {formatBeans(parseBalance(marketplaceStats.total_bounty_pool) ?? 0n)}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">Open listings escrow total in display BEANS.</p>
             </Card>
           </div>
         )}

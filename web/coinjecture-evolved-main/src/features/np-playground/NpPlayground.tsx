@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -102,6 +102,9 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [submittingChain, setSubmittingChain] = useState(false);
+  /** Latest PoW nonce count during header mining (chain submit only). */
+  const [powTries, setPowTries] = useState<number | null>(null);
+  const powUiThrottle = useRef(0);
   const [pullingChainInstance, setPullingChainInstance] = useState(false);
   const [isLg, setIsLg] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"code" | "visual" | "result" | "console">("code");
@@ -484,6 +487,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       setConsoleLines((prev) => [...prev, `[error] ${msg}`, ""]);
       toast.error("Bounty submission failed", { description: msg });
     } finally {
+      setPowTries(null);
       setSubmittingChain(false);
     }
   };
@@ -507,6 +511,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     }
 
     setSubmittingChain(true);
+    setPowTries(null);
+    powUiThrottle.current = 0;
     try {
       const work = await rpcClient.getMiningWork();
       const chainTip = await rpcClient.getChainInfo();
@@ -556,6 +562,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         `[chain] Mining template block #${nextHeight} prev_hash: ${prevHashHex.slice(0, 16)}…`,
         `[chain] Network difficulty: ${work.difficulty}`,
         `[chain] Building block + PoW; coinbase → your wallet address…`,
+        "[chain] Header PoW runs in a background worker so the tab stays responsive.",
         "",
       ]);
 
@@ -568,7 +575,14 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         out.timeMs,
         parentW ?? 0n,
         [],
-        work.difficulty
+        work.difficulty,
+        (nonce) => {
+          const now = performance.now();
+          if (now - powUiThrottle.current >= 350) {
+            powUiThrottle.current = now;
+            setPowTries(nonce);
+          }
+        }
       );
       if (!block) {
         setConsoleLines((prev) => [...prev, "[error] Solution failed verification or PoW header mining failed.", ""]);
@@ -611,6 +625,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       setConsoleLines((prev) => [...prev, `[error] ${msg}`, ""]);
       toast.error("Chain submit failed", { description: msg });
     } finally {
+      setPowTries(null);
       setSubmittingChain(false);
     }
   };
@@ -871,7 +886,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                   className="flex h-full min-h-[220px] w-full min-w-0"
                 >
                   <ResizablePanel defaultSize={52} minSize={30} className="min-w-0 flex flex-col min-h-0">
-                    <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/50 bg-muted/20 text-xs shrink-0">
+                    <div className="flex flex-col border-b border-border/50 bg-muted/20 text-xs shrink-0">
+                    <div className="flex items-center justify-between gap-2 px-3 py-2">
                       <span className="font-mono text-muted-foreground truncate">{activeFile}</span>
                       <div className="flex items-center gap-1 shrink-0">
                         <Button type="button" variant="ghost" size="sm" className="h-8 gap-1" onClick={resetAll} title="Reset">
@@ -913,6 +929,12 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                           Draft bounty
                         </Button>
                       </div>
+                    </div>
+                    {powTries != null ? (
+                      <div className="px-3 pb-2 text-[10px] font-mono text-muted-foreground tabular-nums">
+                        Header PoW: {powTries.toLocaleString()} nonces…
+                      </div>
+                    ) : null}
                     </div>
                     <div className="flex-1 min-h-0 min-w-0 p-2 flex flex-col">
                       <Editor
@@ -1088,6 +1110,11 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     <RotateCcw className="h-5 w-5" />
                   </Button>
                 </div>
+                {powTries != null ? (
+                  <p className="text-[10px] font-mono text-muted-foreground tabular-nums">
+                    Header PoW: {powTries.toLocaleString()} nonces…
+                  </p>
+                ) : null}
               </div>
 
               <Tabs

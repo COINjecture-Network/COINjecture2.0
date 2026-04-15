@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { rpcClient } from "@/lib/rpc-client";
 import { cn } from "@/lib/utils";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
 
 const useHeroVideo = () => {
   const [showVideo, setShowVideo] = useState(
@@ -167,8 +168,8 @@ export const Hero = () => {
                         </Card>
                         <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                           <div className="signal-kicker">Bounty pool</div>
-                          <div className="signal-value text-primary">
-                            {(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B
+                          <div className="signal-value text-primary tabular-nums">
+                            {formatBeans(parseBalance(marketplaceStats.total_bounty_pool) ?? 0n)}
                           </div>
                         </Card>
                       </>

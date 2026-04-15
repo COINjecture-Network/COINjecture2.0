@@ -15,8 +15,13 @@ const RPC_FETCH_TIMEOUT_MS = 45_000;
 const RPC_BLOCK_BODY_TIMEOUT_MS = 90_000;
 /** `chain_submitBlock` payloads are large; API + Nginx must allow big bodies and long proxy reads. */
 const RPC_SUBMIT_BLOCK_TIMEOUT_MS = 300_000;
-/** Parallel `callAll` must not wait for the slowest node to hit the full client timeout (bad UX). */
-const RPC_CALL_ALL_TIMEOUT_MS = 14_000;
+/**
+ * Parallel `callAll` waits for **every** in-flight request to finish (success or timeout), then picks
+ * the best result — so wall time is ~max(per-endpoint latency). Keep this modest for dashboard loads.
+ */
+const RPC_CALL_ALL_TIMEOUT_MS = 10_000;
+/** `chain_getInfo` across all RPCs — slightly tighter so the metrics hero does not sit blank ~2×14s. */
+const RPC_CALL_ALL_CHAIN_INFO_TIMEOUT_MS = 8_000;
 
 async function fetchWithTimeout(
   url: string,
@@ -636,7 +641,12 @@ export class RpcClient {
    * For chain info, returns the node with the highest block height
    * For other queries, returns the first successful response
    */
-  private async callAll<T>(method: string, params: unknown[] = [], selector?: (results: T[]) => T): Promise<T> {
+  private async callAll<T>(
+    method: string,
+    params: unknown[] = [],
+    selector?: (results: T[]) => T,
+    timeoutMs: number = RPC_CALL_ALL_TIMEOUT_MS,
+  ): Promise<T> {
     const promises = this.baseUrls.map(async (url) => {
       try {
         const response = await fetchWithTimeout(
@@ -653,7 +663,7 @@ export class RpcClient {
               params,
             }),
           },
-          RPC_CALL_ALL_TIMEOUT_MS,
+          timeoutMs,
         );
 
         if (!response.ok) {
@@ -808,10 +818,14 @@ export class RpcClient {
   /** Prefer max `best_height` across RPC URLs (same as previous `getChainInfo` JSON-RPC path). */
   private async fetchChainInfoViaJsonRpc(): Promise<ChainInfo> {
     try {
-      return await this.callAll<ChainInfo>('chain_getInfo', [], (results) =>
-        results.reduce((best, current) =>
-          current.best_height > best.best_height ? current : best,
-        ),
+      return await this.callAll<ChainInfo>(
+        'chain_getInfo',
+        [],
+        (results) =>
+          results.reduce((best, current) =>
+            current.best_height > best.best_height ? current : best,
+          ),
+        RPC_CALL_ALL_CHAIN_INFO_TIMEOUT_MS,
       );
     } catch {
       return this.call<ChainInfo>('chain_getInfo', []);
@@ -824,7 +838,8 @@ export class RpcClient {
     const haveNp = finiteOrUndef(info.np_problem_size) != null;
     if (havePow && haveNp) return info;
     try {
-      const mw = await this.getMiningWork();
+      // Single-RPC `call` (failover list) — avoids a second full `callAll` that waits on every host.
+      const mw = await this.call<MiningWork>('chain_getMiningWork', [], 10_000);
       let out = info;
       if (!havePow && Number.isFinite(mw.difficulty)) {
         out = { ...out, header_pow_difficulty: mw.difficulty };

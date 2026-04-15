@@ -152,7 +152,7 @@ interface Solution {
   solver: string;
   /** Parsed on-chain coinbase `reward` (authoritative mint for this block). */
   reward_beans: bigint;
-  /** Integer model `⌊w_trunc/W_parent⌋` when parent W is derivable from tip cumulative work; informational only. */
+  /** Model mint atoms `⌊w_trunc·S/W_parent⌋` when W_parent is derivable (S=10¹²); informational vs coinbase. */
   formula_reward_beans: bigint | null;
   /**
    * Integer truncated from on-chain `header.work_score` — this is what the node sums into cumulative W
@@ -677,10 +677,14 @@ export const LiveSolutionFeed = () => {
                   {solution.parent_w_emission != null && solution.formula_reward_beans != null ? (
                     <span
                       className="text-[10px] text-muted-foreground leading-tight"
-                      title="Minted atoms = ⌊w·S/W_parent⌋ (S=10^12); display BEANS = atoms/S. On-chain coinbase is atoms."
+                      title="Mint = ⌊w_trunc·S / W_parent⌋ ledger atoms (S=10¹²). Display BEANS = mint / S. w_trunc is integer header work, not fractional PoUW bits."
                     >
-                      Model ⌊w·S÷W⌋ = {formatBeans(solution.formula_reward_beans)} atoms (w=
-                      {solution.w_contrib_chain.toString()}, W_parent={solution.parent_w_emission.toString()})
+                      Model mint: {formatBeans(solution.formula_reward_beans)} BEANS
+                      <span className="opacity-80">
+                        {" "}
+                        ({solution.formula_reward_beans.toLocaleString()} atoms, w_trunc=
+                        {solution.w_contrib_chain.toString()}, W_parent={solution.parent_w_emission.toString()})
+                      </span>
                     </span>
                   ) : solution.block_height > 0 ? (
                     <span className="text-[10px] text-muted-foreground leading-tight">
@@ -705,10 +709,12 @@ export const LiveSolutionFeed = () => {
                   </span>
                   <span
                     className="text-[10px] text-muted-foreground leading-tight"
-                    title="Integer added to chain cumulative W (truncated header.work_score). Emission uses Σ of these, not bits above."
+                    title="Chain ΣW uses (header.work_score as u64); values &lt; 1 truncate to 0 even when PoUW bits (above) are non-zero."
                   >
                     ΣW row: +{solution.w_contrib_chain.toString()}
-                    {solution.w_contrib_chain === 0n ? " — parent W unchanged" : ""}
+                    {solution.w_contrib_chain === 0n
+                      ? " — no integer work added to W (stored score truncates to 0)"
+                      : ""}
                   </span>
                 </div>
                 <div className="flex flex-col gap-0.5">

@@ -11,6 +11,13 @@ import {
   workScoreBitsFromPouw,
 } from './chain-metrics';
 import { ProblemType, SolutionType, Block, BlockHeader } from './rpc-client';
+import MiningPowWorker from './mining-pow.worker?worker';
+import {
+  buildHeaderHashDebug,
+  calculateHeaderHash,
+  maxNonceForDifficulty,
+  MAX_LEADING_HEX_ZEROS,
+} from './mining-pow-core';
 
 // Types matching Rust implementation
 export interface Commitment {
@@ -40,9 +47,11 @@ const MAX_TSP_CITIES = 10;
 
 /** Leading **hex** zeroes required on `hex(headerHash)` — not Bitcoin difficulty bits / nBits. */
 const DEFAULT_DIFFICULTY = 2;
-/** 32-byte digest in hex is at most 64 characters — cap difficulty to match node validation. */
-const MAX_LEADING_HEX_ZEROS = 64;
-const MINING_DEBUG_FLAG_KEY = 'coinjecture:mining-debug';
+
+/** Wall-clock cap for in-browser PoW (worker); after this we give up so the UI does not hang forever. */
+const MAX_POW_WORKER_MS = 25 * 60 * 1000;
+/** Main-thread fallback: max ms per tight slice before yielding (no Worker). */
+const MAX_POW_SLICE_MS = 12;
 
 function normalizeHeaderFloat(value: number, decimals: number = 12): number {
   if (!Number.isFinite(value)) {
@@ -56,24 +65,6 @@ function normalizeHeaderFloat(value: number, decimals: number = 12): number {
 function rewardAsJson(reward: bigint): string {
   if (reward < 0n) return "0";
   return reward.toString();
-}
-
-function shouldLogMiningDebug(): boolean {
-  // Always allow logging in development builds
-  if (import.meta.env && import.meta.env.DEV) {
-    return true;
-  }
-
-  // Check localStorage flag (set via: localStorage.setItem('coinjecture:mining-debug', 'true'))
-  if (typeof window !== 'undefined') {
-    try {
-      return window.localStorage?.getItem(MINING_DEBUG_FLAG_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  }
-
-  return false;
 }
 
 /**
@@ -504,133 +495,107 @@ export function createCommitment(
 }
 
 /**
- * Calculate block header hash using JSON serialization
- * Matches Rust core/src/block.rs::hash_from_json() which uses serde_json::to_vec()
- * 
- * IMPORTANT: Field order must match Rust struct field order for consistent JSON serialization
- * Rust struct order: version, height, prev_hash, timestamp, transactions_root, solutions_root,
- *                    commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
- *                    time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
+ * Main-thread PoW fallback (slow at high difficulty). Used when `Worker` is unavailable or fails.
  */
-function buildHeaderHashDebug(header: Block['header']): { hash: string; json: string } {
-  // Convert header to match server format (byte arrays for hashes/addresses)
-  // CRITICAL: Field order must match Rust struct field order exactly
-  const headerForHash: any = {
-    version: header.version,
-    height: header.height,
-    prev_hash: typeof header.prev_hash === 'string' ? Array.from(hexToBytes(header.prev_hash)) : header.prev_hash,
-    timestamp: header.timestamp,
-    transactions_root: typeof header.transactions_root === 'string' ? Array.from(hexToBytes(header.transactions_root)) : header.transactions_root,
-    solutions_root: typeof header.solutions_root === 'string' ? Array.from(hexToBytes(header.solutions_root)) : header.solutions_root,
-    commitment: {
-      hash: typeof header.commitment.hash === 'string' ? Array.from(hexToBytes(header.commitment.hash)) : header.commitment.hash,
-      problem_hash: typeof header.commitment.problem_hash === 'string' ? Array.from(hexToBytes(header.commitment.problem_hash)) : header.commitment.problem_hash
-    },
-    work_score: header.work_score,
-    miner: typeof header.miner === 'string' ? Array.from(hexToBytes(header.miner)) : header.miner,
-    nonce: header.nonce,
-    solve_time_us: header.solve_time_us,
-    verify_time_us: header.verify_time_us,
-    time_asymmetry_ratio: header.time_asymmetry_ratio,
-    solution_quality: header.solution_quality,
-    complexity_weight: header.complexity_weight,
-    energy_estimate_joules: header.energy_estimate_joules
-  };
-  
-  // Serialize header using JSON (matches server-side hash_from_json)
-  // CRITICAL: Field order must match Rust struct field order exactly
-  // Rust struct order: version, height, prev_hash, timestamp, transactions_root, solutions_root,
-  //                    commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
-  //                    time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
-  const floatFieldNames = new Set([
-    'work_score',
-    'time_asymmetry_ratio',
-    'solution_quality',
-    'complexity_weight',
-    'energy_estimate_joules',
-  ]);
-
-  const serializeRustLikeJson = (value: unknown, parentKey?: string): string => {
-    if (value === null) return 'null';
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) {
-        throw new Error(`Cannot serialize non-finite number for ${parentKey ?? 'value'}`);
+async function mineHeaderMainThreadCooperative(
+  header: Block['header'],
+  difficulty: number,
+  onProgress?: (nonce: number, hash: string) => void
+): Promise<{ nonce: number; hash: string } | null> {
+  const n = Math.min(Math.max(0, difficulty), MAX_LEADING_HEX_ZEROS);
+  const targetPrefix = '0'.repeat(n);
+  const maxNonce = maxNonceForDifficulty(n);
+  const yieldToBrowser = () => new Promise<void>((r) => setTimeout(r, 0));
+  let lastProgressWall = 0;
+  const wallStart = performance.now();
+  for (let nonce = 0; nonce < maxNonce; ) {
+    if (performance.now() - wallStart > MAX_POW_WORKER_MS) {
+      throw new Error(
+        'Header PoW exceeded the 25-minute browser limit. For very high difficulty, use a native miner or CLI.',
+      );
+    }
+    const sliceStart = performance.now();
+    while (nonce < maxNonce && performance.now() - sliceStart < MAX_POW_SLICE_MS) {
+      header.nonce = nonce;
+      const h = calculateHeaderHash(header);
+      if (h.startsWith(targetPrefix)) {
+        return { nonce, hash: h };
       }
-      if (parentKey && floatFieldNames.has(parentKey) && Number.isInteger(value)) {
-        return `${value.toFixed(1)}`;
+      if (nonce > 0 && onProgress) {
+        const now = performance.now();
+        if (nonce % 200_000 === 0 || now - lastProgressWall >= 400) {
+          onProgress(nonce, h);
+          lastProgressWall = now;
+        }
       }
-      return JSON.stringify(value);
+      nonce++;
     }
-    if (typeof value === 'boolean') return value ? 'true' : 'false';
-    if (typeof value === 'string') return JSON.stringify(value);
-    if (Array.isArray(value)) {
-      return `[${value.map((item) => serializeRustLikeJson(item)).join(',')}]`;
-    }
-    if (typeof value === 'object') {
-      const entries = Object.entries(value as Record<string, unknown>);
-      return `{${entries
-        .map(([key, item]) => `${JSON.stringify(key)}:${serializeRustLikeJson(item, key)}`)
-        .join(',')}}`;
-    }
-    throw new Error(`Unsupported value in header serialization: ${String(value)}`);
-  };
-
-  const headerJson = serializeRustLikeJson(headerForHash);
-  const headerBytes = new TextEncoder().encode(headerJson);
-  const calculatedHash = hash(headerBytes);
-  
-  if (shouldLogMiningDebug()) {
-    console.log('🧠 Client header JSON (hashed payload):', headerJson);
-    console.log('🔍 Client header hash calculation:', {
-      jsonLength: headerJson.length,
-      jsonBytesLength: headerBytes.length,
-      jsonPreview: headerJson.substring(0, 200),
-      jsonBytes: Array.from(headerBytes.slice(0, 200)),
-      hash: calculatedHash,
-      leadingZeros: calculatedHash.match(/^0*/)?.[0].length || 0
-    });
-    console.log('🔍 Client header object (before JSON.stringify):', JSON.stringify(headerForHash, null, 2));
+    await yieldToBrowser();
   }
-  
-  return { hash: calculatedHash, json: headerJson };
-}
-
-function calculateHeaderHash(header: Block['header']): string {
-  return buildHeaderHashDebug(header).hash;
+  return null;
 }
 
 /**
- * Mine header until `hex(headerHash)` starts with `difficulty` leading **hex** `0` characters.
- * Same rule as the node; not Bitcoin nBits / 256-bit target difficulty.
+ * Header PoW: prefers a **dedicated worker** (full CPU, UI stays responsive). Falls back to
+ * time-sliced main-thread search if workers fail.
  */
-export function mineHeader(
+export async function mineHeader(
   header: Block['header'],
   difficulty: number = DEFAULT_DIFFICULTY,
   onProgress?: (nonce: number, hash: string) => void
-): { nonce: number; hash: string } | null {
-  const n = Math.min(Math.max(0, difficulty), MAX_LEADING_HEX_ZEROS);
-  const targetPrefix = '0'.repeat(n);
-  const maxNonce = 10000000; // Limit nonce search to prevent infinite loops
-  
-  for (let nonce = 0; nonce < maxNonce; nonce++) {
-    header.nonce = nonce;
-    const hash = calculateHeaderHash(header);
-    
-    if (hash.startsWith(targetPrefix)) {
-      return { nonce, hash };
-    }
-    
-    // Progress update every 100k hashes
-    if (nonce > 0 && nonce % 100000 === 0) {
-      if (onProgress) {
-        onProgress(nonce, hash);
-      } else {
-        console.log(`⛏️  Mining... ${nonce} hashes | Latest: ${hash.slice(0, 16)}...`);
+): Promise<{ nonce: number; hash: string } | null> {
+  if (typeof Worker !== 'undefined') {
+    try {
+      const worker = new MiningPowWorker();
+      const headerClone = JSON.parse(JSON.stringify(header)) as Block['header'];
+      const result = await new Promise<{ nonce: number; hash: string } | null>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          worker.terminate();
+          reject(
+            new Error(
+              'Header PoW exceeded the 25-minute browser limit. For very high difficulty, use a native miner or CLI.',
+            ),
+          );
+        }, MAX_POW_WORKER_MS);
+        worker.onmessage = (
+          ev: MessageEvent<{
+            type: string;
+            nonce?: number;
+            hash?: string;
+            result: { nonce: number; hash: string } | null;
+          }>
+        ) => {
+          const d = ev.data;
+          if (d.type === 'progress' && onProgress && d.nonce != null && d.hash) {
+            onProgress(d.nonce, d.hash);
+          }
+          if (d.type === 'done') {
+            clearTimeout(timer);
+            worker.terminate();
+            resolve(d.result);
+          }
+        };
+        worker.onerror = (err) => {
+          clearTimeout(timer);
+          worker.terminate();
+          reject(err);
+        };
+        worker.postMessage({ header: headerClone, difficulty });
+      });
+      if (result) {
+        header.nonce = result.nonce;
       }
+      return result;
+    } catch (e) {
+      console.warn('[mining] PoW worker failed; using main-thread fallback', e);
     }
   }
-  
-  return null;
+
+  const out = await mineHeaderMainThreadCooperative(header, difficulty, onProgress);
+  if (out) {
+    header.nonce = out.nonce;
+  }
+  return out;
 }
 
 export function getClientHeaderHashDebug(header: Block['header']): { hash: string; json: string } {
@@ -733,7 +698,8 @@ export async function createBlock(
   transactions: any[] = [],
   problemSize: number = 10,
   difficulty: number = DEFAULT_DIFFICULTY,
-  parentCumulativeWork: bigint = 0n
+  parentCumulativeWork: bigint = 0n,
+  onMiningProgress?: (nonce: number, hash: string) => void
 ): Promise<Block | null> {
   console.log(`⛏️  Mining block #${height}...`);
   
@@ -815,7 +781,7 @@ export async function createBlock(
   
   // 6. Mine header (find nonce)
   console.log(`🎯 Mining header (difficulty: ${difficulty})...`);
-  const miningResult = mineHeader(header, difficulty);
+  const miningResult = await mineHeader(header, difficulty, onMiningProgress);
   if (!miningResult) {
     console.error('❌ Failed to mine header');
     return null;
@@ -880,7 +846,8 @@ export async function createBlockFromSolvedProblem(
   solveTimeMs: number,
   parentCumulativeWork: bigint,
   transactions: any[] = [],
-  difficulty: number = DEFAULT_DIFFICULTY
+  difficulty: number = DEFAULT_DIFFICULTY,
+  onMiningProgress?: (nonce: number, hash: string) => void
 ): Promise<Block | null> {
   const prevHashHex = extractHashHex(prevHash);
   if (!verifySolution(solution, problem)) {
@@ -940,7 +907,7 @@ export async function createBlockFromSolvedProblem(
     energy_estimate_joules: energyEstimateJoules,
   };
 
-  const miningResult = mineHeader(header, difficulty);
+  const miningResult = await mineHeader(header, difficulty, onMiningProgress);
   if (!miningResult) {
     console.error("❌ Failed to mine header");
     return null;

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Coordinated mesh genesis: wipe chain volumes everywhere, boot ONLY the canonical host
-# until the tip is stable, then start follower VPSs (prevents fork storm from parallel genesis).
+# Coordinated mesh genesis: wipe chain volumes everywhere, pull GHCR image, boot canonical,
+# then boot follower VPSs so the canonical bootnode has external CPP peers (mining is gated
+# until at least one CPP peer connects). Finally wait for a stable tip on canonical.
 #
 # Canonical (largest / seed): 193.203.164.13 — followers dial it first via COINJECT_BOOTNODES.
 #
@@ -16,6 +17,7 @@
 #   FOLLOWER1_HOST=root@76.13.101.67  FOLLOWER1_PATH=/opt/coinjecture-src
 #   FOLLOWER2_HOST=root@198.199.81.81 FOLLOWER2_PATH=/opt/coinjecture
 #   STABLE_IDLE_SECS=45   STABLE_MIN_HEIGHT=1   STABLE_POLL_SECS=15   CANONICAL_WAIT_MAX_SECS=600
+#   CANONICAL_RPC_WAIT_MAX_SECS=120   (wait for JSON-RPC after canonical up, before followers)
 #   COMPOSE_FILE=docker-compose.yml   FOLLOWER_COMPOSE_EXTRA=docker-compose.follower-no-mine.yml
 #
 # Image package: https://github.com/COINjecture-Network/COINjecture2.0/pkgs/container/coinjecture2.0
@@ -47,6 +49,7 @@ STABLE_IDLE_SECS="${STABLE_IDLE_SECS:-45}"
 STABLE_MIN_HEIGHT="${STABLE_MIN_HEIGHT:-1}"
 STABLE_POLL_SECS="${STABLE_POLL_SECS:-15}"
 CANONICAL_WAIT_MAX_SECS="${CANONICAL_WAIT_MAX_SECS:-600}"
+CANONICAL_RPC_WAIT_MAX_SECS="${CANONICAL_RPC_WAIT_MAX_SECS:-120}"
 
 SSH_OPTS=( -o BatchMode=yes -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new )
 
@@ -99,45 +102,20 @@ docker compose -f "$COMPOSE_FILE" pull $NODE_SERVICES
 docker compose -f "$COMPOSE_FILE" up -d --no-build $STACK_SERVICES
 REMOTE
 
-echo ">>> 5) Wait for stable tip on canonical (best_height >= $STABLE_MIN_HEIGHT, unchanged for ~${STABLE_IDLE_SECS}s; max ${CANONICAL_WAIT_MAX_SECS}s)"
-deadline=$((SECONDS + CANONICAL_WAIT_MAX_SECS))
-last_h=""
-stable_since=""
-while [[ $SECONDS -lt $deadline ]]; do
+echo ">>> 5) Wait for canonical JSON-RPC (chain_getInfo; max ${CANONICAL_RPC_WAIT_MAX_SECS}s)"
+rpc_deadline=$((SECONDS + CANONICAL_RPC_WAIT_MAX_SECS))
+while [[ $SECONDS -lt $rpc_deadline ]]; do
   out="$(remote "$CANONICAL_HOST" "curl -sfS -m 20 -X POST http://127.0.0.1:9933/ -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"chain_getInfo\",\"params\":[],\"id\":1}'" || true)"
   h="$(echo "$out" | python3 -c "import json,sys; r=json.load(sys.stdin); print(r.get('result',{}).get('best_height',''))" 2>/dev/null || echo "")"
-  if [[ -z "$h" || ! "$h" =~ ^[0-9]+$ ]]; then
-    echo "    (RPC not ready yet, retry in ${STABLE_POLL_SECS}s)"
-    sleep "$STABLE_POLL_SECS"
-    continue
+  if [[ -n "$h" && "$h" =~ ^[0-9]+$ ]]; then
+    echo ">>> Canonical RPC up (best_height=$h)"
+    break
   fi
-  if [[ "$h" -lt "$STABLE_MIN_HEIGHT" ]]; then
-    echo "    height=$h (waiting for min $STABLE_MIN_HEIGHT)"
-    last_h=""
-    stable_since=""
-    sleep "$STABLE_POLL_SECS"
-    continue
-  fi
-  if [[ "$h" == "$last_h" ]]; then
-    if [[ -z "$stable_since" ]]; then
-      stable_since=$SECONDS
-    fi
-    elapsed=$((SECONDS - stable_since))
-    echo "    height=$h stable_for=${elapsed}s / target_idle=${STABLE_IDLE_SECS}s"
-    if [[ "$elapsed" -ge "$STABLE_IDLE_SECS" ]]; then
-      echo ">>> Stable tip on canonical: height=$h"
-      break
-    fi
-  else
-    echo "    height=$h (advancing)"
-    last_h="$h"
-    stable_since=""
-  fi
-  sleep "$STABLE_POLL_SECS"
+  echo "    (RPC not ready yet, retry in 5s)"
+  sleep 5
 done
-
-if [[ $SECONDS -ge $deadline ]]; then
-  echo "WARN: timed out waiting for stable tip; starting followers anyway — check canonical logs"
+if [[ $SECONDS -ge $rpc_deadline ]]; then
+  echo "WARN: canonical RPC not ready within ${CANONICAL_RPC_WAIT_MAX_SECS}s — starting followers anyway"
 fi
 
 echo ">>> 6) Pull + start follower stacks (sync/RPC only — overlay: $FOLLOWER_COMPOSE_EXTRA)"
@@ -161,6 +139,46 @@ fi
 docker compose -f "$COMPOSE_FILE" -f "$FOLLOWER_COMPOSE_EXTRA" pull $NODE_SERVICES
 docker compose -f "$COMPOSE_FILE" -f "$FOLLOWER_COMPOSE_EXTRA" up -d --no-build $STACK_SERVICES
 REMOTE
+
+echo ">>> 7) Wait for stable tip on canonical (best_height >= $STABLE_MIN_HEIGHT, unchanged for ~${STABLE_IDLE_SECS}s; max ${CANONICAL_WAIT_MAX_SECS}s)"
+deadline=$((SECONDS + CANONICAL_WAIT_MAX_SECS))
+last_h=""
+stable_since=""
+while [[ $SECONDS -lt $deadline ]]; do
+  out="$(remote "$CANONICAL_HOST" "curl -sfS -m 20 -X POST http://127.0.0.1:9933/ -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"chain_getInfo\",\"params\":[],\"id\":1}'" || true)"
+  h="$(echo "$out" | python3 -c "import json,sys; r=json.load(sys.stdin); print(r.get('result',{}).get('best_height',''))" 2>/dev/null || echo "")"
+  if [[ -z "$h" || ! "$h" =~ ^[0-9]+$ ]]; then
+    echo "    (RPC hiccup, retry in ${STABLE_POLL_SECS}s)"
+    sleep "$STABLE_POLL_SECS"
+    continue
+  fi
+  if [[ "$h" -lt "$STABLE_MIN_HEIGHT" ]]; then
+    echo "    height=$h (waiting for min $STABLE_MIN_HEIGHT — followers must reach :707)"
+    last_h=""
+    stable_since=""
+    sleep "$STABLE_POLL_SECS"
+    continue
+  fi
+  if [[ "$h" == "$last_h" ]]; then
+    if [[ -z "$stable_since" ]]; then
+      stable_since=$SECONDS
+    fi
+    elapsed=$((SECONDS - stable_since))
+    echo "    height=$h stable_for=${elapsed}s / target_idle=${STABLE_IDLE_SECS}s"
+    if [[ "$elapsed" -ge "$STABLE_IDLE_SECS" ]]; then
+      echo ">>> Stable tip on canonical: height=$h"
+      break
+    fi
+  else
+    echo "    height=$h (advancing)"
+    last_h="$h"
+    stable_since=""
+  fi
+  sleep "$STABLE_POLL_SECS"
+done
+if [[ $SECONDS -ge $deadline ]]; then
+  echo "WARN: timed out waiting for stable tip — verify P2P :707 and bootnode logs"
+fi
 
 echo ""
 echo "=== Done ==="
