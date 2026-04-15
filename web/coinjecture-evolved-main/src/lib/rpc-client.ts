@@ -319,6 +319,84 @@ function coerceBlockHeightParam(height: unknown): number | null {
   return null;
 }
 
+/** Include JSON-RPC `data` when present (often has serde path for "Invalid params"). */
+function formatJsonRpcError(err: RpcError): string {
+  const base = err.message || 'RPC error';
+  const code = typeof err.code === 'number' ? ` [${err.code}]` : '';
+  let extra = '';
+  if (err.data !== undefined && err.data !== null) {
+    try {
+      const s = typeof err.data === 'string' ? err.data : JSON.stringify(err.data);
+      extra = s.length > 280 ? ` — ${s.slice(0, 280)}…` : ` — ${s}`;
+    } catch {
+      /* ignore */
+    }
+  }
+  return `${base}${code}${extra}`;
+}
+
+/**
+ * Rust `ProblemType` is an externally tagged enum: extra `null` keys or float `u64` distances
+ * break serde on `chain_submitBlock`. Emit a single variant with integer fields only.
+ */
+function problemTypeForChainSubmit(problem: ProblemType): Record<string, unknown> {
+  if (problem.SubsetSum != null && Array.isArray(problem.SubsetSum.numbers)) {
+    const numbers = problem.SubsetSum.numbers.map((x) => Math.trunc(Number(x)));
+    const target = Math.trunc(Number(problem.SubsetSum.target));
+    return { SubsetSum: { numbers, target } };
+  }
+  if (problem.SAT != null && Array.isArray(problem.SAT.clauses)) {
+    return {
+      SAT: {
+        variables: Math.trunc(Number(problem.SAT.variables)),
+        clauses: problem.SAT.clauses.map((c: { literals?: unknown[] }) => ({
+          literals: Array.isArray(c?.literals)
+            ? c.literals.map((lit) => Math.trunc(Number(lit)))
+            : [],
+        })),
+      },
+    };
+  }
+  if (problem.TSP != null && Array.isArray(problem.TSP.distances) && problem.TSP.cities != null) {
+    const cities = Math.trunc(Number(problem.TSP.cities));
+    const distances = problem.TSP.distances.map((row) =>
+      row.map((v) => {
+        const n = Math.trunc(Number(v));
+        if (!Number.isFinite(n) || n < 0) {
+          throw new Error(`Invalid TSP distance: ${String(v)}`);
+        }
+        return Math.min(n, Number.MAX_SAFE_INTEGER);
+      }),
+    );
+    return { TSP: { cities, distances } };
+  }
+  if (problem.Custom != null) {
+    throw new Error(
+      'Custom mining problems are not supported for browser submit in this build (Rust expects raw bytes for problem_id/data).',
+    );
+  }
+  throw new Error('Unsupported or empty problem type for chain_submitBlock');
+}
+
+/** Same as {@link problemTypeForChainSubmit} for `Solution` enum. */
+function solutionTypeForChainSubmit(s: SolutionType): Record<string, unknown> {
+  if (s.SubsetSum != null && Array.isArray(s.SubsetSum)) {
+    return { SubsetSum: s.SubsetSum.map((i) => Math.trunc(Number(i))) };
+  }
+  if (s.SAT != null && Array.isArray(s.SAT)) {
+    return { SAT: s.SAT };
+  }
+  if (s.TSP != null && Array.isArray(s.TSP)) {
+    return { TSP: s.TSP.map((i) => Math.trunc(Number(i))) };
+  }
+  if (s.Custom != null) {
+    throw new Error(
+      'Custom mining solutions are not supported for browser submit in this build (Rust expects raw bytes).',
+    );
+  }
+  throw new Error('Unsupported or empty solution for chain_submitBlock');
+}
+
 // Solution payload (same shape as block solution_reveal) — referenced by ProblemInfo
 export interface SolutionType {
   SubsetSum?: number[];
@@ -640,7 +718,7 @@ export class RpcClient {
         const data: RpcResponse<T> = await response.json();
 
         if (data.error) {
-          throw new Error(data.error.message || 'RPC error');
+          throw new Error(formatJsonRpcError(data.error));
         }
 
         if (data.result === undefined) {
@@ -701,7 +779,7 @@ export class RpcClient {
         const data: RpcResponse<T> = await response.json();
 
         if (data.error) {
-          throw new Error(data.error.message || 'RPC error');
+          throw new Error(formatJsonRpcError(data.error));
         }
 
         if (data.result === undefined) {
@@ -941,7 +1019,7 @@ export class RpcClient {
     return this.call<string>('chain_submitBlock', [serializedBlock], RPC_SUBMIT_BLOCK_TIMEOUT_MS);
   }
 
-  private serializeBlockForRpc(block: Block): any {
+  private serializeBlockForRpc(block: Block): unknown {
     // Convert block to match Rust serialization format
     // Hash and Address fields need to be byte arrays
     const serializeHash = (hash: string | number[]): number[] => {
@@ -962,6 +1040,21 @@ export class RpcClient {
     // version, height, prev_hash, timestamp, transactions_root, solutions_root,
     // commitment, work_score, miner, nonce, solve_time_us, verify_time_us,
     // time_asymmetry_ratio, solution_quality, complexity_weight, energy_estimate_joules
+    const cb = block.coinbase;
+    const coinbaseJson =
+      cb == null
+        ? { to: [], reward: '0', height: 0 }
+        : {
+            to: Array.isArray(cb.to)
+              ? cb.to
+              : Array.from(hexToBytes(String(cb.to).trim().replace(/^0x/i, ''))),
+            reward:
+              typeof cb.reward === 'bigint'
+                ? cb.reward.toString()
+                : String(cb.reward ?? '0'),
+            height: Math.trunc(Number(cb.height)),
+          };
+
     return {
       header: {
         version: block.header.version,
@@ -984,10 +1077,11 @@ export class RpcClient {
         complexity_weight: block.header.complexity_weight,
         energy_estimate_joules: block.header.energy_estimate_joules,
       },
-      coinbase: block.coinbase,
-      transactions: block.transactions,
+      coinbase: coinbaseJson,
+      transactions: block.transactions ?? [],
       solution_reveal: {
-        ...block.solution_reveal,
+        problem: problemTypeForChainSubmit(block.solution_reveal.problem),
+        solution: solutionTypeForChainSubmit(block.solution_reveal.solution),
         commitment: {
           hash: serializeHash(block.solution_reveal.commitment.hash),
           problem_hash: serializeHash(block.solution_reveal.commitment.problem_hash),
