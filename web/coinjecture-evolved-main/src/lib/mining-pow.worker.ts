@@ -5,13 +5,19 @@ import type { Block } from "./rpc-client";
 type InMsg = { header: Block["header"]; difficulty: number };
 
 self.onmessage = (e: MessageEvent<InMsg>) => {
-  const { header, difficulty } = e.data;
-  let last = 0;
-  const result = mineHeaderPowSync(header, difficulty, (nonce, hash) => {
-    if (nonce - last >= 125_000) {
-      last = nonce;
-      self.postMessage({ type: "progress", nonce, hash });
-    }
-  });
-  self.postMessage({ type: "done", result });
+  try {
+    const { header, difficulty } = e.data;
+    let last = 0;
+    const result = mineHeaderPowSync(header, difficulty, (nonce, hash) => {
+      // Post often enough that the Solver Lab banner updates within ~1s on typical hardware.
+      if (nonce - last >= 20_000) {
+        last = nonce;
+        self.postMessage({ type: "progress", nonce, hash });
+      }
+    });
+    self.postMessage({ type: "done", result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    self.postMessage({ type: "error", message });
+  }
 };

@@ -514,6 +514,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     setPowTries(null);
     powUiThrottle.current = 0;
     try {
+      setConsoleLines((prev) => [...prev, "[chain] Mine block: fetching template (chain_getMiningWork) + tip…", ""]);
       const work = await rpcClient.getMiningWork();
       const chainTip = await rpcClient.getChainInfo();
       const parentW = parseU128DecimalString(chainTip.best_cumulative_work);
@@ -539,23 +540,51 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       const prevHashHex = extractHashHex(work.prev_hash);
       const nextHeight = work.next_height;
 
-      const out = await runUserSolver(files, parsed.value, 45000);
-      if (!out.ok) {
-        setConsoleLines((prev) => [...prev, `[error] Solver: ${out.error}`, ""]);
-        return;
-      }
-      const normalized = normalizeSolution(parsed.value, out.solution);
-      if (!normalized) {
-        setConsoleLines((prev) => [...prev, "[error] Solution shape invalid — cannot commit to chain.", ""]);
-        return;
-      }
+      let solveTimeMs: number;
+      let miningSolution: MiningSolution;
 
-      const miningSolution: MiningSolution = {
-        SubsetSum: normalized.SubsetSum,
-        SAT: normalized.SAT,
-        TSP: normalized.TSP,
-        Custom: normalized.Custom,
-      };
+      const reuseRun =
+        runResult?.ok === true &&
+        runResult.solution != null &&
+        normalizeSolution(parsed.value, runResult.solution);
+
+      if (reuseRun) {
+        solveTimeMs = runResult.timeMs;
+        miningSolution = {
+          SubsetSum: reuseRun.SubsetSum,
+          SAT: reuseRun.SAT,
+          TSP: reuseRun.TSP,
+          Custom: reuseRun.Custom,
+        };
+        setConsoleLines((prev) => [
+          ...prev,
+          "[chain] Using your last Run result for this instance (skipping a second solver pass).",
+          "",
+        ]);
+      } else {
+        setConsoleLines((prev) => [
+          ...prev,
+          "[chain] Running your solver in a worker (up to 45s). Tip: Run first to preview, then Mine block reuses that result.",
+          "",
+        ]);
+        const out = await runUserSolver(files, parsed.value, 45000);
+        if (!out.ok) {
+          setConsoleLines((prev) => [...prev, `[error] Solver: ${out.error}`, ""]);
+          return;
+        }
+        const normalized = normalizeSolution(parsed.value, out.solution);
+        if (!normalized) {
+          setConsoleLines((prev) => [...prev, "[error] Solution shape invalid — cannot commit to chain.", ""]);
+          return;
+        }
+        solveTimeMs = out.timeMs;
+        miningSolution = {
+          SubsetSum: normalized.SubsetSum,
+          SAT: normalized.SAT,
+          TSP: normalized.TSP,
+          Custom: normalized.Custom,
+        };
+      }
 
       setConsoleLines((prev) => [
         ...prev,
@@ -566,13 +595,14 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         "",
       ]);
 
+      setPowTries(0);
       const block = await createBlockFromSolvedProblem(
         prevHashHex,
         nextHeight,
         selectedKeyPair.address,
         parsed.value,
         miningSolution,
-        out.timeMs,
+        solveTimeMs,
         parentW ?? 0n,
         [],
         work.difficulty,
@@ -607,6 +637,11 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         return;
       }
 
+      setConsoleLines((prev) => [
+        ...prev,
+        "[chain] Submitting block via chain_submitBlock (large payload — can take up to a few minutes)…",
+        "",
+      ]);
       const blockHash = await rpcClient.submitBlock(block);
       setConsoleLines((prev) => [
         ...prev,

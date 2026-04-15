@@ -560,19 +560,26 @@ export async function mineHeader(
         worker.onmessage = (
           ev: MessageEvent<{
             type: string;
+            message?: string;
             nonce?: number;
             hash?: string;
-            result: { nonce: number; hash: string } | null;
+            result?: { nonce: number; hash: string } | null;
           }>
         ) => {
           const d = ev.data;
           if (d.type === 'progress' && onProgress && d.nonce != null && d.hash) {
             onProgress(d.nonce, d.hash);
           }
+          if (d.type === 'error') {
+            clearTimeout(timer);
+            worker.terminate();
+            reject(new Error(d.message || 'Header PoW worker failed'));
+            return;
+          }
           if (d.type === 'done') {
             clearTimeout(timer);
             worker.terminate();
-            resolve(d.result);
+            resolve(d.result ?? null);
           }
         };
         worker.onerror = (err) => {
