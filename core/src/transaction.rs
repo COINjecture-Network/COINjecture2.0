@@ -1252,4 +1252,18 @@ mod tests {
         assert_eq!(tx.fee(), 10);
         assert_eq!(tx.nonce(), 1);
     }
+
+    #[test]
+    fn transfer_serde_json_roundtrip_large_u128_atoms() {
+        let keypair = KeyPair::generate();
+        let from = keypair.address();
+        let to = Address::from_bytes([7u8; 32]);
+        let amount = 12_000_000_000_000u128;
+        let fee = 1_000_000_000_000u128;
+        let tx = Transaction::new_transfer(from, to, amount, fee, 2, &keypair);
+        let json = serde_json::to_string(&tx).expect("serialize");
+        let back: Transaction = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(tx.fee(), back.fee());
+        assert_eq!(tx.amount(), back.amount());
+    }
 }

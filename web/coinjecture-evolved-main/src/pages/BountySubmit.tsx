@@ -11,13 +11,14 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { ProblemType } from "@/lib/rpc-client";
 import { rpcClient } from "@/lib/rpc-client";
+import { displayBeansToAtoms, formatBeans, parseBalance } from "@/lib/chain-metrics";
 import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { useWallet } from "@/contexts/WalletContext";
 
 /** Must match `STORAGE_KEY` in `NpPlayground.tsx` (Solver Lab → Bounty draft). */
 const SOLVER_LAB_BOUNTY_KEY = "solverLabBountyPayload";
-/** Must match on-chain `MIN_FEE_BOUNTY_SUBMISSION` (see `core/src/validation.rs`). */
-const TRANSACTION_FEE = 1000;
+/** Must match on-chain `MIN_FEE_BOUNTY_SUBMISSION` (see `core/src/validation.rs`) — **atoms**, not display BEANS. */
+const MARKETPLACE_SUBMIT_FEE_ATOMS = 1000n;
 
 type ConfirmedSubmission = {
   problemId: string;
@@ -273,7 +274,9 @@ const BountySubmit = () => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [storedRevealKits, setStoredRevealKits] = useState<Record<string, StoredRevealKit>>({});
 
-  const totalRequired = formData.bounty ? parseInt(formData.bounty) + TRANSACTION_FEE : TRANSACTION_FEE;
+  const totalEscrowAtoms = formData.bounty.trim()
+    ? displayBeansToAtoms(BigInt(formData.bounty.trim())) + MARKETPLACE_SUBMIT_FEE_ATOMS
+    : MARKETPLACE_SUBMIT_FEE_ATOMS;
   const { data: marketplaceStats, refetch: refetchMarketplaceStats } = useQuery({
     queryKey: ["marketplace-stats"],
     queryFn: () => rpcClient.getMarketplaceStats(),
@@ -628,8 +631,9 @@ Return a satisfying assignment or proof of unsatisfiability.
       return;
     }
 
-    if (typeof walletBalance === "number" && walletBalance < bounty) {
-      const message = `Insufficient wallet balance. Available: ${walletBalance.toLocaleString()} BEANS, required escrow: ${bounty.toLocaleString()} BEANS.`;
+    const bountyAtoms = displayBeansToAtoms(BigInt(bounty));
+    if (walletBalance !== undefined && walletBalance < bountyAtoms) {
+      const message = `Insufficient wallet balance. Available: ${formatBeans(walletBalance)} BEANS, required escrow: ${bounty.toLocaleString()} BEANS.`;
       setSubmitError(message);
       toast({ title: "Insufficient balance", description: message, variant: "destructive" });
       return;
@@ -652,12 +656,13 @@ Return a satisfying assignment or proof of unsatisfiability.
       let commitment: string | undefined;
       let salt: string | undefined;
 
+      const bountyParam = displayBeansToAtoms(BigInt(bounty)).toString();
       if (formData.submissionMode === "private") {
         salt = generateSaltHex();
         const privateResult = await rpcClient.submitPrivateProblemWithWallet({
           problem: parsedProblem,
           salt,
-          bounty,
+          bounty: bountyParam,
           min_work_score: minWorkScore,
           expiration_days: expirationDays,
           submitter: selectedKeyPair.address,
@@ -667,7 +672,7 @@ Return a satisfying assignment or proof of unsatisfiability.
       } else {
         problemId = await rpcClient.submitPublicProblem({
           problem: parsedProblem,
-          bounty,
+          bounty: bountyParam,
           min_work_score: minWorkScore,
           expiration_days: expirationDays,
           submitter: selectedKeyPair.address,
@@ -1213,8 +1218,8 @@ Return a satisfying assignment or proof of unsatisfiability.
                     <div className="flex items-center justify-between gap-4 text-sm">
                       <span className="text-muted-foreground">Available balance</span>
                       <span className="font-semibold">
-                        {typeof walletBalance === "number"
-                          ? `${walletBalance.toLocaleString()} BEANS`
+                        {walletBalance !== undefined
+                          ? `${formatBeans(walletBalance)} BEANS`
                           : "Connect wallet"}
                       </span>
                     </div>
@@ -1232,7 +1237,7 @@ Return a satisfying assignment or proof of unsatisfiability.
                     </div>
                     <div className="flex items-center justify-between gap-4 text-sm">
                       <span className="text-muted-foreground">Network fee</span>
-                      <span className="font-semibold">{TRANSACTION_FEE.toLocaleString()} BEANS</span>
+                      <span className="font-semibold">{formatBeans(MARKETPLACE_SUBMIT_FEE_ATOMS)} BEANS</span>
                     </div>
                     <div className="flex items-center justify-between gap-4 text-sm">
                       <span className="text-muted-foreground">Expires in</span>
@@ -1241,7 +1246,7 @@ Return a satisfying assignment or proof of unsatisfiability.
                     <div className="h-px bg-border" />
                     <div className="flex items-center justify-between gap-4">
                       <span className="font-semibold text-primary">Total required</span>
-                      <span className="text-xl font-bold text-primary">{totalRequired.toLocaleString()} BEANS</span>
+                      <span className="text-xl font-bold text-primary">{formatBeans(totalEscrowAtoms)} BEANS</span>
                     </div>
                   </div>
                 </Card>
@@ -1299,7 +1304,9 @@ Return a satisfying assignment or proof of unsatisfiability.
                                     </span>
                                   </div>
                                   <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                                    <span>{problem.bounty.toLocaleString()} BEANS</span>
+                                    <span>
+                                      {formatBeans(parseBalance(problem.bounty) ?? 0n)} BEANS
+                                    </span>
                                     <span>
                                       {savedKit
                                         ? "kit saved"
@@ -1409,8 +1416,8 @@ Return a satisfying assignment or proof of unsatisfiability.
               </Card>
               <Card className="p-4 text-center">
                 <div className="text-3xl font-bold text-primary mb-1">
-                  {typeof marketplaceStats?.total_bounty_pool === "number"
-                    ? `${(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B`
+                  {marketplaceStats?.total_bounty_pool != null
+                    ? `${formatBeans(parseBalance(marketplaceStats.total_bounty_pool) ?? 0n)}`
                     : "Live"}
                 </div>
                 <div className="text-sm text-muted-foreground">Total BEANS Escrowed</div>

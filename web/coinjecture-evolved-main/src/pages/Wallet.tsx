@@ -17,11 +17,16 @@ import { getWalletTransactions, type WalletActivityItem } from "@/lib/api/client
 import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check, ChevronDown } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
+import {
+  displayBeansToAtoms,
+  formatBeans,
+  REWARD_FIXED_POINT_SCALE,
+} from "@/lib/chain-metrics";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
-/** Optional miner tip for higher fee-priority in the block template (legacy mempools may require at least this). */
-const TRANSFER_PRIORITY_FEE_BEANS = 1000;
+/** Miner tip in ledger atoms (= 1000 display BEANS at S = 10^12). */
+const TRANSFER_PRIORITY_TIP_ATOMS = 1000n * REWARD_FIXED_POINT_SCALE;
 
 function isPoolFeeTooLowMessage(message: string): boolean {
   const m = message.toLowerCase();
@@ -332,7 +337,7 @@ function AccountCard({ name, keyPair, selected, onSelect, onDelete }: AccountCar
             {keyPair.address.slice(0, 16)}...{keyPair.address.slice(-8)}
           </div>
           <div className="text-lg font-bold text-primary">
-            {balance !== undefined ? `${balance.toLocaleString()} BEANS` : 'Loading...'}
+            {balance !== undefined ? `${formatBeans(balance)} BEANS` : 'Loading...'}
           </div>
         </div>
         <Button
@@ -361,8 +366,7 @@ function formatBeansLabel(raw: string | null | undefined): string | null {
   if (raw == null || raw === '') return null;
   try {
     const n = BigInt(raw);
-    if (n > BigInt(Number.MAX_SAFE_INTEGER)) return `${raw} BEANS`;
-    return `${Number(raw).toLocaleString()} BEANS`;
+    return `${formatBeans(n)} BEANS`;
   } catch {
     return `${raw} BEANS`;
   }
@@ -796,7 +800,7 @@ function AccountDetails({ accountName, keyPair, onSend }: AccountDetailsProps) {
         <div>
           <Label className="text-muted-foreground">Balance</Label>
           <div className="text-3xl font-bold text-primary mt-1">
-            {accountInfo ? `${accountInfo.balance.toLocaleString()} BEANS` : 'Loading...'}
+            {accountInfo ? `${formatBeans(accountInfo.balance)} BEANS` : 'Loading...'}
           </div>
         </div>
 
@@ -947,23 +951,25 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
     mutationFn: async () => {
       if (!accountInfo) throw new Error("Account info not loaded");
 
-      const amountNum = parseInt(amount, 10);
+      const amountDisplay = BigInt(amount.trim());
+      if (amountDisplay <= 0n) throw new Error("Invalid amount");
+      const amountAtoms = displayBeansToAtoms(amountDisplay);
       const { address: from, privateKey, publicKey } = keyPair;
       const { nonce } = accountInfo;
 
-      const sign = (fee: number) =>
-        createSignedTransferTransaction(from, recipient, amountNum, fee, nonce, privateKey, publicKey);
+      const sign = (fee: bigint) =>
+        createSignedTransferTransaction(from, recipient, amountAtoms, fee, nonce, privateKey, publicKey);
 
       if (priorityTip) {
-        return rpcClient.submitTransaction(sign(TRANSFER_PRIORITY_FEE_BEANS));
+        return rpcClient.submitTransaction(sign(TRANSFER_PRIORITY_TIP_ATOMS));
       }
 
       try {
-        return await rpcClient.submitTransaction(sign(0));
+        return await rpcClient.submitTransaction(sign(0n));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (!isPoolFeeTooLowMessage(msg)) throw e;
-        return rpcClient.submitTransaction(sign(TRANSFER_PRIORITY_FEE_BEANS));
+        return rpcClient.submitTransaction(sign(TRANSFER_PRIORITY_TIP_ATOMS));
       }
     },
     onSuccess: (txHash) => {
@@ -997,18 +1003,25 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
       toast.error("Invalid recipient address (must be 64-character hex)");
       return;
     }
-    const amountNum = parseInt(amount, 10);
-    if (!amount || amountNum <= 0) {
+    let amountDisplay: bigint;
+    try {
+      amountDisplay = BigInt(amount.trim());
+    } catch {
       toast.error("Invalid amount");
       return;
     }
-    if (accountInfo.balance < amountNum) {
+    if (!amount || amountDisplay <= 0n) {
+      toast.error("Invalid amount");
+      return;
+    }
+    const amountAtoms = displayBeansToAtoms(amountDisplay);
+    if (accountInfo.balance < amountAtoms) {
       toast.error("Insufficient balance for this amount");
       return;
     }
-    if (priorityTip && accountInfo.balance < amountNum + TRANSFER_PRIORITY_FEE_BEANS) {
+    if (priorityTip && accountInfo.balance < amountAtoms + TRANSFER_PRIORITY_TIP_ATOMS) {
       toast.error(
-        `Need at least ${(amountNum + TRANSFER_PRIORITY_FEE_BEANS).toLocaleString()} BEANS (amount + ${TRANSFER_PRIORITY_FEE_BEANS.toLocaleString()} tip)`
+        `Need at least ${formatBeans(amountAtoms + TRANSFER_PRIORITY_TIP_ATOMS)} BEANS (amount + ${formatBeans(TRANSFER_PRIORITY_TIP_ATOMS)} tip)`
       );
       return;
     }
@@ -1029,7 +1042,7 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
           <DialogDescription>
             Send BEANS from {accountName}. By default the wallet tries a <strong>zero-fee</strong> transfer (supported
             on updated nodes with fair block templates). Turn on the tip below to attach{" "}
-            {TRANSFER_PRIORITY_FEE_BEANS.toLocaleString()} BEANS for stronger fee-priority or for older nodes that
+            {formatBeans(TRANSFER_PRIORITY_TIP_ATOMS)} BEANS for stronger fee-priority or for older nodes that
             reject zero-fee submits.
           </DialogDescription>
         </DialogHeader>
@@ -1057,7 +1070,7 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
           <div className="flex items-center justify-between gap-3 rounded-md border p-3">
             <div className="space-y-0.5">
               <Label htmlFor="priority-tip" className="text-sm font-medium">
-                Faster confirmation ({TRANSFER_PRIORITY_FEE_BEANS.toLocaleString()} BEANS tip)
+                Faster confirmation ({formatBeans(TRANSFER_PRIORITY_TIP_ATOMS)} BEANS tip)
               </Label>
               <p className="text-xs text-muted-foreground">
                 Skip zero-fee and pay the miner tip up front. Optional on networks that already accept free transfers.
@@ -1070,7 +1083,7 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
           )}
           {accountInfo && (
             <div className="text-sm text-muted-foreground">
-              Balance: {accountInfo.balance.toLocaleString()} BEANS | Nonce: {accountInfo.nonce}
+              Balance: {formatBeans(accountInfo.balance)} BEANS | Nonce: {accountInfo.nonce}
             </div>
           )}
           <div className="flex gap-2">

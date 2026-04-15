@@ -183,8 +183,8 @@ pub struct NodeConfig {
     #[arg(long)]
     pub enable_faucet: bool,
 
-    /// Faucet amount (tokens per request)
-    #[arg(long, default_value = "10000")]
+    /// Faucet amount (**ledger atoms** per request). Default = `10_000 × 10^12` (= 10_000 display BEANS at fixed-point S).
+    #[arg(long, default_value = "10000000000000000")]
     pub faucet_amount: u128,
 
     /// Faucet cooldown (seconds between requests per address)
@@ -629,6 +629,7 @@ impl NodeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use coinject_tokenomics::REWARD_FIXED_POINT_SCALE;
 
     fn test_config() -> NodeConfig {
         NodeConfig {
@@ -655,7 +656,7 @@ mod tests {
             max_peers: 50,
             verbose: false,
             enable_faucet: false,
-            faucet_amount: 10000,
+            faucet_amount: 10_000u128 * REWARD_FIXED_POINT_SCALE,
             faucet_cooldown: 3600,
             hf_token: None,
             hf_dataset_name: None,

@@ -313,7 +313,8 @@ export interface SolutionType {
 export interface ProblemInfo {
   problem_id: string;
   submitter: string;
-  bounty: number; // Balance type
+  /** Ledger atoms (API may send string for large `u128`). */
+  bounty: string | number;
   min_work_score: number;
   status: string; // Rust Debug, e.g. "Open", "Solved" (case varies; use isMarketplaceListingOpen)
   submitted_at: number; // i64 timestamp
@@ -336,7 +337,7 @@ export interface MarketplaceStats {
   solved_problems: number; // usize
   expired_problems: number; // usize
   cancelled_problems: number; // usize
-  total_bounty_pool: number; // Balance
+  total_bounty_pool: string | number; // Balance atoms
 }
 
 // Chain information - matches ChainInfo in rpc/src/server.rs
@@ -373,7 +374,8 @@ export interface MiningWork {
 // Account information - matches AccountInfo in rpc/src/server.rs
 export interface AccountInfo {
   address: string;
-  balance: number; // Balance
+  /** Ledger atoms (`Balance`); 1 display BEANS = 10^12 atoms — use `formatBeans` from chain-metrics. */
+  balance: bigint;
   nonce: number; // u64
 }
 
@@ -500,7 +502,8 @@ export interface PrivateProblemParams {
   problem_type: string;
   size: number; // usize
   complexity_estimate: number; // f64
-  bounty: number; // Balance
+  /** Ledger atoms (decimal string or safe integer). */
+  bounty: string | number;
   min_work_score: number; // f64
   expiration_days: number; // u64
 }
@@ -508,7 +511,8 @@ export interface PrivateProblemParams {
 export interface PrivateProblemWalletParams {
   problem: ProblemType;
   salt: string;
-  bounty: number;
+  /** Ledger atoms — use `displayBeansToAtoms` × display BEANS. */
+  bounty: string | number;
   min_work_score: number;
   expiration_days: number;
   submitter: string;
@@ -522,7 +526,8 @@ export interface PrivateProblemSubmissionResult {
 // Public problem submission parameters - matches PublicProblemParams in rpc/src/server.rs
 export interface PublicProblemParams {
   problem: ProblemType;
-  bounty: number;
+  /** Ledger atoms — use `displayBeansToAtoms` × display BEANS. */
+  bounty: string | number;
   min_work_score: number;
   expiration_days: number;
   submitter: string;
@@ -689,8 +694,9 @@ export class RpcClient {
 
   // ========== Account Methods ==========
   
-  async getBalance(address: string): Promise<number> {
-    return this.call<number>('account_getBalance', [address]);
+  async getBalance(address: string): Promise<bigint> {
+    const raw = await this.call<number | string>('account_getBalance', [address]);
+    return typeof raw === 'bigint' ? raw : BigInt(String(raw));
   }
 
   async getNonce(address: string): Promise<number> {
@@ -698,7 +704,17 @@ export class RpcClient {
   }
 
   async getAccountInfo(address: string): Promise<AccountInfo> {
-    return this.call<AccountInfo>('account_getInfo', [address]);
+    const raw = await this.call<{ address: string; balance: number | string; nonce: number }>(
+      'account_getInfo',
+      [address],
+    );
+    const bal =
+      typeof raw.balance === 'bigint'
+        ? raw.balance
+        : typeof raw.balance === 'string'
+          ? BigInt(raw.balance)
+          : BigInt(Math.trunc(Number(raw.balance)));
+    return { address: raw.address, balance: bal, nonce: raw.nonce };
   }
 
   // ========== Chain Methods ==========

@@ -677,9 +677,9 @@ export const LiveSolutionFeed = () => {
                   {solution.parent_w_emission != null && solution.formula_reward_beans != null ? (
                     <span
                       className="text-[10px] text-muted-foreground leading-tight"
-                      title="Integer work/W model (truncated header.work_score ÷ parent ΣW). Often 0 when W ≫ w; main line is on-chain coinbase."
+                      title="Minted atoms = ⌊w·S/W_parent⌋ (S=10^12); display BEANS = atoms/S. On-chain coinbase is atoms."
                     >
-                      Model ⌊w÷W⌋ = {formatBeans(solution.formula_reward_beans)} (w=
+                      Model ⌊w·S÷W⌋ = {formatBeans(solution.formula_reward_beans)} atoms (w=
                       {solution.w_contrib_chain.toString()}, W_parent={solution.parent_w_emission.toString()})
                     </span>
                   ) : solution.block_height > 0 ? (
@@ -691,7 +691,7 @@ export const LiveSolutionFeed = () => {
                   solution.formula_reward_beans != null &&
                   solution.coinbase_beans !== solution.formula_reward_beans ? (
                     <span className="text-[10px] text-amber-600/90 dark:text-amber-400/90 leading-tight">
-                      Differs from integer ⌊w÷W⌋ (legacy scale or pre-fork blocks).
+                      Differs from model ⌊w·S÷W⌋ (legacy blocks or RPC mismatch).
                     </span>
                   ) : null}
                 </div>

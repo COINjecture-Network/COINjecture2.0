@@ -89,7 +89,7 @@ export function WebCliTerminal({ compact = false, className }: WebCliTerminalPro
             try {
               const accountInfo = await rpcClient.getAccountInfo(selectedKeyPair.address);
               response = `Wallet: ${selectedKeyPair.address.slice(0, 16)}...${selectedKeyPair.address.slice(-8)}
-Balance: ${accountInfo.balance.toLocaleString()} BEANS
+Balance: ${formatBeans(accountInfo.balance)} BEANS
 Nonce: ${accountInfo.nonce}`;
             } catch (error: unknown) {
               const msg = error instanceof Error ? error.message : "Unknown error";
@@ -166,7 +166,7 @@ Network height: ${chainInfo.best_height}`;
               const accountInfo = await rpcClient.getAccountInfo(selectedKeyPair.address);
 
               response = `Mining statistics:
-Your balance: ${accountInfo.balance.toLocaleString()} BEANS
+Your balance: ${formatBeans(accountInfo.balance)} BEANS
 Your nonce: ${accountInfo.nonce}
 ${isMiner ? "You are the miner of the latest block." : "Not the miner of latest block."}
 Latest block: #${block.header.height}
@@ -177,7 +177,7 @@ Verify time: ${(block.header.verify_time_us / 1000).toFixed(2)}ms
 Network height: ${chainInfo.best_height}
 Network peers: ${chainInfo.peer_count}`;
             } else {
-              const bal = (await rpcClient.getAccountInfo(selectedKeyPair.address)).balance.toLocaleString();
+              const bal = formatBeans((await rpcClient.getAccountInfo(selectedKeyPair.address)).balance);
               response = `Mining statistics:
 No blocks found
 Your balance: ${bal} BEANS`;
@@ -319,7 +319,7 @@ Your address: ${selectedKeyPair.address.slice(0, 16)}...${selectedKeyPair.addres
 
                         const rewardB = parseBalance(block.coinbase?.reward);
                         const rewardStr = rewardB !== null ? formatBeans(rewardB) : "0";
-                        const currentBalance = accountInfo?.balance || 0;
+                        const currentBalance = accountInfo?.balance ?? 0n;
 
                         appendLines([
                           `Block mined and submitted successfully.
@@ -334,7 +334,7 @@ Solve time: ${(block.header.solve_time_us / 1000).toFixed(2)}ms
 Energy: ${block.header.energy_estimate_joules.toFixed(4)} J
 Reward: ${rewardStr} BEANS
 
-Your balance: ${currentBalance.toLocaleString()} BEANS
+Your balance: ${formatBeans(currentBalance)} BEANS
 
 Your block is being processed by the network.`,
                           "",

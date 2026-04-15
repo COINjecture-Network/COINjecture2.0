@@ -7,6 +7,7 @@ import { Menu, Wallet, Pickaxe, BadgeDollarSign, ChevronDown } from "lucide-reac
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { rpcClient } from "@/lib/rpc-client";
+import { formatBeans } from "@/lib/chain-metrics";
 import { useWallet } from "@/contexts/WalletContext";
 import { AuthSettingsButton, UserMenu } from "@/lib/auth";
 import {
@@ -112,7 +113,7 @@ export const Navigation = () => {
                       <span className="truncate w-full">{selectedAccount}</span>
                       {navBalance !== undefined && (
                         <span className="text-[10px] font-normal opacity-80 tabular-nums">
-                          {navBalance.toLocaleString()} BEANS
+                          {formatBeans(navBalance)} BEANS
                         </span>
                       )}
                     </span>
@@ -247,7 +248,7 @@ export const Navigation = () => {
                       <span className="truncate w-full">{selectedAccount}</span>
                       {navBalance !== undefined && (
                         <span className="text-[10px] font-normal opacity-80 tabular-nums">
-                          {navBalance.toLocaleString()} BEANS
+                          {formatBeans(navBalance)} BEANS
                         </span>
                       )}
                     </span>

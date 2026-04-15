@@ -52,11 +52,10 @@ function normalizeHeaderFloat(value: number, decimals: number = 12): number {
   return Number(value.toFixed(decimals));
 }
 
-/** Coinbase `reward` in JSON-RPC must be a safe integer. */
-function rewardAsNumber(reward: bigint): number | null {
-  if (reward < 0n) return null;
-  if (reward > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-  return Number(reward);
+/** Coinbase `reward` as JSON — decimal string for full `u128` atom amounts. */
+function rewardAsJson(reward: bigint): string {
+  if (reward < 0n) return "0";
+  return reward.toString();
 }
 
 function shouldLogMiningDebug(): boolean {
@@ -849,11 +848,9 @@ export async function createBlock(
     truncatedHeaderWorkScoreU128(header.work_score),
     parentCumulativeWork
   );
-  const rewardNum = rewardAsNumber(rewardBn);
-  if (rewardNum === null) return null;
   const coinbase = {
     to: Array.from(minerAddressBytes), // Address as byte array (reuse from above)
-    reward: rewardNum,
+    reward: rewardAsJson(rewardBn),
     height
   };
   
@@ -971,11 +968,9 @@ export async function createBlockFromSolvedProblem(
     truncatedHeaderWorkScoreU128(header.work_score),
     parentCumulativeWork
   );
-  const rewardNum = rewardAsNumber(rewardBn);
-  if (rewardNum === null) return null;
   const coinbase = {
     to: Array.from(minerAddressBytes),
-    reward: rewardNum,
+    reward: rewardAsJson(rewardBn),
     height,
   };
 
