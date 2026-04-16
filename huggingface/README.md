@@ -13,15 +13,6 @@ tags:
 - consensus
 size_categories:
 - 1K<n<10K
-# Hub Data Studio: pin JSONL loading so shards with extra keys / mixed JSON shapes still preview.
-# See https://huggingface.co/docs/datasets/en/repository_structure (builder parameters).
-configs:
-- config_name: default
-  default: true
-  data_files:
-  - split: train
-    path: "data/*.jsonl"
-  on_mixed_types: use_json
 ---
 
 # COINjecture NP-Solutions Dataset
@@ -374,6 +365,45 @@ Data is collected in real-time from running COINjecture Network nodes. Each node
 - Large integers (u128) are serialized as strings to avoid JSON precision loss
 - All problem types are unified in a single continuous dataset for cross-problem analysis
 
+### Normalizing legacy JSONL (Hub viewer / `CastError`)
+
+Older JSONL omitted optional keys on some rows. That yields different Arrow **column sets** across shards and breaks Data Studio with `CastError` ("column names don't match"). Current nodes emit the full key set on every line (`null` when unknown).
+
+To **batch-fix** existing `data/*.jsonl` files locally (same key names as `DatasetRecord` in `huggingface/src/client.rs`; unknown top-level keys are dropped):
+
+```bash
+python3 scripts/hf_np_solutions_normalize_jsonl.py --in data/data_1775801281.jsonl --out data/data_1775801281.norm.jsonl
+```
+
+Then replace the originals on the Hub (e.g. `hf upload` or Hub API commits). For thousands of files, run in a loop or job runner and commit in batches. If you change `DatasetRecord`, update `RECORD_KEYS` in `scripts/hf_np_solutions_jsonl_common.py` to match.
+
+**Automated Hub pass** (download → normalize → upload one commit per file; needs `pip install huggingface_hub` and a write token):
+
+```bash
+export HF_TOKEN=hf_...
+python3 scripts/hf_np_solutions_batch_normalize_hub.py --dry-run
+python3 scripts/hf_np_solutions_batch_normalize_hub.py --limit 5
+python3 scripts/hf_np_solutions_batch_normalize_hub.py --sleep 1.0
+```
+
+Use `--start-after data/data_<timestamp>.jsonl` to resume. Full runs create thousands of commits; prefer a VM, tune `--sleep`, or fork the script to batch multiple files per `create_commit` if you hit rate limits.
+
+**Pin the Hub schema (`dataset_infos.json`)**: Data Studio can infer a **partial** feature set from the first shards (missing e.g. `explorer_card`, `peer_count`, `sync_lag_blocks`), then fail when a later shard adds those columns (`CastError: column names don't match`). Upload a root-level `dataset_infos.json` so `datasets` uses the full column layout and `Json` types for `problem_data`, `solution_data`, and `pool_distributions`.
+
+- Generate (or refresh after changing `DatasetRecord` / `RECORD_KEYS`):
+
+```bash
+python3 scripts/hf_np_solutions_emit_dataset_infos.py
+```
+
+- Commit the generated file in this repo at `huggingface/dataset_infos.json`, then upload it to the **dataset repository root** (next to `README.md`), not under `huggingface/` on the Hub:
+
+```bash
+hf upload COINjecture/NP-Solutions huggingface/dataset_infos.json dataset_infos.json --repo-type=dataset
+```
+
+You still need **normalized JSONL** everywhere so `problem_data` / `solution_data` are JSON objects (not stringified blobs); `dataset_infos.json` fixes the **target** schema, not bad row encodings.
+
 ## Dataset Statistics
 
 - **Total Records**: Growing in real-time (unified dataset with all problem types)
@@ -497,9 +527,13 @@ For questions or issues:
 
 ## Changelog
 
+### 2026-04-16
+- **Hub `CastError` / “column names don’t match”**: Older JSONL omitted optional fields entirely (`serde` `skip_serializing_if`). Different shards then inferred different Arrow column sets. Nodes now serialize **every** `DatasetRecord` field on every line (`null` when `None`), so new shards align with the full schema. Existing Hub files stay sparse until replaced or batch-normalized.
+- **`dataset_infos.json`**: Added `scripts/hf_np_solutions_emit_dataset_infos.py` and a generated `huggingface/dataset_infos.json` so the Hub can pin the full feature list (including `Json` columns). Upload that file to the **dataset repo root** on the Hub alongside `README.md`, then wait for the viewer job to refresh.
+
 ### 2026-04-15
-- **Hub viewer / schema**: README YAML `configs` now points at `data/*.jsonl` with `on_mixed_types: use_json` so mixed JSON shapes coerce consistently for the Data Studio preview.
-- **JSONL shape**: `mining_attempts` is always serialized (use `null` when unknown); consensus rows set it from header `nonce`. `problem_data` / `solution_data` are coerced to JSON objects before upload so stringified JSON blobs are not emitted.
+- **JSONL shape (nodes)**: `mining_attempts` is always serialized (use `null` when unknown); consensus rows set it from header `nonce`. `problem_data` / `solution_data` are coerced to JSON objects before upload so stringified JSON blobs are not emitted.
+- **Dataset card YAML**: Do **not** add a `configs` / `on_mixed_types` block for this repo: it made the Hub builder infer `problem_data`/`solution_data` as strings while legacy shards still use nested JSON objects, which triggers `DatasetGenerationError` / `CastError` when generating the preview table.
 
 ### 2026-04-10
 - **`explorer_card` field**: Each JSONL row includes a precomputed multi-line card (UTC time); implemented in `huggingface/src/explorer_card.rs`.

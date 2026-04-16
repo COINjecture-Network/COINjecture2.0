@@ -4,6 +4,7 @@
 
 # Test/temp directories
 /testnet/
+.hf_cache/
 
 # IDE
 .vscode/
