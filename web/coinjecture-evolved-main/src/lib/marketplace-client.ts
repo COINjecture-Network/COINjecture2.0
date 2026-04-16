@@ -77,6 +77,11 @@ function marketplaceBaseUrl(): string {
   return "/marketplace";
 }
 
+function httpErrorDetail(response: Response): string {
+  const bit = response.statusText?.trim();
+  return bit ? `${response.status} ${bit}` : `HTTP ${response.status}`;
+}
+
 export class MarketplaceClient {
   private baseUrl: string;
 
@@ -87,7 +92,7 @@ export class MarketplaceClient {
   async getStats(): Promise<CatalogStats> {
     const response = await fetch(`${this.baseUrl}/api/v1/stats`);
     if (!response.ok) {
-      throw new Error(`Failed to fetch stats: ${response.statusText}`);
+      throw new Error(`Failed to fetch stats: ${httpErrorDetail(response)}`);
     }
     return response.json();
   }
@@ -101,7 +106,7 @@ export class MarketplaceClient {
       body: JSON.stringify(criteria),
     });
     if (!response.ok) {
-      throw new Error(`Failed to search: ${response.statusText}`);
+      throw new Error(`Failed to search: ${httpErrorDetail(response)}`);
     }
     return response.json();
   }
@@ -109,7 +114,7 @@ export class MarketplaceClient {
   async getEntry(problemId: string): Promise<MarketplaceCatalogEntry> {
     const response = await fetch(`${this.baseUrl}/api/v1/catalog/${encodeURIComponent(problemId)}`);
     if (!response.ok) {
-      throw new Error(`Failed to fetch entry: ${response.statusText}`);
+      throw new Error(`Failed to fetch entry: ${httpErrorDetail(response)}`);
     }
     return response.json();
   }
@@ -117,7 +122,7 @@ export class MarketplaceClient {
   async healthCheck(): Promise<{ status: string; version: string; entries_count: number }> {
     const response = await fetch(`${this.baseUrl}/health`);
     if (!response.ok) {
-      throw new Error(`Health check failed: ${response.statusText}`);
+      throw new Error(`Health check failed: ${httpErrorDetail(response)}`);
     }
     return response.json();
   }

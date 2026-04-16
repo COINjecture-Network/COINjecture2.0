@@ -35,9 +35,8 @@ import {
 
 const catalogClient = new MarketplaceClient();
 
-/** Separate HTTP export service (web-wallet). Dev: Vite `/marketplace` proxy. Prod: set full URL. */
+/** Separate HTTP export service — only queried when this env is non-empty (avoids dev/prod 404 spam). */
 function exportCatalogEnabled(): boolean {
-  if (import.meta.env.DEV) return true;
   return Boolean((import.meta.env.VITE_MARKETPLACE_EXPORT_URL as string | undefined)?.trim());
 }
 
@@ -90,8 +89,9 @@ export default function Marketplace() {
             <h1 className="font-brand text-3xl font-bold tracking-tight">Marketplace</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               Live listings from the node (<code className="rounded bg-muted px-1">marketplace_get*</code>). Optional
-              export catalog when <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code> is set
-              (or dev proxy <code className="rounded bg-muted px-1">/marketplace</code>).
+              export REST mirror only if <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code> is
+              set (e.g. <code className="rounded bg-muted px-1">/marketplace</code> with the Vite dev proxy, or a full
+              HTTPS origin in production).
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -155,8 +155,9 @@ export default function Marketplace() {
 
         {!tryExport && (
           <p className="text-xs text-muted-foreground">
-            Export catalog is disabled in this build (set <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code>{" "}
-            to enable the REST mirror).
+            Export catalog mirror is off (set <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code>{" "}
+            — use <code className="rounded bg-muted px-1">/marketplace</code> locally with{" "}
+            <code className="rounded bg-muted px-1">vite.config</code> proxy, or a public export API URL in production).
           </p>
         )}
 
