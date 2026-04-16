@@ -417,7 +417,18 @@ function solutionTypeForChainSubmit(s: SolutionType): Record<string, unknown> {
     return { SubsetSum: s.SubsetSum.map((i) => safeJsonRpcU64(i)) };
   }
   if (s.SAT != null && Array.isArray(s.SAT)) {
-    return { SAT: s.SAT.map((b) => Boolean(b)) };
+    return {
+      SAT: s.SAT.map((b: unknown) => {
+        if (b === true || b === 1) return true;
+        if (b === false || b === 0) return false;
+        if (typeof b === 'string') {
+          const t = b.trim().toLowerCase();
+          if (t === 'true' || t === '1') return true;
+          if (t === 'false' || t === '0' || t === '') return false;
+        }
+        return false;
+      }),
+    };
   }
   if (s.TSP != null && Array.isArray(s.TSP)) {
     return { TSP: s.TSP.map((i) => safeJsonRpcU64(i)) };
