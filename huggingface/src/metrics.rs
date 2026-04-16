@@ -4,7 +4,10 @@
 
 use crate::client::DatasetRecord;
 use crate::energy::{EnergyConfig, EnergyMeasurer};
-use crate::serialize::{extract_problem_from_submission, serialize_problem, serialize_solution};
+use crate::serialize::{
+    coerce_json_object_for_hub, extract_problem_from_submission, serialize_problem,
+    serialize_solution,
+};
 use crate::SyncConfig;
 use coinject_consensus::WorkScoreCalculator;
 use coinject_state::ProblemSubmission;
@@ -120,11 +123,11 @@ impl MetricsCollector {
             submission.problem_reveal.as_ref(),
         )?;
 
-        let problem_data = if let Some(ref p) = problem {
+        let problem_data = coerce_json_object_for_hub(if let Some(ref p) = problem {
             serialize_problem(p)?
         } else {
             serde_json::json!({}) // Private problem not revealed
-        };
+        });
 
         let problem_type = match &submission.submission_mode {
             coinject_core::SubmissionMode::Public { problem } => format!("{:?}", problem)
@@ -254,11 +257,11 @@ impl MetricsCollector {
             submission.problem_reveal.as_ref(),
         )?;
 
-        let problem_data = if let Some(ref p) = problem {
+        let problem_data = coerce_json_object_for_hub(if let Some(ref p) = problem {
             serialize_problem(p)?
         } else {
             serde_json::json!({})
-        };
+        });
 
         let problem_type = match &submission.submission_mode {
             coinject_core::SubmissionMode::Public { problem } => format!("{:?}", problem)
@@ -274,7 +277,8 @@ impl MetricsCollector {
             .solution
             .as_ref()
             .map(serialize_solution)
-            .transpose()?;
+            .transpose()?
+            .map(coerce_json_object_for_hub);
 
         // Calculate metrics
         let time_asymmetry = solve_time.as_secs_f64() / verify_time.as_secs_f64().max(0.001);
@@ -451,9 +455,9 @@ impl MetricsCollector {
         let problem = &block.solution_reveal.problem;
         let solution = &block.solution_reveal.solution;
 
-        // Serialize the problem and solution
-        let problem_data = serialize_problem(problem)?;
-        let solution_data = serialize_solution(solution)?;
+        // Serialize the problem and solution (coerce so Hub never sees string-typed JSON blobs)
+        let problem_data = coerce_json_object_for_hub(serialize_problem(problem)?);
+        let solution_data = coerce_json_object_for_hub(serialize_solution(solution)?);
 
         // Determine problem type
         let problem_type = format!("{:?}", problem)
@@ -578,7 +582,8 @@ impl MetricsCollector {
             solve_time_us: Some(solve_time_us),
             verify_time_us: Some(verify_time_us),
             block_time_seconds: None, // Requires previous block timestamp
-            mining_attempts: None,    // Actual attempt counts are not on-chain; see `nonce`
+            // Header nonce is the only on-chain proxy for “attempts”; keeps column populated for HF viewer.
+            mining_attempts: Some(nonce),
 
             // Asymmetry metrics
             time_asymmetry: Some(time_asymmetry),

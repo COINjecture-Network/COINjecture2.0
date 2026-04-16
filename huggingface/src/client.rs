@@ -108,8 +108,8 @@ pub struct DatasetRecord {
     pub verify_time_us: Option<u64>, // NEW: Verify time in microseconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_time_seconds: Option<f64>, // NEW: Time since previous block
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mining_attempts: Option<u64>, // NEW: Nonce attempts before success
+    /// Always present in JSONL (`null` when unknown) so Hub shards share the same column set.
+    pub mining_attempts: Option<u64>,
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ASYMMETRY METRICS - NP-hardness verification (solve >> verify)

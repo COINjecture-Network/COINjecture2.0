@@ -13,6 +13,15 @@ tags:
 - consensus
 size_categories:
 - 1K<n<10K
+# Hub Data Studio: pin JSONL loading so shards with extra keys / mixed JSON shapes still preview.
+# See https://huggingface.co/docs/datasets/en/repository_structure (builder parameters).
+configs:
+- config_name: default
+  default: true
+  data_files:
+  - split: train
+    path: "data/*.jsonl"
+  on_mixed_types: use_json
 ---
 
 # COINjecture NP-Solutions Dataset
@@ -259,8 +268,8 @@ Each record in the dataset represents either:
 | **PRIMARY CONTENT** |||
 | `problem_id` | string | Unique identifier for the problem |
 | `problem_type` | string | Type of problem: "SubsetSum", "SAT", "TSP", "Custom", or "Private" |
-| `problem_data` | object | Complete problem data (JSON object) |
-| `solution_data` | object (optional) | Solution data with normalized structure |
+| `problem_data` | object | Complete problem data. **Always a JSON object** in rows emitted by current nodes; very old JSONL may have used a string (double-encoded JSON), which breaks automatic schema inference across files. |
+| `solution_data` | object (optional) | Solution data with normalized structure. Same object-vs-string caveat as `problem_data` for legacy shards. |
 | `explorer_card` | string | Preformatted explorer-style card (multi-line text). Uses **absolute UTC** from `timestamp` in the card (not “Ns ago”). Omitted or empty on legacy JSONL without this field. |
 | **IDENTIFIERS** |||
 | `block_height` | int64 | Block height when the record was created |
@@ -285,6 +294,7 @@ Each record in the dataset represents either:
 | **TIMING (consensus / detailed rows)** |||
 | `solve_time_us` | uint64 (optional) | Solve duration in microseconds (→ ms in explorer) |
 | `verify_time_us` | uint64 (optional) | Verify duration in microseconds |
+| `mining_attempts` | uint64 or null | **Present on every JSONL row** (`null` when not applicable). For consensus blocks the node sets this to the header `nonce` (on-chain proxy for search effort). Omitting the key across some shards caused Hugging Face Data Studio column mismatches. |
 | **MINING / CONSENSUS** |||
 | `difficulty_target` | uint32 (optional) | Minimum leading zero bits in block hash (node PoW setting) |
 | `nonce` | uint64 (optional) | Winning header nonce |
@@ -429,15 +439,29 @@ The dataset is accessible via the Hugging Face API:
 
 ### Uploading with the Hugging Face CLI
 
-For manual pushes (exports, Parquet/JSONL, README updates), use the [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli):
+For manual pushes (exports, Parquet/JSONL, README updates), use the [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli). Install **one** of these (pick what works on your machine):
 
 ```bash
+# Option A — standalone installer (macOS / Linux; adds hf to your PATH)
+curl -LsSf https://hf.co/cli/install.sh | bash
+
+# Option B — Homebrew (if the formula is available on your Mac)
 brew install hf
 
-# Optional: interactive login (or rely on HF_TOKEN in the environment)
-hf auth login
+# Option C — Python (hf ships with huggingface_hub; ensure the install’s bin is on PATH)
+python3 -m pip install -U "huggingface_hub"
+```
 
-# From the directory that contains the files you want on the Hub:
+Then authenticate and upload (example: dataset card only from this repo):
+
+```bash
+hf auth login   # or: export HF_TOKEN=...  (never commit tokens)
+
+cd /path/to/COINjecture2.0-main
+hf upload COINjecture/NP-Solutions huggingface/README.md --repo-type=dataset \
+  --commit-message "Dataset card: viewer YAML + schema notes"
+
+# Or upload everything in the current directory tree:
 hf upload COINjecture/NP-Solutions . --repo-type=dataset
 ```
 
@@ -472,6 +496,10 @@ For questions or issues:
 - Open a discussion on the dataset page
 
 ## Changelog
+
+### 2026-04-15
+- **Hub viewer / schema**: README YAML `configs` now points at `data/*.jsonl` with `on_mixed_types: use_json` so mixed JSON shapes coerce consistently for the Data Studio preview.
+- **JSONL shape**: `mining_attempts` is always serialized (use `null` when unknown); consensus rows set it from header `nonce`. `problem_data` / `solution_data` are coerced to JSON objects before upload so stringified JSON blobs are not emitted.
 
 ### 2026-04-10
 - **`explorer_card` field**: Each JSONL row includes a precomputed multi-line card (UTC time); implemented in `huggingface/src/explorer_card.rs`.
