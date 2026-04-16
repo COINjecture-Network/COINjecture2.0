@@ -95,6 +95,7 @@ impl Solution {
                 // Exact solution gets 1.0
                 1.0
             }
+            (Solution::SubsetSum(_), ProblemType::SubsetSum { .. }) => 0.0,
             (Solution::TSP(tour), ProblemType::TSP { cities, distances }) => {
                 if !self.verify(problem) {
                     return 0.0;
@@ -113,6 +114,7 @@ impl Solution {
                 // Exact solution gets 1.0
                 1.0
             }
+            (Solution::SAT(_), ProblemType::SAT { .. }) => 0.0,
             _ => 0.0,
         }
     }
