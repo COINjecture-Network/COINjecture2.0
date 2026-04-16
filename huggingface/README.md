@@ -388,6 +388,22 @@ python3 scripts/hf_np_solutions_batch_normalize_hub.py --sleep 1.0
 
 Use `--start-after data/data_<timestamp>.jsonl` to resume. Full runs create thousands of commits; prefer a VM, tune `--sleep`, or fork the script to batch multiple files per `create_commit` if you hit rate limits.
 
+**Pin the Hub schema (`dataset_infos.json`)**: Data Studio can infer a **partial** feature set from the first shards (missing e.g. `explorer_card`, `peer_count`, `sync_lag_blocks`), then fail when a later shard adds those columns (`CastError: column names don't match`). Upload a root-level `dataset_infos.json` so `datasets` uses the full column layout and `Json` types for `problem_data`, `solution_data`, and `pool_distributions`.
+
+- Generate (or refresh after changing `DatasetRecord` / `RECORD_KEYS`):
+
+```bash
+python3 scripts/hf_np_solutions_emit_dataset_infos.py
+```
+
+- Commit the generated file in this repo at `huggingface/dataset_infos.json`, then upload it to the **dataset repository root** (next to `README.md`), not under `huggingface/` on the Hub:
+
+```bash
+hf upload COINjecture/NP-Solutions huggingface/dataset_infos.json dataset_infos.json --repo-type=dataset
+```
+
+You still need **normalized JSONL** everywhere so `problem_data` / `solution_data` are JSON objects (not stringified blobs); `dataset_infos.json` fixes the **target** schema, not bad row encodings.
+
 ## Dataset Statistics
 
 - **Total Records**: Growing in real-time (unified dataset with all problem types)
@@ -513,6 +529,7 @@ For questions or issues:
 
 ### 2026-04-16
 - **Hub `CastError` / “column names don’t match”**: Older JSONL omitted optional fields entirely (`serde` `skip_serializing_if`). Different shards then inferred different Arrow column sets. Nodes now serialize **every** `DatasetRecord` field on every line (`null` when `None`), so new shards align with the full schema. Existing Hub files stay sparse until replaced or batch-normalized.
+- **`dataset_infos.json`**: Added `scripts/hf_np_solutions_emit_dataset_infos.py` and a generated `huggingface/dataset_infos.json` so the Hub can pin the full feature list (including `Json` columns). Upload that file to the **dataset repo root** on the Hub alongside `README.md`, then wait for the viewer job to refresh.
 
 ### 2026-04-15
 - **JSONL shape (nodes)**: `mining_attempts` is always serialized (use `null` when unknown); consensus rows set it from header `nonce`. `problem_data` / `solution_data` are coerced to JSON objects before upload so stringified JSON blobs are not emitted.

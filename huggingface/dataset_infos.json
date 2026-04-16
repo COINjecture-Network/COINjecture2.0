@@ -1,0 +1,244 @@
+{
+  "default": {
+    "description": "COINjecture NP-Solutions: JSONL rows aligned with `DatasetRecord` (see repo huggingface/).",
+    "citation": "",
+    "homepage": "",
+    "license": "",
+    "features": {
+      "problem_id": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "problem_type": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "problem_data": {
+        "_type": "Json"
+      },
+      "solution_data": {
+        "_type": "Json"
+      },
+      "block_height": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "timestamp": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "block_hash": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "prev_block_hash": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "submitter": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "solver": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "work_score": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "solution_quality": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "problem_complexity": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "bounty": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "solve_time_us": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "verify_time_us": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "block_time_seconds": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "mining_attempts": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "time_asymmetry": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "space_asymmetry": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "energy_asymmetry": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "solve_memory_bytes": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "verify_memory_bytes": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "peak_memory_bytes": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "solve_energy_joules": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "verify_energy_joules": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "total_energy_joules": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "energy_per_operation": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "energy_efficiency": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "peer_count": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "propagation_time_ms": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "sync_lag_blocks": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "difficulty_target": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "nonce": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "hash_rate_estimate": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "chain_work": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "transaction_count": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "block_size_bytes": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "block_reward": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "total_fees": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "pool_distributions": {
+        "_type": "Json"
+      },
+      "cpu_model": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "cpu_cores": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "cpu_threads": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "ram_total_bytes": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "os_info": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "status": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "submission_mode": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "energy_measurement_method": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "metrics_source": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "measurement_confidence": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "data_version": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "node_version": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "node_id": {
+        "dtype": "string",
+        "_type": "Value"
+      },
+      "explorer_card": {
+        "dtype": "string",
+        "_type": "Value"
+      }
+    },
+    "builder_name": "json",
+    "dataset_name": "np_solutions",
+    "config_name": "default",
+    "version": {
+      "version_str": "0.0.0",
+      "major": 0,
+      "minor": 0,
+      "patch": 0
+    },
+    "splits": {
+      "train": {
+        "name": "train",
+        "num_bytes": 0,
+        "num_examples": 0,
+        "dataset_name": "np_solutions"
+      }
+    }
+  }
+}
