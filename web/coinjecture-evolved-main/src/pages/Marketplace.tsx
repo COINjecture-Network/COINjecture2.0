@@ -88,10 +88,11 @@ export default function Marketplace() {
           <div>
             <h1 className="font-brand text-3xl font-bold tracking-tight">Marketplace</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Live listings from the node (<code className="rounded bg-muted px-1">marketplace_get*</code>). Optional
-              export REST mirror only if <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code> is
-              set (e.g. <code className="rounded bg-muted px-1">/marketplace</code> with the Vite dev proxy, or a full
-              HTTPS origin in production).
+              Live listings from the node (<code className="rounded bg-muted px-1">marketplace_get*</code>). An
+              optional export catalog appears below when{" "}
+              <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code> is set at build time (e.g.{" "}
+              <code className="rounded bg-muted px-1">/marketplace</code> behind the Vite proxy, or a public HTTPS
+              origin).
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -151,14 +152,6 @@ export default function Marketplace() {
             <h2 className="text-lg font-semibold tracking-tight">Export catalog mirror</h2>
             <CatalogDashboard stats={exportQuery.data.stats} entries={exportQuery.data.entries} onRefresh={() => void exportQuery.refetch()} />
           </div>
-        )}
-
-        {!tryExport && (
-          <p className="text-xs text-muted-foreground">
-            Export catalog mirror is off (set <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code>{" "}
-            — use <code className="rounded bg-muted px-1">/marketplace</code> locally with{" "}
-            <code className="rounded bg-muted px-1">vite.config</code> proxy, or a public export API URL in production).
-          </p>
         )}
 
         <SubmitBountyDialog open={submitOpen} onOpenChange={setSubmitOpen} />
