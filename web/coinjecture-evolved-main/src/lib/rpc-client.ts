@@ -349,7 +349,48 @@ function safeJsonRpcI64Time(n: unknown): number {
 
 function safeJsonRpcF64(n: unknown): number {
   const v = typeof n === 'bigint' ? Number(n) : Number(n);
-  return Number.isFinite(v) ? v : 0;
+  if (!Number.isFinite(v)) return 0;
+  // Match mining header JSON: stable decimal floats (avoids odd `toJSON` / long binary tails).
+  return Number(v.toFixed(12));
+}
+
+/** Rust `Balance` / `u128` in coinbase — must be a decimal integer string (not `"1.5e20"` / `"12.3"`). */
+function coinbaseRewardToU128String(reward: unknown): string {
+  if (typeof reward === 'bigint') {
+    return reward < 0n ? '0' : reward.toString();
+  }
+  if (typeof reward === 'number') {
+    if (!Number.isFinite(reward) || reward <= 0) return '0';
+    return BigInt(Math.floor(reward)).toString();
+  }
+  const raw = String(reward ?? '0').trim();
+  if (raw === '' || raw.startsWith('-')) return '0';
+  if (/^\d+$/.test(raw)) return raw;
+  // Strip a single fractional tail from accidental stringified floats, then take integer part.
+  const noExp = raw.replace(/[eE][+-]?\d+$/, '');
+  const intPart = noExp.includes('.') ? noExp.slice(0, noExp.indexOf('.')) : noExp;
+  const digits = intPart.replace(/\D/g, '');
+  return digits === '' ? '0' : digits.replace(/^0+(?=\d)/, '') || '0';
+}
+
+/** `Hash` / `Address` JSON is `[u8;32]` — reject non-integers / out-of-range (serde "invalid number"). */
+function u8Tuple32FromMixed(hash: string | number[] | Uint8Array): number[] {
+  if (hash instanceof Uint8Array) {
+    return Array.from(hash, (b) => b & 255);
+  }
+  if (Array.isArray(hash)) {
+    return hash.map((b) => {
+      const n = Math.round(Number(b));
+      if (!Number.isFinite(n)) return 0;
+      return Math.max(0, Math.min(255, n));
+    });
+  }
+  try {
+    const bytes = hexToBytes(String(hash).trim().replace(/^0x/i, ''));
+    return Array.from(bytes, (b) => b & 255);
+  } catch {
+    return Array(32).fill(0);
+  }
 }
 
 /** Include JSON-RPC `data` when present (often has serde path for "Invalid params"). */
@@ -1066,17 +1107,9 @@ export class RpcClient {
   private serializeBlockForRpc(block: Block): unknown {
     // Convert block to match Rust serialization format
     // Hash and Address fields need to be byte arrays
-    const serializeHash = (hash: string | number[]): number[] => {
-      if (Array.isArray(hash)) return hash;
-      const bytes = hexToBytes(hash);
-      return Array.from(bytes);
-    };
+    const serializeHash = (hash: string | number[] | Uint8Array): number[] => u8Tuple32FromMixed(hash);
 
-    const serializeAddress = (addr: string | number[]): number[] => {
-      if (Array.isArray(addr)) return addr;
-      const bytes = hexToBytes(addr);
-      return Array.from(bytes);
-    };
+    const serializeAddress = (addr: string | number[] | Uint8Array): number[] => u8Tuple32FromMixed(addr);
 
     // Explicitly construct header with all fields in exact Rust struct order
     // This prevents JavaScript from reordering fields when using spread operator
@@ -1090,12 +1123,9 @@ export class RpcClient {
         ? { to: [], reward: '0', height: 0 }
         : {
             to: Array.isArray(cb.to)
-              ? cb.to
-              : Array.from(hexToBytes(String(cb.to).trim().replace(/^0x/i, ''))),
-            reward:
-              typeof cb.reward === 'bigint'
-                ? cb.reward.toString()
-                : String(cb.reward ?? '0'),
+              ? u8Tuple32FromMixed(cb.to as number[] | Uint8Array)
+              : u8Tuple32FromMixed(String(cb.to).trim().replace(/^0x/i, '')),
+            reward: coinbaseRewardToU128String(cb.reward),
             height: safeJsonRpcU64(cb.height),
           };
 
