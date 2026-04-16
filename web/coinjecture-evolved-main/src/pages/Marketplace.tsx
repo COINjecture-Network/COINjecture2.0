@@ -6,7 +6,9 @@ import { Loader2, ExternalLink } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { Footer } from "@/components/Footer";
 import { MarketplaceClient, type CatalogStats, type MarketplaceCatalogEntry } from "@/lib/marketplace-client";
-import { rpcClient, type ProblemType } from "@/lib/rpc-client";
+import { rpcClient, type MarketplaceStats, type ProblemInfo, type ProblemType } from "@/lib/rpc-client";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
+import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -33,12 +35,34 @@ import {
 
 const catalogClient = new MarketplaceClient();
 
+/** Separate HTTP export service (web-wallet). Dev: Vite `/marketplace` proxy. Prod: set full URL. */
+function exportCatalogEnabled(): boolean {
+  if (import.meta.env.DEV) return true;
+  return Boolean((import.meta.env.VITE_MARKETPLACE_EXPORT_URL as string | undefined)?.trim());
+}
+
+function shortId(id: string) {
+  if (id.length <= 20) return id;
+  return `${id.slice(0, 10)}…${id.slice(-6)}`;
+}
+
 export default function Marketplace() {
   const queryClient = useQueryClient();
   const [submitOpen, setSubmitOpen] = useState(false);
   const [revealOpen, setRevealOpen] = useState(false);
+  const tryExport = exportCatalogEnabled();
 
-  const catalogQuery = useQuery({
+  const liveQuery = useQuery({
+    queryKey: ["marketplace", "live"],
+    queryFn: async () => {
+      const [stats, open] = await Promise.all([rpcClient.getMarketplaceStats(), rpcClient.getOpenProblems()]);
+      return { stats, open };
+    },
+    refetchInterval: 5_000,
+    retry: 2,
+  });
+
+  const exportQuery = useQuery({
     queryKey: ["marketplace-export", "catalog"],
     queryFn: async () => {
       const [stats, search] = await Promise.all([
@@ -47,11 +71,15 @@ export default function Marketplace() {
       ]);
       return { stats, entries: search.entries };
     },
-    refetchInterval: 5_000,
+    enabled: tryExport,
+    refetchInterval: 15_000,
     retry: 1,
   });
 
-  const { data, isLoading, isError, error, refetch } = catalogQuery;
+  const invalidateAll = () => {
+    void queryClient.invalidateQueries({ queryKey: ["marketplace", "live"] });
+    if (tryExport) void queryClient.invalidateQueries({ queryKey: ["marketplace-export"] });
+  };
 
   return (
     <div className="min-h-screen">
@@ -61,7 +89,9 @@ export default function Marketplace() {
           <div>
             <h1 className="font-brand text-3xl font-bold tracking-tight">Marketplace</h1>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Catalog from the export service (REST). On-chain bounties use the node RPC wizard.
+              Live listings from the node (<code className="rounded bg-muted px-1">marketplace_get*</code>). Optional
+              export catalog when <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code> is set
+              (or dev proxy <code className="rounded bg-muted px-1">/marketplace</code>).
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -74,36 +104,147 @@ export default function Marketplace() {
           </div>
         </div>
 
-        {isError && (
+        {liveQuery.isError && (
           <Alert variant="destructive">
-            <AlertTitle>Catalog unavailable</AlertTitle>
+            <AlertTitle>RPC marketplace unavailable</AlertTitle>
             <AlertDescription>
-              {error instanceof Error ? error.message : String(error)} — ensure the export service is reachable
-              (dev: Vite proxy <code className="rounded bg-muted px-1">/marketplace</code> → 8080).
+              {liveQuery.error instanceof Error ? liveQuery.error.message : String(liveQuery.error)} — check{" "}
+              <code className="rounded bg-muted px-1">VITE_API_URL</code> / RPC and CORS.
             </AlertDescription>
           </Alert>
         )}
 
-        {isLoading && !data && (
+        {liveQuery.isLoading && !liveQuery.data && (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
-            Loading catalog…
+            Loading on-chain marketplace…
           </div>
         )}
 
-        {data && <CatalogDashboard stats={data.stats} entries={data.entries} onRefresh={() => void refetch()} />}
+        {liveQuery.data && (
+          <LiveMarketplaceDashboard
+            stats={liveQuery.data.stats}
+            problems={liveQuery.data.open}
+            onRefresh={() => void liveQuery.refetch()}
+          />
+        )}
+
+        {tryExport && exportQuery.isError && (
+          <Alert>
+            <AlertTitle>Export catalog unavailable</AlertTitle>
+            <AlertDescription>
+              {exportQuery.error instanceof Error ? exportQuery.error.message : String(exportQuery.error)} — optional
+              mirror; live data above is unchanged.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {tryExport && exportQuery.isFetching && !exportQuery.data && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Loading export catalog…
+          </div>
+        )}
+
+        {exportQuery.data && (
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold tracking-tight">Export catalog mirror</h2>
+            <CatalogDashboard stats={exportQuery.data.stats} entries={exportQuery.data.entries} onRefresh={() => void exportQuery.refetch()} />
+          </div>
+        )}
+
+        {!tryExport && (
+          <p className="text-xs text-muted-foreground">
+            Export catalog is disabled in this build (set <code className="rounded bg-muted px-1">VITE_MARKETPLACE_EXPORT_URL</code>{" "}
+            to enable the REST mirror).
+          </p>
+        )}
 
         <SubmitBountyDialog open={submitOpen} onOpenChange={setSubmitOpen} />
-        <RevealProblemDialog
-          open={revealOpen}
-          onOpenChange={setRevealOpen}
-          onSuccess={() => {
-            void queryClient.invalidateQueries({ queryKey: ["marketplace-export"] });
-          }}
-        />
+        <RevealProblemDialog open={revealOpen} onOpenChange={setRevealOpen} onSuccess={invalidateAll} />
       </main>
       <Footer />
     </div>
+  );
+}
+
+function LiveMarketplaceDashboard({
+  stats,
+  problems,
+  onRefresh,
+}: {
+  stats: MarketplaceStats;
+  problems: ProblemInfo[];
+  onRefresh: () => void;
+}) {
+  const poolBn = parseBalance(stats.total_bounty_pool) ?? 0n;
+
+  return (
+    <>
+      <div className="flex justify-end">
+        <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
+          Refresh now
+        </Button>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard title="Total (chain)" value={stats.total_problems.toLocaleString()} subtitle="All-time listings" />
+        <StatCard title="Open" value={stats.open_problems.toLocaleString()} subtitle="Accepting solutions" />
+        <StatCard title="Solved" value={stats.solved_problems.toLocaleString()} subtitle="Paid out" />
+        <StatCard title="Bounty pool" value={formatBeans(poolBn)} subtitle="Escrowed BEANS" />
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Open listings</CardTitle>
+          <CardDescription>
+            {problems.length} open problem{problems.length === 1 ? "" : "s"}. Solve in{" "}
+            <Link to="/solver-lab" className="text-primary underline-offset-4 hover:underline">
+              Solver Lab
+            </Link>
+            .
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {problems.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No open bounties right now.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Problem</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Bounty</TableHead>
+                  <TableHead>Min work</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Solve</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {problems.map((p) => (
+                  <TableRow key={p.problem_id}>
+                    <TableCell className="max-w-[12rem] font-mono text-xs">{shortId(p.problem_id)}</TableCell>
+                    <TableCell className="text-sm">{p.problem_type ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums">{formatBeans(parseBalance(p.bounty) ?? 0n)}</TableCell>
+                    <TableCell className="tabular-nums">{p.min_work_score}</TableCell>
+                    <TableCell>
+                      <Badge variant={isMarketplaceListingOpen(p.status) ? "default" : "secondary"}>{p.status}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to="/solver-lab" state={{ selectedBounty: p }}>
+                          Open
+                        </Link>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </>
   );
 }
 
@@ -128,20 +269,20 @@ function CatalogDashboard({
     <>
       <div className="flex justify-end">
         <Button type="button" variant="outline" size="sm" onClick={onRefresh}>
-          Refresh now
+          Refresh export
         </Button>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Total problems" value={stats.total_problems.toLocaleString()} subtitle={`Latest height ${stats.latest_height}`} />
-        <StatCard title="Avg work score" value={stats.work_score_stats.avg.toFixed(2)} subtitle="Catalog aggregate" />
+        <StatCard title="Catalog problems" value={stats.total_problems.toLocaleString()} subtitle={`Export height ${stats.latest_height}`} />
+        <StatCard title="Avg work score" value={stats.work_score_stats.avg.toFixed(2)} subtitle="Export aggregate" />
         <StatCard title="Avg asymmetry" value={`${stats.time_asymmetry_stats.avg.toFixed(1)}×`} subtitle={`Max ${stats.time_asymmetry_stats.max.toFixed(1)}×`} />
         <StatCard title="Total energy" value={`${(stats.total_energy_joules / 1000).toFixed(1)} kJ`} subtitle="Summed estimates" />
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Problem type mix</CardTitle>
+          <CardTitle className="text-base">Problem type mix (export)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {types.map((t) => (
@@ -163,8 +304,8 @@ function CatalogDashboard({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Recent catalog entries</CardTitle>
-          <CardDescription>Exported proofs — identifiers are shortened in the table.</CardDescription>
+          <CardTitle className="text-base">Recent export entries</CardTitle>
+          <CardDescription>From the export REST service.</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           <Table>
