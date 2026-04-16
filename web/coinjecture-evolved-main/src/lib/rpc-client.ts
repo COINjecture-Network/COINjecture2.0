@@ -319,6 +319,39 @@ function coerceBlockHeightParam(height: unknown): number | null {
   return null;
 }
 
+/** JSON numbers for Rust `u64` fields — serde rejects non-integers / unsafe magnitudes. */
+function safeJsonRpcU64(n: unknown): number {
+  const v = typeof n === 'bigint' ? Number(n) : Number(n);
+  if (!Number.isFinite(v) || v < 0) return 0;
+  return Math.min(Math.floor(v), Number.MAX_SAFE_INTEGER);
+}
+
+/** Rust `i32` (e.g. SAT literals) — out-of-range values cause `Invalid params` / serde "invalid number". */
+function safeJsonRpcI32(n: unknown): number {
+  const v = Math.trunc(typeof n === 'bigint' ? Number(n) : Number(n));
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(-2147483648, Math.min(2147483647, v));
+}
+
+/** Rust `i64` (SubsetSum numbers / target) within JS safe integer range. */
+function safeJsonRpcI64(n: unknown): number {
+  const v = Math.trunc(typeof n === 'bigint' ? Number(n) : Number(n));
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(-Number.MAX_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, v));
+}
+
+/** Rust `i64` timestamp. */
+function safeJsonRpcI64Time(n: unknown): number {
+  const v = Math.trunc(typeof n === 'bigint' ? Number(n) : Number(n));
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(-Number.MAX_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, v));
+}
+
+function safeJsonRpcF64(n: unknown): number {
+  const v = typeof n === 'bigint' ? Number(n) : Number(n);
+  return Number.isFinite(v) ? v : 0;
+}
+
 /** Include JSON-RPC `data` when present (often has serde path for "Invalid params"). */
 function formatJsonRpcError(err: RpcError): string {
   const base = err.message || 'RPC error';
@@ -341,24 +374,24 @@ function formatJsonRpcError(err: RpcError): string {
  */
 function problemTypeForChainSubmit(problem: ProblemType): Record<string, unknown> {
   if (problem.SubsetSum != null && Array.isArray(problem.SubsetSum.numbers)) {
-    const numbers = problem.SubsetSum.numbers.map((x) => Math.trunc(Number(x)));
-    const target = Math.trunc(Number(problem.SubsetSum.target));
+    const numbers = problem.SubsetSum.numbers.map((x) => safeJsonRpcI64(x));
+    const target = safeJsonRpcI64(problem.SubsetSum.target);
     return { SubsetSum: { numbers, target } };
   }
   if (problem.SAT != null && Array.isArray(problem.SAT.clauses)) {
     return {
       SAT: {
-        variables: Math.trunc(Number(problem.SAT.variables)),
+        variables: safeJsonRpcU64(problem.SAT.variables),
         clauses: problem.SAT.clauses.map((c: { literals?: unknown[] }) => ({
           literals: Array.isArray(c?.literals)
-            ? c.literals.map((lit) => Math.trunc(Number(lit)))
+            ? c.literals.map((lit) => safeJsonRpcI32(lit))
             : [],
         })),
       },
     };
   }
   if (problem.TSP != null && Array.isArray(problem.TSP.distances) && problem.TSP.cities != null) {
-    const cities = Math.trunc(Number(problem.TSP.cities));
+    const cities = safeJsonRpcU64(problem.TSP.cities);
     const distances = problem.TSP.distances.map((row) =>
       row.map((v) => {
         const n = Math.trunc(Number(v));
@@ -381,13 +414,13 @@ function problemTypeForChainSubmit(problem: ProblemType): Record<string, unknown
 /** Same as {@link problemTypeForChainSubmit} for `Solution` enum. */
 function solutionTypeForChainSubmit(s: SolutionType): Record<string, unknown> {
   if (s.SubsetSum != null && Array.isArray(s.SubsetSum)) {
-    return { SubsetSum: s.SubsetSum.map((i) => Math.trunc(Number(i))) };
+    return { SubsetSum: s.SubsetSum.map((i) => safeJsonRpcU64(i)) };
   }
   if (s.SAT != null && Array.isArray(s.SAT)) {
-    return { SAT: s.SAT };
+    return { SAT: s.SAT.map((b) => Boolean(b)) };
   }
   if (s.TSP != null && Array.isArray(s.TSP)) {
-    return { TSP: s.TSP.map((i) => Math.trunc(Number(i))) };
+    return { TSP: s.TSP.map((i) => safeJsonRpcU64(i)) };
   }
   if (s.Custom != null) {
     throw new Error(
@@ -1052,30 +1085,30 @@ export class RpcClient {
               typeof cb.reward === 'bigint'
                 ? cb.reward.toString()
                 : String(cb.reward ?? '0'),
-            height: Math.trunc(Number(cb.height)),
+            height: safeJsonRpcU64(cb.height),
           };
 
     return {
       header: {
-        version: block.header.version,
-        height: block.header.height,
+        version: safeJsonRpcU64(block.header.version),
+        height: safeJsonRpcU64(block.header.height),
         prev_hash: serializeHash(block.header.prev_hash),
-        timestamp: block.header.timestamp,
+        timestamp: safeJsonRpcI64Time(block.header.timestamp),
         transactions_root: serializeHash(block.header.transactions_root),
         solutions_root: serializeHash(block.header.solutions_root),
         commitment: {
           hash: serializeHash(block.header.commitment.hash),
           problem_hash: serializeHash(block.header.commitment.problem_hash),
         },
-        work_score: block.header.work_score,
+        work_score: safeJsonRpcF64(block.header.work_score),
         miner: serializeAddress(block.header.miner),
-        nonce: block.header.nonce,
-        solve_time_us: block.header.solve_time_us,
-        verify_time_us: block.header.verify_time_us,
-        time_asymmetry_ratio: block.header.time_asymmetry_ratio,
-        solution_quality: block.header.solution_quality,
-        complexity_weight: block.header.complexity_weight,
-        energy_estimate_joules: block.header.energy_estimate_joules,
+        nonce: safeJsonRpcU64(block.header.nonce),
+        solve_time_us: safeJsonRpcU64(block.header.solve_time_us),
+        verify_time_us: safeJsonRpcU64(block.header.verify_time_us),
+        time_asymmetry_ratio: safeJsonRpcF64(block.header.time_asymmetry_ratio),
+        solution_quality: safeJsonRpcF64(block.header.solution_quality),
+        complexity_weight: safeJsonRpcF64(block.header.complexity_weight),
+        energy_estimate_joules: safeJsonRpcF64(block.header.energy_estimate_joules),
       },
       coinbase: coinbaseJson,
       transactions: block.transactions ?? [],
