@@ -91,13 +91,9 @@ impl Solution {
     /// Calculate solution quality (0.0 to 1.0)
     pub fn quality(&self, problem: &ProblemType) -> f64 {
         match (self, problem) {
-            (Solution::SubsetSum(_), ProblemType::SubsetSum { .. }) => {
+            (Solution::SubsetSum(_), ProblemType::SubsetSum { .. }) if self.verify(problem) => {
                 // Exact solution gets 1.0
-                if self.verify(problem) {
-                    1.0
-                } else {
-                    0.0
-                }
+                1.0
             }
             (Solution::TSP(tour), ProblemType::TSP { cities, distances }) => {
                 if !self.verify(problem) {
@@ -113,13 +109,9 @@ impl Solution {
                 // Lower length = higher quality (inverse ratio)
                 1.0 / (length as f64 + 1.0)
             }
-            (Solution::SAT(_), ProblemType::SAT { .. }) => {
+            (Solution::SAT(_), ProblemType::SAT { .. }) if self.verify(problem) => {
                 // Exact solution gets 1.0
-                if self.verify(problem) {
-                    1.0
-                } else {
-                    0.0
-                }
+                1.0
             }
             _ => 0.0,
         }
