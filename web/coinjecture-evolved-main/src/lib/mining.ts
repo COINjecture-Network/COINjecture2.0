@@ -48,6 +48,9 @@ const MAX_TSP_CITIES = 10;
 /** Leading **hex** zeroes required on `hex(headerHash)` — not Bitcoin difficulty bits / nBits. */
 const DEFAULT_DIFFICULTY = 2;
 
+/** Verify passes averaged for header `verify_time_us` — reduces 1 ms timer quantisation in Workers. */
+const N_VERIFY_PASSES = 100;
+
 /** Wall-clock cap for in-browser PoW (worker); after this we give up so the UI does not hang forever. */
 const MAX_POW_WORKER_MS = 25 * 60 * 1000;
 /** Main-thread fallback: max ms per tight slice before yielding (no Worker). */
@@ -732,13 +735,19 @@ export async function createBlock(
   console.log(`🔒 Commitment created: ${commitment.hash.slice(0, 16)}...`);
   
   // 4. Measured verify + PoUW metrics (consensus/src/work_score.rs: log₂(solve/verify)×quality)
-  const solveTimeUs = Math.max(0, Math.round(solveTimeMs * 1000));
-  const verifyStart = performance.now();
+  const solveTimeUs = Math.max(1, Math.round(solveTimeMs * 1000));
   if (!verifySolution(solution, problem)) {
     console.error('❌ Internal verify failed after solve');
     return null;
   }
-  const verifyTimeUs = Math.max(1, Math.round((performance.now() - verifyStart) * 1000));
+  const verifyStart = performance.now();
+  for (let i = 0; i < N_VERIFY_PASSES; i++) {
+    verifySolution(solution, problem);
+  }
+  const verifyTimeUs = Math.max(
+    1,
+    Math.round(((performance.now() - verifyStart) * 1000) / N_VERIFY_PASSES)
+  );
   const timeAsymmetryRatio = normalizeHeaderFloat(solveTimeUs / verifyTimeUs);
   
   const complexityWeight = normalizeHeaderFloat(calculateProblemDifficultyWeight(problem));
@@ -864,13 +873,15 @@ export async function createBlockFromSolvedProblem(
 
   const commitment = createCommitment(problem, solution, prevHashHex);
 
-  const solveTimeUs = Math.max(0, Math.round(solveTimeMs * 1000));
+  const solveTimeUs = Math.max(1, Math.round(solveTimeMs * 1000));
   const verifyStart = performance.now();
-  if (!verifySolution(solution, problem)) {
-    console.error("❌ Solution failed timed verify pass");
-    return null;
+  for (let i = 0; i < N_VERIFY_PASSES; i++) {
+    verifySolution(solution, problem);
   }
-  const verifyTimeUs = Math.max(1, Math.round((performance.now() - verifyStart) * 1000));
+  const verifyTimeUs = Math.max(
+    1,
+    Math.round(((performance.now() - verifyStart) * 1000) / N_VERIFY_PASSES)
+  );
   const timeAsymmetryRatio = normalizeHeaderFloat(solveTimeUs / verifyTimeUs);
 
   const complexityWeight = normalizeHeaderFloat(calculateProblemDifficultyWeight(problem));
