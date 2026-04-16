@@ -64,6 +64,7 @@ pub struct HuggingFaceClient {
 /// **Hub / Arrow:** every `Option` field is still serialized (`null` when `None`). Omitting keys
 /// (`skip_serializing_if`) caused different JSONL shards to expose different column names, which
 /// breaks `datasets` / Data Studio with `CastError: ... column names don't match`.
+/// One-time fix for old Hub shards: `scripts/hf_np_solutions_normalize_jsonl.py`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetRecord {
     // ═══════════════════════════════════════════════════════════════════════════

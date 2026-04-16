@@ -365,6 +365,18 @@ Data is collected in real-time from running COINjecture Network nodes. Each node
 - Large integers (u128) are serialized as strings to avoid JSON precision loss
 - All problem types are unified in a single continuous dataset for cross-problem analysis
 
+### Normalizing legacy JSONL (Hub viewer / `CastError`)
+
+Older JSONL omitted optional keys on some rows. That yields different Arrow **column sets** across shards and breaks Data Studio with `CastError` ("column names don't match"). Current nodes emit the full key set on every line (`null` when unknown).
+
+To **batch-fix** existing `data/*.jsonl` files locally (same key names as `DatasetRecord` in `huggingface/src/client.rs`; unknown top-level keys are dropped):
+
+```bash
+python3 scripts/hf_np_solutions_normalize_jsonl.py --in data/data_1775801281.jsonl --out data/data_1775801281.norm.jsonl
+```
+
+Then replace the originals on the Hub (e.g. `hf upload` or Hub API commits). For thousands of files, run in a loop or job runner and commit in batches. If you change `DatasetRecord`, update `RECORD_KEYS` in `scripts/hf_np_solutions_normalize_jsonl.py` to match.
+
 ## Dataset Statistics
 
 - **Total Records**: Growing in real-time (unified dataset with all problem types)
