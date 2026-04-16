@@ -603,10 +603,8 @@ impl GovernanceManager {
             None => return Err(ExecutionError::NoAction),
             Some(ProposalAction::ProtocolUpgrade {
                 activation_height, ..
-            }) => {
-                if current_block < *activation_height {
-                    return Err(ExecutionError::TimelockNotExpired);
-                }
+            }) if current_block < *activation_height => {
+                return Err(ExecutionError::TimelockNotExpired);
             }
             _ => {}
         }
