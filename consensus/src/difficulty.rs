@@ -289,6 +289,12 @@ impl DifficultyAdjuster {
                 avg_secs, min_target
             );
         }
+        // Stall detection before variance deferral: mixed timeout + fast blocks can have σ > 0.8 μ
+        // and avg above stall threshold simultaneously; penalty must still apply.
+        if avg_secs > max_target * 2.0 {
+            self.apply_stall_penalty("avg solve time exceeded safe threshold");
+        }
+
         let std_dev = self.solve_time_std_dev(avg_secs);
         if std_dev > avg_secs * HIGH_VARIANCE_RATIO {
             println!(
@@ -297,11 +303,6 @@ impl DifficultyAdjuster {
                 avg_secs * HIGH_VARIANCE_RATIO
             );
             return self.current_size();
-        }
-
-        // Stall detection: avg > 2 × max_target
-        if avg_secs > max_target * 2.0 {
-            self.apply_stall_penalty("avg solve time exceeded safe threshold");
         }
 
         // ── Deterministic integer size computation ────────────────────────
@@ -373,6 +374,10 @@ impl DifficultyAdjuster {
                 avg_secs, min_target
             );
         }
+        if avg_secs > max_target * 2.0 {
+            self.apply_stall_penalty("avg solve time exceeded safe threshold");
+        }
+
         let std_dev = self.solve_time_std_dev(avg_secs);
         if std_dev > avg_secs * HIGH_VARIANCE_RATIO {
             println!(
@@ -381,10 +386,6 @@ impl DifficultyAdjuster {
                 avg_secs * HIGH_VARIANCE_RATIO
             );
             return self.current_size();
-        }
-
-        if avg_secs > max_target * 2.0 {
-            self.apply_stall_penalty("avg solve time exceeded safe threshold");
         }
 
         // ── Deterministic integer size computation ────────────────────────
@@ -787,6 +788,36 @@ mod tests {
         assert!(
             fast_result > slow_result,
             "faster solving should yield larger problem size"
+        );
+    }
+
+    /// Mixed 60 s and 1 μs solves: high σ vs μ triggers variance deferral, but mean still stalls
+    /// the adjuster (avg > 2 × max_target). Stall penalty must run before the deferral early return.
+    #[test]
+    fn test_stall_penalty_applies_before_high_variance_deferral() {
+        let mut adjuster = DifficultyAdjuster::new();
+        let start_size = adjuster.current_size();
+        assert_eq!(start_size, 20);
+
+        // 11 × 60 s + 9 × 1 μs → avg ≈ 33 s > 2 × (10 s × φ), and σ ≫ 0.8 μ.
+        for _ in 0..11 {
+            adjuster.record_solve_time(Duration::from_secs(60));
+        }
+        for _ in 0..9 {
+            adjuster.record_solve_time_us(1);
+        }
+
+        let new_size = adjuster.adjust_difficulty();
+        let expected_penalized =
+            ((start_size as u128 * 7) / 10).max(ABSOLUTE_MIN_SIZE as u128) as usize;
+
+        assert_eq!(
+            new_size, expected_penalized,
+            "stall penalty (70 % size) should apply even when variance deferral skips retarget"
+        );
+        assert!(
+            new_size < start_size,
+            "size should shrink from stall penalty, not remain unchanged due to variance-only early return"
         );
     }
 }
