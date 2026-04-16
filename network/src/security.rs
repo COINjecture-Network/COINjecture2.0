@@ -660,7 +660,7 @@ impl DnsSeedValidator {
             .into_iter()
             .filter(|(_, count)| *count >= threshold)
             .collect();
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.1));
 
         for (addr, _) in candidates {
             if guard.try_add(addr.ip()) {

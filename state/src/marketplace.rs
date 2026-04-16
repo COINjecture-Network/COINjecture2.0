@@ -414,7 +414,7 @@ impl MarketplaceState {
         }
 
         // Newest first (rough sort by submitted_at descending)
-        out.sort_by(|a, b| b.submitted_at.cmp(&a.submitted_at));
+        out.sort_by_key(|submission| std::cmp::Reverse(submission.submitted_at));
         Ok(out)
     }
 
@@ -435,7 +435,7 @@ impl MarketplaceState {
             }
         }
 
-        out.sort_by(|a, b| b.submitted_at.cmp(&a.submitted_at));
+        out.sort_by_key(|submission| std::cmp::Reverse(submission.submitted_at));
         Ok(out)
     }
 

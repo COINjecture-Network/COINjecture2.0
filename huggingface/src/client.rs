@@ -81,7 +81,7 @@ pub struct DatasetRecord {
     // ═══════════════════════════════════════════════════════════════════════════
     pub block_height: u64,
     pub timestamp: i64,
-    pub block_hash: Option<String>, // NEW: Hash of this block
+    pub block_hash: Option<String>,      // NEW: Hash of this block
     pub prev_block_hash: Option<String>, // NEW: Hash of previous block (chain linkage)
     pub submitter: Option<String>,
     pub solver: Option<String>,
@@ -101,7 +101,7 @@ pub struct DatasetRecord {
     // ═══════════════════════════════════════════════════════════════════════════
     // TIMING METRICS - Solve/verify performance (microsecond precision)
     // ═══════════════════════════════════════════════════════════════════════════
-    pub solve_time_us: Option<u64>, // NEW: Solve time in microseconds
+    pub solve_time_us: Option<u64>,  // NEW: Solve time in microseconds
     pub verify_time_us: Option<u64>, // NEW: Verify time in microseconds
     pub block_time_seconds: Option<f64>, // NEW: Time since previous block
     /// Always present in JSONL (`null` when unknown) so Hub shards share the same column set.
@@ -110,8 +110,8 @@ pub struct DatasetRecord {
     // ═══════════════════════════════════════════════════════════════════════════
     // ASYMMETRY METRICS - NP-hardness verification (solve >> verify)
     // ═══════════════════════════════════════════════════════════════════════════
-    pub time_asymmetry: Option<f64>, // solve_time / verify_time
-    pub space_asymmetry: Option<f64>, // solve_memory / verify_memory
+    pub time_asymmetry: Option<f64>,   // solve_time / verify_time
+    pub space_asymmetry: Option<f64>,  // solve_memory / verify_memory
     pub energy_asymmetry: Option<f64>, // solve_energy / verify_energy
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -119,7 +119,7 @@ pub struct DatasetRecord {
     // ═══════════════════════════════════════════════════════════════════════════
     pub solve_memory_bytes: Option<u64>, // NEW: Memory used during solve
     pub verify_memory_bytes: Option<u64>, // NEW: Memory used during verify
-    pub peak_memory_bytes: Option<u64>, // NEW: Peak memory during block
+    pub peak_memory_bytes: Option<u64>,  // NEW: Peak memory during block
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ENERGY MEASUREMENTS - Power consumption tracking
@@ -141,31 +141,31 @@ pub struct DatasetRecord {
     // DIFFICULTY & MINING METRICS
     // ═══════════════════════════════════════════════════════════════════════════
     pub difficulty_target: Option<u32>, // NEW: Leading zeros required
-    pub nonce: Option<u64>, // NEW: Winning nonce value
+    pub nonce: Option<u64>,             // NEW: Winning nonce value
     pub hash_rate_estimate: Option<f64>, // NEW: Estimated H/s (nonce/solve_time)
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CHAIN METRICS - Cumulative blockchain state
     // ═══════════════════════════════════════════════════════════════════════════
-    pub chain_work: Option<f64>, // NEW: Cumulative work score
+    pub chain_work: Option<f64>,        // NEW: Cumulative work score
     pub transaction_count: Option<u32>, // NEW: Transactions in this block
-    pub block_size_bytes: Option<u64>, // NEW: Total block size
+    pub block_size_bytes: Option<u64>,  // NEW: Total block size
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ECONOMIC METRICS - Tokenomics tracking
     // ═══════════════════════════════════════════════════════════════════════════
     pub block_reward: Option<String>, // NEW: Total coinbase reward (as string for u128)
-    pub total_fees: Option<String>, // NEW: Sum of transaction fees (as string)
+    pub total_fees: Option<String>,   // NEW: Sum of transaction fees (as string)
     pub pool_distributions: Option<Value>, // NEW: Token distribution to each pool
 
     // ═══════════════════════════════════════════════════════════════════════════
     // HARDWARE METRICS - Mining infrastructure transparency
     // ═══════════════════════════════════════════════════════════════════════════
-    pub cpu_model: Option<String>, // NEW: CPU model string
-    pub cpu_cores: Option<u32>, // NEW: Number of CPU cores
-    pub cpu_threads: Option<u32>, // NEW: Number of threads used
+    pub cpu_model: Option<String>,    // NEW: CPU model string
+    pub cpu_cores: Option<u32>,       // NEW: Number of CPU cores
+    pub cpu_threads: Option<u32>,     // NEW: Number of threads used
     pub ram_total_bytes: Option<u64>, // NEW: Total system RAM
-    pub os_info: Option<String>, // NEW: Operating system info
+    pub os_info: Option<String>,      // NEW: Operating system info
 
     // ═══════════════════════════════════════════════════════════════════════════
     // METADATA & PROVENANCE
