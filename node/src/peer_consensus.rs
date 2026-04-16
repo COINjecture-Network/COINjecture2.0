@@ -484,20 +484,20 @@ impl WorkScoreCalculator {
     /// work = asymmetry × space × quality × energy_eff
     pub fn block_work_score(problem_size: u64, solve_time_us: u64, verify_time_us: u64) -> u64 {
         // Asymmetry ratio: how much harder to solve than verify
-        let asymmetry = if verify_time_us > 0 {
-            solve_time_us / verify_time_us
-        } else {
-            solve_time_us
-        };
+        let asymmetry = solve_time_us
+            .checked_div(verify_time_us)
+            .unwrap_or(solve_time_us);
 
         // Space complexity (problem size)
         let space = problem_size;
 
         // Quality: smaller solve time per unit of problem size = better
-        let quality = if solve_time_us > 0 {
-            (problem_size * 1_000_000) / solve_time_us
-        } else {
+        let quality = if solve_time_us == 0 {
             problem_size
+        } else {
+            (problem_size * 1_000_000)
+                .checked_div(solve_time_us)
+                .unwrap_or(problem_size)
         };
 
         // Combined work score (simplified)
