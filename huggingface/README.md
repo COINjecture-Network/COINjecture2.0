@@ -488,6 +488,9 @@ For questions or issues:
 
 ## Changelog
 
+### 2026-04-16
+- **Hub `CastError` / “column names don’t match”**: Older JSONL omitted optional fields entirely (`serde` `skip_serializing_if`). Different shards then inferred different Arrow column sets. Nodes now serialize **every** `DatasetRecord` field on every line (`null` when `None`), so new shards align with the full schema. Existing Hub files stay sparse until replaced or batch-normalized.
+
 ### 2026-04-15
 - **JSONL shape (nodes)**: `mining_attempts` is always serialized (use `null` when unknown); consensus rows set it from header `nonce`. `problem_data` / `solution_data` are coerced to JSON objects before upload so stringified JSON blobs are not emitted.
 - **Dataset card YAML**: Do **not** add a `configs` / `on_mixed_types` block for this repo: it made the Hub builder infer `problem_data`/`solution_data` as strings while legacy shards still use nested JSON objects, which triggers `DatasetGenerationError` / `CastError` when generating the preview table.
