@@ -12,7 +12,7 @@ const Index = lazy(() => import("./pages/Index"));
 const SolverLab = lazy(() => import("./pages/SolverLab"));
 const Cli = lazy(() => import("./pages/Cli"));
 const API = lazy(() => import("./pages/API"));
-const Metrics = lazy(() => import("./pages/Metrics"));
+const Explore = lazy(() => import("./pages/Explore"));
 const Marketplace = lazy(() => import("./pages/Marketplace"));
 const Whitepaper = lazy(() => import("./pages/Whitepaper"));
 const Roadmap = lazy(() => import("./pages/Roadmap"));
@@ -65,7 +65,8 @@ const App = () => (
                   <Route path="/terminal" element={<Navigate to="/solver-lab" replace />} />
                   <Route path="/cli" element={<Cli />} />
                   <Route path="/api" element={<API />} />
-                  <Route path="/metrics" element={<Metrics />} />
+                  <Route path="/explore" element={<Explore />} />
+                  <Route path="/metrics" element={<Navigate to="/explore" replace />} />
                   <Route path="/marketplace" element={<Marketplace />} />
                   <Route path="/whitepaper" element={<Whitepaper />} />
                   <Route path="/roadmap" element={<Roadmap />} />

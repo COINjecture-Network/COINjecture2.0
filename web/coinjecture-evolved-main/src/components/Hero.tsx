@@ -375,9 +375,9 @@ export const Hero = () => {
                   Open Solver Lab <Code className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
-              <Link to="/metrics">
+              <Link to="/explore">
                 <Button size="lg" variant="outline" className="gentle-animation px-8">
-                  View Live Metrics <TrendingUp className="ml-2 h-4 w-4" />
+                  Explore chain <TrendingUp className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
             </div>

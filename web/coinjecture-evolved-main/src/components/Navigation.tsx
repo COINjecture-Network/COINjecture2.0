@@ -38,7 +38,7 @@ export const Navigation = () => {
   const desktopNavItems = [
     { to: "/solver-lab", label: "Solver Lab" },
     { to: "/api", label: "API Docs" },
-    { to: "/metrics", label: "Metrics" },
+    { to: "/explore", label: "Explore" },
     { to: "/marketplace", label: "Marketplace" },
     { to: "/wallet", label: "Wallet" },
     { to: "/whitepaper", label: "Whitepaper" },
@@ -206,11 +206,11 @@ export const Navigation = () => {
               API Docs
             </NavLink>
             <NavLink
-              to="/metrics"
+              to="/explore"
               className="rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => setMobileMenuOpen(false)}
             >
-              Metrics
+              Explore
             </NavLink>
             <NavLink
               to="/marketplace"
