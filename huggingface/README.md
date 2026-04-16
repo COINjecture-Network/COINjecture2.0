@@ -375,7 +375,18 @@ To **batch-fix** existing `data/*.jsonl` files locally (same key names as `Datas
 python3 scripts/hf_np_solutions_normalize_jsonl.py --in data/data_1775801281.jsonl --out data/data_1775801281.norm.jsonl
 ```
 
-Then replace the originals on the Hub (e.g. `hf upload` or Hub API commits). For thousands of files, run in a loop or job runner and commit in batches. If you change `DatasetRecord`, update `RECORD_KEYS` in `scripts/hf_np_solutions_normalize_jsonl.py` to match.
+Then replace the originals on the Hub (e.g. `hf upload` or Hub API commits). For thousands of files, run in a loop or job runner and commit in batches. If you change `DatasetRecord`, update `RECORD_KEYS` in `scripts/hf_np_solutions_jsonl_common.py` to match.
+
+**Automated Hub pass** (download → normalize → upload one commit per file; needs `pip install huggingface_hub` and a write token):
+
+```bash
+export HF_TOKEN=hf_...
+python3 scripts/hf_np_solutions_batch_normalize_hub.py --dry-run
+python3 scripts/hf_np_solutions_batch_normalize_hub.py --limit 5
+python3 scripts/hf_np_solutions_batch_normalize_hub.py --sleep 1.0
+```
+
+Use `--start-after data/data_<timestamp>.jsonl` to resume. Full runs create thousands of commits; prefer a VM, tune `--sleep`, or fork the script to batch multiple files per `create_commit` if you hit rate limits.
 
 ## Dataset Statistics
 
