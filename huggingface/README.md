@@ -13,15 +13,6 @@ tags:
 - consensus
 size_categories:
 - 1K<n<10K
-# Hub Data Studio: pin JSONL loading so shards with extra keys / mixed JSON shapes still preview.
-# See https://huggingface.co/docs/datasets/en/repository_structure (builder parameters).
-configs:
-- config_name: default
-  default: true
-  data_files:
-  - split: train
-    path: "data/*.jsonl"
-  on_mixed_types: use_json
 ---
 
 # COINjecture NP-Solutions Dataset
@@ -498,8 +489,8 @@ For questions or issues:
 ## Changelog
 
 ### 2026-04-15
-- **Hub viewer / schema**: README YAML `configs` now points at `data/*.jsonl` with `on_mixed_types: use_json` so mixed JSON shapes coerce consistently for the Data Studio preview.
-- **JSONL shape**: `mining_attempts` is always serialized (use `null` when unknown); consensus rows set it from header `nonce`. `problem_data` / `solution_data` are coerced to JSON objects before upload so stringified JSON blobs are not emitted.
+- **JSONL shape (nodes)**: `mining_attempts` is always serialized (use `null` when unknown); consensus rows set it from header `nonce`. `problem_data` / `solution_data` are coerced to JSON objects before upload so stringified JSON blobs are not emitted.
+- **Dataset card YAML**: Do **not** add a `configs` / `on_mixed_types` block for this repo: it made the Hub builder infer `problem_data`/`solution_data` as strings while legacy shards still use nested JSON objects, which triggers `DatasetGenerationError` / `CastError` when generating the preview table.
 
 ### 2026-04-10
 - **`explorer_card` field**: Each JSONL row includes a precomputed multi-line card (UTC time); implemented in `huggingface/src/explorer_card.rs`.
