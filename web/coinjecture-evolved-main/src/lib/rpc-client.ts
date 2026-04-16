@@ -354,23 +354,51 @@ function safeJsonRpcF64(n: unknown): number {
   return Number(v.toFixed(12));
 }
 
-/** Rust `Balance` / `u128` in coinbase — must be a decimal integer string (not `"1.5e20"` / `"12.3"`). */
+/**
+ * Decimal digits suitable for a JSON **integer** token (no leading zeros except a lone `0`).
+ * Rust `Balance` / `u128` uses serde_json’s integer scanner — values like `"01"` are invalid JSON numbers.
+ */
+function normalizeDecimalIntDigitsForJson(digits: string): string {
+  const d = digits.replace(/\D/g, '');
+  if (d === '') return '0';
+  const stripped = d.replace(/^0+/, '');
+  return stripped === '' ? '0' : stripped;
+}
+
+/**
+ * Rust `Balance` / `u128` in coinbase — normalized decimal digits as a string.
+ * `chain_submitBlock` rewrites this to an unquoted JSON integer before send (see `jsonRpcBodyChainSubmitBlock`).
+ */
 function coinbaseRewardToU128String(reward: unknown): string {
   if (typeof reward === 'bigint') {
-    return reward < 0n ? '0' : reward.toString();
+    return normalizeDecimalIntDigitsForJson(reward < 0n ? '0' : reward.toString());
   }
   if (typeof reward === 'number') {
     if (!Number.isFinite(reward) || reward <= 0) return '0';
-    return BigInt(Math.floor(reward)).toString();
+    return normalizeDecimalIntDigitsForJson(BigInt(Math.floor(reward)).toString());
   }
   const raw = String(reward ?? '0').trim();
   if (raw === '' || raw.startsWith('-')) return '0';
-  if (/^\d+$/.test(raw)) return raw;
+  if (/^\d+$/.test(raw)) return normalizeDecimalIntDigitsForJson(raw);
   // Strip a single fractional tail from accidental stringified floats, then take integer part.
   const noExp = raw.replace(/[eE][+-]?\d+$/, '');
   const intPart = noExp.includes('.') ? noExp.slice(0, noExp.indexOf('.')) : noExp;
   const digits = intPart.replace(/\D/g, '');
-  return digits === '' ? '0' : digits.replace(/^0+(?=\d)/, '') || '0';
+  return digits === '' ? '0' : normalizeDecimalIntDigitsForJson(digits.replace(/^0+(?=\d)/, '') || '0');
+}
+
+/**
+ * serde_json deserializes `u128` only from a JSON **number** token. `JSON.stringify` would otherwise emit
+ * `"reward":"123…"` (a string), and the lexer hits `"` → `invalid number` (often around ~1.2k into the body).
+ */
+function jsonRpcBodyChainSubmitBlock(envelope: {
+  jsonrpc: string;
+  id: number;
+  method: string;
+  params: unknown[];
+}): string {
+  const body = JSON.stringify(envelope);
+  return body.replace(/"reward":"(0|[1-9]\d*)"/, '"reward":$1');
 }
 
 /** `Hash` / `Address` JSON is `[u8;32]` — reject non-integers / out-of-range (serde "invalid number"). */
@@ -779,6 +807,15 @@ export class RpcClient {
     for (let i = 0; i < this.baseUrls.length; i++) {
       const url = this.baseUrls[i];
       try {
+        const envelope = {
+          jsonrpc: '2.0' as const,
+          id: this.requestId++,
+          method,
+          params: rpcParams,
+        };
+        const body =
+          method === 'chain_submitBlock' ? jsonRpcBodyChainSubmitBlock(envelope) : JSON.stringify(envelope);
+
         const response = await fetchWithTimeout(
           url,
           {
@@ -786,12 +823,7 @@ export class RpcClient {
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: this.requestId++,
-              method,
-              params: rpcParams,
-            }),
+            body,
           },
           timeoutMs,
         );

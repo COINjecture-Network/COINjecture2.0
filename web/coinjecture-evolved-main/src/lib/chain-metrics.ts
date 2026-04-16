@@ -1,12 +1,15 @@
 /**
  * Display helpers aligned with consensus + tokenomics (Rust):
  * - Work score: consensus/src/work_score.rs — bits = log₂(solve/verify) × quality
- * - Block reward: `tokenomics/src/rewards.rs` — minted **atoms** = `⌊w_trunc·S / W_parent⌋`
- *   with `S = REWARD_FIXED_POINT_SCALE`; one **display BEANS** = S atoms.
+ * - Block reward: `tokenomics/src/rewards.rs` — minted **atoms** = `⌊w_trunc·S·K / W_parent⌋`
+ *   with `S = REWARD_FIXED_POINT_SCALE`, `K = REWARD_EMISSION_MULTIPLIER`; one **display BEANS** = S atoms.
  */
 
 /** Must match `coinject_tokenomics::REWARD_FIXED_POINT_SCALE` (10^12). */
 export const REWARD_FIXED_POINT_SCALE = 1_000_000_000_000n;
+
+/** Must match `coinject_tokenomics::REWARD_EMISSION_MULTIPLIER`. */
+export const REWARD_EMISSION_MULTIPLIER = 50n;
 
 /** Match `consensus/src/work_score.rs` — same floors as the f64 `calculate` path. */
 const MIN_VERIFY_TIME_US = 1;
@@ -31,14 +34,14 @@ export function workScoreBitsFromPouw(
 
 /**
  * Same as Rust `RewardCalculator::calculate_block_reward`:
- * `⌊w_trunc·S / W_parent⌋` minted **atoms** (`S = REWARD_FIXED_POINT_SCALE`).
+ * `⌊w_trunc·S·K / W_parent⌋` minted **atoms**.
  */
 export function blockRewardFromTruncWorkAndParentW(
   blockWorkTrunc: bigint,
   parentCumulativeWork: bigint
 ): bigint {
   if (parentCumulativeWork <= 0n) return 0n;
-  return (blockWorkTrunc * REWARD_FIXED_POINT_SCALE) / parentCumulativeWork;
+  return (blockWorkTrunc * REWARD_FIXED_POINT_SCALE * REWARD_EMISSION_MULTIPLIER) / parentCumulativeWork;
 }
 
 /** Convert whole display BEANS to ledger atoms. */

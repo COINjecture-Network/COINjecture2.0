@@ -1163,7 +1163,7 @@ impl Miner {
         let header = mined_header; // Use the mined header with correct nonce
         println!("Header mined: {:?}", header_hash);
 
-        // 9. Block reward: ⌊w_trunc / W_parent⌋ (whitepaper work_score / W, same trunc as chain W)
+        // 9. Block reward: ⌊w_trunc·S·K / W_parent⌋ atoms (tokenomics; same w_trunc/W as chain cumulative W)
         let reward_amount = self
             .reward_calculator
             .calculate_block_reward(header.work_score, parent_cumulative_work);

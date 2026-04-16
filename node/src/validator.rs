@@ -86,7 +86,7 @@ impl BlockValidator {
         expected_height: u64,
         skip_timestamp_age_check: bool,
         // Σ truncated `work_score` through the parent block (`W`). When `Some`, coinbase must match
-        // Tokenomics: `work_score / W` with fixed-point atoms — `⌊w_trunc·S / W⌋` (see `REWARD_FIXED_POINT_SCALE`).
+        // Tokenomics: `⌊w_trunc·S·K / W⌋` atoms (`S`/`K` = `REWARD_FIXED_POINT_SCALE` / `REWARD_EMISSION_MULTIPLIER`).
         parent_cumulative_work_for_emission: Option<u128>,
     ) -> Result<(), ValidationError> {
         // 1. Validate block height

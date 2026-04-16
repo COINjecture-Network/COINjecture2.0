@@ -152,7 +152,7 @@ interface Solution {
   solver: string;
   /** Parsed on-chain coinbase `reward` (authoritative mint for this block). */
   reward_beans: bigint;
-  /** Model mint atoms `⌊w_trunc·S/W_parent⌋` when W_parent is derivable (S=10¹²); informational vs coinbase. */
+  /** Model mint atoms `⌊w_trunc·S·K/W_parent⌋` when W_parent is derivable (S=10¹², K=emission multiplier); informational vs coinbase. */
   formula_reward_beans: bigint | null;
   /**
    * Integer truncated from on-chain `header.work_score` — this is what the node sums into cumulative W
@@ -677,7 +677,7 @@ export const LiveSolutionFeed = () => {
                   {solution.parent_w_emission != null && solution.formula_reward_beans != null ? (
                     <span
                       className="text-[10px] text-muted-foreground leading-tight"
-                      title="Mint = ⌊w_trunc·S / W_parent⌋ ledger atoms (S=10¹²). Display BEANS = mint / S. w_trunc is integer header work, not fractional PoUW bits."
+                      title="Mint = ⌊w_trunc·S·K / W_parent⌋ ledger atoms (S=10¹², K matches node). Display BEANS = mint / S. w_trunc is integer header work, not fractional PoUW bits."
                     >
                       Model mint: {formatBeans(solution.formula_reward_beans)} BEANS
                       <span className="opacity-80">
@@ -695,7 +695,7 @@ export const LiveSolutionFeed = () => {
                   solution.formula_reward_beans != null &&
                   solution.coinbase_beans !== solution.formula_reward_beans ? (
                     <span className="text-[10px] text-amber-600/90 dark:text-amber-400/90 leading-tight">
-                      Differs from model ⌊w·S÷W⌋ (legacy blocks or RPC mismatch).
+                      Differs from model ⌊w·S·K÷W⌋ (legacy blocks or RPC mismatch).
                     </span>
                   ) : null}
                 </div>
