@@ -109,17 +109,12 @@ def build_dataset_infos() -> dict:
         "license": "",
         "features": features,
         "builder_name": "json",
-        "dataset_name": "np_solutions",
+        # Must match Hub `SplitInfo.dataset_name` for repo `COINjecture/NP-Solutions` (hyphenated slug).
+        "dataset_name": "np-solutions",
         "config_name": "default",
         "version": {"version_str": "0.0.0", "major": 0, "minor": 0, "patch": 0},
-        "splits": {
-            "train": {
-                "name": "train",
-                "num_bytes": 0,
-                "num_examples": 0,
-                "dataset_name": "np_solutions",
-            }
-        },
+        # Do not pin `num_bytes` / `num_examples` here — they drift as shards grow and HF verifies
+        # them against on-Hub data, causing UnexpectedError (expected 0 vs recorded N).
     }
     return {"default": inner}
 

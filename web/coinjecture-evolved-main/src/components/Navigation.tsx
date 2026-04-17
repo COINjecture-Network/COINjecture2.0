@@ -38,7 +38,7 @@ export const Navigation = () => {
   const desktopNavItems = [
     { to: "/solver-lab", label: "Solver Lab" },
     { to: "/api", label: "API Docs" },
-    { to: "/explore", label: "Explore" },
+    { to: "/explore", label: "Explorer" },
     { to: "/marketplace", label: "Marketplace" },
     { to: "/wallet", label: "Wallet" },
     { to: "/whitepaper", label: "Whitepaper" },
@@ -85,12 +85,12 @@ export const Navigation = () => {
                   variant="ghost"
                   className="h-10 rounded-full border border-border/60 bg-background/70 px-4 text-sm font-medium text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                 >
-                  {activeDesktopNavItem?.label ?? "Explore"}
+                  {activeDesktopNavItem?.label ?? "Explorer"}
                   <ChevronDown className="ml-2 h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" side="bottom" sideOffset={8} className="w-56">
-                <DropdownMenuLabel>Explore COINjecture</DropdownMenuLabel>
+                <DropdownMenuLabel>COINjecture Explorer</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {desktopNavItems.map((item) => (
                   <DropdownMenuItem key={item.to} onClick={() => navigate(item.to)}>
@@ -210,7 +210,7 @@ export const Navigation = () => {
               className="rounded-md px-3 py-2.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => setMobileMenuOpen(false)}
             >
-              Explore
+              Explorer
             </NavLink>
             <NavLink
               to="/marketplace"

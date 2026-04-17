@@ -3,12 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   Award,
+  BarChart3,
   Blocks,
   Calculator,
   CheckCircle,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Layers,
   Loader2,
   Network,
   Search,
@@ -33,7 +35,8 @@ import {
 } from "recharts";
 import { Navigation } from "@/components/Navigation";
 import { Footer } from "@/components/Footer";
-import { rpcClient, type Block, type ChainInfo } from "@/lib/rpc-client";
+import { chainInfoU128DecimalString, rpcClient, type Block, type ChainInfo } from "@/lib/rpc-client";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
 import {
   MetricsClient,
   type AllPoolsData,
@@ -71,12 +74,14 @@ const ETA = 1 / Math.sqrt(2);
 const LAMBDA = 1 / Math.sqrt(2);
 const TAU_C = Math.sqrt(2);
 
+/** Same units as landing metrics: ledger atoms → display BEANS (÷10¹²). */
 function rewardDisplay(block: Block): string {
   const r = block.coinbase?.reward;
   if (r === undefined || r === null) return "—";
-  if (typeof r === "bigint") return r.toString();
-  if (typeof r === "number") return r.toLocaleString();
-  return String(r);
+  const atoms = parseBalance(r);
+  if (atoms !== null) return formatBeans(atoms);
+  const digits = chainInfoU128DecimalString(r);
+  return digits ?? String(r);
 }
 
 function txRows(block: Block): { key: string; line: string }[] {
@@ -92,10 +97,16 @@ export default function Explore() {
   const [searchHeight, setSearchHeight] = useState("");
   const [showPeers, setShowPeers] = useState(false);
 
-  const { data: chainInfo } = useQuery({
+  const {
+    data: chainInfo,
+    isError: chainInfoError,
+    error: chainInfoErr,
+    isLoading: chainInfoLoading,
+  } = useQuery({
     queryKey: ["explore", "chainInfo"],
     queryFn: () => rpcClient.getChainInfo(),
     refetchInterval: 10_000,
+    retry: 2,
   });
 
   const { data: allPools, error: poolsError } = useQuery({
@@ -148,7 +159,7 @@ export default function Explore() {
       <Navigation />
       <main className="container mx-auto space-y-8 px-4 pb-20 pt-28 sm:px-6">
         <div>
-          <h1 className="font-brand text-3xl font-bold tracking-tight">Explore</h1>
+          <h1 className="font-brand text-3xl font-bold tracking-tight">Explorer</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             Chain overview, blocks, and live Prometheus metrics (pools, consensus, oracle).
           </p>
@@ -161,8 +172,23 @@ export default function Explore() {
           </Alert>
         )}
 
+        {chainInfoError && (
+          <Alert variant="destructive">
+            <AlertTitle>Chain</AlertTitle>
+            <AlertDescription>
+              {chainInfoErr instanceof Error ? chainInfoErr.message : String(chainInfoErr ?? "Unknown error")}. Check{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-xs">VITE_API_URL</code> and{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-xs">/chain/info</code> plus{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-xs">/node-rpc</code> (API{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-xs">NODE_RPC_URL</code>).
+            </AlertDescription>
+          </Alert>
+        )}
+
         <ChainStatsBar
           chainInfo={chainInfo}
+          chainLoading={chainInfoLoading}
+          chainErrored={chainInfoError}
           metricsBlockHeight={metricsHeight}
           showPeers={showPeers}
           onTogglePeers={() => setShowPeers((v) => !v)}
@@ -234,11 +260,15 @@ export default function Explore() {
 
 function ChainStatsBar({
   chainInfo,
+  chainLoading,
+  chainErrored,
   metricsBlockHeight,
   showPeers,
   onTogglePeers,
 }: {
   chainInfo: ChainInfo | undefined;
+  chainLoading: boolean;
+  chainErrored: boolean;
   metricsBlockHeight: number | undefined;
   showPeers: boolean;
   onTogglePeers: () => void;
@@ -251,8 +281,17 @@ function ChainStatsBar({
           Chain stats
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <StatPill icon={<Blocks className="h-4 w-4" />} label="Best height" value={chainInfo ? chainInfo.best_height.toLocaleString() : "…"} />
+      <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-6">
+        <StatPill
+          icon={<Blocks className="h-4 w-4" />}
+          label="Best height"
+          value={
+            chainErrored ? "—"
+            : chainInfo ? chainInfo.best_height.toLocaleString()
+            : chainLoading ? "…"
+            : "—"
+          }
+        />
         <button
           type="button"
           onClick={onTogglePeers}
@@ -264,14 +303,47 @@ function ChainStatsBar({
           </Badge>
         </button>
         <StatPill
-          icon={<Award className="h-4 w-4" />}
-          label="Cumulative work"
-          value={chainInfo?.best_cumulative_work ? String(chainInfo.best_cumulative_work).slice(0, 14) + "…" : "—"}
+          icon={<BarChart3 className="h-4 w-4" />}
+          label="Cumulative work (W)"
+          value={
+            chainErrored
+              ? "—"
+              : chainInfo
+                ? (chainInfoU128DecimalString(chainInfo.best_cumulative_work) ?? "—")
+                : chainLoading
+                  ? "…"
+                  : "—"
+          }
         />
         <StatPill
           icon={<Award className="h-4 w-4" />}
+          label="Total minted (coinbase)"
+          value={
+            chainErrored
+              ? "—"
+              : chainInfo
+                ? (() => {
+                    const atoms = parseBalance(chainInfo.total_minted_rewards);
+                    if (atoms !== null) return formatBeans(atoms);
+                    return chainInfoU128DecimalString(chainInfo.total_minted_rewards) ?? "—";
+                  })()
+                : chainLoading
+                  ? "…"
+                  : "—"
+          }
+        />
+        <StatPill
+          icon={<Layers className="h-4 w-4" />}
           label="NP size (next)"
-          value={chainInfo?.np_problem_size != null ? String(chainInfo.np_problem_size) : "—"}
+          value={
+            chainErrored
+              ? "—"
+              : chainInfo?.np_problem_size != null && Number.isFinite(chainInfo.np_problem_size)
+                ? chainInfo.np_problem_size.toLocaleString()
+                : chainLoading
+                  ? "…"
+                  : "—"
+          }
         />
         <StatPill
           icon={<Activity className="h-4 w-4" />}
@@ -305,14 +377,14 @@ function ChainStatsBar({
   );
 }
 
-function StatPill({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function StatPill({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
   return (
     <div className="rounded-lg border bg-muted/20 px-3 py-2">
       <div className="flex items-center gap-2 text-muted-foreground">
         {icon}
         <span className="text-xs font-medium uppercase tracking-wide">{label}</span>
       </div>
-      <div className="mt-1 font-mono text-lg font-semibold tabular-nums">{value}</div>
+      <div className="mt-1 break-all font-mono text-sm font-semibold leading-snug tabular-nums sm:text-base">{value}</div>
     </div>
   );
 }

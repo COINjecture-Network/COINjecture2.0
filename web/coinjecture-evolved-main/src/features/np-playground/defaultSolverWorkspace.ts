@@ -15,8 +15,8 @@ export type WorkspaceFilePath = (typeof WORKSPACE_FILES)[number];
 
 export const DEFAULT_WORKSPACE_FILES: Record<WorkspaceFilePath, string> = {
   "solvers/subset-sum.js": `/**
- * Subset Sum — nonnegative integers. Return indices or null.
- * Verified on-chain like core::problem::Solution::SubsetSum.
+ * Subset Sum — nonnegative integers. Return 0-based indices into \`numbers\` (or null).
+ * Verified on-chain like core::problem::Solution::SubsetSum (Rust sums numbers[i] for each i).
  */
 function solveSubsetSum(numbers, target) {
   const n = numbers.length;

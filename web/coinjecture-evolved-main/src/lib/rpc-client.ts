@@ -16,12 +16,25 @@ const RPC_BLOCK_BODY_TIMEOUT_MS = 90_000;
 /** `chain_submitBlock` payloads are large; API + Nginx must allow big bodies and long proxy reads. */
 const RPC_SUBMIT_BLOCK_TIMEOUT_MS = 300_000;
 /**
+ * `chain_getMiningWork` builds the next template and can be slow through `POST …/node-rpc` → origin → node.
+ * The API allows 300s on `/node-rpc`; 60s was aborting the browser before many slow templates finished.
+ * Keep under typical CDN/proxy ceilings (~100–120s) where possible; increase only for explicit mining calls.
+ */
+const RPC_GET_MINING_WORK_TIMEOUT_MS = 120_000;
+/** `chain_getMiningWork` inside `getChainInfo` only — do not hold the metrics hero for the full mining timeout. */
+const RPC_SUPPLEMENT_MINING_WORK_TIMEOUT_MS = 12_000;
+/**
  * Parallel `callAll` waits for **every** in-flight request to finish (success or timeout), then picks
  * the best result — so wall time is ~max(per-endpoint latency). Keep this modest for dashboard loads.
  */
 const RPC_CALL_ALL_TIMEOUT_MS = 10_000;
-/** `chain_getInfo` across all RPCs — slightly tighter so the metrics hero does not sit blank ~2×14s. */
-const RPC_CALL_ALL_CHAIN_INFO_TIMEOUT_MS = 8_000;
+/**
+ * `chain_getInfo` across all RPC URLs — must cover browser → API `/node-rpc` → node `chain_getInfo`.
+ * The API upstream light client uses ~22s; 8s caused false failures then a 45s `call` fallback still too tight.
+ */
+const RPC_CALL_ALL_CHAIN_INFO_TIMEOUT_MS = 28_000;
+/** Sequential `call('chain_getInfo')` after `callAll` fails (single tunnel, cold cache, slow origin). */
+const RPC_CHAIN_GET_INFO_CALL_TIMEOUT_MS = 90_000;
 
 async function fetchWithTimeout(
   url: string,
@@ -29,7 +42,15 @@ async function fetchWithTimeout(
   timeoutMs: number = RPC_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => {
+    try {
+      controller.abort(
+        new DOMException(`HTTP request timed out after ${timeoutMs}ms`, 'TimeoutError'),
+      );
+    } catch {
+      controller.abort();
+    }
+  }, timeoutMs);
   try {
     return await fetch(url, {
       ...init,
@@ -37,6 +58,13 @@ async function fetchWithTimeout(
       credentials: 'omit',
       mode: 'cors',
     });
+  } catch (e: unknown) {
+    if (e instanceof DOMException && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+      const msg = e.message?.trim();
+      const vague = !msg || /aborted without reason/i.test(msg);
+      throw new Error(vague ? `HTTP request timed out after ${timeoutMs}ms` : msg);
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
   }
@@ -160,6 +188,22 @@ export function getDefaultRpcBaseUrls(): string[] {
   return ['http://localhost:9933'];
 }
 
+/**
+ * `best_cumulative_work` / `total_minted_rewards` are u128 in Rust; JSON may be a decimal string, a number
+ * (when serde emits a JSON number), or bigint. Never use `value?.trim()` on RPC payloads — numbers have no
+ * `trim` and optional chaining does not skip the call (`(123)?.trim()` still throws).
+ */
+export function chainInfoU128DecimalString(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    return t !== '' ? t : undefined;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw)) return String(Math.trunc(raw));
+  if (typeof raw === 'bigint') return raw.toString();
+  return undefined;
+}
+
 /** Production: same-origin-friendly chain summary from the API (CORS already on `VITE_API_URL`). */
 async function fetchChainInfoFromApi(): Promise<ChainInfo> {
   const raw = import.meta.env.VITE_API_URL as string | undefined;
@@ -218,14 +262,8 @@ async function fetchChainInfoFromApi(): Promise<ChainInfo> {
         ? Number(j.np_problem_size)
         : undefined;
 
-  const best_cumulative_work =
-    typeof j.best_cumulative_work === 'string' && j.best_cumulative_work.trim() !== ''
-      ? j.best_cumulative_work.trim()
-      : undefined;
-  const total_minted_rewards =
-    typeof j.total_minted_rewards === 'string' && j.total_minted_rewards.trim() !== ''
-      ? j.total_minted_rewards.trim()
-      : undefined;
+  const best_cumulative_work = chainInfoU128DecimalString(j.best_cumulative_work);
+  const total_minted_rewards = chainInfoU128DecimalString(j.total_minted_rewards);
 
   return {
     chain_id: typeof j.chain_id === 'string' ? j.chain_id : `coinjecture:${network}`,
@@ -253,12 +291,31 @@ function finiteOrUndef(n: number | undefined): number | undefined {
   return n != null && Number.isFinite(n) ? n : undefined;
 }
 
+function normalizeChainInfoU128Fields(info: ChainInfo): ChainInfo {
+  return {
+    ...info,
+    best_cumulative_work: chainInfoU128DecimalString(info.best_cumulative_work as unknown),
+    total_minted_rewards: chainInfoU128DecimalString(info.total_minted_rewards as unknown),
+  };
+}
+
 /** Prefer API for identity fields; fill mining / W / minted from JSON-RPC when the API omits them. */
+/** When JSON-RPC fails, merge still prefers API fields; RPC side contributes nothing. */
+function stubRpcShardForMerge(api: ChainInfo): ChainInfo {
+  return {
+    chain_id: api.chain_id,
+    best_height: 0,
+    best_hash: '',
+    genesis_hash: '',
+    peer_count: 0,
+  };
+}
+
 function mergeChainInfoFromRpc(api: ChainInfo, rpc: ChainInfo): ChainInfo {
-  const bcwApi = api.best_cumulative_work?.trim();
-  const bcwRpc = rpc.best_cumulative_work?.trim();
-  const tmrApi = api.total_minted_rewards?.trim();
-  const tmrRpc = rpc.total_minted_rewards?.trim();
+  const bcwApi = chainInfoU128DecimalString(api.best_cumulative_work as unknown);
+  const bcwRpc = chainInfoU128DecimalString(rpc.best_cumulative_work as unknown);
+  const tmrApi = chainInfoU128DecimalString(api.total_minted_rewards as unknown);
+  const tmrRpc = chainInfoU128DecimalString(rpc.total_minted_rewards as unknown);
   return {
     ...api,
     total_work: api.total_work ?? rpc.total_work,
@@ -1062,7 +1119,7 @@ export class RpcClient {
         RPC_CALL_ALL_CHAIN_INFO_TIMEOUT_MS,
       );
     } catch {
-      return this.call<ChainInfo>('chain_getInfo', []);
+      return this.call<ChainInfo>('chain_getInfo', [], RPC_CHAIN_GET_INFO_CALL_TIMEOUT_MS);
     }
   }
 
@@ -1073,7 +1130,11 @@ export class RpcClient {
     if (havePow && haveNp) return info;
     try {
       // Single-RPC `call` (failover list) — avoids a second full `callAll` that waits on every host.
-      const mw = await this.call<MiningWork>('chain_getMiningWork', [], 10_000);
+      const mw = await this.call<MiningWork>(
+        'chain_getMiningWork',
+        [],
+        RPC_SUPPLEMENT_MINING_WORK_TIMEOUT_MS,
+      );
       let out = info;
       if (!havePow && Number.isFinite(mw.difficulty)) {
         out = { ...out, header_pow_difficulty: mw.difficulty };
@@ -1094,29 +1155,57 @@ export class RpcClient {
    */
   async getChainInfo(): Promise<ChainInfo> {
     const rpcPromise = this.fetchChainInfoViaJsonRpc();
+    const finish = async (info: ChainInfo) =>
+      normalizeChainInfoU128Fields(await this.supplementChainInfoMiningFields(info));
 
     if (!isDevelopment) {
       const base = apiBaseTrimmed();
       if (base) {
-        try {
-          const [fromApi, rpcInfo] = await Promise.all([
-            fetchChainInfoFromApi(),
-            rpcPromise,
-          ]);
-          if (!apiChainInfoLooksEmptyTip(fromApi)) {
-            return await this.supplementChainInfoMiningFields(mergeChainInfoFromRpc(fromApi, rpcInfo));
-          }
+        const [apiSettled, rpcSettled] = await Promise.allSettled([
+          fetchChainInfoFromApi(),
+          rpcPromise,
+        ]);
+
+        if (apiSettled.status === 'rejected') {
+          console.warn('[rpc-client] /chain/info failed', apiSettled.reason);
+        }
+        if (rpcSettled.status === 'rejected') {
+          console.warn('[rpc-client] chain_getInfo (JSON-RPC) failed', rpcSettled.reason);
+        }
+
+        const fromApi = apiSettled.status === 'fulfilled' ? apiSettled.value : null;
+        const rpcInfo = rpcSettled.status === 'fulfilled' ? rpcSettled.value : null;
+
+        if (fromApi && !apiChainInfoLooksEmptyTip(fromApi)) {
+          return await finish(
+            mergeChainInfoFromRpc(fromApi, rpcInfo ?? stubRpcShardForMerge(fromApi)),
+          );
+        }
+
+        if (fromApi && apiChainInfoLooksEmptyTip(fromApi)) {
           console.warn(
             '[rpc-client] /chain/info returned empty tip (height 0, no hashes); using JSON-RPC',
           );
-        } catch (e) {
-          console.warn('[rpc-client] /chain/info failed; using JSON-RPC', e);
         }
-        return await this.supplementChainInfoMiningFields(await rpcPromise);
+
+        if (rpcInfo) {
+          return await finish(rpcInfo);
+        }
+        if (fromApi) {
+          return await finish(fromApi);
+        }
+
+        const err =
+          rpcSettled.status === 'rejected'
+            ? rpcSettled.reason
+            : apiSettled.status === 'rejected'
+              ? apiSettled.reason
+              : new Error('Could not load chain info');
+        throw err instanceof Error ? err : new Error(String(err));
       }
     }
 
-    return await this.supplementChainInfoMiningFields(await rpcPromise);
+    return await finish(await rpcPromise);
   }
 
   /**
@@ -1125,7 +1214,7 @@ export class RpcClient {
    * waiting on every parallel host would still yield zero successes when only one URL is the API tunnel.
    */
   async getMiningWork(): Promise<MiningWork> {
-    return this.call<MiningWork>('chain_getMiningWork', [], 10_000);
+    return this.call<MiningWork>('chain_getMiningWork', [], RPC_GET_MINING_WORK_TIMEOUT_MS);
   }
 
   async submitBlock(block: Block): Promise<string> {

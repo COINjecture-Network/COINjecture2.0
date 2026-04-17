@@ -13,11 +13,23 @@ use axum::{
     Json,
 };
 use bytes::Bytes;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::net::SocketAddr;
 
 use crate::errors::ApiError;
 use crate::AppState;
+
+/// `chain_getInfo` with no args — safe to serve from the same TTL cache as `GET /chain/info` (`EventBroadcaster`).
+fn chain_get_info_cacheable_request(body: &Value) -> bool {
+    if body.get("method").and_then(|m| m.as_str()) != Some("chain_getInfo") {
+        return false;
+    }
+    match body.get("params") {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(a)) => a.is_empty(),
+        _ => false,
+    }
+}
 
 fn client_ip_for_upstream(headers: &HeaderMap, peer: &SocketAddr) -> String {
     if let Some(val) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
@@ -60,6 +72,28 @@ pub async fn proxy(
     let body_len = body.len();
     let xff = client_ip_for_upstream(&headers, &peer);
 
+    let parsed: Option<Value> = serde_json::from_slice(&body).ok();
+
+    if let Some(ref req) = parsed {
+        if chain_get_info_cacheable_request(req) {
+            if let Some(cached) = state.broadcaster.get_cached_chain_info().await {
+                let id = req.get("id").cloned().unwrap_or(Value::Null);
+                let reply = json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": cached,
+                });
+                let bytes = serde_json::to_vec(&reply)
+                    .map_err(|e| ApiError::Internal(format!("serialize chain_getInfo cache: {e}")))?;
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+                    .body(Body::from(bytes))
+                    .map_err(|e| ApiError::Internal(e.to_string()));
+            }
+        }
+    }
+
     let (status_u16, bytes) = rpc
         .forward_jsonrpc_body(body, Some(xff.as_str()))
         .await
@@ -67,6 +101,22 @@ pub async fn proxy(
             tracing::warn!(error = %e, body_len, "/node-rpc forward to node failed");
             ApiError::ServiceUnavailable(format!("Node RPC forward failed: {e}"))
         })?;
+
+    if status_u16 == 200 {
+        if let Some(ref req) = parsed {
+            if chain_get_info_cacheable_request(req) {
+                if let Ok(resp) = serde_json::from_slice::<Value>(&bytes) {
+                    if resp.get("error").is_none() {
+                        if let Some(result) = resp.get("result").cloned() {
+                            if result.is_object() {
+                                state.broadcaster.set_cached_chain_info(result).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let status = StatusCode::from_u16(status_u16).unwrap_or(StatusCode::BAD_GATEWAY);
 

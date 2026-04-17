@@ -377,7 +377,7 @@ export const Hero = () => {
               </Link>
               <Link to="/explore">
                 <Button size="lg" variant="outline" className="gentle-animation px-8">
-                  Explore chain <TrendingUp className="ml-2 h-4 w-4" />
+                  Open Explorer <TrendingUp className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
             </div>

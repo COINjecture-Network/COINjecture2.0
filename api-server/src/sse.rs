@@ -70,7 +70,7 @@ pub struct EventBroadcaster {
     pub latest_block: RwLock<Option<BlockEvent>>,
     /// Cached latest mempool snapshot.
     pub latest_mempool: RwLock<Option<MempoolEvent>>,
-    /// Cached chain info for `/chain/info` (5-second TTL).
+    /// Cached chain info for `/chain/info` and `chain_getInfo` fast path (short TTL).
     cached_chain_info: RwLock<Option<CachedChainInfo>>,
 }
 
@@ -170,12 +170,13 @@ impl EventBroadcaster {
         }
     }
 
-    /// Return cached chain info if it was fetched within the last 5 seconds.
+    /// Return cached chain info if it was fetched within the last few seconds (dashboards + `/node-rpc` fast path).
     pub async fn get_cached_chain_info(&self) -> Option<Value> {
+        const CHAIN_INFO_CACHE_TTL_SECS: u64 = 15;
         let guard = self.cached_chain_info.read().await;
         guard
             .as_ref()
-            .filter(|c| c.fetched_at.elapsed().as_secs() < 5)
+            .filter(|c| c.fetched_at.elapsed().as_secs() < CHAIN_INFO_CACHE_TTL_SECS)
             .map(|c| c.value.clone())
     }
 

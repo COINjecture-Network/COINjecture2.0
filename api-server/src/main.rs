@@ -89,6 +89,16 @@ async fn main() {
 
     // Start node poller if RPC URL is configured
     if let Some(ref rpc) = node_rpc {
+        // One-shot warm so first browser `/node-rpc` + `GET /chain/info` can hit cache immediately.
+        {
+            let rpc = rpc.clone();
+            let broadcaster = broadcaster.clone();
+            tokio::spawn(async move {
+                if let Ok(info) = rpc.get_chain_info().await {
+                    broadcaster.set_cached_chain_info(info).await;
+                }
+            });
+        }
         let poller = NodePoller::new(rpc.clone(), broadcaster.clone(), Duration::from_secs(2));
         tokio::spawn(async move {
             poller.run().await;

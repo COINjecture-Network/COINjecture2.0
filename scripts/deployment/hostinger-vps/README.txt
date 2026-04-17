@@ -12,8 +12,10 @@ Cursor/AI cannot SSH into your server. You (or support) must run commands on the
      sudo nano /etc/coinjecture/api.env
      sudo chmod 600 /etc/coinjecture/api.env
 
-4) Run installer (as root):
-     sudo bash scripts/deployment/hostinger-vps/install-api-on-vps.sh
+4) Build + install API binary (or use Docker — see api-server/README.md):
+     cargo build --release -p coinjecture-api-server
+     sudo install -m 755 target/release/coinjecture-api /opt/coinjecture/coinjecture-api
+     Install coinjecture-api.service from this folder, then: sudo systemctl enable --now coinjecture-api
 
 5) DNS: A record api.coinjecture.com -> server IP. Then TLS:
      sudo certbot certonly --nginx -d api.coinjecture.com

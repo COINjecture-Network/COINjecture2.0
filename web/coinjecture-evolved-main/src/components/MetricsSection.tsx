@@ -3,9 +3,16 @@ import { Button } from "@/components/ui/button";
 import { TrendingUp, Users, Activity, Target, Award, BarChart3, Network, Loader2, Binary, Layers } from "lucide-react";
 import { LiveSolutionFeed } from "./LiveSolutionFeed";
 import { useQuery } from "@tanstack/react-query";
-import { rpcClient } from "@/lib/rpc-client";
+import { chainInfoU128DecimalString, rpcClient } from "@/lib/rpc-client";
+import { hashHexOrEmpty } from "@/lib/mining";
 import { Link } from "react-router-dom";
 import { formatBeans, parseBalance } from "@/lib/chain-metrics";
+
+function hashSnippet(value: unknown): string {
+  const h = hashHexOrEmpty(value);
+  if (!h) return "—";
+  return h.length >= 16 ? `${h.slice(0, 16)}...` : h;
+}
 
 export const MetricsSection = () => {
   const { data: chainInfo, isLoading: chainLoading, isError: chainError } = useQuery({
@@ -112,7 +119,11 @@ export const MetricsSection = () => {
                 <Activity className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Block Height</p>
               </div>
-              <p className="text-xl font-bold">{chainInfo.best_height.toLocaleString()}</p>
+              <p className="text-xl font-bold">
+                {Number.isFinite(chainInfo.best_height)
+                  ? chainInfo.best_height.toLocaleString()
+                  : "—"}
+              </p>
             </Card>
             <Card className="signal-card">
               <div className="flex items-center gap-3 mb-2">
@@ -126,22 +137,14 @@ export const MetricsSection = () => {
                 <Target className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Best Hash</p>
               </div>
-              <p className="text-xs font-mono break-all">
-                {chainInfo.best_hash.length >= 16
-                  ? `${chainInfo.best_hash.slice(0, 16)}...`
-                  : chainInfo.best_hash || "—"}
-              </p>
+              <p className="text-xs font-mono break-all">{hashSnippet(chainInfo.best_hash)}</p>
             </Card>
             <Card className="signal-card">
               <div className="flex items-center gap-3 mb-2">
                 <Award className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Genesis</p>
               </div>
-              <p className="text-xs font-mono break-all">
-                {chainInfo.genesis_hash.length >= 16
-                  ? `${chainInfo.genesis_hash.slice(0, 16)}...`
-                  : chainInfo.genesis_hash || "—"}
-              </p>
+              <p className="text-xs font-mono break-all">{hashSnippet(chainInfo.genesis_hash)}</p>
             </Card>
           </div>
         )}
@@ -183,7 +186,7 @@ export const MetricsSection = () => {
                 <p className="text-sm text-muted-foreground">Cumulative work (W)</p>
               </div>
               <p className="text-lg font-bold font-mono break-all">
-                {chainInfo.best_cumulative_work?.trim() ? chainInfo.best_cumulative_work : "—"}
+                {chainInfoU128DecimalString(chainInfo.best_cumulative_work) ?? "—"}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Σ truncated integer work from headers (same units as w_trunc in rewards). Not display BEANS; not
@@ -197,17 +200,18 @@ export const MetricsSection = () => {
               </div>
               <p className="text-xl font-bold tabular-nums">
                 {(() => {
-                  const s = chainInfo.total_minted_rewards?.trim();
-                  if (!s) return "—";
-                  const atoms = parseBalance(s);
-                  return atoms !== null ? formatBeans(atoms) : s;
+                  const atoms = parseBalance(chainInfo.total_minted_rewards);
+                  if (atoms !== null) return formatBeans(atoms);
+                  const s = chainInfoU128DecimalString(chainInfo.total_minted_rewards);
+                  return s ?? "—";
                 })()}
               </p>
-              {chainInfo.total_minted_rewards?.trim() ? (
+              {chainInfoU128DecimalString(chainInfo.total_minted_rewards) ? (
                 <p className="text-xs text-muted-foreground font-mono break-all mt-0.5">
                   {(() => {
-                    const a = parseBalance(chainInfo.total_minted_rewards!.trim());
-                    return a !== null ? `${a.toLocaleString()} atoms raw` : chainInfo.total_minted_rewards;
+                    const a = parseBalance(chainInfo.total_minted_rewards);
+                    const raw = chainInfoU128DecimalString(chainInfo.total_minted_rewards);
+                    return a !== null ? `${a.toString()} atoms raw` : raw ?? "—";
                   })()}
                 </p>
               ) : null}

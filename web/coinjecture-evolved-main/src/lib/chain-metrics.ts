@@ -93,12 +93,22 @@ export function parseU128DecimalString(raw: unknown): bigint | null {
 
 /** Format ledger **atoms** as display BEANS (trim fractional zeros). */
 export function formatBeans(atoms: bigint): string {
+  let a: bigint;
+  if (typeof atoms === "bigint") {
+    a = atoms;
+  } else if (typeof atoms === "number" && Number.isFinite(atoms)) {
+    a = BigInt(Math.trunc(atoms));
+  } else if (typeof atoms === "string" && /^\d+$/.test(atoms.trim())) {
+    a = BigInt(atoms.trim());
+  } else {
+    return "—";
+  }
   const s = REWARD_FIXED_POINT_SCALE;
-  if (atoms === 0n) return "0";
-  const neg = atoms < 0n;
-  const a = neg ? -atoms : atoms;
-  const whole = a / s;
-  const frac = a % s;
+  if (a === 0n) return "0";
+  const neg = a < 0n;
+  const aAbs = neg ? -a : a;
+  const whole = aAbs / s;
+  const frac = aAbs % s;
   if (frac === 0n) {
     return (neg ? "-" : "") + whole.toLocaleString(undefined, { maximumFractionDigits: 0 });
   }

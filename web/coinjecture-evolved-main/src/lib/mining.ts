@@ -111,6 +111,16 @@ class SeededRNG {
 /**
  * Extract hex string from hash (handles string, object, and byte array formats)
  */
+/** Like {@link extractHashHex} but never throws (dashboard / metrics). */
+export function hashHexOrEmpty(hash: unknown): string {
+  if (hash == null) return '';
+  try {
+    return extractHashHex(hash as Parameters<typeof extractHashHex>[0]);
+  } catch {
+    return '';
+  }
+}
+
 export function extractHashHex(hash: string | { hash?: string; bytes?: string } | number[] | Uint8Array | any): string {
   // If it's already a string, return it
   if (typeof hash === 'string') {

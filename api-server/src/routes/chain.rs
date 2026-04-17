@@ -69,7 +69,7 @@ pub async fn chain_info(State(state): State<AppState>) -> Json<ChainInfoResponse
     let mut best_cumulative_work = None;
     let mut total_minted_rewards = None;
     let (height, syncing, peer_count) = if let Some(ref rpc) = state.node_rpc {
-        // Serve from cache when available and fresh (5-second TTL).
+        // Serve from cache when available and fresh (see `EventBroadcaster::get_cached_chain_info`).
         let info = if let Some(cached) = state.broadcaster.get_cached_chain_info().await {
             cached
         } else {

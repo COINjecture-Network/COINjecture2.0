@@ -440,7 +440,7 @@ const BountySubmit = () => {
 \`\`\`
 
 **Expected Output:**
-Return a subset of numbers that sum exactly to the target.
+Return **0-based indices** into the \`numbers\` array (on-chain \`Solution::SubsetSum\`); e.g. indices \`[1,2,3]\` mean \`numbers[1]+numbers[2]+numbers[3]\`, not the literal values 1+2+3.
 
 **Example Output:**
 \`\`\`json

@@ -635,7 +635,11 @@ export const LiveSolutionFeed = () => {
                   <span className="text-muted-foreground">Solution:</span>
                   {solution.problem_type === "SubsetSum" && solution.solution_data.indices && (
                     <span className="terminal-font text-success">
-                      Indices {solution.solution_data.indices.join(", ")} → Sum: {solution.solution_data.sum}
+                      {Array.isArray(solution.problem_data.values) && solution.problem_data.values.length > 0
+                        ? `${solution.solution_data.indices
+                            .map((i) => solution.problem_data.values![i])
+                            .join(" + ")} = ${solution.solution_data.sum} (0-based indices ${solution.solution_data.indices.join(", ")})`
+                        : `0-based indices ${solution.solution_data.indices.join(", ")} → sum ${solution.solution_data.sum}`}
                     </span>
                   )}
                   {solution.problem_type === "TSP" && solution.solution_data.route && (

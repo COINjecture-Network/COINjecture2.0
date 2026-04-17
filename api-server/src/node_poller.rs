@@ -64,6 +64,8 @@ impl NodePoller {
             // NOTE: No dedicated mempool RPC method exists yet.
             // TODO: Add mempool_getInfo to the RPC crate for accurate data.
             if let Ok(info) = self.node_rpc.get_chain_info().await {
+                // Keeps `GET /chain/info` + `POST /node-rpc` `chain_getInfo` fast-path cache warm (same TTL as chain route).
+                self.broadcaster.set_cached_chain_info(info.clone()).await;
                 let event = MempoolEvent {
                     pending_count: info["pending_transactions"].as_u64().unwrap_or(0) as usize,
                     total_size_bytes: 0,
