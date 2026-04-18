@@ -217,22 +217,26 @@ impl NodeRpcClient {
 
     /// Get network info from the node.
     pub async fn get_network_info(&self) -> Result<Value, NodeRpcError> {
-        self.call_on(&self.http_light, "network_getInfo", json!([])).await
+        self.call_on(&self.http_light, "network_getInfo", json!([]))
+            .await
     }
 
     /// Get chain info from the node.
     pub async fn get_chain_info(&self) -> Result<Value, NodeRpcError> {
-        self.call_on(&self.http_light, "chain_getInfo", json!([])).await
+        self.call_on(&self.http_light, "chain_getInfo", json!([]))
+            .await
     }
 
     /// Get the latest block from the node.
     pub async fn get_latest_block(&self) -> Result<Value, NodeRpcError> {
-        self.call_on(&self.http_heavy, "chain_getLatestBlock", json!([])).await
+        self.call_on(&self.http_heavy, "chain_getLatestBlock", json!([]))
+            .await
     }
 
     /// Get a block by height.
     pub async fn get_block_by_height(&self, height: u64) -> Result<Value, NodeRpcError> {
-        self.call_on(&self.http_heavy, "chain_getBlock", json!([height])).await
+        self.call_on(&self.http_heavy, "chain_getBlock", json!([height]))
+            .await
     }
 
     async fn send_proxy_with_retry(
