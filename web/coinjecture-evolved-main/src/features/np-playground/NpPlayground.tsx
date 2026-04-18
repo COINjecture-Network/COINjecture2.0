@@ -134,10 +134,11 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   });
 
   const { data: miningWork } = useQuery({
-    queryKey: ["solverLab", "miningWork"],
+    queryKey: ["solverLab", "miningWork", chainInfo?.best_height],
     queryFn: () => rpcClient.getMiningWork(),
-    refetchInterval: 15_000,
-    staleTime: 5_000,
+    enabled: !!chainInfo,
+    staleTime: Infinity,
+    refetchInterval: false,
   });
 
   const { data: selectedBounty, isLoading: selectedBountyLoading } = useQuery({
