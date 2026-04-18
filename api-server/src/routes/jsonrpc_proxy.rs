@@ -83,8 +83,9 @@ pub async fn proxy(
                     "id": id,
                     "result": cached,
                 });
-                let bytes = serde_json::to_vec(&reply)
-                    .map_err(|e| ApiError::Internal(format!("serialize chain_getInfo cache: {e}")))?;
+                let bytes = serde_json::to_vec(&reply).map_err(|e| {
+                    ApiError::Internal(format!("serialize chain_getInfo cache: {e}"))
+                })?;
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))

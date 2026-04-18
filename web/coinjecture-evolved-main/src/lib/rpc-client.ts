@@ -1154,32 +1154,27 @@ export class RpcClient {
    * are not stuck empty when the API’s `NODE_RPC_URL` points at a non-mining or older node.
    */
   async getChainInfo(): Promise<ChainInfo> {
-    const rpcPromise = this.fetchChainInfoViaJsonRpc();
     const finish = async (info: ChainInfo) =>
       normalizeChainInfoU128Fields(await this.supplementChainInfoMiningFields(info));
 
     if (!isDevelopment) {
       const base = apiBaseTrimmed();
       if (base) {
-        const [apiSettled, rpcSettled] = await Promise.allSettled([
-          fetchChainInfoFromApi(),
-          rpcPromise,
-        ]);
+        // Start JSON-RPC in background but don't wait for it when API already has a valid tip.
+        const rpcPromise = this.fetchChainInfoViaJsonRpc();
+        rpcPromise.catch(() => {});
 
-        if (apiSettled.status === 'rejected') {
-          console.warn('[rpc-client] /chain/info failed', apiSettled.reason);
+        let fromApi: ChainInfo | null = null;
+        let apiError: unknown = null;
+        try {
+          fromApi = await fetchChainInfoFromApi();
+        } catch (e) {
+          apiError = e;
+          console.warn('[rpc-client] /chain/info failed', e);
         }
-        if (rpcSettled.status === 'rejected') {
-          console.warn('[rpc-client] chain_getInfo (JSON-RPC) failed', rpcSettled.reason);
-        }
-
-        const fromApi = apiSettled.status === 'fulfilled' ? apiSettled.value : null;
-        const rpcInfo = rpcSettled.status === 'fulfilled' ? rpcSettled.value : null;
 
         if (fromApi && !apiChainInfoLooksEmptyTip(fromApi)) {
-          return await finish(
-            mergeChainInfoFromRpc(fromApi, rpcInfo ?? stubRpcShardForMerge(fromApi)),
-          );
+          return await finish(mergeChainInfoFromRpc(fromApi, stubRpcShardForMerge(fromApi)));
         }
 
         if (fromApi && apiChainInfoLooksEmptyTip(fromApi)) {
@@ -1188,24 +1183,24 @@ export class RpcClient {
           );
         }
 
-        if (rpcInfo) {
-          return await finish(rpcInfo);
-        }
-        if (fromApi) {
-          return await finish(fromApi);
+        let rpcInfo: ChainInfo | null = null;
+        let rpcError: unknown = null;
+        try {
+          rpcInfo = await rpcPromise;
+        } catch (e) {
+          rpcError = e;
+          console.warn('[rpc-client] chain_getInfo (JSON-RPC) failed', e);
         }
 
-        const err =
-          rpcSettled.status === 'rejected'
-            ? rpcSettled.reason
-            : apiSettled.status === 'rejected'
-              ? apiSettled.reason
-              : new Error('Could not load chain info');
+        if (rpcInfo) return await finish(rpcInfo);
+        if (fromApi) return await finish(fromApi);
+
+        const err = apiError ?? rpcError ?? new Error('Could not load chain info');
         throw err instanceof Error ? err : new Error(String(err));
       }
     }
 
-    return await finish(await rpcPromise);
+    return await finish(await this.fetchChainInfoViaJsonRpc());
   }
 
   /**
