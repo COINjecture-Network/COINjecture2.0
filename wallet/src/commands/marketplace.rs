@@ -33,7 +33,10 @@ pub async fn list_problems(client: &RpcClient) -> Result<()> {
                     &problem.problem_id[0..16].dimmed()
                 );
                 println!("   Submitter:  {}", problem.submitter);
-                println!("   Bounty:     {} BEANS", format_atoms_as_beans(problem.bounty));
+                println!(
+                    "   Bounty:     {} BEANS",
+                    format_atoms_as_beans(problem.bounty)
+                );
                 println!("   Min Score:  {:.4}", problem.min_work_score);
                 println!("   Status:     {}", format_status(&problem.status));
                 println!("   Submitted:  {}", format_timestamp(problem.submitted_at));
@@ -84,7 +87,10 @@ pub async fn get_problem(problem_id: &str, client: &RpcClient) -> Result<()> {
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Problem ID:  {}", problem.problem_id);
             println!("Submitter:   {}", problem.submitter);
-            println!("Bounty:      {} BEANS", format_atoms_as_beans(problem.bounty));
+            println!(
+                "Bounty:      {} BEANS",
+                format_atoms_as_beans(problem.bounty)
+            );
             println!("Min Score:   {:.4}", problem.min_work_score);
             println!("Status:      {}", format_status(&problem.status));
             println!("Submitted:   {}", format_timestamp(problem.submitted_at));

@@ -28,8 +28,5 @@ pub fn format_atoms_as_beans(atoms: u128) -> String {
     while frac_str.ends_with('0') {
         frac_str.pop();
     }
-    format!(
-        "{}.{frac_str}",
-        add_thousands_sep_uint(whole.to_string())
-    )
+    format!("{}.{frac_str}", add_thousands_sep_uint(whole.to_string()))
 }
