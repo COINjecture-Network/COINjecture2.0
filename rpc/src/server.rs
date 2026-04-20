@@ -23,6 +23,7 @@ use jsonrpsee::{
     types::ErrorObjectOwned,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -99,6 +100,18 @@ pub struct NetworkInfo {
     pub peer_count: usize,
     pub listen_addresses: Vec<String>,
     pub bootnode_address_hint: String,
+}
+
+/// One connected CPP peer as seen by this node (RPC mirror of last known status).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkPeerInfo {
+    /// Hex-encoded 32-byte CPP peer id.
+    pub peer_id: String,
+    pub address: String,
+    pub best_height: u64,
+    pub best_hash: String,
+    /// Advertised cumulative work on the peer's tip chain (`u128` decimal string).
+    pub cumulative_work: String,
 }
 
 /// Account information response
@@ -405,6 +418,10 @@ pub trait CoinjectRpc {
     #[method(name = "network_getInfo")]
     async fn get_network_info(&self) -> RpcResult<NetworkInfo>;
 
+    /// List connected peers with last advertised tip and work (CPP).
+    #[method(name = "network_listPeers")]
+    async fn list_network_peers(&self) -> RpcResult<Vec<NetworkPeerInfo>>;
+
     /// Submit a mined block to the network
     #[method(name = "chain_submitBlock")]
     async fn submit_block(&self, block: Block) -> RpcResult<String>;
@@ -478,6 +495,8 @@ pub struct RpcServerState {
     pub mining_work_provider: Option<MiningWorkProvider>,
     /// When set, enriches [`ChainInfo`] with header PoW nibbles and NP problem size.
     pub mining_difficulty_tip_provider: Option<MiningDifficultyTipProvider>,
+    /// Live CPP peer rows maintained by the node (`peer_id` hex key).
+    pub peer_directory: Arc<RwLock<HashMap<String, NetworkPeerInfo>>>,
 }
 
 /// RPC server implementation
@@ -1631,6 +1650,13 @@ impl CoinjectRpcServer for RpcServerImpl {
         })
     }
 
+    async fn list_network_peers(&self) -> RpcResult<Vec<NetworkPeerInfo>> {
+        let map = self.state.peer_directory.read().await;
+        let mut peers: Vec<NetworkPeerInfo> = map.values().cloned().collect();
+        peers.sort_by(|a, b| a.address.cmp(&b.address).then_with(|| a.peer_id.cmp(&b.peer_id)));
+        Ok(peers)
+    }
+
     async fn submit_block(&self, block: Block) -> RpcResult<String> {
         println!(
             "📥 RPC: Received block submission for height {}",
@@ -1802,6 +1828,7 @@ mod tests {
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
             mining_difficulty_tip_provider: None,
+            peer_directory: Arc::new(RwLock::new(HashMap::new())),
         });
 
         let rpc = RpcServerImpl::new(state);
@@ -1846,6 +1873,7 @@ mod tests {
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
             mining_difficulty_tip_provider: None,
+            peer_directory: Arc::new(RwLock::new(HashMap::new())),
         });
 
         let rpc = RpcServerImpl::new(state);

@@ -11,14 +11,19 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { ProblemType } from "@/lib/rpc-client";
 import { rpcClient } from "@/lib/rpc-client";
-import { displayBeansToAtoms, formatBeans, parseBalance } from "@/lib/chain-metrics";
+import {
+  displayBeansToAtoms,
+  formatBeans,
+  MIN_BOUNTY_SUBMISSION_FEE_ATOMS,
+  parseBalance,
+} from "@/lib/chain-metrics";
 import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { useWallet } from "@/contexts/WalletContext";
 
 /** Must match `STORAGE_KEY` in `NpPlayground.tsx` (Solver Lab → Bounty draft). */
 const SOLVER_LAB_BOUNTY_KEY = "solverLabBountyPayload";
-/** Must match on-chain `MIN_FEE_BOUNTY_SUBMISSION` (see `core/src/validation.rs`) — **atoms**, not display BEANS. */
-const MARKETPLACE_SUBMIT_FEE_ATOMS = 1000n;
+/** On-chain `MIN_FEE_BOUNTY_SUBMISSION` when posting via `transaction_submit` — re-exported from chain-metrics. */
+const MARKETPLACE_SUBMIT_FEE_ATOMS = MIN_BOUNTY_SUBMISSION_FEE_ATOMS;
 
 type ConfirmedSubmission = {
   problemId: string;
@@ -298,7 +303,7 @@ const BountySubmit = () => {
     { value: "TSP", label: "TSP", note: "Best for routing and optimization style work." },
     { value: "SAT", label: "SAT", note: "Best for satisfiability and constraint-heavy work." },
   ];
-  const rewardPresets = ["25000", "50000", "100000", "250000"];
+  const rewardPresets = ["1", "2", "5", "10", "25"];
   const durationPresets = ["7", "14", "30", "90"];
   const complexityOptions = [
     { value: "easy", label: "Easy" },
@@ -457,7 +462,7 @@ Return **0-based indices** into the \`numbers\` array (on-chain \`Solution::Subs
 - Solution must be exact (not approximate)
 
 **Verification:** Automated - sum of returned subset must equal target`,
-      bounty: "50000",
+      bounty: "10",
       minWorkScore: "150",
       complexity: "medium"
     },
@@ -504,7 +509,7 @@ Return the shortest tour visiting all cities exactly once and returning to start
 - Must return to starting city
 
 **Verification:** Automated - validate tour completeness and distance calculation`,
-      bounty: "100000",
+      bounty: "15",
       minWorkScore: "200",
       complexity: "hard"
     },
@@ -555,7 +560,7 @@ Return a satisfying assignment or proof of unsatisfiability.
 - Must satisfy ALL clauses
 
 **Verification:** Automated - evaluate assignment against all clauses`,
-      bounty: "75000",
+      bounty: "20",
       minWorkScore: "180",
       complexity: "expert"
     }
@@ -616,8 +621,8 @@ Return a satisfying assignment or proof of unsatisfiability.
     const minWorkScore = Number.parseFloat(formData.minWorkScore);
     const expirationDays = Number.parseInt(formData.expirationDays, 10);
 
-    if (!Number.isFinite(bounty) || bounty < 1000) {
-      setSubmitError("Bounty must be at least 1,000 BEANS.");
+    if (!Number.isFinite(bounty) || bounty < 1) {
+      setSubmitError("Bounty must be at least 1 BEANS.");
       return;
     }
 
@@ -632,8 +637,9 @@ Return a satisfying assignment or proof of unsatisfiability.
     }
 
     const bountyAtoms = displayBeansToAtoms(BigInt(bounty));
-    if (walletBalance !== undefined && walletBalance < bountyAtoms) {
-      const message = `Insufficient wallet balance. Available: ${formatBeans(walletBalance)} BEANS, required escrow: ${bounty.toLocaleString()} BEANS.`;
+    const requiredAtoms = bountyAtoms + MARKETPLACE_SUBMIT_FEE_ATOMS;
+    if (walletBalance !== undefined && walletBalance < requiredAtoms) {
+      const message = `Insufficient wallet balance. Available: ${formatBeans(walletBalance)} BEANS, required: ${formatBeans(requiredAtoms)} BEANS (bounty + network fee).`;
       setSubmitError(message);
       toast({ title: "Insufficient balance", description: message, variant: "destructive" });
       return;
@@ -954,7 +960,7 @@ Return a satisfying assignment or proof of unsatisfiability.
                           value={formData.bounty}
                           onChange={(e) => setFormData({ ...formData, bounty: e.target.value })}
                           placeholder="50000"
-                          min="1000"
+                          min="1"
                           required
                         />
                         <div className="flex flex-wrap gap-2">
@@ -970,7 +976,9 @@ Return a satisfying assignment or proof of unsatisfiability.
                             </Button>
                           ))}
                         </div>
-                        <p className="text-xs text-muted-foreground">Minimum funding is 1,000 BEANS plus the network fee.</p>
+                        <p className="text-xs text-muted-foreground">
+                          Minimum funding is 1 BEANS plus a small network fee ({formatBeans(MARKETPLACE_SUBMIT_FEE_ATOMS)} BEANS) when posting on-chain via paid paths.
+                        </p>
                       </div>
 
                       <div className="space-y-3">

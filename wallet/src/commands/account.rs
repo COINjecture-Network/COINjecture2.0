@@ -1,5 +1,6 @@
 // Account management commands
 
+use crate::atoms_display::format_atoms_as_beans;
 use crate::keystore::Keystore;
 use crate::rpc_client::RpcClient;
 use anyhow::Result;
@@ -71,7 +72,7 @@ pub async fn get_balance(address: &str, client: &RpcClient) -> Result<()> {
             println!("{}", "Account Balance".green().bold());
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Address: {}", address);
-            println!("Balance: {} tokens", format_balance(balance));
+            println!("Balance: {} BEANS", format_atoms_as_beans(balance));
         }
         Err(e) => {
             println!("{}", format!("❌ Failed to get balance: {}", e).red());
@@ -94,7 +95,7 @@ pub async fn get_account_info(address: &str, client: &RpcClient) -> Result<()> {
             println!("{}", "Account Information".green().bold());
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Address: {}", info.address);
-            println!("Balance: {} tokens", format_balance(info.balance));
+            println!("Balance: {} BEANS", format_atoms_as_beans(info.balance));
             println!("Nonce:   {}", info.nonce);
 
             // Check if account is in keystore
@@ -179,17 +180,3 @@ fn format_timestamp(timestamp: i64) -> String {
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
 
-fn format_balance(balance: u128) -> String {
-    // Format with thousand separators
-    let balance_str = balance.to_string();
-    let mut result = String::new();
-
-    for (count, c) in balance_str.chars().rev().enumerate() {
-        if count > 0 && count % 3 == 0 {
-            result.insert(0, ',');
-        }
-        result.insert(0, c);
-    }
-
-    result
-}

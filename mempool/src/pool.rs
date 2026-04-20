@@ -1,6 +1,7 @@
 // Transaction mempool with fee prioritization
 // Institutional-grade transaction pool for Network B
 
+use coinject_core::validation::MIN_FEE_BOUNTY_SUBMISSION;
 use coinject_core::{Balance, Hash, Transaction};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -58,7 +59,8 @@ impl Default for PoolConfig {
         PoolConfig {
             max_transactions: 10_000,
             max_size_bytes: 20 * 1024 * 1024, // 20 MB
-            min_fee: 1000,                    // 1000 units minimum fee
+            // Same floor as `MIN_FEE_BOUNTY_SUBMISSION` (0.001 display BEANS in atoms).
+            min_fee: MIN_FEE_BOUNTY_SUBMISSION,
         }
     }
 }
@@ -442,7 +444,7 @@ mod tests {
         let config = PoolConfig {
             max_transactions: 5,
             max_size_bytes: 1024 * 1024,
-            min_fee: 1000,
+            min_fee: MIN_FEE_BOUNTY_SUBMISSION,
         };
         let pool = TransactionPool::with_config(config);
         assert_eq!(pool.len(), 0);

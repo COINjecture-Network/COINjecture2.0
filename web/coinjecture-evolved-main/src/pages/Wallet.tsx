@@ -20,13 +20,13 @@ import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import {
   displayBeansToAtoms,
   formatBeans,
-  REWARD_FIXED_POINT_SCALE,
+  MIN_BOUNTY_SUBMISSION_FEE_ATOMS,
 } from "@/lib/chain-metrics";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
-/** Miner tip in ledger atoms (= 1000 display BEANS at S = 10^12). */
-const TRANSFER_PRIORITY_TIP_ATOMS = 1000n * REWARD_FIXED_POINT_SCALE;
+/** Optional paid-path tip in ledger atoms (0.001 display BEANS — same scale as mempool / bounty min fee). */
+const TRANSFER_PRIORITY_TIP_ATOMS = MIN_BOUNTY_SUBMISSION_FEE_ATOMS;
 
 function isPoolFeeTooLowMessage(message: string): boolean {
   const m = message.toLowerCase();

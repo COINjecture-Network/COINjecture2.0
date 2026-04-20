@@ -26,9 +26,14 @@ pub const MAX_AMOUNT: Balance = u128::MAX / 2;
 /// Minimum transaction fee for types that still charge a network fee (e.g. time-locks).
 pub const MIN_FEE: Balance = 1;
 
+/// Ledger fixed point: one **display BEANS** in smallest units (atoms).
+/// Matches `coinject_tokenomics::REWARD_FIXED_POINT_SCALE` — consensus code must not depend on that crate.
+pub const ATOMS_PER_DISPLAY_BEAN: Balance = 1_000_000_000_000;
+
 /// Minimum fee for posting a new marketplace bounty (`SubmitProblem`).
-/// Keep aligned with default `coinject_mempool::PoolConfig::min_fee` for that path.
-pub const MIN_FEE_BOUNTY_SUBMISSION: Balance = 1000;
+/// **0.001 display BEANS** — small vs typical block rewards (~0.1 BEANS) but above dust.
+/// Keep aligned with default `coinject_mempool::PoolConfig::min_fee` for paid tx paths.
+pub const MIN_FEE_BOUNTY_SUBMISSION: Balance = ATOMS_PER_DISPLAY_BEAN / 1000;
 
 /// Maximum transaction data payload (64 KB)
 pub const MAX_TX_DATA_SIZE: usize = 64 * 1024;

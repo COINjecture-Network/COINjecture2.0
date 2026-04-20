@@ -8,6 +8,9 @@
 /** Must match `coinject_tokenomics::REWARD_FIXED_POINT_SCALE` (10^12). */
 export const REWARD_FIXED_POINT_SCALE = 1_000_000_000_000n;
 
+/** Must match `coinject_core::validation::MIN_FEE_BOUNTY_SUBMISSION` (0.001 display BEANS in atoms). */
+export const MIN_BOUNTY_SUBMISSION_FEE_ATOMS = REWARD_FIXED_POINT_SCALE / 1000n;
+
 /** Must match `coinject_tokenomics::REWARD_EMISSION_MULTIPLIER`. */
 export const REWARD_EMISSION_MULTIPLIER = 50n;
 

@@ -32,7 +32,7 @@ use coinject_network::cpp::{
     NetworkEvent as CppNetworkEvent, NodeType as CppNodeType, PeerId as CppPeerId,
 };
 use coinject_rpc::server::{
-    MiningDifficultyTip, MiningDifficultyTipFuture, MiningWork, MiningWorkFuture,
+    MiningDifficultyTip, MiningDifficultyTipFuture, MiningWork, MiningWorkFuture, NetworkPeerInfo,
 };
 use coinject_rpc::websocket::{
     RpcCommand as WebSocketRpcCommand, RpcEvent as WebSocketRpcEvent, WebSocketRpc,
@@ -492,6 +492,8 @@ impl CoinjectNode {
 
         // Create shared peer count for RPC
         let peer_count = Arc::new(RwLock::new(0));
+        let peer_directory: Arc<RwLock<HashMap<String, NetworkPeerInfo>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         // Generate CPP PeerId — random per instance to avoid collisions in Docker
         // (Previous deterministic scheme used data_dir + chain_id, which collided
@@ -812,6 +814,7 @@ impl CoinjectNode {
             best_hash: self.chain.best_hash_ref(),
             genesis_hash: self.chain.genesis_hash(),
             peer_count: Arc::clone(&peer_count),
+            peer_directory: Arc::clone(&peer_directory),
             faucet_handler,
             block_submission_handler,
             local_peer_id: Some(local_peer_id_str.clone()),
@@ -976,6 +979,7 @@ impl CoinjectNode {
         let tx_pool_clone = Arc::clone(&self.tx_pool);
         let best_known_peer_height_clone = Arc::clone(&best_known_peer_height);
         let peer_count_clone = Arc::clone(&peer_count);
+        let peer_directory_clone = Arc::clone(&peer_directory);
         let peer_consensus_clone = Arc::clone(&peer_consensus);
         let network_cmd_tx_for_events = network_cmd_tx.clone();
         let cpp_network_cmd_tx_for_events = cpp_network_cmd_tx.clone();
@@ -1516,6 +1520,20 @@ impl CoinjectNode {
                         best_hash,
                     } => {
                         info!(peer_id = %hex::encode(peer_id), addr = %addr, "peer connected");
+                        let peer_key = hex::encode(peer_id);
+                        {
+                            let mut dir = peer_directory_clone.write().await;
+                            dir.insert(
+                                peer_key.clone(),
+                                NetworkPeerInfo {
+                                    peer_id: peer_key,
+                                    address: addr.to_string(),
+                                    best_height,
+                                    best_hash: format!("{}", best_hash),
+                                    cumulative_work: "0".to_string(),
+                                },
+                            );
+                        }
                         // Update peer count
                         {
                             let mut count = peer_count_clone.write().await;
@@ -1587,6 +1605,10 @@ impl CoinjectNode {
                     }
                     CppNetworkEvent::PeerDisconnected { peer_id, reason: _ } => {
                         info!(peer_id = %hex::encode(peer_id), "peer disconnected");
+                        {
+                            let mut dir = peer_directory_clone.write().await;
+                            dir.remove(&hex::encode(peer_id));
+                        }
                         // Update peer count
                         {
                             let mut count = peer_count_clone.write().await;
@@ -1609,6 +1631,21 @@ impl CoinjectNode {
                         cumulative_work,
                     } => {
                         debug!(peer_id = %hex::encode(peer_id), best_height, best_hash = ?best_hash, cumulative_work, "status update received");
+
+                        {
+                            let peer_key = hex::encode(peer_id);
+                            let mut dir = peer_directory_clone.write().await;
+                            let entry = dir.entry(peer_key.clone()).or_insert(NetworkPeerInfo {
+                                peer_id: peer_key.clone(),
+                                address: String::new(),
+                                best_height: 0,
+                                best_hash: String::new(),
+                                cumulative_work: "0".to_string(),
+                            });
+                            entry.best_height = best_height;
+                            entry.best_hash = format!("{}", best_hash);
+                            entry.cumulative_work = format!("{}", cumulative_work);
+                        }
 
                         // Update peer consensus tracker
                         let peer_id_str = hex::encode(peer_id);

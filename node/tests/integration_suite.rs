@@ -30,7 +30,7 @@ use coinject_mempool::{PoolConfig, ProblemMarketplace, TransactionPool};
 use coinject_network::cpp::{CppConfig, CppNetwork, NetworkCommand, NodeType as CppNodeType};
 use coinject_node::chain::ChainState;
 use coinject_node::genesis::{create_genesis_block, GenesisConfig};
-use coinject_rpc::{BlockchainReader, RpcServer, RpcServerState};
+use coinject_rpc::{BlockchainReader, NetworkPeerInfo, RpcServer, RpcServerState};
 use coinject_state::{AccountState, ChannelState, EscrowState, MarketplaceState, TimeLockState};
 use redb::Database;
 use std::collections::HashMap;
@@ -669,6 +669,19 @@ async fn test_7_rpc_integration() {
     let test_addr = Address::from_bytes([0x55u8; 32]);
     state.set_balance(&test_addr, 123_456).unwrap();
 
+    let peer_id_hex = "01".repeat(32);
+    let mut seed_peers = HashMap::new();
+    seed_peers.insert(
+        peer_id_hex.clone(),
+        NetworkPeerInfo {
+            peer_id: peer_id_hex.clone(),
+            address: "192.0.2.1:707".to_string(),
+            best_height: 99,
+            best_hash: "ab".repeat(32),
+            cumulative_work: "12345678901234567890".to_string(),
+        },
+    );
+
     // ── Server state ───────────────────────────────────────────────────────
     let server_state = Arc::new(RpcServerState {
         account_state: Arc::clone(&state),
@@ -684,6 +697,7 @@ async fn test_7_rpc_integration() {
         best_hash: Arc::new(RwLock::new(genesis_hash)),
         genesis_hash,
         peer_count: Arc::new(RwLock::new(3)),
+        peer_directory: Arc::new(RwLock::new(seed_peers)),
         faucet_handler: None,
         block_submission_handler: None,
         local_peer_id: Some("test-peer-0xABCD".to_string()),
@@ -756,6 +770,18 @@ async fn test_7_rpc_integration() {
         .expect("network_getInfo");
 
     assert_eq!(net_info["peer_id"].as_str().unwrap(), "test-peer-0xABCD");
+
+    // ── network_listPeers ───────────────────────────────────────────────────
+    let peers: serde_json::Value = client
+        .request("network_listPeers", rpc_params![])
+        .await
+        .expect("network_listPeers");
+
+    let arr = peers.as_array().expect("peers array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["address"].as_str().unwrap(), "192.0.2.1:707");
+    assert_eq!(arr[0]["peer_id"].as_str().unwrap(), peer_id_hex);
+    assert_eq!(arr[0]["best_height"].as_u64().unwrap(), 99);
 
     server.stop().expect("server stop");
 }
