@@ -1653,7 +1653,11 @@ impl CoinjectRpcServer for RpcServerImpl {
     async fn list_network_peers(&self) -> RpcResult<Vec<NetworkPeerInfo>> {
         let map = self.state.peer_directory.read().await;
         let mut peers: Vec<NetworkPeerInfo> = map.values().cloned().collect();
-        peers.sort_by(|a, b| a.address.cmp(&b.address).then_with(|| a.peer_id.cmp(&b.peer_id)));
+        peers.sort_by(|a, b| {
+            a.address
+                .cmp(&b.address)
+                .then_with(|| a.peer_id.cmp(&b.peer_id))
+        });
         Ok(peers)
     }
 

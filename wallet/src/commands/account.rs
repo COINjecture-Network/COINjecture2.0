@@ -179,4 +179,3 @@ fn format_timestamp(timestamp: i64) -> String {
     let dt = DateTime::<Utc>::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
     dt.format("%Y-%m-%d %H:%M:%S UTC").to_string()
 }
-
