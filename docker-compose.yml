@@ -26,6 +26,13 @@ version: '3.8'
 #   COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0@sha256:575e023fd9508d5bbec27cb0ece08a515153cbde760e0d12257549e87ddac3ba
 #
 # api-server still uses Dockerfile.api → `coinject-api:latest` (build once or supply a prebuilt image).
+#
+# Log rotation: without this, json-file logs can grow until the host disk fills (e.g. verbose bootnode).
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
 
 services:
   # ── Bootnode ─────────────────────────────────────────────────────────────
@@ -37,6 +44,7 @@ services:
     image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-bootnode
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
     # HF_TOKEN / HUGGINGFACE_TOKEN / HF_DATASET_NAME: set in .env (env_file). Do not pass them here as
@@ -90,6 +98,7 @@ services:
     image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node1
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
     environment:
@@ -139,6 +148,7 @@ services:
     image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node2
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
     environment:
@@ -188,6 +198,7 @@ services:
     image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node3
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
     environment:
@@ -240,6 +251,7 @@ services:
       dockerfile: Dockerfile.api
     image: coinject-api:latest
     container_name: coinject-api
+    logging: *json-logging
     ports:
       - "3030:3030"
     depends_on:
