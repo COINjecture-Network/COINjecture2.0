@@ -1,6 +1,8 @@
 // Chain State Manager
 // Block storage, best chain tracking, and chain reorganization
 #![allow(dead_code)]
+// ChainError wraps large redb error types; boxing them would change the public API
+#![allow(clippy::result_large_err)]
 
 use coinject_core::{Block, BlockHeader, Hash};
 use lru::LruCache;
@@ -15,6 +17,12 @@ use tokio::sync::RwLock;
 const BLOCKS_TABLE: TableDefinition<&[u8; 32], &[u8]> = TableDefinition::new("blocks");
 const METADATA_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 const HEIGHT_INDEX_TABLE: TableDefinition<u64, &[u8; 32]> = TableDefinition::new("height_index");
+
+/// Metadata key: sum of `header.work_score` along the canonical best chain (genesis → tip).
+const CUM_WORK_META_KEY: &str = "cum_work";
+
+/// Metadata key: sum of `coinbase.reward` on the canonical best chain (genesis → tip).
+const TOTAL_MINTED_META_KEY: &str = "total_minted_rewards";
 
 // v4.7.46: Maximum reasonable height to detect database corruption
 // If height exceeds this, it's likely corrupted bytes being interpreted as u64
@@ -117,6 +125,12 @@ impl ChainState {
                 metadata_table.insert("genesis_hash", genesis_hash.as_bytes() as &[u8])?;
                 metadata_table.insert("best_height", 0u64.to_le_bytes().as_ref())?;
                 metadata_table.insert("best_hash", genesis_hash.as_bytes() as &[u8])?;
+                let genesis_work = (genesis_block.header.work_score.max(0.0) as u64) as u128;
+                metadata_table.insert(CUM_WORK_META_KEY, genesis_work.to_le_bytes().as_ref())?;
+                metadata_table.insert(
+                    TOTAL_MINTED_META_KEY,
+                    genesis_block.coinbase.reward.to_le_bytes().as_ref(),
+                )?;
             }
             write_txn.commit()?;
 
@@ -168,12 +182,21 @@ impl ChainState {
                 let mut table = write_txn.open_table(METADATA_TABLE)?;
                 table.insert("best_height", best_height.to_le_bytes().as_ref())?;
                 table.insert("best_hash", best_hash.as_bytes() as &[u8])?;
+                let genesis_work = (genesis_block.header.work_score.max(0.0) as u64) as u128;
+                table.insert(CUM_WORK_META_KEY, genesis_work.to_le_bytes().as_ref())?;
+                table.insert(
+                    TOTAL_MINTED_META_KEY,
+                    genesis_block.coinbase.reward.to_le_bytes().as_ref(),
+                )?;
             }
             write_txn.commit()?;
 
             eprintln!("   ✅ Database auto-fixed: Reset to genesis block (height 0)");
             eprintln!("   The node will re-sync from peers.");
         }
+
+        Self::ensure_cumulative_work_meta(&db, best_hash)?;
+        Self::ensure_total_minted_meta(&db, best_hash, genesis_block)?;
 
         let cache_cap = NonZeroUsize::new(block_cache_size.max(1)).unwrap();
         Ok(ChainState {
@@ -184,6 +207,128 @@ impl ChainState {
             genesis_hash,
             block_cache: Arc::new(Mutex::new(LruCache::new(cache_cap))),
         })
+    }
+
+    fn read_cumulative_work_meta(db: &Arc<Database>) -> Result<Option<u128>, ChainError> {
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(METADATA_TABLE)?;
+        let Some(v) = table.get(CUM_WORK_META_KEY)? else {
+            return Ok(None);
+        };
+        let bytes = v.value();
+        if bytes.len() != 16 {
+            return Ok(None);
+        }
+        let arr: [u8; 16] = bytes[..16]
+            .try_into()
+            .map_err(|_| ChainError::InvalidHeight)?;
+        Ok(Some(u128::from_le_bytes(arr)))
+    }
+
+    fn compute_cumulative_work_tip_db(
+        db: &Arc<Database>,
+        mut tip: Hash,
+    ) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let Some(block) = Self::load_block_from_db(db, &tip)? else {
+                return Err(ChainError::BlockNotFound);
+            };
+            sum = sum.saturating_add((block.header.work_score.max(0.0) as u64) as u128);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    /// Σ `coinbase.reward` from genesis through `tip` (inclusive), walking `prev_hash`.
+    fn compute_total_minted_tip_db(db: &Arc<Database>, mut tip: Hash) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let Some(block) = Self::load_block_from_db(db, &tip)? else {
+                return Err(ChainError::BlockNotFound);
+            };
+            sum = sum.saturating_add(block.coinbase.reward);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    fn read_total_minted_meta(db: &Arc<Database>) -> Result<Option<u128>, ChainError> {
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(METADATA_TABLE)?;
+        let Some(v) = table.get(TOTAL_MINTED_META_KEY)? else {
+            return Ok(None);
+        };
+        let bytes = v.value();
+        if bytes.len() != 16 {
+            return Ok(None);
+        }
+        let arr: [u8; 16] = bytes[..16]
+            .try_into()
+            .map_err(|_| ChainError::InvalidHeight)?;
+        Ok(Some(u128::from_le_bytes(arr)))
+    }
+
+    /// Backfill `total_minted_rewards` for databases created before this metadata existed.
+    fn ensure_total_minted_meta(
+        db: &Arc<Database>,
+        tip: Hash,
+        genesis_block: &Block,
+    ) -> Result<(), ChainError> {
+        if Self::read_total_minted_meta(db)?.is_some() {
+            return Ok(());
+        }
+        let m = Self::compute_total_minted_tip_db(db, tip).unwrap_or(genesis_block.coinbase.reward);
+        let write_txn = db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(METADATA_TABLE)?;
+            table.insert(TOTAL_MINTED_META_KEY, m.to_le_bytes().as_ref())?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Cumulative work (Σ truncated `work_score`) from genesis through `tip_hash` (inclusive).
+    pub fn cumulative_work_at_tip_hash(&self, tip_hash: Hash) -> Result<u128, ChainError> {
+        Self::compute_cumulative_work_tip_db(&self.db, tip_hash)
+    }
+
+    /// Sum of coinbase rewards on the canonical best chain to the current tip (metadata).
+    pub fn best_total_minted_rewards(&self) -> u128 {
+        Self::read_total_minted_meta(&self.db)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
+    fn load_block_from_db(db: &Arc<Database>, hash: &Hash) -> Result<Option<Block>, ChainError> {
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(BLOCKS_TABLE)?;
+        match table.get(hash.as_bytes())? {
+            Some(bytes_ref) => Ok(Some(bincode::deserialize(bytes_ref.value())?)),
+            None => Ok(None),
+        }
+    }
+
+    /// If `cum_work` is missing (pre-upgrade DB), compute from the stored tip and persist.
+    fn ensure_cumulative_work_meta(db: &Arc<Database>, tip: Hash) -> Result<(), ChainError> {
+        if Self::read_cumulative_work_meta(db)?.is_some() {
+            return Ok(());
+        }
+        let w = Self::compute_cumulative_work_tip_db(db, tip)?;
+        let write_txn = db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(METADATA_TABLE)?;
+            table.insert(CUM_WORK_META_KEY, w.to_le_bytes().as_ref())?;
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 
     /// Store a block in the database
@@ -239,11 +384,20 @@ impl ChainState {
             *self.best_height.write().await = block_height;
             *self.best_hash.write().await = block_hash;
 
+            let prev_cum = Self::read_cumulative_work_meta(&self.db)?.unwrap_or(0);
+            let inc = (block.header.work_score.max(0.0) as u64) as u128;
+            let new_cum = prev_cum.saturating_add(inc);
+
+            let prev_minted = Self::read_total_minted_meta(&self.db)?.unwrap_or(0);
+            let new_minted = prev_minted.saturating_add(block.coinbase.reward);
+
             let write_txn = self.db.begin_write()?;
             {
                 let mut table = write_txn.open_table(METADATA_TABLE)?;
                 table.insert("best_height", block_height.to_le_bytes().as_ref())?;
                 table.insert("best_hash", block_hash.as_bytes() as &[u8])?;
+                table.insert(CUM_WORK_META_KEY, new_cum.to_le_bytes().as_ref())?;
+                table.insert(TOTAL_MINTED_META_KEY, new_minted.to_le_bytes().as_ref())?;
             }
             write_txn.commit()?;
 
@@ -314,6 +468,14 @@ impl ChainState {
         *self.best_hash.read().await
     }
 
+    /// Cumulative work (Σ `header.work_score`) on the canonical best chain to the current tip.
+    pub async fn best_cumulative_work(&self) -> u128 {
+        Self::read_cumulative_work_meta(&self.db)
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+    }
+
     /// Get the best block
     pub async fn best_block(&self) -> Result<Option<Block>, ChainError> {
         let hash = self.best_block_hash().await;
@@ -353,12 +515,37 @@ impl ChainState {
         }
     }
 
-    /// Find common ancestor between current best chain and a target block
-    /// Returns (common_ancestor_hash, common_ancestor_height)
-    pub async fn find_common_ancestor(
+    /// Resolve a header by hash from committed chain storage, or from `alt_chain` (typically the
+    /// in-memory P2P sync buffer holding blocks not yet written to disk).
+    ///
+    /// [`Self::find_common_ancestor_with_alt_chain`] needs this so walking a peer's alternate branch
+    /// does not return `None` just because intermediate blocks only exist in the buffer.
+    fn block_by_hash_or_alt(
+        &self,
+        hash: &Hash,
+        alt_chain: &[Block],
+    ) -> Result<Option<Block>, ChainError> {
+        if let Some(b) = self.get_block_by_hash(hash)? {
+            return Ok(Some(b));
+        }
+        for b in alt_chain {
+            if b.header.hash() == *hash {
+                return Ok(Some(b.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Find common ancestor between our canonical best chain and a target header, optionally
+    /// resolving the **competing** branch from `alt_chain` (sync buffer) when hashes are not
+    /// stored yet.
+    ///
+    /// Pass `alt_chain: &[]` for behaviour identical to [`Self::find_common_ancestor`].
+    pub async fn find_common_ancestor_with_alt_chain(
         &self,
         target_hash: &Hash,
         target_height: u64,
+        alt_chain: &[Block],
     ) -> Result<Option<(Hash, u64)>, ChainError> {
         let current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
@@ -401,7 +588,7 @@ impl ChainState {
         }
 
         while their_height > our_height {
-            if let Some(block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
                 // Check if this block's prev_hash matches our chain at the previous height
                 // This allows finding common ancestors even when intermediate blocks are missing
                 if their_height > 0 {
@@ -437,7 +624,7 @@ impl ChainState {
             } else {
                 // Missing block in our chain - check if their chain has a block that matches our height
                 // This handles gaps in our chain
-                if let Ok(Some(their_block)) = self.get_block_by_hash(&their_hash) {
+                if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
                     // Check if their prev_hash matches any block we have at this height
                     if let Ok(Some(our_block_at_height)) = self.get_block_by_height(our_height) {
                         if their_block.header.prev_hash == our_block_at_height.header.hash() {
@@ -449,7 +636,7 @@ impl ChainState {
                 return Ok(None);
             }
 
-            if let Some(their_block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
                 // Check if their block's prev_hash matches our block at the previous height
                 if their_height > 0 {
                     if let Ok(Some(our_block_at_height)) =
@@ -483,6 +670,17 @@ impl ChainState {
         } else {
             Ok(None)
         }
+    }
+
+    /// Find common ancestor between current best chain and a target block
+    /// Returns (common_ancestor_hash, common_ancestor_height)
+    pub async fn find_common_ancestor(
+        &self,
+        target_hash: &Hash,
+        target_height: u64,
+    ) -> Result<Option<(Hash, u64)>, ChainError> {
+        self.find_common_ancestor_with_alt_chain(target_hash, target_height, &[])
+            .await
     }
 
     /// Get chain path from start_hash to end_hash (inclusive)
@@ -599,11 +797,16 @@ impl ChainState {
         *self.best_height.write().await = new_best_height;
         *self.best_hash.write().await = new_best_hash;
 
+        let new_cum = Self::compute_cumulative_work_tip_db(&self.db, new_best_hash)?;
+        let new_minted = Self::compute_total_minted_tip_db(&self.db, new_best_hash)?;
+
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(METADATA_TABLE)?;
             table.insert("best_height", new_best_height.to_le_bytes().as_ref())?;
             table.insert("best_hash", new_best_hash.as_bytes() as &[u8])?;
+            table.insert(CUM_WORK_META_KEY, new_cum.to_le_bytes().as_ref())?;
+            table.insert(TOTAL_MINTED_META_KEY, new_minted.to_le_bytes().as_ref())?;
         }
         write_txn.commit()?;
 
@@ -768,41 +971,6 @@ pub struct ChainStats {
     pub db_file_size_bytes: u64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::genesis::{create_genesis_block, GenesisConfig};
-
-    #[tokio::test]
-    async fn test_chain_initialization() {
-        let temp_dir = std::env::temp_dir().join("coinject-chain-test-init");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-
-        let genesis = create_genesis_block(GenesisConfig::default());
-        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
-
-        assert_eq!(chain.best_block_height().await, 0);
-        assert_eq!(chain.genesis_hash(), genesis.header.hash());
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    #[tokio::test]
-    async fn test_block_storage() {
-        let temp_dir = std::env::temp_dir().join("coinject-chain-test-storage");
-        let _ = std::fs::remove_dir_all(&temp_dir);
-
-        let genesis = create_genesis_block(GenesisConfig::default());
-        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
-
-        // Retrieve genesis
-        let retrieved = chain.get_block_by_height(0).unwrap().unwrap();
-        assert_eq!(retrieved.header.height, 0);
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-}
-
 // Implement BlockchainReader trait for RPC access
 impl coinject_rpc::BlockchainReader for ChainState {
     fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, String> {
@@ -815,6 +983,20 @@ impl coinject_rpc::BlockchainReader for ChainState {
 
     fn get_header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, String> {
         self.get_header_by_height(height).map_err(|e| e.to_string())
+    }
+
+    fn best_cumulative_work_decimal(&self) -> Option<String> {
+        Some(
+            Self::read_cumulative_work_meta(&self.db)
+                .ok()
+                .flatten()
+                .unwrap_or(0)
+                .to_string(),
+        )
+    }
+
+    fn total_minted_rewards_decimal(&self) -> Option<String> {
+        Some(self.best_total_minted_rewards().to_string())
     }
 }
 
@@ -868,5 +1050,40 @@ impl BlockProvider for ChainBlockProvider {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async { *self.best_height.read().await })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::genesis::{create_genesis_block, GenesisConfig};
+
+    #[tokio::test]
+    async fn test_chain_initialization() {
+        let temp_dir = std::env::temp_dir().join("coinject-chain-test-init");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let genesis = create_genesis_block(GenesisConfig::default());
+        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
+
+        assert_eq!(chain.best_block_height().await, 0);
+        assert_eq!(chain.genesis_hash(), genesis.header.hash());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_block_storage() {
+        let temp_dir = std::env::temp_dir().join("coinject-chain-test-storage");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let genesis = create_genesis_block(GenesisConfig::default());
+        let chain = ChainState::new(&temp_dir, &genesis, 512).unwrap();
+
+        // Retrieve genesis
+        let retrieved = chain.get_block_by_height(0).unwrap().unwrap();
+        assert_eq!(retrieved.header.height, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

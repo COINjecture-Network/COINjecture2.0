@@ -59,8 +59,7 @@ impl NoiseKeypair {
         } else {
             let keypair = Self::generate();
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| NoiseError::KeyLoad(e.to_string()))?;
+                std::fs::create_dir_all(parent).map_err(|e| NoiseError::KeyLoad(e.to_string()))?;
             }
             let mut bytes = Vec::with_capacity(64);
             bytes.extend_from_slice(&keypair.private_key);
@@ -99,12 +98,14 @@ impl NoiseConnection {
         mut stream: TcpStream,
         local_keypair: &NoiseKeypair,
     ) -> Result<Self, NoiseError> {
-        let params: snow::params::NoiseParams = NOISE_PARAMS
-            .parse()
-            .map_err(|e: snow::error::Error| NoiseError::Handshake(format!("Invalid params: {e}")))?;
+        let params: snow::params::NoiseParams =
+            NOISE_PARAMS.parse().map_err(|e: snow::error::Error| {
+                NoiseError::Handshake(format!("Invalid params: {e}"))
+            })?;
 
         let mut hs = Builder::new(params)
             .local_private_key(&local_keypair.private_key)
+            .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?
             .build_initiator()
             .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?;
 
@@ -156,12 +157,14 @@ impl NoiseConnection {
         mut stream: TcpStream,
         local_keypair: &NoiseKeypair,
     ) -> Result<Self, NoiseError> {
-        let params: snow::params::NoiseParams = NOISE_PARAMS
-            .parse()
-            .map_err(|e: snow::error::Error| NoiseError::Handshake(format!("Invalid params: {e}")))?;
+        let params: snow::params::NoiseParams =
+            NOISE_PARAMS.parse().map_err(|e: snow::error::Error| {
+                NoiseError::Handshake(format!("Invalid params: {e}"))
+            })?;
 
         let mut hs = Builder::new(params)
             .local_private_key(&local_keypair.private_key)
+            .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?
             .build_responder()
             .map_err(|e| NoiseError::Handshake(format!("Builder: {e}")))?;
 
@@ -348,6 +351,7 @@ mod tests {
         let kp_i = builder_i.generate_keypair().unwrap();
         let mut initiator = builder_i
             .local_private_key(&kp_i.private)
+            .unwrap()
             .build_initiator()
             .unwrap();
 
@@ -355,6 +359,7 @@ mod tests {
         let kp_r = builder_r.generate_keypair().unwrap();
         let mut responder = builder_r
             .local_private_key(&kp_r.private)
+            .unwrap()
             .build_responder()
             .unwrap();
 

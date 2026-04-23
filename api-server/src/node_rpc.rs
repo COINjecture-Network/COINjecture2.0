@@ -10,10 +10,40 @@ use std::fmt;
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// `POST /node-rpc` returns the first upstream HTTP response. If that body is JSON-RPC `error`
+/// for `chain_getMiningWork` on a follower (mining disabled), try the next `NODE_RPC_URL` so
+/// browsers see the same failover as [`NodeRpcClient::call`].
+///
+/// Also retries on JSON-RPC **Invalid params** (-32602) for that method only: some public RPC
+/// stacks surface version skew or strict param parsing that way; the mining-enabled bootnode may
+/// still accept the same body.
+fn try_next_upstream_after_jsonrpc_error(request_method: Option<&str>, response: &Value) -> bool {
+    if request_method != Some("chain_getMiningWork") {
+        return false;
+    }
+    let Some(err) = response.get("error") else {
+        return false;
+    };
+    let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+    let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
+    if msg.contains("mining disabled") || msg.contains("Mining work not available") {
+        return true;
+    }
+    code == -32602
+}
+
+fn jsonrpc_method_from_request_body(body: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(body).ok()?;
+    v.get("method")?.as_str().map(str::to_string)
+}
+
 pub struct NodeRpcClient {
     urls: Vec<String>,
-    http: Client,
-    /// Longer timeout for browser-originated JSON-RPC forwarded through `POST /node-rpc`.
+    /// Small JSON-RPC (`chain_getInfo`, `network_getInfo`) — must not sit near the heavy read timeout.
+    http_light: Client,
+    /// Large JSON-RPC (`chain_getBlock`, `chain_getLatestBlock`).
+    http_heavy: Client,
+    /// Browser-originated `POST /node-rpc` (may include huge `chain_submitBlock`).
     http_proxy: Client,
 }
 
@@ -35,8 +65,12 @@ impl fmt::Display for NodeRpcError {
 }
 
 impl NodeRpcClient {
-    const TRANSPORT_RETRIES: usize = 10;
-    const RETRY_DELAY_MS: u64 = 250;
+    /// Retries after transport errors. Keep small: each attempt can cost the **full** HTTP read
+    /// timeout (below), so 20×90s was pathological when an upstream was wedged.
+    const TRANSPORT_RETRIES: usize = 4;
+    const RETRY_DELAY_MS: u64 = 400;
+    const LIGHT_RPC_TIMEOUT_SECS: u64 = 22;
+    const HEAVY_RPC_TIMEOUT_SECS: u64 = 90;
 
     pub fn new(url: &str) -> Self {
         let urls = url
@@ -47,22 +81,38 @@ impl NodeRpcClient {
             .collect::<Vec<_>>();
         Self {
             urls,
-            http: Client::builder()
-                .timeout(Duration::from_secs(5))
-                .pool_max_idle_per_host(0)
+            http_light: Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(Self::LIGHT_RPC_TIMEOUT_SECS))
+                .pool_max_idle_per_host(8)
+                .build()
+                .unwrap_or_default(),
+            http_heavy: Client::builder()
+                .connect_timeout(Duration::from_secs(8))
+                .timeout(Duration::from_secs(Self::HEAVY_RPC_TIMEOUT_SECS))
+                .pool_max_idle_per_host(8)
                 .build()
                 .unwrap_or_default(),
             // Block submission (`chain_submitBlock`) can be large + slow; browser → /node-rpc → node.
             http_proxy: Client::builder()
+                .connect_timeout(Duration::from_secs(8))
                 .timeout(Duration::from_secs(300))
-                .pool_max_idle_per_host(0)
+                .pool_max_idle_per_host(8)
                 .build()
                 .unwrap_or_default(),
         }
     }
 
     /// Forward a raw JSON-RPC POST body to the node; returns upstream status + body bytes.
-    pub async fn forward_jsonrpc_body(&self, body: Bytes) -> Result<(u16, Bytes), NodeRpcError> {
+    ///
+    /// `x_forwarded_for` should be the browser (or edge) client IP when the API proxies browser
+    /// traffic — the node's JSON-RPC rate limiter keys on `X-Forwarded-For` / `X-Real-IP`.
+    /// Without this, every proxied request appears as the same peer and shares one ~100 RPM bucket.
+    pub async fn forward_jsonrpc_body(
+        &self,
+        body: Bytes,
+        x_forwarded_for: Option<&str>,
+    ) -> Result<(u16, Bytes), NodeRpcError> {
         if self.urls.is_empty() {
             return Err(NodeRpcError::Unavailable(
                 "no upstream RPC URLs configured".to_string(),
@@ -70,9 +120,13 @@ impl NodeRpcClient {
         }
 
         let mut errors = Vec::new();
+        let request_method = jsonrpc_method_from_request_body(&body);
 
         for url in &self.urls {
-            let resp = match self.send_proxy_with_retry(url, body.clone()).await {
+            let resp = match self
+                .send_proxy_with_retry(url, body.clone(), x_forwarded_for)
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => {
                     errors.push(format!("{url}: {e}"));
@@ -85,6 +139,22 @@ impl NodeRpcClient {
                 .bytes()
                 .await
                 .map_err(|e| NodeRpcError::RequestFailed(format!("{url}: {e}")))?;
+
+            if status == 200 && self.urls.len() > 1 {
+                if let Ok(val) = serde_json::from_slice::<Value>(&bytes) {
+                    if val.get("error").is_some()
+                        && try_next_upstream_after_jsonrpc_error(request_method.as_deref(), &val)
+                    {
+                        let hint = val
+                            .pointer("/error/message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("jsonrpc error");
+                        errors.push(format!("{url}: {hint}"));
+                        continue;
+                    }
+                }
+            }
+
             return Ok((status, bytes));
         }
 
@@ -95,7 +165,12 @@ impl NodeRpcClient {
     }
 
     /// Send a JSON-RPC 2.0 request and return the result field.
-    async fn call(&self, method: &str, params: Value) -> Result<Value, NodeRpcError> {
+    async fn call_on(
+        &self,
+        client: &Client,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, NodeRpcError> {
         if self.urls.is_empty() {
             return Err(NodeRpcError::Unavailable(
                 "no upstream RPC URLs configured".to_string(),
@@ -105,7 +180,10 @@ impl NodeRpcClient {
         let mut errors = Vec::new();
 
         for url in &self.urls {
-            let resp = match self.send_json_with_retry(url, method, params.clone()).await {
+            let resp = match self
+                .send_json_with_retry(client, url, method, params.clone())
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => {
                     errors.push(format!("{url}: {e}"));
@@ -139,40 +217,46 @@ impl NodeRpcClient {
 
     /// Get network info from the node.
     pub async fn get_network_info(&self) -> Result<Value, NodeRpcError> {
-        self.call("network_getInfo", json!([])).await
+        self.call_on(&self.http_light, "network_getInfo", json!([]))
+            .await
     }
 
     /// Get chain info from the node.
     pub async fn get_chain_info(&self) -> Result<Value, NodeRpcError> {
-        self.call("chain_getInfo", json!([])).await
+        self.call_on(&self.http_light, "chain_getInfo", json!([]))
+            .await
     }
 
     /// Get the latest block from the node.
     pub async fn get_latest_block(&self) -> Result<Value, NodeRpcError> {
-        self.call("chain_getLatestBlock", json!([])).await
+        self.call_on(&self.http_heavy, "chain_getLatestBlock", json!([]))
+            .await
     }
 
     /// Get a block by height.
     pub async fn get_block_by_height(&self, height: u64) -> Result<Value, NodeRpcError> {
-        self.call("chain_getBlock", json!([height])).await
+        self.call_on(&self.http_heavy, "chain_getBlock", json!([height]))
+            .await
     }
 
     async fn send_proxy_with_retry(
         &self,
         url: &str,
         body: Bytes,
+        x_forwarded_for: Option<&str>,
     ) -> Result<reqwest::Response, NodeRpcError> {
         let mut last_error = None;
 
         for attempt in 0..Self::TRANSPORT_RETRIES {
-            match self
+            let mut req = self
                 .http_proxy
                 .post(url)
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body.clone())
-                .send()
-                .await
-            {
+                .body(body.clone());
+            if let Some(ip) = x_forwarded_for.filter(|s| !s.trim().is_empty()) {
+                req = req.header("X-Forwarded-For", ip.trim());
+            }
+            match req.send().await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
                     last_error = Some(e.to_string());
@@ -190,6 +274,7 @@ impl NodeRpcClient {
 
     async fn send_json_with_retry(
         &self,
+        client: &Client,
         url: &str,
         method: &str,
         params: Value,
@@ -204,7 +289,7 @@ impl NodeRpcClient {
                 "params": params.clone(),
             });
 
-            match self.http.post(url).json(&body).send().await {
+            match client.post(url).json(&body).send().await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
                     last_error = Some(e.to_string());

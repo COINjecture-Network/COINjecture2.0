@@ -7,4 +7,7 @@ pub mod tls;
 pub mod websocket;
 
 pub use server::*;
-pub use websocket::*;
+pub use websocket::{
+    ClientId, LightClient, RpcCommand, RpcError, RpcEvent, RpcMessage, RpcMetrics, WebSocketRpc,
+    WorkQueue,
+};

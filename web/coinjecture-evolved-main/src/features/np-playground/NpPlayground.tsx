@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -51,12 +51,14 @@ import { TSPVisualizer } from "./visualizers/TSPVisualizer";
 import { SATVisualizer } from "./visualizers/SATVisualizer";
 import { useWallet } from "@/contexts/WalletContext";
 import { rpcClient, type ProblemInfo, type ProblemType } from "@/lib/rpc-client";
+import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import {
   createBlockFromSolvedProblem,
   extractHashHex,
   getClientHeaderHashDebug,
   type Solution as MiningSolution,
 } from "@/lib/mining";
+import { parseU128DecimalString } from "@/lib/chain-metrics";
 
 /** Alias for `<Editor />` — must stay after all imports (ES modules forbid statements between imports). */
 const Editor = SolverCodeEditor;
@@ -100,6 +102,9 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [submittingChain, setSubmittingChain] = useState(false);
+  /** Latest PoW nonce count during header mining (chain submit only). */
+  const [powTries, setPowTries] = useState<number | null>(null);
+  const powUiThrottle = useRef(0);
   const [pullingChainInstance, setPullingChainInstance] = useState(false);
   const [isLg, setIsLg] = useState(true);
   const [mobilePanel, setMobilePanel] = useState<"code" | "visual" | "result" | "console">("code");
@@ -122,17 +127,18 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   }, [files]);
 
   const { data: chainInfo } = useQuery({
-    queryKey: ["solverLab", "chainInfo"],
+    queryKey: ["chain-info"],
     queryFn: () => rpcClient.getChainInfo(),
     refetchInterval: 15_000,
     staleTime: 5_000,
   });
 
   const { data: miningWork } = useQuery({
-    queryKey: ["solverLab", "miningWork"],
+    queryKey: ["solverLab", "miningWork", chainInfo?.best_height],
     queryFn: () => rpcClient.getMiningWork(),
-    refetchInterval: 15_000,
-    staleTime: 5_000,
+    enabled: !!chainInfo,
+    staleTime: Infinity,
+    refetchInterval: false,
   });
 
   const { data: selectedBounty, isLoading: selectedBountyLoading } = useQuery({
@@ -234,13 +240,14 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     try {
       const out = await runUserSolver(files, parsed.value, 45000);
       if (!out.ok) {
+        const solverErr = out.error;
         setRunResult({
           ok: false,
           timeMs: out.timeMs ?? 0,
           solution: null,
-          log: [out.error],
+          log: [solverErr],
         });
-        setConsoleLines((prev) => [...prev, `[error] ${out.error}`, ""]);
+        setConsoleLines((prev) => [...prev, `[error] ${solverErr}`, ""]);
         return;
       }
       const normalized = normalizeSolution(parsed.value, out.solution);
@@ -412,7 +419,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       return;
     }
 
-    if (selectedBounty.status.toUpperCase() !== "OPEN") {
+    if (!isMarketplaceListingOpen(selectedBounty.status)) {
       toast.error("Bounty is no longer open");
       return;
     }
@@ -425,7 +432,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
 
     const parsed = parseNetworkProblem(instanceText);
     if (!parsed.ok) {
-      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parsed.error}`]);
+      const parseErr = parsed.error;
+      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parseErr}`]);
       return;
     }
 
@@ -480,6 +488,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       setConsoleLines((prev) => [...prev, `[error] ${msg}`, ""]);
       toast.error("Bounty submission failed", { description: msg });
     } finally {
+      setPowTries(null);
       setSubmittingChain(false);
     }
   };
@@ -497,13 +506,30 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
 
     const parsed = parseNetworkProblem(instanceText);
     if (!parsed.ok) {
-      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parsed.error}`]);
+      const parseErr = parsed.error;
+      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parseErr}`]);
       return;
     }
 
     setSubmittingChain(true);
+    setPowTries(null);
+    powUiThrottle.current = 0;
     try {
+      setConsoleLines((prev) => [...prev, "[chain] Mine block: fetching template (chain_getMiningWork) + tip…", ""]);
       const work = await rpcClient.getMiningWork();
+      const chainTip = await rpcClient.getChainInfo();
+      const parentW = parseU128DecimalString(chainTip.best_cumulative_work);
+      if (work.next_height > 0 && parentW === null) {
+        setConsoleLines((prev) => [
+          ...prev,
+          "[error] Chain info missing best_cumulative_work — update the node/API to compute emission W.",
+          "",
+        ]);
+        toast.error("Cannot build coinbase", {
+          description: "The chain tip did not report cumulative work (W).",
+        });
+        return;
+      }
       if (!problemTypesEqual(parsed.value, work.problem)) {
         const msg =
           "instance.json must match chain_getMiningWork (next block template). Click “Sync from chain”, then solve and submit.";
@@ -515,41 +541,79 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       const prevHashHex = extractHashHex(work.prev_hash);
       const nextHeight = work.next_height;
 
-      const out = await runUserSolver(files, parsed.value, 45000);
-      if (!out.ok) {
-        setConsoleLines((prev) => [...prev, `[error] Solver: ${out.error}`, ""]);
-        return;
-      }
-      const normalized = normalizeSolution(parsed.value, out.solution);
-      if (!normalized) {
-        setConsoleLines((prev) => [...prev, "[error] Solution shape invalid — cannot commit to chain.", ""]);
-        return;
-      }
+      let solveTimeMs: number;
+      let miningSolution: MiningSolution;
 
-      const miningSolution: MiningSolution = {
-        SubsetSum: normalized.SubsetSum,
-        SAT: normalized.SAT,
-        TSP: normalized.TSP,
-        Custom: normalized.Custom,
-      };
+      const reuseRun =
+        runResult?.ok === true &&
+        runResult.solution != null &&
+        normalizeSolution(parsed.value, runResult.solution);
+
+      if (reuseRun) {
+        solveTimeMs = runResult.timeMs;
+        miningSolution = {
+          SubsetSum: reuseRun.SubsetSum,
+          SAT: reuseRun.SAT,
+          TSP: reuseRun.TSP,
+          Custom: reuseRun.Custom,
+        };
+        setConsoleLines((prev) => [
+          ...prev,
+          "[chain] Using your last Run result for this instance (skipping a second solver pass).",
+          "",
+        ]);
+      } else {
+        setConsoleLines((prev) => [
+          ...prev,
+          "[chain] Running your solver in a worker (up to 45s). Tip: Run first to preview, then Mine block reuses that result.",
+          "",
+        ]);
+        const out = await runUserSolver(files, parsed.value, 45000);
+        if (!out.ok) {
+          setConsoleLines((prev) => [...prev, `[error] Solver: ${out.error}`, ""]);
+          return;
+        }
+        const normalized = normalizeSolution(parsed.value, out.solution);
+        if (!normalized) {
+          setConsoleLines((prev) => [...prev, "[error] Solution shape invalid — cannot commit to chain.", ""]);
+          return;
+        }
+        solveTimeMs = out.timeMs;
+        miningSolution = {
+          SubsetSum: normalized.SubsetSum,
+          SAT: normalized.SAT,
+          TSP: normalized.TSP,
+          Custom: normalized.Custom,
+        };
+      }
 
       setConsoleLines((prev) => [
         ...prev,
         `[chain] Mining template block #${nextHeight} prev_hash: ${prevHashHex.slice(0, 16)}…`,
         `[chain] Network difficulty: ${work.difficulty}`,
         `[chain] Building block + PoW; coinbase → your wallet address…`,
+        "[chain] Header PoW runs in a background worker so the tab stays responsive.",
         "",
       ]);
 
+      setPowTries(0);
       const block = await createBlockFromSolvedProblem(
         prevHashHex,
         nextHeight,
         selectedKeyPair.address,
         parsed.value,
         miningSolution,
-        out.timeMs,
+        solveTimeMs,
+        parentW ?? 0n,
         [],
-        work.difficulty
+        work.difficulty,
+        (nonce) => {
+          const now = performance.now();
+          if (now - powUiThrottle.current >= 350) {
+            powUiThrottle.current = now;
+            setPowTries(nonce);
+          }
+        }
       );
       if (!block) {
         setConsoleLines((prev) => [...prev, "[error] Solution failed verification or PoW header mining failed.", ""]);
@@ -574,6 +638,11 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         return;
       }
 
+      setConsoleLines((prev) => [
+        ...prev,
+        "[chain] Submitting block via chain_submitBlock (large payload — can take up to a few minutes)…",
+        "",
+      ]);
       const blockHash = await rpcClient.submitBlock(block);
       setConsoleLines((prev) => [
         ...prev,
@@ -592,13 +661,15 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       setConsoleLines((prev) => [...prev, `[error] ${msg}`, ""]);
       toast.error("Chain submit failed", { description: msg });
     } finally {
+      setPowTries(null);
       setSubmittingChain(false);
     }
   };
 
   const renderViz = () => {
     if (!parsedPreview.ok) {
-      return <p className="text-sm text-destructive">{parsedPreview.error}</p>;
+      const previewErr = parsedPreview.error;
+      return <p className="text-sm text-destructive">{previewErr}</p>;
     }
     const p = parsedPreview.value;
     const sol = runResult?.ok ? runResult.solution : null;
@@ -851,7 +922,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                   className="flex h-full min-h-[220px] w-full min-w-0"
                 >
                   <ResizablePanel defaultSize={52} minSize={30} className="min-w-0 flex flex-col min-h-0">
-                    <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/50 bg-muted/20 text-xs shrink-0">
+                    <div className="flex flex-col border-b border-border/50 bg-muted/20 text-xs shrink-0">
+                    <div className="flex items-center justify-between gap-2 px-3 py-2">
                       <span className="font-mono text-muted-foreground truncate">{activeFile}</span>
                       <div className="flex items-center gap-1 shrink-0">
                         <Button type="button" variant="ghost" size="sm" className="h-8 gap-1" onClick={resetAll} title="Reset">
@@ -893,6 +965,12 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                           Draft bounty
                         </Button>
                       </div>
+                    </div>
+                    {powTries != null ? (
+                      <div className="px-3 pb-2 text-[10px] font-mono text-muted-foreground tabular-nums">
+                        Header PoW: {powTries.toLocaleString()} nonces…
+                      </div>
+                    ) : null}
                     </div>
                     <div className="flex-1 min-h-0 min-w-0 p-2 flex flex-col">
                       <Editor
@@ -1068,6 +1146,11 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     <RotateCcw className="h-5 w-5" />
                   </Button>
                 </div>
+                {powTries != null ? (
+                  <p className="text-[10px] font-mono text-muted-foreground tabular-nums">
+                    Header PoW: {powTries.toLocaleString()} nonces…
+                  </p>
+                ) : null}
               </div>
 
               <Tabs

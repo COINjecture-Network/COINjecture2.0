@@ -11,11 +11,19 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { ProblemType } from "@/lib/rpc-client";
 import { rpcClient } from "@/lib/rpc-client";
+import {
+  displayBeansToAtoms,
+  formatBeans,
+  MIN_BOUNTY_SUBMISSION_FEE_ATOMS,
+  parseBalance,
+} from "@/lib/chain-metrics";
+import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { useWallet } from "@/contexts/WalletContext";
 
 /** Must match `STORAGE_KEY` in `NpPlayground.tsx` (Solver Lab → Bounty draft). */
 const SOLVER_LAB_BOUNTY_KEY = "solverLabBountyPayload";
-const TRANSACTION_FEE = 1000;
+/** On-chain `MIN_FEE_BOUNTY_SUBMISSION` when posting via `transaction_submit` — re-exported from chain-metrics. */
+const MARKETPLACE_SUBMIT_FEE_ATOMS = MIN_BOUNTY_SUBMISSION_FEE_ATOMS;
 
 type ConfirmedSubmission = {
   problemId: string;
@@ -61,18 +69,26 @@ const defaultFormData = {
 
 const PRIVATE_REVEAL_KITS_KEY = "coinjecturePrivateRevealKits";
 
-function extractCandidateJson(description: string): string | null {
-  const fencedMatch = description.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fencedMatch?.[1]) {
-    return fencedMatch[1].trim();
+/** Every ``` / ```json fenced block (in order). Strict JSON only inside fences. */
+function extractAllFencedJsonBlocks(description: string): string[] {
+  const out: string[] = [];
+  const re = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(description)) !== null) {
+    const t = m[1].trim();
+    if (t) {
+      out.push(t);
+    }
   }
+  return out;
+}
 
+function extractBraceJson(description: string): string | null {
   const firstBrace = description.indexOf("{");
   const lastBrace = description.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) {
     return description.slice(firstBrace, lastBrace + 1).trim();
   }
-
   return null;
 }
 
@@ -80,19 +96,43 @@ function parseProblemFromDescription(
   description: string,
   problemType: string,
 ): ProblemType {
-  const candidateJson = extractCandidateJson(description);
-  if (!candidateJson) {
+  const fencedBlocks = extractAllFencedJsonBlocks(description);
+  const braceJson = extractBraceJson(description);
+  const candidates = [...fencedBlocks, ...(braceJson ? [braceJson] : [])];
+
+  if (candidates.length === 0) {
     throw new Error(`Paste a ${problemType} instance JSON block into the description before submitting.`);
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(candidateJson);
-  } catch {
-    throw new Error(`The problem description must include valid JSON for the live ${problemType} instance.`);
+  let lastParseError: string | null = null;
+  for (const candidateJson of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidateJson);
+    } catch {
+      lastParseError = "JSON.parse failed (strict JSON only — no // comments or trailing commas in fenced blocks).";
+      continue;
+    }
+
+    try {
+      return problemRecordToProblemType(parsed as Record<string, unknown>, problemType);
+    } catch (e) {
+      lastParseError = e instanceof Error ? e.message : String(e);
+      continue;
+    }
   }
 
-  const record = parsed as Record<string, unknown>;
+  if (lastParseError) {
+    throw new Error(
+      lastParseError.startsWith("JSON.parse")
+        ? `The problem description must include valid JSON for the live ${problemType} instance. ${lastParseError}`
+        : lastParseError,
+    );
+  }
+  throw new Error(`The problem description must include valid JSON for the live ${problemType} instance.`);
+}
+
+function problemRecordToProblemType(record: Record<string, unknown>, problemType: string): ProblemType {
   if (problemType === "SubsetSum") {
     if (!Array.isArray(record.numbers) || typeof record.target !== "number") {
       throw new Error("Subset Sum submissions require JSON with `numbers` and `target` fields.");
@@ -239,7 +279,9 @@ const BountySubmit = () => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [storedRevealKits, setStoredRevealKits] = useState<Record<string, StoredRevealKit>>({});
 
-  const totalRequired = formData.bounty ? parseInt(formData.bounty) + TRANSACTION_FEE : TRANSACTION_FEE;
+  const totalEscrowAtoms = formData.bounty.trim()
+    ? displayBeansToAtoms(BigInt(formData.bounty.trim())) + MARKETPLACE_SUBMIT_FEE_ATOMS
+    : MARKETPLACE_SUBMIT_FEE_ATOMS;
   const { data: marketplaceStats, refetch: refetchMarketplaceStats } = useQuery({
     queryKey: ["marketplace-stats"],
     queryFn: () => rpcClient.getMarketplaceStats(),
@@ -261,7 +303,7 @@ const BountySubmit = () => {
     { value: "TSP", label: "TSP", note: "Best for routing and optimization style work." },
     { value: "SAT", label: "SAT", note: "Best for satisfiability and constraint-heavy work." },
   ];
-  const rewardPresets = ["25000", "50000", "100000", "250000"];
+  const rewardPresets = ["1", "2", "5", "10", "25"];
   const durationPresets = ["7", "14", "30", "90"];
   const complexityOptions = [
     { value: "easy", label: "Easy" },
@@ -285,7 +327,7 @@ const BountySubmit = () => {
       problem.submitter.toLowerCase() === selectedKeyPair.address.toLowerCase() &&
       problem.is_private &&
       !problem.is_revealed &&
-      problem.status === "Open"
+      isMarketplaceListingOpen(problem.status)
     );
   });
 
@@ -403,7 +445,7 @@ const BountySubmit = () => {
 \`\`\`
 
 **Expected Output:**
-Return a subset of numbers that sum exactly to the target.
+Return **0-based indices** into the \`numbers\` array (on-chain \`Solution::SubsetSum\`); e.g. indices \`[1,2,3]\` mean \`numbers[1]+numbers[2]+numbers[3]\`, not the literal values 1+2+3.
 
 **Example Output:**
 \`\`\`json
@@ -420,7 +462,7 @@ Return a subset of numbers that sum exactly to the target.
 - Solution must be exact (not approximate)
 
 **Verification:** Automated - sum of returned subset must equal target`,
-      bounty: "50000",
+      bounty: "10",
       minWorkScore: "150",
       complexity: "medium"
     },
@@ -467,7 +509,7 @@ Return the shortest tour visiting all cities exactly once and returning to start
 - Must return to starting city
 
 **Verification:** Automated - validate tour completeness and distance calculation`,
-      bounty: "100000",
+      bounty: "15",
       minWorkScore: "200",
       complexity: "hard"
     },
@@ -480,19 +522,19 @@ Return the shortest tour visiting all cities exactly once and returning to start
 - Clauses: CNF formula with clauses of up to 3 literals each
 - Number of clauses: m
 
-**Example Input:**
+**Example Input (strict JSON — no \`//\` comments inside the block):**
 \`\`\`json
 {
   "variables": 4,
   "clauses": [
-    [1, -2, 3],    // (x₁ ∨ ¬x₂ ∨ x₃)
-    [-1, 2, -3],   // (¬x₁ ∨ x₂ ∨ ¬x₃)
-    [2, 3, 4],     // (x₂ ∨ x₃ ∨ x₄)
-    [-2, -3, 4]    // (¬x₂ ∨ ¬x₃ ∨ x₄)
+    [1, -2, 3],
+    [-1, 2, -3],
+    [2, 3, 4],
+    [-2, -3, 4]
   ]
 }
 \`\`\`
-Note: Positive numbers = variable, negative = negation
+Literal sign: positive integer = variable xₖ, negative = ¬xₖ (e.g. \`-2\` is ¬x₂).
 
 **Expected Output:**
 Return a satisfying assignment or proof of unsatisfiability.
@@ -518,7 +560,7 @@ Return a satisfying assignment or proof of unsatisfiability.
 - Must satisfy ALL clauses
 
 **Verification:** Automated - evaluate assignment against all clauses`,
-      bounty: "75000",
+      bounty: "20",
       minWorkScore: "180",
       complexity: "expert"
     }
@@ -579,8 +621,8 @@ Return a satisfying assignment or proof of unsatisfiability.
     const minWorkScore = Number.parseFloat(formData.minWorkScore);
     const expirationDays = Number.parseInt(formData.expirationDays, 10);
 
-    if (!Number.isFinite(bounty) || bounty < 1000) {
-      setSubmitError("Bounty must be at least 1,000 BEANS.");
+    if (!Number.isFinite(bounty) || bounty < 1) {
+      setSubmitError("Bounty must be at least 1 BEANS.");
       return;
     }
 
@@ -594,8 +636,10 @@ Return a satisfying assignment or proof of unsatisfiability.
       return;
     }
 
-    if (typeof walletBalance === "number" && walletBalance < bounty) {
-      const message = `Insufficient wallet balance. Available: ${walletBalance.toLocaleString()} BEANS, required escrow: ${bounty.toLocaleString()} BEANS.`;
+    const bountyAtoms = displayBeansToAtoms(BigInt(bounty));
+    const requiredAtoms = bountyAtoms + MARKETPLACE_SUBMIT_FEE_ATOMS;
+    if (walletBalance !== undefined && walletBalance < requiredAtoms) {
+      const message = `Insufficient wallet balance. Available: ${formatBeans(walletBalance)} BEANS, required: ${formatBeans(requiredAtoms)} BEANS (bounty + network fee).`;
       setSubmitError(message);
       toast({ title: "Insufficient balance", description: message, variant: "destructive" });
       return;
@@ -618,12 +662,13 @@ Return a satisfying assignment or proof of unsatisfiability.
       let commitment: string | undefined;
       let salt: string | undefined;
 
+      const bountyParam = displayBeansToAtoms(BigInt(bounty)).toString();
       if (formData.submissionMode === "private") {
         salt = generateSaltHex();
         const privateResult = await rpcClient.submitPrivateProblemWithWallet({
           problem: parsedProblem,
           salt,
-          bounty,
+          bounty: bountyParam,
           min_work_score: minWorkScore,
           expiration_days: expirationDays,
           submitter: selectedKeyPair.address,
@@ -633,7 +678,7 @@ Return a satisfying assignment or proof of unsatisfiability.
       } else {
         problemId = await rpcClient.submitPublicProblem({
           problem: parsedProblem,
-          bounty,
+          bounty: bountyParam,
           min_work_score: minWorkScore,
           expiration_days: expirationDays,
           submitter: selectedKeyPair.address,
@@ -915,7 +960,7 @@ Return a satisfying assignment or proof of unsatisfiability.
                           value={formData.bounty}
                           onChange={(e) => setFormData({ ...formData, bounty: e.target.value })}
                           placeholder="50000"
-                          min="1000"
+                          min="1"
                           required
                         />
                         <div className="flex flex-wrap gap-2">
@@ -931,7 +976,9 @@ Return a satisfying assignment or proof of unsatisfiability.
                             </Button>
                           ))}
                         </div>
-                        <p className="text-xs text-muted-foreground">Minimum funding is 1,000 BEANS plus the network fee.</p>
+                        <p className="text-xs text-muted-foreground">
+                          Minimum funding is 1 BEANS plus a small network fee ({formatBeans(MARKETPLACE_SUBMIT_FEE_ATOMS)} BEANS) when posting on-chain via paid paths.
+                        </p>
                       </div>
 
                       <div className="space-y-3">
@@ -1179,8 +1226,8 @@ Return a satisfying assignment or proof of unsatisfiability.
                     <div className="flex items-center justify-between gap-4 text-sm">
                       <span className="text-muted-foreground">Available balance</span>
                       <span className="font-semibold">
-                        {typeof walletBalance === "number"
-                          ? `${walletBalance.toLocaleString()} BEANS`
+                        {walletBalance !== undefined
+                          ? `${formatBeans(walletBalance)} BEANS`
                           : "Connect wallet"}
                       </span>
                     </div>
@@ -1198,7 +1245,7 @@ Return a satisfying assignment or proof of unsatisfiability.
                     </div>
                     <div className="flex items-center justify-between gap-4 text-sm">
                       <span className="text-muted-foreground">Network fee</span>
-                      <span className="font-semibold">{TRANSACTION_FEE.toLocaleString()} BEANS</span>
+                      <span className="font-semibold">{formatBeans(MARKETPLACE_SUBMIT_FEE_ATOMS)} BEANS</span>
                     </div>
                     <div className="flex items-center justify-between gap-4 text-sm">
                       <span className="text-muted-foreground">Expires in</span>
@@ -1207,7 +1254,7 @@ Return a satisfying assignment or proof of unsatisfiability.
                     <div className="h-px bg-border" />
                     <div className="flex items-center justify-between gap-4">
                       <span className="font-semibold text-primary">Total required</span>
-                      <span className="text-xl font-bold text-primary">{totalRequired.toLocaleString()} BEANS</span>
+                      <span className="text-xl font-bold text-primary">{formatBeans(totalEscrowAtoms)} BEANS</span>
                     </div>
                   </div>
                 </Card>
@@ -1265,7 +1312,9 @@ Return a satisfying assignment or proof of unsatisfiability.
                                     </span>
                                   </div>
                                   <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                                    <span>{problem.bounty.toLocaleString()} BEANS</span>
+                                    <span>
+                                      {formatBeans(parseBalance(problem.bounty) ?? 0n)} BEANS
+                                    </span>
                                     <span>
                                       {savedKit
                                         ? "kit saved"
@@ -1375,8 +1424,8 @@ Return a satisfying assignment or proof of unsatisfiability.
               </Card>
               <Card className="p-4 text-center">
                 <div className="text-3xl font-bold text-primary mb-1">
-                  {typeof marketplaceStats?.total_bounty_pool === "number"
-                    ? `${(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B`
+                  {marketplaceStats?.total_bounty_pool != null
+                    ? `${formatBeans(parseBalance(marketplaceStats.total_bounty_pool) ?? 0n)}`
                     : "Live"}
                 </div>
                 <div className="text-sm text-muted-foreground">Total BEANS Escrowed</div>

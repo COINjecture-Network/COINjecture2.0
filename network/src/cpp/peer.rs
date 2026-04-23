@@ -59,6 +59,9 @@ pub struct Peer {
     /// Best block hash
     pub best_hash: Hash,
 
+    /// Cumulative work on peer's advertised best chain (from Status); `0` until first status.
+    pub cumulative_work: u128,
+
     /// Genesis hash (for chain validation)
     pub genesis_hash: Hash,
 
@@ -121,6 +124,7 @@ impl Peer {
     /// # Parameters
     /// - `connection_nonce`: Nonce for deterministic tie-breaking of simultaneous connections
     /// - `is_outbound`: Whether we initiated this connection (true) or received it (false)
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: PeerId,
         addr: SocketAddr,
@@ -217,6 +221,7 @@ impl Peer {
             node_type,
             best_height,
             best_hash,
+            cumulative_work: 0,
             genesis_hash,
             flow_control: FlowControl::new(),
             quality: 1.0, // Start with perfect quality
@@ -265,11 +270,18 @@ impl Peer {
         }
     }
 
-    /// Update peer status
-    pub fn update_status(&mut self, height: u64, hash: Hash, node_type: NodeType) {
+    /// Update peer status (height/hash/type and optional cumulative work from Status).
+    pub fn update_status(
+        &mut self,
+        height: u64,
+        hash: Hash,
+        node_type: NodeType,
+        cumulative_work: u128,
+    ) {
         self.best_height = height;
         self.best_hash = hash;
         self.node_type = node_type;
+        self.cumulative_work = cumulative_work;
         self.last_seen = Instant::now();
     }
 
@@ -583,7 +595,7 @@ mod tests {
 
         // Calculate expected: 0.8*0.4 + 0.95*0.3 + 0.5*0.2 + 0.1*0.1
         // = 0.32 + 0.285 + 0.1 + 0.01 = 0.715
-        assert!(score >= 0.0 && score <= 1.0);
+        assert!((0.0..=1.0).contains(&score));
         let expected: f64 = 0.715;
         assert!(
             (score - expected).abs() < 0.01_f64,

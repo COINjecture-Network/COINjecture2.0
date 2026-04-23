@@ -19,5 +19,7 @@ pub mod sync_optimizer;
 
 // Exposed for integration tests
 pub mod chain;
+#[cfg(feature = "adzdb")]
+pub mod chain_adzdb;
 pub mod genesis;
 pub mod validator;

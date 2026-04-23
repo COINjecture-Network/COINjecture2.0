@@ -23,8 +23,17 @@ use std::path::Path;
 /// Maximum amount in a single field (half of u128::MAX prevents amount+fee overflow)
 pub const MAX_AMOUNT: Balance = u128::MAX / 2;
 
-/// Minimum transaction fee (non-zero prevents spam)
+/// Minimum transaction fee for types that still charge a network fee (e.g. time-locks).
 pub const MIN_FEE: Balance = 1;
+
+/// Ledger fixed point: one **display BEANS** in smallest units (atoms).
+/// Matches `coinject_tokenomics::REWARD_FIXED_POINT_SCALE` — consensus code must not depend on that crate.
+pub const ATOMS_PER_DISPLAY_BEAN: Balance = 1_000_000_000_000;
+
+/// Minimum fee for posting a new marketplace bounty (`SubmitProblem`).
+/// **0.001 display BEANS** — small vs typical block rewards (~0.1 BEANS) but above dust.
+/// Keep aligned with default `coinject_mempool::PoolConfig::min_fee` for paid tx paths.
+pub const MIN_FEE_BOUNTY_SUBMISSION: Balance = ATOMS_PER_DISPLAY_BEAN / 1000;
 
 /// Maximum transaction data payload (64 KB)
 pub const MAX_TX_DATA_SIZE: usize = 64 * 1024;
@@ -175,6 +184,15 @@ pub fn validate_fee(fee: Balance) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Fee may be zero (e.g. simple transfers); must not exceed [`MAX_AMOUNT`].
+#[inline]
+pub fn validate_fee_allow_zero(fee: Balance) -> Result<(), ValidationError> {
+    if fee > MAX_AMOUNT {
+        return Err(ValidationError::AmountOverflow(fee));
+    }
+    Ok(())
+}
+
 /// Overflow-safe addition for Balance values.
 #[inline]
 pub fn checked_add(a: Balance, b: Balance) -> Result<Balance, ValidationError> {
@@ -204,9 +222,14 @@ pub fn validate_amount_and_fee(amount: Balance, fee: Balance) -> Result<(), Vali
 // Transaction field validation
 // =============================================================================
 
-/// Validate Transfer transaction fields.
+/// Validate Transfer transaction fields (amount > 0; fee may be zero).
 pub fn validate_transfer_fields(amount: Balance, fee: Balance) -> Result<(), ValidationError> {
-    validate_amount_and_fee(amount, fee)
+    validate_amount(amount)?;
+    validate_fee_allow_zero(fee)?;
+    amount
+        .checked_add(fee)
+        .ok_or(ValidationError::AmountPlusFeeOverflow { amount, fee })?;
+    Ok(())
 }
 
 /// Validate TimeLock transaction fields.
@@ -265,6 +288,7 @@ pub fn validate_string_field(s: &str) -> Result<(), ValidationError> {
 /// - `solution_quality` is in [0.0, 1.0]
 /// - `complexity_weight` and `energy_estimate_joules` are finite and non-negative
 /// - `tx_count` ≤ MAX_BLOCK_TRANSACTIONS
+#[allow(clippy::too_many_arguments)]
 pub fn validate_block_header_fields(
     version: u32,
     timestamp: Timestamp,
@@ -307,7 +331,7 @@ pub fn validate_block_header_fields(
     }
 
     // Solution quality: in [0.0, 1.0]
-    if !solution_quality.is_finite() || solution_quality < 0.0 || solution_quality > 1.0 {
+    if !solution_quality.is_finite() || !(0.0..=1.0).contains(&solution_quality) {
         return Err(ValidationError::InvalidSolutionQuality(solution_quality));
     }
 
@@ -564,12 +588,22 @@ mod tests {
     }
 
     #[test]
+    fn fee_allow_zero_ok() {
+        assert!(validate_fee_allow_zero(0).is_ok());
+        assert!(validate_fee_allow_zero(MAX_AMOUNT).is_ok());
+    }
+
+    #[test]
+    fn transfer_fields_zero_fee_ok() {
+        assert!(validate_transfer_fields(1_000, 0).is_ok());
+    }
+
+    #[test]
     fn amount_and_fee_sum_overflow() {
-        // Both individually at MAX_AMOUNT — sum overflows.
-        assert!(matches!(
-            validate_amount_and_fee(MAX_AMOUNT, MAX_AMOUNT),
-            Err(ValidationError::AmountPlusFeeOverflow { .. })
-        ));
+        // MAX_AMOUNT = u128::MAX / 2.  Two MAX_AMOUNT values sum to
+        // u128::MAX - 1, which fits in u128, so Ok is returned.
+        // Actual u128 overflow is exercised by checked_add_overflow below.
+        assert!(validate_amount_and_fee(MAX_AMOUNT, MAX_AMOUNT).is_ok());
     }
 
     #[test]

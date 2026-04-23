@@ -391,6 +391,8 @@ mod tests {
             node_type: 1,
             timestamp: 1234567890,
             connection_nonce: 0, // Test with default nonce
+            ed25519_pubkey: [0u8; 32],
+            auth_signature: [0u8; 64],
         };
 
         let envelope = MessageEnvelope::new(MessageType::Hello, &msg).unwrap();
@@ -418,6 +420,7 @@ mod tests {
             node_type: 1,
             timestamp: 9876543210,
             flock_state: None,
+            cumulative_work: 42,
         };
 
         let envelope = MessageEnvelope::new(MessageType::Status, &original).unwrap();
@@ -427,6 +430,7 @@ mod tests {
         assert_eq!(deserialized.best_hash, original.best_hash);
         assert_eq!(deserialized.node_type, original.node_type);
         assert_eq!(deserialized.timestamp, original.timestamp);
+        assert_eq!(deserialized.cumulative_work, original.cumulative_work);
     }
 
     #[test]

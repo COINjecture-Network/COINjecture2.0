@@ -4,16 +4,18 @@
 // NOTE: Some error codes are prepared for future RPC methods
 #![allow(dead_code)]
 
+use crate::middleware::{AuditLogLayer, SecurityConfig, SecurityGateLayer};
+use crate::tls::TlsConfig;
 use coinject_core::{
-    Address, Balance, Block, BlockHeader, Hash, Transaction,
-    ProblemType, Solution, SubmissionMode, ProblemReveal, WellformednessProof, ProblemParameters,
+    Address, Balance, Block, BlockHeader, Hash, ProblemParameters, ProblemReveal, ProblemType,
+    Solution, SubmissionMode, Transaction, WellformednessProof,
 };
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
-use coinject_state::{MarketplaceStats, ProblemSubmission};
 use coinject_state::{
-    AccountState, TimeLockState, TimeLock, EscrowState, Escrow,
-    ChannelState, Channel, MarketplaceState
+    AccountState, Channel, ChannelState, Escrow, EscrowState, MarketplaceState, TimeLock,
+    TimeLockState,
 };
+use coinject_state::{MarketplaceStats, ProblemSubmission};
 use jsonrpsee::{
     core::{async_trait, RpcResult},
     proc_macros::rpc,
@@ -21,17 +23,16 @@ use jsonrpsee::{
     types::ErrorObjectOwned,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tower::ServiceBuilder;
 use tower::timeout::TimeoutLayer;
-use tower_http::cors::{CorsLayer, Any};
-use crate::middleware::{AuditLogLayer, SecurityGateLayer, SecurityConfig};
-use crate::tls::TlsConfig;
+use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
 
 /// Trait for reading blockchain data (allows node to provide chain state without circular dependency)
 pub trait BlockchainReader: Send + Sync {
@@ -48,6 +49,16 @@ pub trait BlockchainReader: Send + Sync {
             }
         }
         Ok(total)
+    }
+
+    /// Σ truncated `work_score` on the canonical best chain to tip (`u128` as decimal string for JSON).
+    fn best_cumulative_work_decimal(&self) -> Option<String> {
+        None
+    }
+
+    /// Σ `coinbase.reward` on the canonical best chain to tip (`u128` as decimal string).
+    fn total_minted_rewards_decimal(&self) -> Option<String> {
+        None
     }
 }
 
@@ -68,6 +79,18 @@ pub struct ChainInfo {
     pub total_work: u64,
     /// Whether the node is currently syncing
     pub is_syncing: bool,
+    /// Header PoW: leading hex `0` nibbles on `hex(header_hash)` when mining is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_pow_difficulty: Option<u32>,
+    /// NP post-block adjuster size for the next instance (when mining is enabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub np_problem_size: Option<usize>,
+    /// Canonical cumulative work `W` at best tip (`u128` decimal string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_cumulative_work: Option<String>,
+    /// Sum of coinbase rewards on the best chain to tip (`u128` decimal string).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_minted_rewards: Option<String>,
 }
 
 /// Network information response (for P2P debugging)
@@ -77,6 +100,18 @@ pub struct NetworkInfo {
     pub peer_count: usize,
     pub listen_addresses: Vec<String>,
     pub bootnode_address_hint: String,
+}
+
+/// One connected CPP peer as seen by this node (RPC mirror of last known status).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkPeerInfo {
+    /// Hex-encoded 32-byte CPP peer id.
+    pub peer_id: String,
+    pub address: String,
+    pub best_height: u64,
+    pub best_hash: String,
+    /// Advertised cumulative work on the peer's tip chain (`u128` decimal string).
+    pub cumulative_work: String,
 }
 
 /// Account information response
@@ -110,6 +145,12 @@ pub struct ProblemInfo {
     pub problem_size: Option<usize>,
     pub is_revealed: bool,
     pub problem: Option<ProblemType>,
+    /// Set when the listing has been solved (hex-encoded solver address).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver: Option<String>,
+    /// Winning on-chain solution payload when status is solved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solution: Option<Solution>,
 }
 
 /// Private problem submission parameters
@@ -296,6 +337,14 @@ pub trait CoinjectRpc {
     #[method(name = "marketplace_getProblem")]
     async fn get_problem(&self, problem_id: String) -> RpcResult<Option<ProblemInfo>>;
 
+    /// All bounties posted by this address (hex-encoded 32-byte pubkey hash).
+    #[method(name = "marketplace_getProblemsBySubmitter")]
+    async fn get_problems_by_submitter(&self, address: String) -> RpcResult<Vec<ProblemInfo>>;
+
+    /// Bounties this address solved (accepted winning solution).
+    #[method(name = "marketplace_getProblemsBySolver")]
+    async fn get_problems_by_solver(&self, address: String) -> RpcResult<Vec<ProblemInfo>>;
+
     /// Get marketplace statistics
     #[method(name = "marketplace_getStats")]
     async fn get_marketplace_stats(&self) -> RpcResult<MarketplaceStats>;
@@ -369,6 +418,10 @@ pub trait CoinjectRpc {
     #[method(name = "network_getInfo")]
     async fn get_network_info(&self) -> RpcResult<NetworkInfo>;
 
+    /// List connected peers with last advertised tip and work (CPP).
+    #[method(name = "network_listPeers")]
+    async fn list_network_peers(&self) -> RpcResult<Vec<NetworkPeerInfo>>;
+
     /// Submit a mined block to the network
     #[method(name = "chain_submitBlock")]
     async fn submit_block(&self, block: Block) -> RpcResult<String>;
@@ -389,7 +442,12 @@ pub struct MiningWork {
     pub next_height: u64,
     /// Parent block hash (epoch salt) as hex — must match `chain_getInfo.best_hash` when you pull and submit immediately.
     pub prev_hash: String,
-    /// Current miner header difficulty target (leading zero hex chars).
+    /// Required **leading hexadecimal zero characters** at the start of `hex(header_hash)`.
+    ///
+    /// This is **not** Bitcoin’s compact `nBits` target, nor “bits of difficulty” as a
+    /// 256-bit threshold: each increment is one more required leading `0` in the **hex string**
+    /// (e.g. `4` ⇒ hash hex must start with `0000`). Maximum meaningful value is 64 (32-byte
+    /// digest → 64 hex digits).
     pub difficulty: u32,
     /// Deterministic instance: SubsetSum, SAT, or TSP (same serde as `chain_getBlock` / `solution_reveal.problem`).
     pub problem: ProblemType,
@@ -397,6 +455,17 @@ pub struct MiningWork {
 
 pub type MiningWorkFuture = Pin<Box<dyn Future<Output = Result<MiningWork, String>> + Send>>;
 pub type MiningWorkProvider = Arc<dyn Fn() -> MiningWorkFuture + Send + Sync>;
+
+/// Live mining difficulty levers for dashboards (`chain_getInfo` when mining is enabled).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiningDifficultyTip {
+    pub header_pow_difficulty: u32,
+    pub np_problem_size: usize,
+}
+
+pub type MiningDifficultyTipFuture =
+    Pin<Box<dyn Future<Output = Result<MiningDifficultyTip, String>> + Send>>;
+pub type MiningDifficultyTipProvider = Arc<dyn Fn() -> MiningDifficultyTipFuture + Send + Sync>;
 
 /// RPC server state
 pub struct RpcServerState {
@@ -424,6 +493,10 @@ pub struct RpcServerState {
     pub is_syncing: Arc<RwLock<bool>>,
     /// When set (nodes with consensus miner), serves [`chain_getMiningWork`].
     pub mining_work_provider: Option<MiningWorkProvider>,
+    /// When set, enriches [`ChainInfo`] with header PoW nibbles and NP problem size.
+    pub mining_difficulty_tip_provider: Option<MiningDifficultyTipProvider>,
+    /// Live CPP peer rows maintained by the node (`peer_id` hex key).
+    pub peer_directory: Arc<RwLock<HashMap<String, NetworkPeerInfo>>>,
 }
 
 /// RPC server implementation
@@ -481,19 +554,31 @@ impl RpcServerImpl {
         {
             (INVALID_PARAMS, "Invalid block timestamp".to_string())
         } else if lower.contains("invalid solution") {
-            (INVALID_PARAMS, "Invalid solution for mining problem".to_string())
+            (
+                INVALID_PARAMS,
+                "Invalid solution for mining problem".to_string(),
+            )
         } else if lower.contains("insufficient work") || lower.contains("work score below") {
             (INVALID_PARAMS, "Insufficient work score".to_string())
         } else if lower.contains("did not extend the chain") {
-            (INVALID_PARAMS, "Block did not extend the current chain tip".to_string())
+            (
+                INVALID_PARAMS,
+                "Block did not extend the current chain tip".to_string(),
+            )
         } else if lower.contains("failed to store block") {
             (INTERNAL_ERROR, "Failed to store block".to_string())
         } else if lower.contains("failed to apply block transactions") {
-            (INTERNAL_ERROR, "Failed to apply block transactions".to_string())
+            (
+                INTERNAL_ERROR,
+                "Failed to apply block transactions".to_string(),
+            )
         } else if lower.contains("failed to broadcast block") {
             (INTERNAL_ERROR, "Failed to broadcast block".to_string())
         } else if lower.contains("no async runtime available") {
-            (INTERNAL_ERROR, "Block submission service unavailable".to_string())
+            (
+                INTERNAL_ERROR,
+                "Block submission service unavailable".to_string(),
+            )
         } else if lower.contains("block validation failed") {
             (INVALID_PARAMS, detail.clone())
         } else {
@@ -670,36 +755,43 @@ impl RpcServerImpl {
 
     /// Convert ProblemSubmission to ProblemInfo
     fn problem_to_info(&self, problem: &ProblemSubmission) -> ProblemInfo {
-        let (is_private, problem_type, problem_size, is_revealed, revealed_problem) = match &problem.submission_mode {
-            SubmissionMode::Public { problem } => {
-                let problem_type_name = match problem {
-                    ProblemType::SubsetSum { numbers, .. } => {
-                        Some(format!("SubsetSum({})", numbers.len()))
-                    }
-                    ProblemType::SAT { variables, clauses } => {
-                        Some(format!("SAT(vars={}, clauses={})", variables, clauses.len()))
-                    }
-                    ProblemType::TSP { cities, .. } => {
-                        Some(format!("TSP(cities={})", cities))
-                    }
-                    ProblemType::Custom { .. } => Some("Custom".to_string()),
-                };
-                let size = match problem {
-                    ProblemType::SubsetSum { numbers, .. } => Some(numbers.len()),
-                    ProblemType::SAT { variables, .. } => Some(*variables),
-                    ProblemType::TSP { cities, .. } => Some(*cities),
-                    ProblemType::Custom { .. } => None,
-                };
-                (false, problem_type_name, size, true, Some(problem.clone()))
-            }
-            SubmissionMode::Private { public_params, .. } => {
-                let problem_type_name = Some(public_params.problem_type.clone());
-                let size = Some(public_params.size);
-                let is_revealed = problem.problem_reveal.is_some();
-                let revealed_problem = problem.problem_reveal.as_ref().map(|reveal| reveal.problem.clone());
-                (true, problem_type_name, size, is_revealed, revealed_problem)
-            }
-        };
+        let (is_private, problem_type, problem_size, is_revealed, revealed_problem) =
+            match &problem.submission_mode {
+                SubmissionMode::Public { problem } => {
+                    let problem_type_name = match problem {
+                        ProblemType::SubsetSum { numbers, .. } => {
+                            Some(format!("SubsetSum({})", numbers.len()))
+                        }
+                        ProblemType::SAT { variables, clauses } => Some(format!(
+                            "SAT(vars={}, clauses={})",
+                            variables,
+                            clauses.len()
+                        )),
+                        ProblemType::TSP { cities, .. } => Some(format!("TSP(cities={})", cities)),
+                        ProblemType::Custom { .. } => Some("Custom".to_string()),
+                    };
+                    let size = match problem {
+                        ProblemType::SubsetSum { numbers, .. } => Some(numbers.len()),
+                        ProblemType::SAT { variables, .. } => Some(*variables),
+                        ProblemType::TSP { cities, .. } => Some(*cities),
+                        ProblemType::Custom { .. } => None,
+                    };
+                    (false, problem_type_name, size, true, Some(problem.clone()))
+                }
+                SubmissionMode::Private { public_params, .. } => {
+                    let problem_type_name = Some(public_params.problem_type.clone());
+                    let size = Some(public_params.size);
+                    let is_revealed = problem.problem_reveal.is_some();
+                    let revealed_problem = problem
+                        .problem_reveal
+                        .as_ref()
+                        .map(|reveal| reveal.problem.clone());
+                    (true, problem_type_name, size, is_revealed, revealed_problem)
+                }
+            };
+
+        let solver = problem.solver.as_ref().map(|a| hex::encode(a.as_bytes()));
+        let solution = problem.solution.clone();
 
         ProblemInfo {
             problem_id: hex::encode(problem.problem_id.as_bytes()),
@@ -714,6 +806,8 @@ impl RpcServerImpl {
             problem_size,
             is_revealed,
             problem: revealed_problem,
+            solver,
+            solution,
         }
     }
 }
@@ -759,14 +853,29 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Check if it's JSON format (from web wallet) or hex-encoded bincode (from CLI)
         let tx: Transaction = if tx_hex.trim().starts_with('{') {
             // JSON format (from web wallet)
-            serde_json::from_str(&tx_hex)
-                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("JSON deserialize error: {}", e), None::<()>))?
+            serde_json::from_str(&tx_hex).map_err(|e| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    format!("JSON deserialize error: {}", e),
+                    None::<()>,
+                )
+            })?
         } else {
             // Hex-encoded bincode format (from CLI wallet)
-            let tx_bytes = hex::decode(tx_hex.trim_start_matches("0x"))
-                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Hex decode error: {}", e), None::<()>))?;
-            bincode::deserialize(&tx_bytes)
-                .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Bincode deserialize error: {}", e), None::<()>))?
+            let tx_bytes = hex::decode(tx_hex.trim_start_matches("0x")).map_err(|e| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    format!("Hex decode error: {}", e),
+                    None::<()>,
+                )
+            })?;
+            bincode::deserialize(&tx_bytes).map_err(|e| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    format!("Bincode deserialize error: {}", e),
+                    None::<()>,
+                )
+            })?
         };
 
         // Basic validation
@@ -784,7 +893,11 @@ impl CoinjectRpcServer for RpcServerImpl {
             Ok(hash) => {
                 let pool_size = pool.len();
                 drop(pool);
-                println!("✅ Transaction added to pool! Hash: {}, Pool size: {}", hex::encode(hash.as_bytes()), pool_size);
+                println!(
+                    "✅ Transaction added to pool! Hash: {}, Pool size: {}",
+                    hex::encode(hash.as_bytes()),
+                    pool_size
+                );
                 Ok(hex::encode(hash.as_bytes()))
             }
             Err(e) => {
@@ -828,7 +941,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .blockchain
             .get_block_by_height(height)
-            .map_err(|e| Self::internal_error(e))
+            .map_err(Self::internal_error)
     }
 
     async fn get_latest_block(&self) -> RpcResult<Option<Block>> {
@@ -836,14 +949,14 @@ impl CoinjectRpcServer for RpcServerImpl {
         self.state
             .blockchain
             .get_block_by_height(best_height)
-            .map_err(|e| Self::internal_error(e))
+            .map_err(Self::internal_error)
     }
 
     async fn get_block_header(&self, height: u64) -> RpcResult<Option<BlockHeader>> {
         self.state
             .blockchain
             .get_header_by_height(height)
-            .map_err(|e| Self::internal_error(e))
+            .map_err(Self::internal_error)
     }
 
     async fn get_chain_info(&self) -> RpcResult<ChainInfo> {
@@ -852,11 +965,30 @@ impl CoinjectRpcServer for RpcServerImpl {
         let peer_count = *self.state.peer_count.read().await;
 
         // Calculate cumulative work from chain (sum of work scores)
-        let total_work = self.state.blockchain.calculate_chain_work(best_height)
+        let total_work = self
+            .state
+            .blockchain
+            .calculate_chain_work(best_height)
             .unwrap_or(0);
 
         // Check if syncing (simplified: syncing if we have peers but recent blocks are slow)
         let is_syncing = *self.state.is_syncing.read().await;
+
+        let (header_pow_difficulty, np_problem_size) =
+            if let Some(provider) = &self.state.mining_difficulty_tip_provider {
+                match provider().await {
+                    Ok(tip) => (Some(tip.header_pow_difficulty), Some(tip.np_problem_size)),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "mining difficulty tip provider failed");
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            };
+
+        let best_cumulative_work = self.state.blockchain.best_cumulative_work_decimal();
+        let total_minted_rewards = self.state.blockchain.total_minted_rewards_decimal();
 
         Ok(ChainInfo {
             chain_id: self.state.chain_id.clone(),
@@ -866,6 +998,10 @@ impl CoinjectRpcServer for RpcServerImpl {
             peer_count,
             total_work,
             is_syncing,
+            header_pow_difficulty,
+            np_problem_size,
+            best_cumulative_work,
+            total_minted_rewards,
         })
     }
 
@@ -883,22 +1019,52 @@ impl CoinjectRpcServer for RpcServerImpl {
     }
 
     async fn get_open_problems(&self) -> RpcResult<Vec<ProblemInfo>> {
-        let problems = self.state.marketplace_state.get_open_problems()
-            .map_err(|e| Self::internal_error(e))?;
+        let problems = self
+            .state
+            .marketplace_state
+            .get_open_problems()
+            .map_err(Self::internal_error)?;
         Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
     }
 
     async fn get_problem(&self, problem_id: String) -> RpcResult<Option<ProblemInfo>> {
         Self::validate_str_len(&problem_id, 256, "problem_id")?;
         let hash = self.parse_hash(&problem_id)?;
-        let problem = self.state.marketplace_state.get_problem(&hash)
-            .map_err(|e| Self::internal_error(e))?;
+        let problem = self
+            .state
+            .marketplace_state
+            .get_problem(&hash)
+            .map_err(Self::internal_error)?;
         Ok(problem.map(|p| self.problem_to_info(&p)))
     }
 
+    async fn get_problems_by_submitter(&self, address: String) -> RpcResult<Vec<ProblemInfo>> {
+        Self::validate_str_len(&address, 256, "address")?;
+        let addr = self.parse_address(&address)?;
+        let problems = self
+            .state
+            .marketplace_state
+            .list_problems_for_submitter(addr)
+            .map_err(Self::internal_error)?;
+        Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
+    }
+
+    async fn get_problems_by_solver(&self, address: String) -> RpcResult<Vec<ProblemInfo>> {
+        Self::validate_str_len(&address, 256, "address")?;
+        let addr = self.parse_address(&address)?;
+        let problems = self
+            .state
+            .marketplace_state
+            .list_problems_for_solver(addr)
+            .map_err(Self::internal_error)?;
+        Ok(problems.iter().map(|p| self.problem_to_info(p)).collect())
+    }
+
     async fn get_marketplace_stats(&self) -> RpcResult<MarketplaceStats> {
-        self.state.marketplace_state.get_stats()
-            .map_err(|e| Self::internal_error(e))
+        self.state
+            .marketplace_state
+            .get_stats()
+            .map_err(Self::internal_error)
     }
 
     async fn submit_private_problem(&self, params: PrivateProblemParams) -> RpcResult<String> {
@@ -908,13 +1074,25 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&params.vk_hash, 256, "vk_hash")?;
         Self::validate_str_len(&params.problem_type, 256, "problem_type")?;
         if params.size > 100_000 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "size exceeds maximum of 100000", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "size exceeds maximum of 100000",
+                None::<()>,
+            ));
         }
         if params.complexity_estimate < 0.0 || params.complexity_estimate > 1e15 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "complexity_estimate out of range", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "complexity_estimate out of range",
+                None::<()>,
+            ));
         }
         if params.expiration_days == 0 || params.expiration_days > 365 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "expiration_days must be 1-365", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "expiration_days must be 1-365",
+                None::<()>,
+            ));
         }
 
         // Parse commitment hash
@@ -959,14 +1137,17 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Submit to marketplace state (using placeholder address - in production this would come from authenticated session)
         let submitter = Address::from_bytes([0u8; 32]); // TODO: Get from authenticated user session
 
-        let problem_id = self.state.marketplace_state.submit_problem(
-            submission_mode,
-            submitter,
-            params.bounty,
-            params.min_work_score,
-            params.expiration_days,
-        )
-        .map_err(|e| Self::internal_error(e))?;
+        let problem_id = self
+            .state
+            .marketplace_state
+            .submit_problem(
+                submission_mode,
+                submitter,
+                params.bounty,
+                params.min_work_score,
+                params.expiration_days,
+            )
+            .map_err(Self::internal_error)?;
 
         Ok(hex::encode(problem_id.as_bytes()))
     }
@@ -1007,7 +1188,10 @@ impl CoinjectRpcServer for RpcServerImpl {
         if balance < params.bounty {
             return Err(ErrorObjectOwned::owned(
                 INVALID_PARAMS,
-                format!("Insufficient balance: have {}, need {}", balance, params.bounty),
+                format!(
+                    "Insufficient balance: have {}, need {}",
+                    balance, params.bounty
+                ),
                 None::<()>,
             ));
         }
@@ -1027,7 +1211,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         let public_params = Self::problem_public_params(&params.problem, params.min_work_score);
         let (zk_wellformed_proof, commitment) =
             WellformednessProof::create(&params.problem, &salt, &public_params)
-                .map_err(|e| Self::internal_error(e))?;
+                .map_err(Self::internal_error)?;
 
         let submission_mode = SubmissionMode::Private {
             problem_commitment: commitment,
@@ -1045,13 +1229,13 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.min_work_score,
                 params.expiration_days,
             )
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         let new_balance = balance - params.bounty;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         Ok(PrivateProblemSubmissionResult {
             problem_id: hex::encode(problem_id.as_bytes()),
@@ -1065,15 +1249,24 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&params.salt, 256, "salt")?;
         // problem JSON limit: 1 MB
         if params.problem.len() > 1024 * 1024 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "problem JSON exceeds 1 MB", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "problem JSON exceeds 1 MB",
+                None::<()>,
+            ));
         }
 
         // Parse problem ID
         let problem_id = self.parse_hash(&params.problem_id)?;
 
         // Parse problem (deserialize from JSON)
-        let problem: ProblemType = serde_json::from_str(&params.problem)
-            .map_err(|e| ErrorObjectOwned::owned(INVALID_PARAMS, format!("Invalid problem JSON: {}", e), None::<()>))?;
+        let problem: ProblemType = serde_json::from_str(&params.problem).map_err(|e| {
+            ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                format!("Invalid problem JSON: {}", e),
+                None::<()>,
+            )
+        })?;
 
         // Parse salt
         let salt_bytes = hex::decode(params.salt.trim_start_matches("0x"))
@@ -1094,8 +1287,10 @@ impl CoinjectRpcServer for RpcServerImpl {
         let reveal = ProblemReveal::new(problem, salt);
 
         // Submit reveal to marketplace state
-        self.state.marketplace_state.reveal_problem(problem_id, reveal)
-            .map_err(|e| Self::internal_error(e))?;
+        self.state
+            .marketplace_state
+            .reveal_problem(problem_id, reveal)
+            .map_err(Self::internal_error)?;
 
         Ok(true)
     }
@@ -1132,7 +1327,10 @@ impl CoinjectRpcServer for RpcServerImpl {
         if balance < params.bounty {
             return Err(ErrorObjectOwned::owned(
                 INVALID_PARAMS,
-                format!("Insufficient balance: have {}, need {}", balance, params.bounty),
+                format!(
+                    "Insufficient balance: have {}, need {}",
+                    balance, params.bounty
+                ),
                 None::<()>,
             ));
         }
@@ -1147,13 +1345,13 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.min_work_score,
                 params.expiration_days,
             )
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         let new_balance = balance - params.bounty;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+            .map_err(Self::internal_error)?;
 
         Ok(hex::encode(problem_id.as_bytes()))
     }
@@ -1162,7 +1360,11 @@ impl CoinjectRpcServer for RpcServerImpl {
         // Input validation
         Self::validate_str_len(&params.submitter, 256, "submitter")?;
         if params.numbers.len() > 10_000 {
-            return Err(ErrorObjectOwned::owned(INVALID_PARAMS, "numbers array exceeds maximum of 10000 elements", None::<()>));
+            return Err(ErrorObjectOwned::owned(
+                INVALID_PARAMS,
+                "numbers array exceeds maximum of 10000 elements",
+                None::<()>,
+            ));
         }
 
         // Parse submitter address
@@ -1203,7 +1405,10 @@ impl CoinjectRpcServer for RpcServerImpl {
         if balance < params.bounty {
             return Err(ErrorObjectOwned::owned(
                 INVALID_PARAMS,
-                format!("Insufficient balance: have {}, need {}", balance, params.bounty),
+                format!(
+                    "Insufficient balance: have {}, need {}",
+                    balance, params.bounty
+                ),
                 None::<()>,
             ));
         }
@@ -1218,19 +1423,24 @@ impl CoinjectRpcServer for RpcServerImpl {
         };
 
         // Submit to marketplace state
-        let problem_id = self.state.marketplace_state.submit_public_problem(
-            problem,
-            submitter,
-            bounty,
-            params.min_work_score,
-            params.expiration_days,
-        )
-        .map_err(|e| Self::internal_error(e))?;
+        let problem_id = self
+            .state
+            .marketplace_state
+            .submit_public_problem(
+                problem,
+                submitter,
+                bounty,
+                params.min_work_score,
+                params.expiration_days,
+            )
+            .map_err(Self::internal_error)?;
 
         // Deduct bounty from submitter's balance (escrow)
         let new_balance = balance - bounty;
-        self.state.account_state.set_balance(&submitter, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+        self.state
+            .account_state
+            .set_balance(&submitter, new_balance)
+            .map_err(Self::internal_error)?;
 
         tracing::info!(problem_id = %hex::encode(problem_id.as_bytes()), bounty, "subset_sum_submitted");
 
@@ -1249,18 +1459,25 @@ impl CoinjectRpcServer for RpcServerImpl {
         let problem_id = self.parse_hash(&params.problem_id)?;
 
         // Submit solution to marketplace state (validates and updates status)
-        self.state.marketplace_state.submit_solution(problem_id, solver, params.solution)
-            .map_err(|e| Self::internal_error(e))?;
+        self.state
+            .marketplace_state
+            .submit_solution(problem_id, solver, params.solution)
+            .map_err(Self::internal_error)?;
 
         // Claim bounty and credit solver
-        let (solver_addr, bounty) = self.state.marketplace_state.claim_bounty(problem_id)
-            .map_err(|e| Self::internal_error(e))?;
+        let (solver_addr, bounty) = self
+            .state
+            .marketplace_state
+            .claim_bounty(problem_id)
+            .map_err(Self::internal_error)?;
 
         // Credit solver's account with bounty
         let current_balance = self.state.account_state.get_balance(&solver_addr);
         let new_balance = current_balance + bounty;
-        self.state.account_state.set_balance(&solver_addr, new_balance)
-            .map_err(|e| Self::internal_error(e))?;
+        self.state
+            .account_state
+            .set_balance(&solver_addr, new_balance)
+            .map_err(Self::internal_error)?;
 
         tracing::info!(solver = %hex::encode(solver_addr.as_bytes()), bounty, "solution_accepted");
 
@@ -1271,48 +1488,72 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_str_len(&recipient, 256, "recipient")?;
         let addr = self.parse_address(&recipient)?;
         let timelocks = self.state.timelock_state.get_timelocks_for_recipient(&addr);
-        Ok(timelocks.into_iter().map(|tl| self.timelock_to_info(&tl)).collect())
+        Ok(timelocks
+            .into_iter()
+            .map(|tl| self.timelock_to_info(&tl))
+            .collect())
     }
 
     async fn get_unlocked_timelocks(&self) -> RpcResult<Vec<TimeLockInfo>> {
         let timelocks = self.state.timelock_state.get_unlocked_timelocks();
-        Ok(timelocks.into_iter().map(|tl| self.timelock_to_info(&tl)).collect())
+        Ok(timelocks
+            .into_iter()
+            .map(|tl| self.timelock_to_info(&tl))
+            .collect())
     }
 
     async fn get_escrows_by_sender(&self, sender: String) -> RpcResult<Vec<EscrowInfo>> {
         Self::validate_str_len(&sender, 256, "sender")?;
         let addr = self.parse_address(&sender)?;
         let escrows = self.state.escrow_state.get_escrows_by_sender(&addr);
-        Ok(escrows.into_iter().map(|e| self.escrow_to_info(&e)).collect())
+        Ok(escrows
+            .into_iter()
+            .map(|e| self.escrow_to_info(&e))
+            .collect())
     }
 
     async fn get_escrows_by_recipient(&self, recipient: String) -> RpcResult<Vec<EscrowInfo>> {
         Self::validate_str_len(&recipient, 256, "recipient")?;
         let addr = self.parse_address(&recipient)?;
         let escrows = self.state.escrow_state.get_escrows_by_recipient(&addr);
-        Ok(escrows.into_iter().map(|e| self.escrow_to_info(&e)).collect())
+        Ok(escrows
+            .into_iter()
+            .map(|e| self.escrow_to_info(&e))
+            .collect())
     }
 
     async fn get_active_escrows(&self) -> RpcResult<Vec<EscrowInfo>> {
         let escrows = self.state.escrow_state.get_active_escrows();
-        Ok(escrows.into_iter().map(|e| self.escrow_to_info(&e)).collect())
+        Ok(escrows
+            .into_iter()
+            .map(|e| self.escrow_to_info(&e))
+            .collect())
     }
 
     async fn get_channels_by_address(&self, address: String) -> RpcResult<Vec<ChannelInfo>> {
         Self::validate_str_len(&address, 256, "address")?;
         let addr = self.parse_address(&address)?;
         let channels = self.state.channel_state.get_channels_for_address(&addr);
-        Ok(channels.into_iter().map(|c| self.channel_to_info(&c)).collect())
+        Ok(channels
+            .into_iter()
+            .map(|c| self.channel_to_info(&c))
+            .collect())
     }
 
     async fn get_open_channels(&self) -> RpcResult<Vec<ChannelInfo>> {
         let channels = self.state.channel_state.get_open_channels();
-        Ok(channels.into_iter().map(|c| self.channel_to_info(&c)).collect())
+        Ok(channels
+            .into_iter()
+            .map(|c| self.channel_to_info(&c))
+            .collect())
     }
 
     async fn get_disputed_channels(&self) -> RpcResult<Vec<ChannelInfo>> {
         let channels = self.state.channel_state.get_disputed_channels();
-        Ok(channels.into_iter().map(|c| self.channel_to_info(&c)).collect())
+        Ok(channels
+            .into_iter()
+            .map(|c| self.channel_to_info(&c))
+            .collect())
     }
 
     async fn faucet_request_tokens(&self, address: String) -> RpcResult<FaucetResponse> {
@@ -1325,7 +1566,9 @@ impl CoinjectRpcServer for RpcServerImpl {
                     success: false,
                     amount: None,
                     new_balance: None,
-                    message: "Faucet is not enabled on this node. Use --enable-faucet flag to enable.".to_string(),
+                    message:
+                        "Faucet is not enabled on this node. Use --enable-faucet flag to enable."
+                            .to_string(),
                     cooldown_remaining: None,
                 });
             }
@@ -1385,9 +1628,13 @@ impl CoinjectRpcServer for RpcServerImpl {
     async fn get_network_info(&self) -> RpcResult<NetworkInfo> {
         let peer_count = *self.state.peer_count.read().await;
         let listen_addresses = self.state.listen_addresses.read().await.clone();
-        
-        let peer_id = self.state.local_peer_id.clone().unwrap_or_else(|| "unknown".to_string());
-        
+
+        let peer_id = self
+            .state
+            .local_peer_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+
         // Generate a bootnode address hint for operators
         let bootnode_hint = if !listen_addresses.is_empty() {
             format!("{}/p2p/{}", listen_addresses[0], peer_id)
@@ -1403,10 +1650,27 @@ impl CoinjectRpcServer for RpcServerImpl {
         })
     }
 
+    async fn list_network_peers(&self) -> RpcResult<Vec<NetworkPeerInfo>> {
+        let map = self.state.peer_directory.read().await;
+        let mut peers: Vec<NetworkPeerInfo> = map.values().cloned().collect();
+        peers.sort_by(|a, b| {
+            a.address
+                .cmp(&b.address)
+                .then_with(|| a.peer_id.cmp(&b.peer_id))
+        });
+        Ok(peers)
+    }
+
     async fn submit_block(&self, block: Block) -> RpcResult<String> {
-        println!("📥 RPC: Received block submission for height {}", block.header.height);
-        
-        let handler = self.state.block_submission_handler.as_ref()
+        println!(
+            "📥 RPC: Received block submission for height {}",
+            block.header.height
+        );
+
+        let handler = self
+            .state
+            .block_submission_handler
+            .as_ref()
             .ok_or_else(|| {
                 ErrorObjectOwned::owned(
                     INTERNAL_ERROR,
@@ -1488,7 +1752,11 @@ impl RpcServer {
             })
         });
 
-        Ok(RpcServer { handle, addr, tls_task })
+        Ok(RpcServer {
+            handle,
+            addr,
+            tls_task,
+        })
     }
 
     /// Get the listening address
@@ -1563,6 +1831,8 @@ mod tests {
             listen_addresses: Arc::new(RwLock::new(vec![])),
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
+            mining_difficulty_tip_provider: None,
+            peer_directory: Arc::new(RwLock::new(HashMap::new())),
         });
 
         let rpc = RpcServerImpl::new(state);
@@ -1606,6 +1876,8 @@ mod tests {
             listen_addresses: Arc::new(RwLock::new(vec![])),
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
+            mining_difficulty_tip_provider: None,
+            peer_directory: Arc::new(RwLock::new(HashMap::new())),
         });
 
         let rpc = RpcServerImpl::new(state);

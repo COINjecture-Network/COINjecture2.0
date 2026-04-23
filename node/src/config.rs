@@ -22,18 +22,13 @@ use std::path::PathBuf;
 // =============================================================================
 
 /// Block pruning strategy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum PruningMode {
     /// Keep all blocks forever (archive node behaviour, default)
+    #[default]
     Archive,
     /// Keep only the most recent N blocks (saves disk space)
     Full,
-}
-
-impl Default for PruningMode {
-    fn default() -> Self {
-        PruningMode::Archive
-    }
 }
 
 impl std::fmt::Display for PruningMode {
@@ -62,11 +57,12 @@ pub fn version_name(version: u32) -> &'static str {
 }
 
 /// Node type preference (actual classification is based on behavior)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum NodeTypePreference {
     /// Header-only sync for mobile/embedded devices (minimal storage)
     Light,
     /// Full validation with standard storage (default)
+    #[default]
     Full,
     /// Complete historical data preservation (2TB+ storage)
     Archive,
@@ -76,12 +72,6 @@ pub enum NodeTypePreference {
     Bounty,
     /// External data feeds and cross-chain bridges
     Oracle,
-}
-
-impl Default for NodeTypePreference {
-    fn default() -> Self {
-        NodeTypePreference::Full
-    }
 }
 
 impl std::fmt::Display for NodeTypePreference {
@@ -172,12 +162,13 @@ pub struct NodeConfig {
     #[arg(long, default_value = "coinject-network-b-v2")]
     pub chain_id: String,
 
-    /// Mining difficulty (leading zeros in hash)
+    /// Minimum header PoW: count of **leading hex zero characters** in `hex(block_header_hash)`.
+    /// Not Bitcoin `nBits`; each +1 is one more leading `0` in the hex string (max 64).
     #[arg(long, default_value = "4")]
     pub difficulty: u32,
 
     /// Target block time in seconds
-    #[arg(long, default_value = "60")]
+    #[arg(long, default_value = "10")]
     pub block_time: u64,
 
     /// Maximum number of peers
@@ -192,8 +183,8 @@ pub struct NodeConfig {
     #[arg(long)]
     pub enable_faucet: bool,
 
-    /// Faucet amount (tokens per request)
-    #[arg(long, default_value = "10000")]
+    /// Faucet amount (**ledger atoms** per request). Default = `10_000 × 10^12` (= 10_000 display BEANS at fixed-point S).
+    #[arg(long, default_value = "10000000000000000")]
     pub faucet_amount: u128,
 
     /// Faucet cooldown (seconds between requests per address)
@@ -314,13 +305,35 @@ impl NodeConfig {
             .ok()
             .or_else(|| std::env::var("BOOTNODES").ok());
         if let Some(raw) = from_env {
-            for part in raw.split(',') {
-                let s = part.trim();
-                if s.is_empty() {
-                    continue;
+            // If `--bootnodes` was set on the CLI (non-empty after clap parse), do not merge env.
+            // Otherwise Docker followers that use `--bootnodes bootnode:707` would also inherit
+            // COINJECT_BOOTNODES from `.env` and dial every public mesh IP — many connections share
+            // one host public IP, hitting CPP per-IP limits (default 3) and triggering rate bans.
+            if config.bootnodes.is_empty() {
+                for part in raw.split(',') {
+                    let s = part.trim();
+                    if s.is_empty() {
+                        continue;
+                    }
+                    if !config.bootnodes.iter().any(|b| b == s) {
+                        config.bootnodes.push(s.to_string());
+                    }
                 }
-                if !config.bootnodes.iter().any(|b| b == s) {
-                    config.bootnodes.push(s.to_string());
+            }
+        }
+        // Hugging Face: token/dataset from env when not passed on CLI (Docker `.env` + compose).
+        if config.hf_token.is_none() {
+            if let Ok(t) = std::env::var("HUGGINGFACE_TOKEN").or_else(|_| std::env::var("HF_TOKEN"))
+            {
+                if !t.is_empty() {
+                    config.hf_token = Some(t);
+                }
+            }
+        }
+        if config.hf_dataset_name.is_none() {
+            if let Ok(d) = std::env::var("HF_DATASET_NAME") {
+                if !d.is_empty() {
+                    config.hf_dataset_name = Some(d);
                 }
             }
         }
@@ -616,6 +629,7 @@ impl NodeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use coinject_tokenomics::REWARD_FIXED_POINT_SCALE;
 
     fn test_config() -> NodeConfig {
         NodeConfig {
@@ -638,11 +652,11 @@ mod tests {
             bootnodes: vec![],
             chain_id: "test".to_string(),
             difficulty: 4,
-            block_time: 60,
+            block_time: 10,
             max_peers: 50,
             verbose: false,
             enable_faucet: false,
-            faucet_amount: 10000,
+            faucet_amount: 10_000u128 * REWARD_FIXED_POINT_SCALE,
             faucet_cooldown: 3600,
             hf_token: None,
             hf_dataset_name: None,

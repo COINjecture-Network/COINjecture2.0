@@ -8,6 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUST_TOOLCHAIN: stable
 
 jobs:
   # ─── Build release binaries for all platforms ──────────────────────────────
@@ -52,10 +53,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Guard — ensure toolchain is set
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
+
+      - name: Verify Rust toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rustc -V
+          cargo -V
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -82,10 +97,11 @@ jobs:
 
       - name: Build binaries (native)
         if: '!matrix.use_cross'
+        shell: bash
         run: |
           cargo build --release \
             --target ${{ matrix.target }} \
-            --bin coinject-node \
+            --bin coinject \
             --bin coinject-wallet
 
       - name: Build binaries (cross)
@@ -93,7 +109,7 @@ jobs:
         run: |
           cross build --release \
             --target ${{ matrix.target }} \
-            --bin coinject-node \
+            --bin coinject \
             --bin coinject-wallet
 
       # ── Package artifacts ──────────────────────────────────────────────────
@@ -103,7 +119,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           mkdir -p dist
 
-          cp target/${{ matrix.target }}/release/coinject-node \
+          cp target/${{ matrix.target }}/release/coinject \
              dist/coinject-node-${TAG}-${{ matrix.artifact_suffix }}
           cp target/${{ matrix.target }}/release/coinject-wallet \
              dist/coinject-wallet-${TAG}-${{ matrix.artifact_suffix }}
@@ -121,7 +137,7 @@ jobs:
           $TAG = "${{ github.ref_name }}"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-          Copy-Item "target\${{ matrix.target }}\release\coinject-node.exe" `
+          Copy-Item "target\${{ matrix.target }}\release\coinject.exe" `
                     "dist\coinject-node-${TAG}-${{ matrix.artifact_suffix }}.exe"
           Copy-Item "target\${{ matrix.target }}\release\coinject-wallet.exe" `
                     "dist\coinject-wallet-${TAG}-${{ matrix.artifact_suffix }}.exe"

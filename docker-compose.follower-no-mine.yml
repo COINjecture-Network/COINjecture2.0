@@ -1,0 +1,39 @@
+# Overlay for mesh **follower** VPSs: run full node stack (P2P + RPC + metrics) **without** mining.
+# Canonical host (e.g. 193) keeps `docker-compose.yml` only (`--mine` on all node services).
+#
+# Usage on followers (76, 198, …):
+#   docker compose -f docker-compose.yml -f docker-compose.follower-no-mine.yml up -d --no-build
+#
+# Requires the same `.env` as the base file (COINJECT_BOOTNODES, COINJECT_NODE_IMAGE, etc.).
+
+services:
+  bootnode:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+
+  node1:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
+
+  node2:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
+
+  node3:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707

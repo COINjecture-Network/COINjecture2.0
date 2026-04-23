@@ -7,9 +7,9 @@
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org/)
 [![Database](https://img.shields.io/badge/Database-redb%202.1-green)](https://crates.io/crates/redb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![CI](https://github.com/Quigles1337/COINjecture2.0/actions/workflows/ci.yml/badge.svg?branch=remove-libp2p)](https://github.com/Quigles1337/COINjecture2.0/actions/workflows/ci.yml)
+[![CI](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/ci.yml)
 
-*Proof of Useful Work (PoUW) blockchain with autonomous NP-complete problem marketplace*
+*Proof of Useful Work (PoUW) blockchain with autonomous NP problem marketplace*
 
 </div>
 
@@ -27,6 +27,7 @@
 - [Institutional-Grade Infrastructure](#institutional-grade-infrastructure)
 - [Mathematical Foundation](#mathematical-foundation)
 - [Quick Start](#quick-start)
+- [Production deployment and chain health](#production-deployment-and-chain-health)
 - [For AI Research Labs](#for-ai-research-labs)
 - [Development Status](#development-status)
 - [License](#license)
@@ -47,8 +48,8 @@ COINjecture 2.0 is a **testnet WEB4** Layer 1 blockchain protocol built in pure 
 - **WEB3**: Wasteful hash grinding with no real-world value
 - **WEB4**: Every hash solves real computational problems. Every block advances science.
 
-**Current Status**: 4-node Docker testnet verified — nodes discover, mine blocks, and propagate across the network
-**Live Features**: Autonomous bounty payouts, NP-complete problem solving, dimensional economics, CPP peer discovery
+**Current Status**: **v4.8.4** (Phases 1–18 complete); 4-node Docker testnet verified — nodes discover, mine blocks, and propagate across the network  
+**Live Features**: Autonomous bounty payouts, NP-complete problem solving, dimensional economics, CPP + mesh P2P with **Noise_XX** encrypted transport (`network/src/noise.rs`, `encrypted_connection.rs`)
 
 ---
 
@@ -95,18 +96,19 @@ graph TB
 
 ### Work Score Formula
 
-```
-Work Score = (solve_time / verify_time) × √(solve_memory / verify_memory) × problem_weight × quality × energy_efficiency
+Implemented in `consensus/src/work_score.rs` (Phase 18 consensus rewrite):
 
-Where:
-- solve_time: Time to find solution (NP-hard)
-- verify_time: Time to check solution (polynomial)
-- problem_weight: Difficulty multiplier
-- quality: Solution optimality (0.0-1.0)
-- energy_efficiency: Hardware efficiency factor
+```text
+work_score = log₂(solve_time / verify_time) × quality_score
 ```
 
-**This is provably useful work** - not hash grinding.
+**Rationale (summary)**  
+- **Time asymmetry** `solve_time / verify_time` is the property all NP instances share: finding a solution is hard, verifying it is polynomial-time. `log₂` turns the ratio into **comparable security bits** across problem types.  
+- **`quality_score`** captures how good the submitted solution is (consensus-verifiable).  
+
+**Deliberately not in the formula** (see code comments): space asymmetry, “energy efficiency,” and problem-specific multipliers that would be **self-reported or gameable** by miners. The racing incentive caps inflated solve times: slower work loses the block to faster honest competitors.
+
+**This is provably useful work** — not hash grinding.
 
 ---
 
@@ -289,7 +291,22 @@ graph TB
 
 ## Network Architecture
 
-COINjecture uses the **CPP (COINjecture P2P Protocol)** — a custom TCP wire protocol on port 707, designed for equilibrium-based message routing.
+COINjecture’s **`network`** crate combines **CPP** (COINjecture P2P Protocol) — a custom TCP wire format on port 707, with equilibrium-based routing — and a **mesh** layer (`network/src/mesh/`) for gossip-style coordination and bridges. **Noise_XX** (`network/src/noise.rs`) and **`encrypted_connection.rs`** provide optional **encrypted transport** on top of these transports. CPP and mesh share the same discovery, peer store, PEX, and scoring policies rather than two disconnected stacks.
+
+### Node roles (empirical classification)
+
+Nodes are classified **from observed behavior** (`node/src/node_types.rs`), not self-declared roles:
+
+| Type | Role |
+|------|------|
+| **Light** | Header-oriented sync, minimal storage, mobile-friendly |
+| **Full** | Full validation, standard chain storage |
+| **Archive** | Full history retention (large storage) |
+| **Validator** | Block production + fast validation |
+| **Bounty** | PoUW / marketplace solving workload |
+| **Oracle** | External data feeds and bridge-style interfaces |
+
+The `coinject` binary is the main full-node entrypoint; behavior over time maps into the types above.
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'Arial'}}}%%
@@ -322,7 +339,7 @@ graph TB
         subgraph "Layer 3: Consensus Engine PoUW"
             CONSENSUS["Consensus Engine<br/>Proof of Useful Work"]
             POW["NP-Problem Solving<br/>SubsetSum SAT TSP"]
-            WORKSCORE["Work Score Calculation<br/>Quality Time Memory"]
+            WORKSCORE["Work Score<br/>log2 asymmetry x quality"]
             VALIDATOR["Block Validator<br/>Solution Verification"]
 
             CONSENSUS --> POW
@@ -330,21 +347,26 @@ graph TB
             CONSENSUS --> VALIDATOR
         end
 
-        subgraph "Layer 4: CPP Network Protocol"
-            CPP["CPP Network<br/>Custom TCP on Port 707"]
+        subgraph "Layer 4: P2P (CPP + Mesh, Noise_XX)"
+            CPP["CPP TCP /707<br/>Wire + routing"]
+            MESH["Mesh layer<br/>Gossip / transport"]
+            NOISE["Noise_XX<br/>noise.rs + encrypted_connection"]
             ROUTER["EquilibriumRouter<br/>sqrt-n * eta Fanout"]
             FLOCK["FlockState<br/>Reynolds Murmuration"]
             INTEGRITY["Message Integrity<br/>blake3 Checksums"]
 
             CPP --> ROUTER
             CPP --> FLOCK
+            MESH --> ROUTER
+            CPP --> NOISE
+            MESH --> NOISE
             CPP --> INTEGRITY
         end
 
         subgraph "Layer 5: Application Interface"
             RPC["JSON-RPC Server<br/>HTTP/WebSocket"]
-            WALLET["CLI Wallet<br/>Ed25519 Keystore"]
-            NODE["Full Node Binary<br/>coinject"]
+            WALLET["CLI + Web Wallet<br/>Keystore / browser UI"]
+            NODE["coinject node<br/>6 empirical types"]
 
             RPC --> NODE
             WALLET --> RPC
@@ -368,6 +390,7 @@ graph TB
         VALIDATOR -.->|"Verifies"| MARKETPLACE
         POW -.->|"Submits"| CONSENSUS
         NODE -.->|"Broadcasts"| CPP
+        NODE -.->|"Mesh"| MESH
         ROUTER -.->|"Delivers"| VALIDATOR
         DIST -.->|"Updates"| POOLS
         BOUNTY -.->|"Credits"| ACCOUNTS
@@ -422,6 +445,18 @@ let write_txn = db.begin_write()?;
 write_txn.commit()?;  // Atomic commit with durability
 ```
 
+### Observability (Prometheus + Grafana)
+
+The `monitoring/` directory ships **Prometheus** scrape configs and **Grafana** dashboard provisioning for node and API metrics. After bringing up the stack (for example `docker compose up -d` where compose includes these services):
+
+```bash
+# Grafana dashboards (default compose mapping; adjust if your ports differ)
+open http://localhost:3000
+
+# Prometheus UI / raw metrics
+open http://localhost:9090
+```
+
 ---
 
 ## Mathematical Foundation
@@ -471,7 +506,7 @@ Where:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Quigles1337/COINjecture2.0.git
+git clone https://github.com/COINjecture-Network/COINjecture2.0.git
 cd COINjecture2.0
 
 # Build and start 4-node testnet
@@ -493,7 +528,7 @@ docker-compose down
 ### Native Build
 
 ```bash
-git clone https://github.com/Quigles1337/COINjecture2.0.git
+git clone https://github.com/COINjecture-Network/COINjecture2.0.git
 cd COINjecture2.0
 
 # Build release binaries
@@ -547,6 +582,54 @@ cargo test --all -- --nocapture
 
 ---
 
+## Production deployment and chain health
+
+For Docker stacks on multiple hosts, confirm everyone is on the **same chain** before worrying about block height: `chain_getInfo` must report the same **`chain_id`** and **`genesis_hash`**. **`best_height`** then catches up as sync runs (often minutes to hours depending on peer count and history).
+
+**Compare bootnodes** (default JSON-RPC is host port **9933**; adjust IPs for your fleet):
+
+```bash
+for ip in 193.203.164.13 76.13.101.67; do
+  curl -sS -m 15 -X POST "http://$ip:9933/" -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","method":"chain_getInfo","params":[],"id":1}'
+  echo
+done
+```
+
+If **`best_height`** on a host stops increasing while peers are far ahead, inspect sync on that machine (for example `docker logs coinject-bootnode`). Logs such as **`historical sync block conflicts with local chain`**, **`Block hash mismatch`**, or **`sync batch made no progress`** usually mean the node extended a **local fork** (often because it produced blocks while still far behind peers). Fix: wipe volumes, resync from canonical peers; the binary still gates mining with peer sync/consensus, but an empty or divergent DB may need a guarded resync (see destructive resync script).
+
+**Destructive wipe (guarded SSH script):** [`scripts/deployment/destructive-chain-resync-remote.sh`](scripts/deployment/destructive-chain-resync-remote.sh) — read the header for `DESTRUCTIVE_CHAIN_RESYNC_CONFIRM` and what is kept vs removed.
+
+**New DigitalOcean mesh peer (wipe + clone + sync-follower):** [`scripts/deployment/bootstrap-digitalocean-mesh-node.sh`](scripts/deployment/bootstrap-digitalocean-mesh-node.sh) — set `HOST`, `WIPE_CONFIRM=I_WIPE_DROPLET_CHAIN_DATA`, `MESH_BOOTNODES` (CPP `host:707` list), and either `DEPLOY_BOOTNODE_ONLY=1` or Supabase vars for `api-server`. If SSH needs a specific key: `SSH_IDENTITY=$HOME/.ssh/id_ed25519`. Open inbound **707/tcp** on the droplet firewall.
+
+**Mesh / follower overlay (mining on):** [`docker-compose.sync-follower.yml`](docker-compose.sync-follower.yml) overrides node commands so followers dial **`bootnode:707`** while keeping **`--mine`** on every chain service. Before the tip is caught up, the node still waits for peers/sync and **`peer_consensus.should_mine()`** limits who actually produces a block — you do not need a second compose step to “turn mining on” after sync.
+
+**One public CPP IP per host (fleet on one VPS):** [`docker-compose.local-ram.yml`](docker-compose.local-ram.yml) clears env bootnodes for **node1–node3** so only **bootnode** dials the public mesh. **`.env` bootlists:** omit self — [`scripts/deployment/print-mesh-bootnodes.sh`](scripts/deployment/print-mesh-bootnodes.sh). Full checklist: [`docs/CPP_DEPLOYMENT.md`](docs/CPP_DEPLOYMENT.md) (section *Reliable multi-site mesh*).
+
+**Prove chain containers have `--mine`:** [`scripts/deployment/verify-node-mining-enabled.sh`](scripts/deployment/verify-node-mining-enabled.sh) — set `HOST=root@…` (SSH) or `VERIFY_LOCAL=1` on the server; optional `CONTAINERS="coinject-bootnode …"`. (`verify-follower-not-mining.sh` is a thin wrapper and deprecated.) **Peer diversity:** add stable bootnode peers in `.env` / compose so `chain_getInfo.peer_count` is not stuck at 1. **CPU:** a larger VPS raises validation throughput; sync batch size is protocol-capped (see network CPP config), not a compose knob.
+
+After a volume wipe, on the recovering host (example: three chain services + API):
+
+```bash
+cd /opt/coinjecture-src   # your clone path
+docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode node1 node2 api-server
+```
+
+If sync **repeatedly stalls** in the same height band with fork / “missing block” warnings in `docker logs coinject-bootnode`, try a **single chain database** on that host: bring up only **`bootnode`** and **`api-server`** (omit `node1` / `node2`) with the same overlay — one volume (`bootnode-data`), one P2P view — then widen the stack once caught up.
+
+Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Optional watch loop from your laptop: [`scripts/deployment/watch-sync-gap.sh`](scripts/deployment/watch-sync-gap.sh) (set `CANONICAL_RPC` / `FOLLOWER_RPC` or pass two URLs; `ONE_SHOT=1` for a single sample; `EXIT_WHEN_CAUGHT_UP=1` to **exit as soon as** `gap <= SYNC_GAP_OK`). To **watch until caught up, then SSH and refresh the stack** in one go: set `HOST` and `REMOTE_PATH`, then run [`scripts/deployment/wait-for-sync-then-mining.sh`](scripts/deployment/wait-for-sync-then-mining.sh) (uses `SYNC_WATCH_INTERVAL`, default 60s). To find the first height where **`prev_hash`** differs between two RPC URLs, use [`scripts/compare-fork-blocks.sh`](scripts/compare-fork-blocks.sh).
+
+If you prefer **base compose only** (no overlay file), after catch-up you can recreate with a single file — same volumes, never `down -v`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml down
+docker compose -f docker-compose.yml up -d --build bootnode node1 node2 node3 api-server
+```
+
+Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay): [`scripts/deployment/switch-to-mining-after-sync-remote.sh`](scripts/deployment/switch-to-mining-after-sync-remote.sh) (`MINING_SERVICES` overrides the service list if you omit `node3`).
+
+---
+
 ## For AI Research Labs
 
 ### COINjecture as Training Data Substrate
@@ -583,6 +666,8 @@ cargo test --all -- --nocapture
 - D2: Short-term strategy (days)
 - D3: Medium-term positioning (weeks)
 
+**HuggingFace dataset pipeline** (`huggingface/`): Solved PoUW problem sets can be **exported and uploaded** to HuggingFace as versioned datasets — cryptographically anchored to chain state — so labs can fine-tune or evaluate models on **verifiable NP instances and solutions**, not hand-waved synthetic logs.
+
 ---
 
 ## Development Status
@@ -615,8 +700,10 @@ cargo test --all -- --nocapture
   - [x] Adaptive difficulty adjustment
   - [x] Block validation and work score calculation
 
-- [x] **Networking (Custom P2P — CPP)**
-  - [x] Custom TCP Protocol (port 707) with Ed25519-authenticated handshakes
+- [x] **Networking (CPP + mesh + Noise_XX)**
+  - [x] CPP custom TCP protocol (port 707) with Ed25519-authenticated handshakes
+  - [x] Mesh layer (`network/src/mesh/`) for gossip, transport, and bridges
+  - [x] Noise_XX encrypted sessions (`noise.rs`, `encrypted_connection.rs`)
   - [x] PEX Reactor (Tendermint-style peer exchange with rate limiting)
   - [x] Cascading Peer Discovery (persistent DB → DNS seeds → hardcoded → manual)
   - [x] Peer Scoring (ban-score + positive reputation with auto-promotion)
@@ -650,7 +737,7 @@ cargo test --all -- --nocapture
   - [x] Ed25519 keystore
   - [x] Transaction construction and marketplace support
 
-### Docker Testnet Verified (2026-03-12)
+### Docker Testnet Verified (2026-03-25)
 
 4-node Docker testnet fully operational:
 - All 4 nodes healthy and connected (bootnode + 3 peers)
@@ -662,11 +749,13 @@ cargo test --all -- --nocapture
 
 ### Roadmap
 
-**Phase 1** (Complete): Testnet with PoUW marketplace + dimensional pools + redb
-**Phase 2** (Complete): Production infrastructure — API server, auth, PEX, SSE streaming, marketplace DB
-**Phase 3** (Current): Noise_XX P2P encryption, matching engine, indexer service, production Docker + monitoring
-**Phase 4** (Q3 2026): Security audit + economic attack simulation + mainnet preparation
-**Phase 5** (Q4 2026): Mainnet launch with live bounty marketplace
+**Phases 1–18** (✅ Complete): Testnet foundation through full-stack platform — includes PoUW marketplace, dimensional pools, redb, REST API + Supabase, web UIs, **Noise_XX** P2P encryption, mesh + CPP networking, indexer, Docker testnets, matching engine, monitoring assets, and **v4.8.4** consensus work-score rewrite (`CHANGELOG.md`).
+
+**Post-4.8.4** (ongoing): Mining-fairness tweaks, fee system refinements, observability and ops polish (see recent commits on `main`).
+
+**Phase 19** (Next): Security audit + economic attack simulation + mainnet preparation
+
+**Phase 20** (Q4 2026): Mainnet launch with live bounty marketplace
 
 ---
 
@@ -694,21 +783,16 @@ COINjecture 2.0 (WEB4)
 │   ├── miner.rs       # NP-problem solving & mining logic
 │   └── work_score.rs  # Work score calculation
 │
-├── network/            # Custom TCP P2P networking (CPP)
-│   ├── cpp/
-│   │   ├── network.rs         # Main event loop, peer management
-│   │   ├── peer.rs            # Peer struct, TCP write task
-│   │   ├── protocol.rs        # Wire protocol encoding/decoding
-│   │   ├── router.rs          # EquilibriumRouter (sqrt-n*eta fanout)
-│   │   ├── flock.rs           # FlockState murmuration coordination
-│   │   ├── message.rs         # 19 message types with dimensional priority
-│   │   ├── config.rs          # Constants (ETA, ports, timeouts)
-│   │   ├── flow_control.rs    # Window-based congestion control
-│   │   └── node_integration.rs # PeerSelector, NodeMetrics
-│   ├── peer_store.rs  # Persistent peer DB (vetted/unvetted buckets, Sybil resistance)
-│   ├── pex.rs         # PEX reactor (Tendermint-style peer exchange)
-│   ├── discovery.rs   # Cascading discovery (DB → DNS → seeds → manual)
-│   └── peer_scoring.rs # Ban-score + reputation scoring
+├── network/            # P2P: CPP (TCP/707) + mesh; Noise_XX encryption
+│   ├── cpp/            # CPP wire protocol, EquilibriumRouter, flocking, flow control
+│   ├── mesh/           # Mesh gossip, transport, bridge helpers, mesh router
+│   ├── noise.rs        # Noise_XX handshake / session crypto
+│   ├── encrypted_connection.rs # Encrypted streams atop CPP or mesh transports
+│   ├── peer_store.rs   # Persistent peer DB (Sybil-resistant buckets)
+│   ├── pex.rs          # PEX reactor (Tendermint-style peer exchange)
+│   ├── discovery.rs    # Cascading discovery (DB → DNS → seeds → manual)
+│   ├── peer_scoring.rs # Ban-score + reputation scoring
+│   └── ...             # security.rs, reputation.rs, noise_identity.rs, tests/
 │
 ├── mempool/            # Transaction pool
 │   ├── pool.rs        # Mempool logic
@@ -734,6 +818,7 @@ COINjecture 2.0 (WEB4)
 │
 ├── node/               # Full node binary
 │   ├── main.rs        # Entry point
+│   ├── node_types.rs  # Six empirical node types (Light, Full, Archive, Validator, Bounty, Oracle)
 │   ├── service/       # Node orchestration (decomposed)
 │   │   ├── mod.rs             # Node struct, lifecycle, startup
 │   │   ├── block_processing.rs # Transaction apply/unwind
@@ -743,10 +828,14 @@ COINjecture 2.0 (WEB4)
 │   ├── chain.rs       # Block storage (redb)
 │   └── validator.rs   # Block/transaction validation
 │
-└── wallet/             # CLI wallet
-    ├── main.rs        # CLI interface
-    ├── keystore.rs    # Ed25519 key management
-    └── rpc_client.rs  # RPC communication
+├── wallet/             # CLI wallet
+│   ├── main.rs        # CLI interface
+│   ├── keystore.rs    # Ed25519 key management
+│   └── rpc_client.rs  # RPC communication
+│
+├── web-wallet/         # Browser wallet (React; AES-256-GCM, PBKDF2, CSP-minded UI)
+├── huggingface/        # HuggingFace dataset uploader for verified problem/solution sets
+└── monitoring/         # Prometheus scrape configs + Grafana dashboards + alerts
 ```
 
 ---
@@ -806,9 +895,9 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## Links
 
-- **GitHub**: https://github.com/Quigles1337/COINjecture2.0
-- **Testnet Guide**: [TESTNET_QUICKSTART.md](TESTNET_QUICKSTART.md)
-- **Current Issues**: [CURRENT_ISSUES.md](CURRENT_ISSUES.md)
+- **GitHub**: https://github.com/COINjecture-Network/COINjecture2.0
+- **Getting started**: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- **Troubleshooting**: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 - **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---

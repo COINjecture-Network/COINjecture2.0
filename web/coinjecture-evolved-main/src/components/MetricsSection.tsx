@@ -1,16 +1,24 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { TrendingUp, Users, Activity, Target, Award, BarChart3, Network, Loader2 } from "lucide-react";
+import { TrendingUp, Users, Activity, Target, Award, BarChart3, Network, Loader2, Binary, Layers } from "lucide-react";
 import { LiveSolutionFeed } from "./LiveSolutionFeed";
 import { useQuery } from "@tanstack/react-query";
-import { rpcClient } from "@/lib/rpc-client";
+import { chainInfoU128DecimalString, rpcClient } from "@/lib/rpc-client";
+import { hashHexOrEmpty } from "@/lib/mining";
 import { Link } from "react-router-dom";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
+
+function hashSnippet(value: unknown): string {
+  const h = hashHexOrEmpty(value);
+  if (!h) return "—";
+  return h.length >= 16 ? `${h.slice(0, 16)}...` : h;
+}
 
 export const MetricsSection = () => {
   const { data: chainInfo, isLoading: chainLoading, isError: chainError } = useQuery({
     queryKey: ['chain-info'],
     queryFn: () => rpcClient.getChainInfo(),
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 5000, // Keep mining / W / minted close to RPC tip
   });
 
   const { data: marketplaceStats, isLoading: statsLoading, isError: statsError } = useQuery({
@@ -111,7 +119,11 @@ export const MetricsSection = () => {
                 <Activity className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Block Height</p>
               </div>
-              <p className="text-xl font-bold">{chainInfo.best_height.toLocaleString()}</p>
+              <p className="text-xl font-bold">
+                {Number.isFinite(chainInfo.best_height)
+                  ? chainInfo.best_height.toLocaleString()
+                  : "—"}
+              </p>
             </Card>
             <Card className="signal-card">
               <div className="flex items-center gap-3 mb-2">
@@ -125,21 +137,86 @@ export const MetricsSection = () => {
                 <Target className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Best Hash</p>
               </div>
-              <p className="text-xs font-mono break-all">
-                {chainInfo.best_hash.length >= 16
-                  ? `${chainInfo.best_hash.slice(0, 16)}...`
-                  : chainInfo.best_hash || "—"}
-              </p>
+              <p className="text-xs font-mono break-all">{hashSnippet(chainInfo.best_hash)}</p>
             </Card>
             <Card className="signal-card">
               <div className="flex items-center gap-3 mb-2">
                 <Award className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Genesis</p>
               </div>
-              <p className="text-xs font-mono break-all">
-                {chainInfo.genesis_hash.length >= 16
-                  ? `${chainInfo.genesis_hash.slice(0, 16)}...`
-                  : chainInfo.genesis_hash || "—"}
+              <p className="text-xs font-mono break-all">{hashSnippet(chainInfo.genesis_hash)}</p>
+            </Card>
+          </div>
+        )}
+
+        {chainInfo && (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-12">
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <Binary className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">Header PoW (leading hex zeros)</p>
+              </div>
+              <p className="text-xl font-bold tabular-nums">
+                {chainInfo.header_pow_difficulty != null && Number.isFinite(chainInfo.header_pow_difficulty)
+                  ? chainInfo.header_pow_difficulty
+                  : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Each +1 is one more required leading <code className="rounded bg-muted px-1">0</code> in{" "}
+                <code className="rounded bg-muted px-1">hex(header_hash)</code> (max 64).
+              </p>
+            </Card>
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <Layers className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">NP problem size (adjuster)</p>
+              </div>
+              <p className="text-xl font-bold tabular-nums">
+                {chainInfo.np_problem_size != null && Number.isFinite(chainInfo.np_problem_size)
+                  ? chainInfo.np_problem_size.toLocaleString()
+                  : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Post-block empirical size target for the next block template (shown when the node exposes mining tips).
+              </p>
+            </Card>
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <BarChart3 className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">Cumulative work (W)</p>
+              </div>
+              <p className="text-lg font-bold font-mono break-all">
+                {chainInfoU128DecimalString(chainInfo.best_cumulative_work) ?? "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Σ truncated integer work from headers (same units as w_trunc in rewards). Not display BEANS; not
+                ledger atoms.
+              </p>
+            </Card>
+            <Card className="signal-card">
+              <div className="flex items-center gap-3 mb-2">
+                <Award className="h-6 w-6 text-primary" />
+                <p className="text-sm text-muted-foreground">Total minted (coinbase)</p>
+              </div>
+              <p className="text-xl font-bold tabular-nums">
+                {(() => {
+                  const atoms = parseBalance(chainInfo.total_minted_rewards);
+                  if (atoms !== null) return formatBeans(atoms);
+                  const s = chainInfoU128DecimalString(chainInfo.total_minted_rewards);
+                  return s ?? "—";
+                })()}
+              </p>
+              {chainInfoU128DecimalString(chainInfo.total_minted_rewards) ? (
+                <p className="text-xs text-muted-foreground font-mono break-all mt-0.5">
+                  {(() => {
+                    const a = parseBalance(chainInfo.total_minted_rewards);
+                    const raw = chainInfoU128DecimalString(chainInfo.total_minted_rewards);
+                    return a !== null ? `${a.toString()} atoms raw` : raw ?? "—";
+                  })()}
+                </p>
+              ) : null}
+              <p className="text-xs text-muted-foreground mt-1">
+                Sum of coinbase rewards on the best chain — values are ledger atoms; main figure is BEANS (÷10¹²).
               </p>
             </Card>
           </div>
@@ -181,7 +258,10 @@ export const MetricsSection = () => {
                 <TrendingUp className="h-6 w-6 text-primary" />
                 <p className="text-sm text-muted-foreground">Bounty Pool</p>
               </div>
-              <p className="text-2xl font-bold">{(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B</p>
+              <p className="text-2xl font-bold tabular-nums">
+                {formatBeans(parseBalance(marketplaceStats.total_bounty_pool) ?? 0n)}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">Open listings escrow total in display BEANS.</p>
             </Card>
           </div>
         )}

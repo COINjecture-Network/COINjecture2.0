@@ -1,5 +1,6 @@
 // Transaction commands
 
+use crate::atoms_display::{format_atoms_as_beans, DEFAULT_PAID_TX_FEE_ATOMS};
 use crate::keystore::Keystore;
 use crate::rpc_client::RpcClient;
 use anyhow::{anyhow, Result};
@@ -51,18 +52,16 @@ pub async fn send_tokens(
     // Get current nonce
     let nonce = client.get_nonce(&sender.address).await?;
 
-    // Fee calculation for EIP-1559 style fee market
-    // Default: 1000 base fee + 500 priority fee = 1500 total
-    // TODO: Query actual base fee from RPC and make priority fee configurable
-    let fee = 1500u128; // base_fee (1000) + priority_fee (500)
+    // Default paid-network fee: `DEFAULT_PAID_TX_FEE_ATOMS` (0.001 display BEANS; matches mempool min).
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();
     println!("{}", "Transaction Details".cyan().bold());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("From:   {} ({})", sender.name.cyan(), sender.address);
     println!("To:     {}", to_address);
-    println!("Amount: {} tokens", format_balance(amount));
-    println!("Fee:    {} tokens", format_balance(fee));
+    println!("Amount: {} BEANS", format_atoms_as_beans(amount));
+    println!("Fee:    {} BEANS", format_atoms_as_beans(fee));
     println!("Nonce:  {}", nonce);
     println!();
 
@@ -161,15 +160,15 @@ pub async fn create_timelock(
     let nonce = client.get_nonce(&sender.address).await?;
 
     // Fee calculation
-    let fee = 1500u128;
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();
     println!("{}", "Time-Lock Transaction Details".cyan().bold());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("From:       {} ({})", sender.name.cyan(), sender.address);
     println!("Recipient:  {}", recipient_address);
-    println!("Amount:     {} tokens", format_balance(amount));
-    println!("Fee:        {} tokens", format_balance(fee));
+    println!("Amount:     {} BEANS", format_atoms_as_beans(amount));
+    println!("Fee:        {} BEANS", format_atoms_as_beans(fee));
     println!("Unlock In:  {} seconds", unlock_in_seconds);
     println!(
         "Unlock At:  {}",
@@ -327,7 +326,7 @@ pub async fn create_escrow(
     let nonce = client.get_nonce(&sender.address).await?;
 
     // Fee calculation
-    let fee = 1500u128;
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();
     println!("{}", "Escrow Creation Details".cyan().bold());
@@ -339,8 +338,8 @@ pub async fn create_escrow(
     } else {
         println!("Arbiter:    {}", "None".dimmed());
     }
-    println!("Amount:     {} tokens", format_balance(amount));
-    println!("Fee:        {} tokens", format_balance(fee));
+    println!("Amount:     {} BEANS", format_atoms_as_beans(amount));
+    println!("Fee:        {} BEANS", format_atoms_as_beans(fee));
     println!("Timeout In: {} seconds", timeout_in_seconds);
     println!(
         "Timeout At: {}",
@@ -464,14 +463,14 @@ pub async fn release_escrow(from: &str, escrow_id: &str, client: &RpcClient) -> 
     let nonce = client.get_nonce(&sender.address).await?;
 
     // Fee calculation
-    let fee = 1500u128;
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();
     println!("{}", "Escrow Release Details".cyan().bold());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("From:      {} ({})", sender.name.cyan(), sender.address);
     println!("Escrow ID: {}", escrow_id_str);
-    println!("Fee:       {} tokens", format_balance(fee));
+    println!("Fee:       {} BEANS", format_atoms_as_beans(fee));
     println!("Nonce:     {}", nonce);
     println!();
 
@@ -560,14 +559,14 @@ pub async fn refund_escrow(from: &str, escrow_id: &str, client: &RpcClient) -> R
     let nonce = client.get_nonce(&sender.address).await?;
 
     // Fee calculation
-    let fee = 1500u128;
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();
     println!("{}", "Escrow Refund Details".cyan().bold());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("From:      {} ({})", sender.name.cyan(), sender.address);
     println!("Escrow ID: {}", escrow_id_str);
-    println!("Fee:       {} tokens", format_balance(fee));
+    println!("Fee:       {} BEANS", format_atoms_as_beans(fee));
     println!("Nonce:     {}", nonce);
     println!();
 
@@ -665,7 +664,7 @@ pub async fn open_channel(
     let nonce = client.get_nonce(&sender.address).await?;
 
     // Fee calculation
-    let fee = 2000u128;
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS.saturating_mul(2);
 
     // Generate channel ID using blake3 hash
     let current_time = chrono::Utc::now().timestamp();
@@ -689,14 +688,14 @@ pub async fn open_channel(
     println!("From:          {} ({})", sender.name.cyan(), sender.address);
     println!("Participant A: {}", sender.address);
     println!("Participant B: {}", participant_b_str);
-    println!("Deposit A:     {} tokens", format_balance(deposit_a));
-    println!("Deposit B:     {} tokens", format_balance(deposit_b));
+    println!("Deposit A:     {} BEANS", format_atoms_as_beans(deposit_a));
+    println!("Deposit B:     {} BEANS", format_atoms_as_beans(deposit_b));
     println!(
-        "Total:         {} tokens",
-        format_balance(deposit_a + deposit_b)
+        "Total:         {} BEANS",
+        format_atoms_as_beans(deposit_a + deposit_b)
     );
     println!("Timeout:       {} seconds", timeout_seconds);
-    println!("Fee:           {} tokens", format_balance(fee));
+    println!("Fee:           {} BEANS", format_atoms_as_beans(fee));
     println!("Nonce:         {}", nonce);
     println!(
         "Channel ID:    {}",
@@ -813,7 +812,7 @@ pub async fn update_channel(
     let nonce = client.get_nonce(&sender.address).await?;
 
     // Fee calculation
-    let fee = 1000u128;
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();
     println!("{}", "Channel Update Details".cyan().bold());
@@ -821,9 +820,9 @@ pub async fn update_channel(
     println!("From:       {} ({})", sender.name.cyan(), sender.address);
     println!("Channel ID: {}", channel_id_str);
     println!("Sequence:   {}", sequence);
-    println!("Balance A:  {} tokens", format_balance(balance_a));
-    println!("Balance B:  {} tokens", format_balance(balance_b));
-    println!("Fee:        {} tokens", format_balance(fee));
+    println!("Balance A:  {} BEANS", format_atoms_as_beans(balance_a));
+    println!("Balance B:  {} BEANS", format_atoms_as_beans(balance_b));
+    println!("Fee:        {} BEANS", format_atoms_as_beans(fee));
     println!("Nonce:      {}", nonce);
     println!();
 
@@ -922,7 +921,7 @@ pub async fn close_channel(
     let nonce = client.get_nonce(&sender.address).await?;
 
     // Fee calculation
-    let fee = 1500u128;
+    let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();
     println!("{}", "Channel Close Details".cyan().bold());
@@ -934,14 +933,14 @@ pub async fn close_channel(
     );
     println!("Channel ID:      {}", channel_id_str);
     println!(
-        "Final Balance A: {} tokens",
-        format_balance(final_balance_a)
+        "Final Balance A: {} BEANS",
+        format_atoms_as_beans(final_balance_a)
     );
     println!(
-        "Final Balance B: {} tokens",
-        format_balance(final_balance_b)
+        "Final Balance B: {} BEANS",
+        format_atoms_as_beans(final_balance_b)
     );
-    println!("Fee:             {} tokens", format_balance(fee));
+    println!("Fee:             {} BEANS", format_atoms_as_beans(fee));
     println!("Nonce:           {}", nonce);
     println!();
 
@@ -1185,19 +1184,4 @@ fn create_channel_close_signing_message(
     msg.extend_from_slice(&final_balance_a.to_le_bytes());
     msg.extend_from_slice(&final_balance_b.to_le_bytes());
     msg
-}
-
-fn format_balance(balance: u128) -> String {
-    // Format with thousand separators
-    let balance_str = balance.to_string();
-    let mut result = String::new();
-
-    for (count, c) in balance_str.chars().rev().enumerate() {
-        if count > 0 && count % 3 == 0 {
-            result.insert(0, ',');
-        }
-        result.insert(0, c);
-    }
-
-    result
 }

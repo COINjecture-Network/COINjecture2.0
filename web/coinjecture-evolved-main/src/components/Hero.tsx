@@ -1,11 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { BrandLogo } from "@/components/BrandLogo";
 import { ArrowRight, Download, Code, Award, Target, TrendingUp, Database, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { rpcClient } from "@/lib/rpc-client";
 import { cn } from "@/lib/utils";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
 
 const useHeroVideo = () => {
   const [showVideo, setShowVideo] = useState(
@@ -85,6 +87,9 @@ export const Hero = () => {
         <div className="container mx-auto px-6 relative z-10 flex-1 flex flex-col justify-center">
           <div className="max-w-6xl mx-auto w-full">
             <div className="text-center mb-16 animate-fade-in">
+              <div className="flex justify-center mb-6">
+                <BrandLogo size="lg" />
+              </div>
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-effect border-white/10 mb-6 subtle-shadow">
                 <div className={`w-2 h-2 rounded-full ${chainInfo ? 'bg-success animate-pulse' : 'bg-muted'}`} />
                 <span
@@ -163,8 +168,8 @@ export const Hero = () => {
                         </Card>
                         <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                           <div className="signal-kicker">Bounty pool</div>
-                          <div className="signal-value text-primary">
-                            {(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B
+                          <div className="signal-value text-primary tabular-nums">
+                            {formatBeans(parseBalance(marketplaceStats.total_bounty_pool) ?? 0n)}
                           </div>
                         </Card>
                       </>
@@ -336,7 +341,10 @@ export const Hero = () => {
                       All solutions and metrics are publicly available on HuggingFace
                     </p>
                     <a 
-                      href="https://huggingface.co/datasets/COINjecture/NP_Solutions" 
+                      href={
+                        (import.meta.env.VITE_HF_DATASET_URL as string | undefined)?.trim() ||
+                        "https://huggingface.co/datasets/COINjecture/NP-Solutions"
+                      }
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="text-sm text-primary hover:underline inline-flex items-center gap-1"
@@ -367,9 +375,9 @@ export const Hero = () => {
                   Open Solver Lab <Code className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
-              <Link to="/metrics">
+              <Link to="/explore">
                 <Button size="lg" variant="outline" className="gentle-animation px-8">
-                  View Live Metrics <TrendingUp className="ml-2 h-4 w-4" />
+                  Open Explorer <TrendingUp className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
             </div>

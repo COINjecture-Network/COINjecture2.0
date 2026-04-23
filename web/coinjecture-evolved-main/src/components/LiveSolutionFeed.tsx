@@ -6,10 +6,12 @@ import { useQuery } from "@tanstack/react-query";
 import { rpcClient } from "@/lib/rpc-client";
 import { bytesToHex } from "@noble/hashes/utils";
 import {
-  blockRewardFromWorkScore,
+  blockRewardFromTruncWorkAndParentW,
   formatBeans,
   formatWorkScoreBits,
   parseBalance,
+  parseU128DecimalString,
+  truncatedHeaderWorkScoreU128,
   workScoreBitsFromPouw,
 } from "@/lib/chain-metrics";
 
@@ -100,6 +102,39 @@ function numish(v: unknown): number | null {
   return null;
 }
 
+/**
+ * Parent cumulative work for height `h` is `W_tip − w_h − Σ w_i (h<i≤tip)` with `w` = truncated stored
+ * `header.work_score` (same as node DB), not PoUW display bits.
+ */
+function applyTokenomicsRewardsToSolutions(
+  solutions: Solution[],
+  workByHeight: Map<number, bigint>,
+  tipHeight: number,
+  wTip: bigint,
+): void {
+  for (const s of solutions) {
+    if (s.block_height <= 0) continue;
+    let tail = 0n;
+    let complete = true;
+    for (let hi = s.block_height + 1; hi <= tipHeight; hi++) {
+      const w = workByHeight.get(hi);
+      if (w === undefined) {
+        complete = false;
+        break;
+      }
+      tail += w;
+    }
+    const wSelf = workByHeight.get(s.block_height);
+    if (wSelf === undefined) complete = false;
+    if (!complete) continue;
+    const parentW = wTip - wSelf - tail;
+    if (parentW < 0n) continue;
+    s.parent_w_emission = parentW;
+    // Integer ⌊w/W⌋ is often 0 once W ≫ w_trunc — do not replace on-chain coinbase in `reward_beans`.
+    s.formula_reward_beans = blockRewardFromTruncWorkAndParentW(wSelf, parentW);
+  }
+}
+
 function formatMinerShort(miner: unknown): string {
   if (typeof miner === "string" && miner.length >= 16) {
     return `${miner.slice(0, 8)}...${miner.slice(-6)}`;
@@ -115,8 +150,19 @@ interface Solution {
   block_height: number;
   problem_type: "SubsetSum" | "TSP" | "SAT" | "Custom";
   solver: string;
-  /** Coinbase reward (BEANS) — from block; fallback matches tokenomics reward formula */
+  /** Parsed on-chain coinbase `reward` (authoritative mint for this block). */
   reward_beans: bigint;
+  /** Model mint atoms `⌊w_trunc·S·K/W_parent⌋` when W_parent is derivable (S=10¹², K=emission multiplier); informational vs coinbase. */
+  formula_reward_beans: bigint | null;
+  /**
+   * Integer truncated from on-chain `header.work_score` — this is what the node sums into cumulative W
+   * (`work_score.max(0) as u64`). When this is 0, parent W does not grow and rewards can repeat.
+   */
+  w_contrib_chain: bigint;
+  /** Parent cumulative W (Σ chain rows before this block) when derivable from tip W + loaded heights. */
+  parent_w_emission: bigint | null;
+  /** Parsed `coinbase.reward` from RPC JSON when present (may match or differ from formula display). */
+  coinbase_beans: bigint | null;
   /** Bit-equivalent work consensus/src/work_score.rs */
   work_score_bits: number;
   /** solve_time / verify_time — PoUW difficulty signal (header field) */
@@ -151,17 +197,34 @@ export const LiveSolutionFeed = () => {
   const { data: chainInfo } = useQuery({
     queryKey: ['chain-info'],
     queryFn: () => rpcClient.getChainInfo(),
-    refetchInterval: 10000,
+    refetchInterval: 5000,
   });
 
   const BLOCK_FETCH_CONCURRENCY = 4;
 
-  const { data: feedData } = useQuery({
+  const {
+    data: feedData,
+    isError: feedQueryError,
+    error: feedQueryErrorDetail,
+    failureCount: feedFailureCount,
+  } = useQuery({
     queryKey: ['live-solution-feed', chainInfo?.best_height, chainInfo?.best_hash],
     enabled: !!chainInfo,
-    refetchInterval: 12000,
+    refetchInterval: 8000,
     queryFn: async () => {
-      const latestHeight = chainInfo!.best_height;
+      // `/chain/info` (or parallel chain_getInfo) may report a higher tip than the node behind
+      // `VITE_API_URL/node-rpc` or a single lagging RPC. chain_getBlock(h) then returns null for
+      // every h > that node's tip → "fetched 0". Cap heights to the RPC tip we can actually read.
+      const apiBest = chainInfo!.best_height;
+      const tipBlock = await rpcClient.getLatestBlock();
+      let latestHeight = apiBest;
+      if (tipBlock?.header) {
+        const th = headerHeight(tipBlock.header);
+        if (th !== null) {
+          latestHeight = Math.min(apiBest, th);
+        }
+      }
+
       const blockCount = 20;
       const startHeight = Math.max(0, latestHeight - blockCount + 1);
       const heights: number[] = [];
@@ -170,6 +233,7 @@ export const LiveSolutionFeed = () => {
       }
 
       const newSolutions: Solution[] = [];
+      const workByHeight = new Map<number, bigint>();
       let blocksFetched = 0;
       let blocksWithReveal = 0;
       let blocksHeaderOnly = 0;
@@ -189,15 +253,23 @@ export const LiveSolutionFeed = () => {
         note: string,
         blockRaw?: Record<string, unknown>,
       ) => {
+        workByHeight.set(
+          height,
+          truncatedHeaderWorkScoreU128(header.work_score ?? header.workScore),
+        );
         const bits = effectiveHeaderWorkScoreBits(header);
+        const wRow = truncatedHeaderWorkScoreU128(header.work_score ?? header.workScore);
         const fromCb = blockRaw ? coinbaseRewardBeansFromBlock(blockRaw) : null;
-        const rewardBeans =
-          fromCb !== null && fromCb > 0n ? fromCb : blockRewardFromWorkScore(bits);
+        const rewardBeans = fromCb !== null ? fromCb : 0n;
         newSolutions.push({
           block_height: height,
           problem_type: "Custom",
           solver: formatMinerShort(header.miner),
           reward_beans: rewardBeans,
+          formula_reward_beans: null,
+          w_contrib_chain: wRow,
+          parent_w_emission: null,
+          coinbase_beans: fromCb,
           work_score_bits: bits,
           time_asymmetry_ratio: typeof header.time_asymmetry_ratio === "number" ? header.time_asymmetry_ratio : Number(header.time_asymmetry_ratio ?? NaN),
           solution_quality: typeof header.solution_quality === "number" ? header.solution_quality : Number(header.solution_quality ?? NaN),
@@ -213,12 +285,17 @@ export const LiveSolutionFeed = () => {
       const processBlock = (block: Awaited<ReturnType<typeof rpcClient.getBlock>>) => {
         if (!block) return;
         try {
-        const raw = block as Record<string, unknown>;
+        const raw = block as unknown as Record<string, unknown>;
         const headerRaw = raw.header as Record<string, unknown> | undefined;
         if (!headerRaw) return;
 
         const height = headerHeight(headerRaw);
         if (height === null) return;
+
+        workByHeight.set(
+          height,
+          truncatedHeaderWorkScoreU128(headerRaw.work_score ?? headerRaw.workScore),
+        );
 
         const solutionReveal = (raw.solution_reveal ?? raw.solutionReveal) as {
           problem?: unknown;
@@ -250,9 +327,9 @@ export const LiveSolutionFeed = () => {
         }
 
         const bits = effectiveHeaderWorkScoreBits(headerRaw);
+        const wRow = truncatedHeaderWorkScoreU128(headerRaw.work_score ?? headerRaw.workScore);
         const fromCb = coinbaseRewardBeansFromBlock(raw);
-        const rewardBeans =
-          fromCb !== null && fromCb > 0n ? fromCb : blockRewardFromWorkScore(bits);
+        const rewardBeans = fromCb !== null ? fromCb : 0n;
 
         let problemType: "SubsetSum" | "TSP" | "SAT" | "Custom" | null = null;
         let problemData: Solution['problem_data'] = {};
@@ -345,6 +422,10 @@ export const LiveSolutionFeed = () => {
           problem_type: problemType,
           solver,
           reward_beans: rewardBeans,
+          formula_reward_beans: null,
+          w_contrib_chain: wRow,
+          parent_w_emission: null,
+          coinbase_beans: fromCb,
           work_score_bits: bits,
           time_asymmetry_ratio: typeof headerRaw.time_asymmetry_ratio === "number" ? headerRaw.time_asymmetry_ratio : Number(headerRaw.time_asymmetry_ratio ?? NaN),
           solution_quality: typeof headerRaw.solution_quality === "number" ? headerRaw.solution_quality : Number(headerRaw.solution_quality ?? NaN),
@@ -372,15 +453,23 @@ export const LiveSolutionFeed = () => {
         }
       }
 
-      // If every chain_getBlock(height) returned null (nodes behind / flaky), try tip once.
+      // If every chain_getBlock(height) returned null, reuse RPC tip from above, then REST fallback.
+      if (blocksFetched === 0 && tipBlock) {
+        processBlock(tipBlock);
+      }
       if (blocksFetched === 0) {
-        const tip = await rpcClient.getLatestBlock();
-        if (tip) processBlock(tip);
+        const viaApi = await rpcClient.getLatestBlockFromApi();
+        if (viaApi) processBlock(viaApi);
       }
 
       const uniqueByHeight = Array.from(
         new Map(newSolutions.map((s) => [s.block_height, s])).values(),
       ).sort((a, b) => b.block_height - a.block_height);
+
+      const wTip = parseU128DecimalString(chainInfo!.best_cumulative_work);
+      if (wTip !== null) {
+        applyTokenomicsRewardsToSolutions(uniqueByHeight, workByHeight, latestHeight, wTip);
+      }
 
       let feedHint: string | null = null;
       if (uniqueByHeight.length === 0 && blocksFetched > 0 && blocksWithReveal === 0) {
@@ -391,7 +480,8 @@ export const LiveSolutionFeed = () => {
           "Blocks include solution_reveal but problem/solution JSON was not recognized (see browser console).";
       } else if (uniqueByHeight.length === 0 && blocksFetched === 0) {
         feedHint =
-          "Could not load block bodies from any RPC in VITE_RPC_URL (chain_getBlock / chain_getLatestBlock).";
+          "Could not load block bodies (chain_getBlock / chain_getLatestBlock / API /chain/latest-block). " +
+          "Confirm VITE_API_URL, API NODE_RPC_URL, and that /node-rpc and /chain/latest-block reach a synced node.";
       }
 
       const feedStats =
@@ -452,7 +542,21 @@ export const LiveSolutionFeed = () => {
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
         )}
-        {chainInfo && solutions.length === 0 && (
+        {chainInfo && feedQueryError && (
+          <div className="text-center py-8 text-destructive text-sm space-y-2 px-4">
+            <AlertCircle className="h-8 w-8 mx-auto opacity-80" />
+            <p className="font-medium">Could not load the live feed</p>
+            <p className="text-muted-foreground break-words max-w-xl mx-auto">
+              {feedQueryErrorDetail instanceof Error
+                ? feedQueryErrorDetail.message
+                : String(feedQueryErrorDetail ?? 'Unknown error')}
+            </p>
+            {feedFailureCount > 0 ? (
+              <p className="text-xs text-muted-foreground">Failed attempts: {feedFailureCount}</p>
+            ) : null}
+          </div>
+        )}
+        {chainInfo && !feedQueryError && solutions.length === 0 && (
           <div className="text-center py-12 text-muted-foreground space-y-3">
             <AlertCircle className="h-8 w-8 mx-auto mb-4 opacity-50" />
             <p>No solutions found in recent blocks</p>
@@ -531,7 +635,11 @@ export const LiveSolutionFeed = () => {
                   <span className="text-muted-foreground">Solution:</span>
                   {solution.problem_type === "SubsetSum" && solution.solution_data.indices && (
                     <span className="terminal-font text-success">
-                      Indices {solution.solution_data.indices.join(", ")} → Sum: {solution.solution_data.sum}
+                      {Array.isArray(solution.problem_data.values) && solution.problem_data.values.length > 0
+                        ? `${solution.solution_data.indices
+                            .map((i) => solution.problem_data.values![i])
+                            .join(" + ")} = ${solution.solution_data.sum} (0-based indices ${solution.solution_data.indices.join(", ")})`
+                        : `0-based indices ${solution.solution_data.indices.join(", ")} → sum ${solution.solution_data.sum}`}
                     </span>
                   )}
                   {solution.problem_type === "TSP" && solution.solution_data.route && (
@@ -560,9 +668,9 @@ export const LiveSolutionFeed = () => {
                 </div>
               </div>
 
-              {/* Metrics — align with consensus/src/work_score.rs + tokenomics/src/rewards.rs */}
+              {/* Metrics — emission uses Σ on-chain header work_score integers, not PoUW bits alone */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                <div className="flex flex-col gap-0.5">
+                <div className="flex flex-col gap-0.5 sm:col-span-1">
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Award className="h-3 w-3 text-primary shrink-0" />
                     Reward (BEANS)
@@ -570,14 +678,47 @@ export const LiveSolutionFeed = () => {
                   <span className="font-semibold text-primary tabular-nums">
                     {formatBeans(solution.reward_beans)}
                   </span>
+                  {solution.parent_w_emission != null && solution.formula_reward_beans != null ? (
+                    <span
+                      className="text-[10px] text-muted-foreground leading-tight"
+                      title="Mint = ⌊w_trunc·S·K / W_parent⌋ ledger atoms (S=10¹², K matches node). Display BEANS = mint / S. w_trunc is integer header work, not fractional PoUW bits."
+                    >
+                      Model mint: {formatBeans(solution.formula_reward_beans)} BEANS
+                      <span className="opacity-80">
+                        {" "}
+                        ({solution.formula_reward_beans.toLocaleString()} atoms, w_trunc=
+                        {solution.w_contrib_chain.toString()}, W_parent={solution.parent_w_emission.toString()})
+                      </span>
+                    </span>
+                  ) : solution.block_height > 0 ? (
+                    <span className="text-[10px] text-muted-foreground leading-tight">
+                      W_parent not derived (tip/window mismatch); reward from block coinbase only.
+                    </span>
+                  ) : null}
+                  {solution.coinbase_beans != null &&
+                  solution.formula_reward_beans != null &&
+                  solution.coinbase_beans !== solution.formula_reward_beans ? (
+                    <span className="text-[10px] text-amber-600/90 dark:text-amber-400/90 leading-tight">
+                      Differs from model ⌊w·S·K÷W⌋ (legacy blocks or RPC mismatch).
+                    </span>
+                  ) : null}
                 </div>
                 <div className="flex flex-col gap-0.5">
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Target className="h-3 w-3 text-warning shrink-0" />
                     Work (bits)
                   </span>
-                  <span className="font-semibold tabular-nums" title="log₂(solve/verify) × quality">
+                  <span className="font-semibold tabular-nums" title="log₂(solve/verify) × quality from header / PoUW estimate">
                     {formatWorkScoreBits(solution.work_score_bits)}
+                  </span>
+                  <span
+                    className="text-[10px] text-muted-foreground leading-tight"
+                    title="Chain ΣW uses (header.work_score as u64); values &lt; 1 truncate to 0 even when PoUW bits (above) are non-zero."
+                  >
+                    ΣW row: +{solution.w_contrib_chain.toString()}
+                    {solution.w_contrib_chain === 0n
+                      ? " — no integer work added to W (stored score truncates to 0)"
+                      : ""}
                   </span>
                 </div>
                 <div className="flex flex-col gap-0.5">

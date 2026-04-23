@@ -38,6 +38,8 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { rpcClient, type ProblemInfo } from "@/lib/rpc-client";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
+import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { formatDistanceToNow } from "date-fns";
 import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
@@ -200,7 +202,7 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
               <Badge variant="outline" className="border-primary/20 text-primary">
                 Solver demand
               </Badge>
-              <Badge variant={problem.status === "OPEN" ? "default" : "secondary"}>
+              <Badge variant={isMarketplaceListingOpen(problem.status) ? "default" : "secondary"}>
                 {statusLabel}
               </Badge>
               {problem.is_private && (
@@ -477,7 +479,7 @@ export const MarketplaceSection = () => {
                 value={featuredProblem ? `${featuredProblem.bounty.toLocaleString()} BEANS` : "Loading"}
                 description={
                   featuredProblem
-                    ? `${featuredProblem.status === "OPEN" ? "Open now" : featuredProblem.status} • closes ${formatDistanceToNow(new Date(featuredProblem.expires_at * 1000), { addSuffix: true })}`
+                    ? `${isMarketplaceListingOpen(featuredProblem.status) ? "Open now" : featuredProblem.status} • closes ${formatDistanceToNow(new Date(featuredProblem.expires_at * 1000), { addSuffix: true })}`
                     : "Loading the highest-signal solver opportunity."
                 }
                 tone="bounty"
@@ -546,7 +548,11 @@ export const MarketplaceSection = () => {
                     />
                     <MetricPill
                       label="Bounty pool"
-                      value={stats && typeof stats.total_bounty_pool === "number" ? `${(stats.total_bounty_pool / 1e9).toFixed(2)}B` : "Live"}
+                      value={
+                        statsLoading ? "Loading" : stats
+                          ? formatBeans(parseBalance(stats.total_bounty_pool) ?? 0n)
+                          : "Live"
+                      }
                     />
                     <MetricPill
                       label="Expired"

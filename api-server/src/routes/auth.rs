@@ -1,8 +1,8 @@
 use axum::extract::State;
 use axum::Json;
 use serde::Deserialize;
-use serde_json::{json, Value};
 use serde::Serialize;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::crypto::verify_ed25519_signature;

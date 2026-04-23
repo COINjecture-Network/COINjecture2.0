@@ -16,9 +16,10 @@ use crate::AppState;
 fn require_supabase(
     state: &AppState,
 ) -> Result<&std::sync::Arc<crate::supabase::SupabaseClient>, ApiError> {
-    state.supabase.as_ref().ok_or_else(|| {
-        ApiError::ServiceUnavailable("Marketplace database not available".into())
-    })
+    state
+        .supabase
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("Marketplace database not available".into()))
 }
 
 // ── Query params ────────────────────────────────────────────────────────────
@@ -134,7 +135,11 @@ pub async fn place_order(
     let order_type = match req.order_type.to_lowercase().as_str() {
         "limit" => OrderType::Limit,
         "market" => OrderType::Market,
-        _ => return Err(ApiError::BadRequest("type must be 'limit' or 'market'".into())),
+        _ => {
+            return Err(ApiError::BadRequest(
+                "type must be 'limit' or 'market'".into(),
+            ))
+        }
     };
 
     let price = match &req.price {
@@ -279,8 +284,7 @@ pub async fn create_task(
         .wallet_address
         .as_deref()
         .unwrap_or(&auth_user.user_id);
-    let deadline =
-        Utc::now() + chrono::Duration::hours(req.deadline_hours.unwrap_or(720) as i64);
+    let deadline = Utc::now() + chrono::Duration::hours(req.deadline_hours.unwrap_or(720) as i64);
     let body = json!({
         "submitter_user_id": auth_user.user_id,
         "submitter_wallet": wallet,
@@ -373,7 +377,11 @@ pub async fn download_dataset(
     let end_height = snapshot
         .get("end_height")
         .and_then(|value| value.as_i64())
-        .ok_or_else(|| ApiError::NotFound(format!("Dataset '{slug}' has no ready snapshot to download")))?;
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Dataset '{slug}' has no ready snapshot to download"
+            ))
+        })?;
 
     let rows_path = dataset_rows_path(&slug, end_height)?;
     let rows = supabase
@@ -494,7 +502,13 @@ fn rows_to_csv(rows: &Value) -> Result<String, String> {
     }
 
     let mut out = String::new();
-    out.push_str(&headers.iter().map(|h| csv_escape(h)).collect::<Vec<_>>().join(","));
+    out.push_str(
+        &headers
+            .iter()
+            .map(|h| csv_escape(h))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
     out.push('\n');
 
     for item in items {
@@ -529,7 +543,11 @@ fn csv_meta_value(value: Option<&Value>) -> String {
 
 fn csv_escape(value: &str) -> String {
     let escaped = value.replace('"', "\"\"");
-    if escaped.contains(',') || escaped.contains('"') || escaped.contains('\n') || escaped.contains('\r') {
+    if escaped.contains(',')
+        || escaped.contains('"')
+        || escaped.contains('\n')
+        || escaped.contains('\r')
+    {
         format!("\"{escaped}\"")
     } else {
         escaped

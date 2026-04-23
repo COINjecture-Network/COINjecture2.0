@@ -33,8 +33,8 @@ type ChainStore = Arc<RwLock<HashMap<u64, Hash>>>;
 
 /// A test node with full block production and storage wiring.
 struct ChainNode {
-    coord_cmd_tx: mpsc::UnboundedSender<CoordinatorCommand>,
-    node_id: [u8; 32],
+    _coord_cmd_tx: mpsc::UnboundedSender<CoordinatorCommand>,
+    _node_id: [u8; 32],
     events: Arc<RwLock<Vec<CoordinatorEvent>>>,
     chain: ChainStore,
     mesh_service: Option<NetworkService>,
@@ -50,7 +50,7 @@ impl ChainNode {
         let mesh_config = NetworkConfig {
             listen_addr: listen,
             seed_nodes: seeds,
-            data_dir: data_dir.into_path(),
+            data_dir: data_dir.keep(),
             ..Default::default()
         };
 
@@ -118,7 +118,7 @@ impl PreNode {
         let (coord_event_tx, mut coord_event_rx) = mpsc::unbounded_channel::<CoordinatorEvent>();
 
         let (coordinator, _shared_state) =
-            EpochCoordinator::new(node_id, coord_config, 0, Hash::from_bytes([0; 32]));
+            EpochCoordinator::new(node_id, coord_config, 0, Hash::from_bytes([0; 32]), 0);
 
         // Spawn coordinator
         tokio::spawn(async move {
@@ -234,6 +234,7 @@ impl PreNode {
                                 epoch,
                                 commit: SolutionCommit {
                                     node_id: commit.node_id.0,
+                                    public_key: [0u8; 32],
                                     solution_hash: commit.solution_hash,
                                     work_score: commit.work_score,
                                     signature: commit.signature,
@@ -256,6 +257,7 @@ impl PreNode {
                         let _ = coord_cmd_for_bridge.send(CoordinatorCommand::ChainTipUpdated {
                             height,
                             hash: block_hash,
+                            best_cumulative_work: 0,
                         });
                     }
                     _ => {}
@@ -264,8 +266,8 @@ impl PreNode {
         });
 
         ChainNode {
-            coord_cmd_tx,
-            node_id,
+            _coord_cmd_tx: coord_cmd_tx,
+            _node_id: node_id,
             events,
             chain,
             mesh_service: Some(mesh_service),

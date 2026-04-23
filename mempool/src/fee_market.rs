@@ -196,8 +196,10 @@ mod tests {
 
     #[test]
     fn test_base_fee_floor() {
-        let mut market = FeeMarket::default();
-        market.base_fee = 150; // Set to near minimum
+        let mut market = FeeMarket {
+            base_fee: 150, // Set to near minimum
+            ..Default::default()
+        };
 
         // Very empty blocks should hit floor
         for _ in 0..10 {

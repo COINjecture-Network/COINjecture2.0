@@ -1,0 +1,48 @@
+# Overlay: same mesh topology as the base file, but followers use `--bootnodes bootnode:707`
+# instead of only public mesh peers from `.env`. **Mining is enabled** (`--mine`) on every
+# node service; before the tip is caught up, the binary still waits for peers/sync and
+# `peer_consensus.should_mine()` gates actual block production — you do not need a second
+# compose switch to turn mining on after sync.
+#
+# Example (mesh peer + api):
+#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode api-server
+#
+# Legacy cold-start (empty volume, avoid competing blocks until RPC tip is close): run this
+# overlay first, then temporarily scale mining down only if you use a custom no-mine overlay;
+# for normal operation, mining stays on as above.
+
+services:
+  bootnode:
+    command: >
+      --mine
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+
+  node1:
+    command: >
+      --mine
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
+
+  node2:
+    command: >
+      --mine
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
+
+  node3:
+    command: >
+      --mine
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
