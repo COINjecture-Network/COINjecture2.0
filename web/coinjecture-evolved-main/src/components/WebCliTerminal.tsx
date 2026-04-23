@@ -3,8 +3,13 @@ import { Card } from "@/components/ui/card";
 import { Copy, Check, Loader2 } from "lucide-react";
 import { useWallet } from "@/contexts/WalletContext";
 import { rpcClient } from "@/lib/rpc-client";
-import { formatBeans, parseBalance } from "@/lib/chain-metrics";
-import { createBlock, extractHashHex } from "@/lib/mining";
+import { formatBeans, parseBalance, parseU128DecimalString } from "@/lib/chain-metrics";
+import {
+  createBlockFromSolvedProblem,
+  extractHashHex,
+  getClientHeaderHashDebug,
+  solveProblem,
+} from "@/lib/mining";
 import { cn } from "@/lib/utils";
 
 const COMMANDS = [
@@ -84,7 +89,7 @@ export function WebCliTerminal({ compact = false, className }: WebCliTerminalPro
             try {
               const accountInfo = await rpcClient.getAccountInfo(selectedKeyPair.address);
               response = `Wallet: ${selectedKeyPair.address.slice(0, 16)}...${selectedKeyPair.address.slice(-8)}
-Balance: ${accountInfo.balance.toLocaleString()} BEANS
+Balance: ${formatBeans(accountInfo.balance)} BEANS
 Nonce: ${accountInfo.nonce}`;
             } catch (error: unknown) {
               const msg = error instanceof Error ? error.message : "Unknown error";
@@ -161,7 +166,7 @@ Network height: ${chainInfo.best_height}`;
               const accountInfo = await rpcClient.getAccountInfo(selectedKeyPair.address);
 
               response = `Mining statistics:
-Your balance: ${accountInfo.balance.toLocaleString()} BEANS
+Your balance: ${formatBeans(accountInfo.balance)} BEANS
 Your nonce: ${accountInfo.nonce}
 ${isMiner ? "You are the miner of the latest block." : "Not the miner of latest block."}
 Latest block: #${block.header.height}
@@ -172,7 +177,7 @@ Verify time: ${(block.header.verify_time_us / 1000).toFixed(2)}ms
 Network height: ${chainInfo.best_height}
 Network peers: ${chainInfo.peer_count}`;
             } else {
-              const bal = (await rpcClient.getAccountInfo(selectedKeyPair.address)).balance.toLocaleString();
+              const bal = formatBeans((await rpcClient.getAccountInfo(selectedKeyPair.address)).balance);
               response = `Mining statistics:
 No blocks found
 Your balance: ${bal} BEANS`;
@@ -224,12 +229,21 @@ Peers: ${chainInfo.peer_count}`;
           } else {
             try {
               const chainInfo = await rpcClient.getChainInfo();
-              const latestBlock = await rpcClient.getLatestBlock();
+              const work = await rpcClient.getMiningWork();
 
-              if (!latestBlock || !chainInfo.best_hash) {
+              if (!chainInfo.best_hash || !work.prev_hash) {
                 appendLines([`coinjectured$ ${cmd}`, "No blocks found. Cannot submit block without chain state.", ""]);
               } else {
-                const nextHeight = chainInfo.best_height + 1;
+                const nextHeight = work.next_height;
+                const parentW = parseU128DecimalString(chainInfo.best_cumulative_work);
+                if (nextHeight > 0 && parentW === null) {
+                  appendLines([
+                    `coinjectured$ ${cmd}`,
+                    "Cannot mine: chain info missing best_cumulative_work (W). Update the node/API.",
+                    "",
+                  ]);
+                  break;
+                }
 
                 appendLines([
                   `coinjectured$ ${cmd}`,
@@ -241,20 +255,38 @@ Your address: ${selectedKeyPair.address.slice(0, 16)}...${selectedKeyPair.addres
                 ]);
 
                 try {
-                  const prevHashHex = extractHashHex(chainInfo.best_hash);
+                  const prevHashHex = extractHashHex(work.prev_hash);
+                  const solved = solveProblem(work.problem);
 
-                  const block = await createBlock(
+                  if (!solved) {
+                    appendLines(["Mining failed. Could not solve the current network problem.", ""]);
+                    break;
+                  }
+
+                  appendLines([`Mining header at network difficulty ${work.difficulty}…`, ""]);
+
+                  const block = await createBlockFromSolvedProblem(
                     prevHashHex,
                     nextHeight,
                     selectedKeyPair.address,
+                    work.problem,
+                    solved.solution,
+                    solved.solveTimeMs,
+                    parentW ?? 0n,
                     [],
-                    10,
-                    2
+                    work.difficulty,
                   );
 
                   if (!block) {
-                    appendLines(["Mining failed. Could not create block.", ""]);
+                    appendLines([`Mining failed. Could not create block at difficulty ${work.difficulty}.`, ""]);
                   } else {
+                    const clientHashDebug = getClientHeaderHashDebug(block.header);
+                    appendLines([
+                      `Client header hash: ${clientHashDebug.hash.slice(0, 32)}… (${clientHashDebug.hash.match(/^0*/)?.[0].length || 0} leading zeros)`,
+                      `Client header payload preview: ${clientHashDebug.json.slice(0, 160)}…`,
+                      "",
+                    ]);
+
                     const finalChainInfo = await rpcClient.getChainInfo();
 
                     if (finalChainInfo.best_height >= block.header.height) {
@@ -287,7 +319,7 @@ Your address: ${selectedKeyPair.address.slice(0, 16)}...${selectedKeyPair.addres
 
                         const rewardB = parseBalance(block.coinbase?.reward);
                         const rewardStr = rewardB !== null ? formatBeans(rewardB) : "0";
-                        const currentBalance = accountInfo?.balance || 0;
+                        const currentBalance = accountInfo?.balance ?? 0n;
 
                         appendLines([
                           `Block mined and submitted successfully.
@@ -296,12 +328,13 @@ Block:
 Height: #${block.header.height}
 Hash: ${blockHash.slice(0, 16)}…
 Nonce: ${block.header.nonce}
+Difficulty: ${work.difficulty}
 Work score: ${block.header.work_score.toFixed(2)}
 Solve time: ${(block.header.solve_time_us / 1000).toFixed(2)}ms
 Energy: ${block.header.energy_estimate_joules.toFixed(4)} J
 Reward: ${rewardStr} BEANS
 
-Your balance: ${currentBalance.toLocaleString()} BEANS
+Your balance: ${formatBeans(currentBalance)} BEANS
 
 Your block is being processed by the network.`,
                           "",

@@ -1,4 +1,5 @@
 import { Github, Twitter, MessageCircle } from "lucide-react";
+import { BrandLogo } from "@/components/BrandLogo";
 
 export const Footer = () => {
   return (
@@ -6,7 +7,7 @@ export const Footer = () => {
       <div className="container mx-auto px-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
           <div>
-            <div className="text-xl font-brand font-extrabold gradient-text mb-4 tracking-tight">COINjecture</div>
+            <div className="text-xl font-brand font-extrabold gradient-text tracking-tight mb-4">COINjecture</div>
             <p className="text-sm text-muted-foreground">
               Utility-based computational work blockchain powered by $BEANS
             </p>
@@ -17,7 +18,7 @@ export const Footer = () => {
             <ul className="space-y-2 text-sm text-muted-foreground">
               <li><a href="/solver-lab" className="hover:text-foreground transition-colors">Solver Lab</a></li>
               <li><a href="#api" className="hover:text-foreground transition-colors">API Docs</a></li>
-              <li><a href="#metrics" className="hover:text-foreground transition-colors">Metrics</a></li>
+              <li><a href="/explore" className="hover:text-foreground transition-colors">Explorer</a></li>
               <li><a href="#marketplace" className="hover:text-foreground transition-colors">Marketplace</a></li>
             </ul>
           </div>
@@ -44,6 +45,9 @@ export const Footer = () => {
               <a href="#" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Discord">
                 <MessageCircle className="h-5 w-5" />
               </a>
+            </div>
+            <div className="mt-4">
+              <BrandLogo size="md" />
             </div>
           </div>
         </div>

@@ -6,11 +6,8 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use coinjecture_api_server::{
-    build_router,
-    config::Config,
-    middleware::rate_limit::create_rate_limiter,
-    nonce_store::NonceStore,
-    AppState,
+    build_router, config::Config, middleware::rate_limit::create_rate_limiter,
+    nonce_store::NonceStore, AppState,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use http_body_util::BodyExt;
@@ -48,6 +45,7 @@ fn test_config() -> Config {
         indexer_enabled: false,
         indexer_poll_interval_secs: 5,
         indexer_confirmations: 6,
+        cors_extra_origins: vec![],
     }
 }
 

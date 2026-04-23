@@ -174,7 +174,11 @@ mod tests {
 
     #[test]
     fn roundtrip_message() {
-        let msg = SiwbMessage::new("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", "test-nonce", "testnet");
+        let msg = SiwbMessage::new(
+            "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+            "test-nonce",
+            "testnet",
+        );
         let text = msg.to_message_string();
         let parsed = SiwbMessage::from_message_string(&text).unwrap();
 

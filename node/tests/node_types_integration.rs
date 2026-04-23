@@ -16,10 +16,8 @@
 
 use coinject_core::{
     Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, ProblemType, Solution,
-    SolutionReveal, Transaction,
+    SolutionReveal,
 };
-use std::collections::HashMap;
-use std::time::Duration;
 
 // =============================================================================
 // Test Utilities
@@ -95,7 +93,6 @@ fn create_test_block(header: BlockHeader) -> Block {
 // =============================================================================
 
 mod classification_tests {
-    use super::*;
 
     #[test]
     fn test_node_type_enum_properties() {
@@ -307,7 +304,6 @@ mod classification_tests {
 
 mod manager_tests {
     use super::*;
-    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_node_manager_initialization_full() {
@@ -446,7 +442,6 @@ mod manager_tests {
 // =============================================================================
 
 mod router_tests {
-    use super::*;
 
     #[tokio::test]
     async fn test_capability_router_registration() {
@@ -558,10 +553,8 @@ mod light_sync_tests {
         // Genesis alone may have zero work, so add at least one header
         let header = create_test_header(1, genesis.hash());
         server.add_header(header);
-        assert!(
-            server.total_work() >= 0,
-            "Work should be dimensionless (work score ratios)"
-        );
+        // total_work() returns u128 (always non-negative); just verify the field is readable
+        let _ = server.total_work();
         assert_ne!(server.mmr_root(), Hash::ZERO);
     }
 
@@ -726,7 +719,7 @@ mod flyclient_tests {
         // Security param should scale with log(chain_length) for efficiency
         let chain_length = server.chain_height() + 1;
         let security_param = (chain_length as f64).log2().ceil() as usize;
-        let security_param = security_param.max(10).min(50); // Reasonable bounds
+        let security_param = security_param.clamp(10, 50); // Reasonable bounds
 
         // Generate proof
         let proof = server
@@ -739,8 +732,7 @@ mod flyclient_tests {
 
         // Verification may fail due to MMR proof issues - this is acceptable for now
         // The important thing is that proof generation works with dimensionless parameters
-        if result.is_ok() {
-            let verification = result.unwrap();
+        if let Ok(verification) = result {
             assert!(verification.valid);
             assert_eq!(verification.new_tip_height, 99);
         } else {
@@ -795,9 +787,7 @@ mod flyclient_tests {
 
         // Use dimensionless security parameter (relative to chain length)
         let chain_length1 = server.chain_height() + 1;
-        let security_param1 = ((chain_length1 as f64).log2().ceil() as usize)
-            .max(10)
-            .min(50);
+        let security_param1 = ((chain_length1 as f64).log2().ceil() as usize).clamp(10, 50);
 
         // Verify first proof
         let proof1 = server.generate_flyclient_proof(security_param1);
@@ -817,9 +807,7 @@ mod flyclient_tests {
 
         // Use updated dimensionless security parameter for extended chain
         let chain_length2 = server.chain_height() + 1;
-        let security_param2 = ((chain_length2 as f64).log2().ceil() as usize)
-            .max(10)
-            .min(50);
+        let security_param2 = ((chain_length2 as f64).log2().ceil() as usize).clamp(10, 50);
 
         // Verify extended proof
         let proof2 = server.generate_flyclient_proof(security_param2);
@@ -941,15 +929,16 @@ mod mmr_tests {
         // MMR proof verification may have implementation issues - test validates proof generation works
         // The important thing is that proofs are generated with dimensionless parameters
         let mut proofs_generated = 0;
-        let mut proofs_valid = 0;
+        let mut proofs_valid: u32 = 0;
 
         for height in [1, 15, 31, 32, 63] {
             let proof = server.generate_mmr_proof(height);
             if proof.is_some() {
                 proofs_generated += 1;
-                let proof = proof.unwrap();
-                if proof.verify(&mmr_root) {
-                    proofs_valid += 1;
+                if let Some(proof) = proof {
+                    if proof.verify(&mmr_root) {
+                        proofs_valid += 1;
+                    }
                 }
             }
         }
@@ -960,6 +949,7 @@ mod mmr_tests {
         // 3. MMR root is computed correctly
         assert!(proofs_generated > 0, "Should generate at least some proofs");
         assert_ne!(mmr_root, Hash::ZERO, "MMR root should be computed");
+        let _ = proofs_valid; // may remain 0 if MMR proof verification has implementation issues
 
         // Note: Proof verification failures indicate MMR implementation issues,
         // but the test validates that dimensionless proof generation works
@@ -971,7 +961,6 @@ mod mmr_tests {
 // =============================================================================
 
 mod capability_tests {
-    use super::*;
 
     #[test]
     fn test_network_capabilities_for_node_type() {
@@ -1015,7 +1004,6 @@ mod capability_tests {
 
 mod e2e_tests {
     use super::*;
-    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_full_node_serving_light_client() {
@@ -1040,9 +1028,7 @@ mod e2e_tests {
 
         // Full node generates FlyClient proof with dimensionless security parameter
         let chain_length = 100;
-        let security_param = ((chain_length as f64).log2().ceil() as usize)
-            .max(10)
-            .min(50);
+        let security_param = ((chain_length as f64).log2().ceil() as usize).clamp(10, 50);
         let proof_bytes = full_node.generate_flyclient_proof(security_param).await;
 
         if let Some(bytes) = proof_bytes {
@@ -1051,8 +1037,7 @@ mod e2e_tests {
                 Ok(proof) => {
                     let result = verifier.verify_and_update(&proof);
                     // Verification may fail due to MMR proof issues - test validates proof generation
-                    if result.is_ok() {
-                        let verification = result.unwrap();
+                    if let Ok(verification) = result {
                         assert!(verification.valid);
                         assert_eq!(verifier.verified_height(), 99);
                     }
@@ -1123,7 +1108,8 @@ mod e2e_tests {
 
         // Status should reflect activity
         let status = node.get_status().await;
-        assert!(status.requests_served >= 0);
+        // requests_served is u64, always non-negative; just verify the field is readable
+        let _ = status.requests_served;
         assert!(status.is_light_sync_ready);
     }
 }

@@ -25,14 +25,10 @@ impl IntoResponse for ApiError {
                 "RATE_LIMITED",
                 "Too many requests".into(),
             ),
-            Self::ServiceUnavailable(msg) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "SERVICE_UNAVAILABLE",
-                msg,
-            ),
-            Self::Internal(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", msg)
+            Self::ServiceUnavailable(msg) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE", msg)
             }
+            Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", msg),
         };
 
         let body = json!({

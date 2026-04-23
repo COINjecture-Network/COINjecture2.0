@@ -52,7 +52,8 @@ pub const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024; // 4 MB (was 10 MB — redu
 // ---------------------------------------------------------------------------
 
 /// Maximum inbound connections from a single IP address.
-pub const SECURITY_MAX_CONNS_PER_IP: usize = 3;
+/// Mesh / Docker hosts may present several logical peers behind one NAT IP (e.g. bootnode + followers).
+pub const SECURITY_MAX_CONNS_PER_IP: usize = 12;
 
 /// Maximum total concurrent P2P connections (inbound + outbound).
 pub const SECURITY_MAX_TOTAL_CONNECTIONS: usize = 128;
@@ -67,13 +68,14 @@ pub const SECURITY_BAN_DURATION_SECS: u64 = 3600; // 1 hour
 pub const SECURITY_SHORT_BAN_SECS: u64 = 300; // 5 minutes
 
 /// Token-bucket capacity for per-peer rate limiting (burst allowance).
-pub const SECURITY_RATE_BUCKET_CAPACITY: f64 = 200.0;
+/// Sync bursts (GetBlocks / block propagation) can exceed modest defaults and trigger short IP bans.
+pub const SECURITY_RATE_BUCKET_CAPACITY: f64 = 1000.0;
 
 /// Token-bucket refill rate — sustained messages per second per peer.
-pub const SECURITY_RATE_MSGS_PER_SEC: f64 = 50.0;
+pub const SECURITY_RATE_MSGS_PER_SEC: f64 = 250.0;
 
 /// How many rate-limit strikes before a peer is short-banned.
-pub const SECURITY_RATE_STRIKE_THRESHOLD: u32 = 10;
+pub const SECURITY_RATE_STRIKE_THRESHOLD: u32 = 50;
 
 /// How many malformed message strikes before a peer is (long) banned.
 pub const SECURITY_MALFORMED_STRIKE_THRESHOLD: u32 = 5;
@@ -211,7 +213,7 @@ pub mod timeouts {
             assert!(CONSENSUS_PEER_TIMEOUT_SECS > NETWORK_PEER_TIMEOUT_SECS as f64);
 
             // Stale threshold > Consensus timeout (final cutoff)
-            assert!(CONSENSUS_STALE_THRESHOLD_SECS > CONSENSUS_PEER_TIMEOUT_SECS);
+            const { assert!(CONSENSUS_STALE_THRESHOLD_SECS > CONSENSUS_PEER_TIMEOUT_SECS) };
         }
 
         #[test]
@@ -346,8 +348,8 @@ mod tests {
 
     #[test]
     fn test_equilibrium_constant() {
-        // Verify η = 1/√2 ≈ 0.7071
-        assert!((ETA - 0.7071).abs() < 0.0001);
+        // Verify η = 1/√2
+        assert_eq!(ETA, std::f64::consts::FRAC_1_SQRT_2);
         assert!((ETA * SQRT_2 - 1.0).abs() < 0.0001);
     }
 

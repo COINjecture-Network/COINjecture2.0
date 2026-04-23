@@ -292,10 +292,7 @@ mod tests {
         let oid = order.id;
         handle.submit_order(order).await.unwrap();
 
-        let cancelled = handle
-            .cancel_order(oid, "BEANS/USDC".into())
-            .await
-            .unwrap();
+        let cancelled = handle.cancel_order(oid, "BEANS/USDC".into()).await.unwrap();
         assert!(cancelled.is_some());
     }
 

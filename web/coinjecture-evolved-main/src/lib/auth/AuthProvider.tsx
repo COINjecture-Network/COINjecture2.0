@@ -24,7 +24,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [authMethod, setAuthMethod] = useState<AuthMethod | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authModalTab, setAuthModalTab] = useState<'wallet' | 'email'>('wallet');
+  const [authModalTab, setAuthModalTab] = useState<AuthModalTab>('welcome');
   const [authModalEmailSection, setAuthModalEmailSection] =
     useState<AuthModalEmailSection>('signin');
 

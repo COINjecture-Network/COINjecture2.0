@@ -189,7 +189,9 @@ impl PeerStore {
         let mut peers: Vec<StoredPeer> = self
             .peers
             .iter()
-            .filter(|r| r.value().bucket == PeerBucket::Vetted && !self.is_banned_inner(r.value(), now))
+            .filter(|r| {
+                r.value().bucket == PeerBucket::Vetted && !self.is_banned_inner(r.value(), now)
+            })
             .map(|r| r.value().clone())
             .collect();
         peers.truncate(max);
@@ -341,7 +343,7 @@ impl PeerStore {
         }
 
         // Never evict manual peers; sort by last_seen ascending (oldest first)
-        in_bucket.sort_by(|a, b| a.1.cmp(&b.1));
+        in_bucket.sort_by_key(|a| a.1);
 
         let to_remove = in_bucket.len() - max;
         let mut removed = 0;

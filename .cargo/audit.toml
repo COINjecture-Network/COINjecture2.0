@@ -1,0 +1,4 @@
+[advisories]
+ignore = [
+  "RUSTSEC-2026-0097", # rand advisory currently affects transitive deps without compatible upstream fixes
+]

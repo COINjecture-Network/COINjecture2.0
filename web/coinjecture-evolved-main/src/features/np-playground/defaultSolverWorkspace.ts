@@ -15,8 +15,8 @@ export type WorkspaceFilePath = (typeof WORKSPACE_FILES)[number];
 
 export const DEFAULT_WORKSPACE_FILES: Record<WorkspaceFilePath, string> = {
   "solvers/subset-sum.js": `/**
- * Subset Sum — nonnegative integers. Return indices or null.
- * Verified on-chain like core::problem::Solution::SubsetSum.
+ * Subset Sum — nonnegative integers. Return 0-based indices into \`numbers\` (or null).
+ * Verified on-chain like core::problem::Solution::SubsetSum (Rust sums numbers[i] for each i).
  */
 function solveSubsetSum(numbers, target) {
   const n = numbers.length;
@@ -53,27 +53,61 @@ function solveSubsetSum(numbers, target) {
 
   "solvers/sat.js": `/**
  * SAT — DIMACS literals (±1..n). Return assignment (boolean[]) or null.
- * Clauses: { literals: number[] } (same as mining / rpc).
+ * Clauses: bare number[] or { literals: number[] } (same as mining / rpc).
  */
 function solveSAT(variables, clauses) {
-  const maxAttempts = Math.min(1 << Math.min(variables, 20), 1000000);
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const assignment = [];
-    for (let i = 0; i < variables; i++) {
-      assignment.push(((attempt >> i) & 1) === 1);
+  const cls = clauses.map((c) =>
+    Array.isArray(c) ? c : c.literals != null ? c.literals : c
+  );
+
+  function dpll(asgn) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const clause of cls) {
+        let unitLit = null;
+        let numUndef = 0;
+        let sat = false;
+        for (const lit of clause) {
+          const v = Math.abs(lit) - 1;
+          if (asgn[v] === undefined) {
+            numUndef++;
+            unitLit = lit;
+          } else if ((lit > 0) === asgn[v]) {
+            sat = true;
+            break;
+          }
+        }
+        if (sat) continue;
+        if (numUndef === 0) return null;
+        if (numUndef === 1) {
+          asgn = asgn.slice();
+          asgn[Math.abs(unitLit) - 1] = unitLit > 0;
+          changed = true;
+        }
+      }
     }
-    const ok = clauses.every((clause) => {
-      const lits = clause.literals != null ? clause.literals : clause;
-      return lits.some((literal) => {
-        const varIdx = Math.abs(literal) - 1;
-        if (varIdx >= assignment.length) return false;
-        const value = assignment[varIdx];
-        return literal > 0 ? value : !value;
-      });
-    });
-    if (ok) return assignment;
+    let next = -1;
+    for (let i = 0; i < variables; i++) {
+      if (asgn[i] === undefined) {
+        next = i;
+        break;
+      }
+    }
+    if (next === -1) return asgn;
+
+    const aT = asgn.slice();
+    aT[next] = true;
+    const rT = dpll(aT);
+    if (rT !== null) return rT;
+
+    const aF = asgn.slice();
+    aF[next] = false;
+    return dpll(aF);
   }
-  return null;
+
+  const result = dpll(new Array(variables).fill(undefined));
+  return result === null ? null : result.map((v) => v === true);
 }
 `,
 

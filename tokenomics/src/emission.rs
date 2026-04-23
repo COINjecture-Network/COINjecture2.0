@@ -266,11 +266,7 @@ impl EmissionCalculator {
         let target_supply = (self.metrics.target_supply as f64 * next_threshold) as u128;
         let remaining = target_supply.saturating_sub(self.metrics.circulating_supply);
 
-        if current_emission > 0 {
-            Some((remaining / current_emission) as u64)
-        } else {
-            None
-        }
+        remaining.checked_div(current_emission).map(|q| q as u64)
     }
 
     /// Get emission info

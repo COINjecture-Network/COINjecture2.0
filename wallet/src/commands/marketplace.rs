@@ -1,5 +1,6 @@
 // Marketplace commands
 
+use crate::atoms_display::format_atoms_as_beans;
 use crate::rpc_client::RpcClient;
 use anyhow::Result;
 use colored::*;
@@ -32,7 +33,10 @@ pub async fn list_problems(client: &RpcClient) -> Result<()> {
                     &problem.problem_id[0..16].dimmed()
                 );
                 println!("   Submitter:  {}", problem.submitter);
-                println!("   Bounty:     {} tokens", format_balance(problem.bounty));
+                println!(
+                    "   Bounty:     {} BEANS",
+                    format_atoms_as_beans(problem.bounty)
+                );
                 println!("   Min Score:  {:.4}", problem.min_work_score);
                 println!("   Status:     {}", format_status(&problem.status));
                 println!("   Submitted:  {}", format_timestamp(problem.submitted_at));
@@ -83,7 +87,10 @@ pub async fn get_problem(problem_id: &str, client: &RpcClient) -> Result<()> {
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("Problem ID:  {}", problem.problem_id);
             println!("Submitter:   {}", problem.submitter);
-            println!("Bounty:      {} tokens", format_balance(problem.bounty));
+            println!(
+                "Bounty:      {} BEANS",
+                format_atoms_as_beans(problem.bounty)
+            );
             println!("Min Score:   {:.4}", problem.min_work_score);
             println!("Status:      {}", format_status(&problem.status));
             println!("Submitted:   {}", format_timestamp(problem.submitted_at));
@@ -112,7 +119,7 @@ pub async fn submit_problem(problem_type: &str, bounty: u128, _client: &RpcClien
     );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("Problem Type: {}", problem_type);
-    println!("Bounty:       {} tokens", format_balance(bounty));
+    println!("Bounty:       {} BEANS", format_atoms_as_beans(bounty));
     println!();
     println!("This feature requires:");
     println!("  • Problem generation for {}", problem_type);
@@ -125,20 +132,6 @@ pub async fn submit_problem(problem_type: &str, bounty: u128, _client: &RpcClien
 }
 
 // Helper functions
-
-fn format_balance(balance: u128) -> String {
-    let balance_str = balance.to_string();
-    let mut result = String::new();
-
-    for (count, c) in balance_str.chars().rev().enumerate() {
-        if count > 0 && count % 3 == 0 {
-            result.insert(0, ',');
-        }
-        result.insert(0, c);
-    }
-
-    result
-}
 
 fn format_timestamp(timestamp: i64) -> String {
     use chrono::{DateTime, Utc};

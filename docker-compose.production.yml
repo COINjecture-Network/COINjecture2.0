@@ -1,12 +1,20 @@
 # COINjecture 2.0 — Full Production Stack
 # Usage: docker compose -f docker-compose.production.yml up -d
 # Requires: .env.production with Supabase credentials
+#
+# Node image from GHCR (optional — avoids local `cargo build` on the host):
+#   COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0:latest
+# Digest pin (same value as docker-compose.yml header when rolling together):
+#   COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0@sha256:575e023fd9508d5bbec27cb0ece08a515153cbde760e0d12257549e87ddac3ba
+#   docker compose -f docker-compose.production.yml pull node
+#   docker compose -f docker-compose.production.yml up -d --no-build
+# See docker-compose.yml header for full notes (docker login ghcr.io, digest pins).
 
 services:
   # ── COINjecture Node ──────────────────────────────────────────────────────
   node:
-    # Must match `docker images` when using `up --no-build` (same tag as Dockerfile / main compose).
-    image: coinject-node:latest
+    # Pin the same digest on every host: set COINJECT_NODE_IMAGE in .env.production (see .env.example).
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -29,6 +37,14 @@ services:
       - RPC_MAX_BODY_BYTES=${RPC_MAX_BODY_BYTES:-67108864}
       - RPC_TIMEOUT_SECS=${RPC_TIMEOUT_SECS:-300}
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
     networks:
       - coinjecture
     healthcheck:
@@ -46,13 +62,15 @@ services:
       dockerfile: Dockerfile.api
     image: coinject-api:latest
     container_name: coinject-api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3030:3030"
     environment:
       - COINJECTURE_API_HOST=0.0.0.0
       - COINJECTURE_API_PORT=3030
       - COINJECTURE_NETWORK=${COINJECTURE_NETWORK:-testnet}
-      - NODE_RPC_URL=http://node:9933
+      - NODE_RPC_URL=${NODE_RPC_URL:-http://node:9933}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}

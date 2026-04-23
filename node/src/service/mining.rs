@@ -3,10 +3,13 @@
 #![allow(dead_code)]
 
 use super::*;
-use tracing::{trace, debug, info, warn, error};
+use coinject_huggingface::NetworkContext;
+use coinject_mempool::{BLOCK_TEMPLATE_MAX_TRANSACTIONS, BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS};
+use tracing::{debug, error, info, trace, warn};
 
 impl CoinjectNode {
     /// Mining loop
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn mining_loop(
         miner: Arc<RwLock<Miner>>,
         chain: Arc<ChainState>,
@@ -32,72 +35,118 @@ impl CoinjectNode {
         } else {
             // Wait for peer connections and initial chain sync before mining
             info!("waiting for peer connections and chain sync before mining");
-        use coinject_core::ETA;
-        let mut sync_wait_interval = time::interval(Duration::from_secs(2));
-        let mut sync_attempts = 0;
-        // MAX_SYNC_WAIT_ATTEMPTS: Network-derived timeout would be ETA * network_median_sync_time
-        // For now, using ETA-scaled value: 150 attempts * 2s = 300s, scaled by ETA ≈ 212s effective
-        const MAX_SYNC_WAIT_ATTEMPTS: u32 = (150.0 * ETA) as u32; // ETA-scaled sync timeout
-        let mut last_height = 0u64;
-        let mut stable_height_count = 0u32;
-        // STABLE_HEIGHT_THRESHOLD: Dimensionless count, but could be ETA-scaled
-        // 3 checks ensures stability without excessive delay
-        const STABLE_HEIGHT_THRESHOLD: u32 = 3; // Height must be stable for 3 checks (6 seconds)
-        
-        loop {
-            sync_wait_interval.tick().await;
-            sync_attempts += 1;
+            use coinject_core::ETA;
+            let mut sync_wait_interval = time::interval(Duration::from_secs(2));
+            let mut sync_attempts = 0;
+            // MAX_SYNC_WAIT_ATTEMPTS: Network-derived timeout would be ETA * network_median_sync_time
+            // For now, using ETA-scaled value: 150 attempts * 2s = 300s, scaled by ETA ≈ 212s effective
+            const MAX_SYNC_WAIT_ATTEMPTS: u32 = (150.0 * ETA) as u32; // ETA-scaled sync timeout
+            let mut last_height = 0u64;
+            let mut stable_height_count = 0u32;
+            // STABLE_HEIGHT_THRESHOLD: Dimensionless count, but could be ETA-scaled
+            // 3 checks ensures stability without excessive delay
+            const STABLE_HEIGHT_THRESHOLD: u32 = 3; // Height must be stable for 3 checks (6 seconds)
+            let mut warned_no_peer_after_timeout = false;
 
-            let current_peers = *peer_count.read().await;
-            let best_height = chain.best_block_height().await;
+            loop {
+                sync_wait_interval.tick().await;
+                sync_attempts += 1;
 
-            // Check if we have peers
-            if current_peers > 0 {
-                // Check if height is stable (not actively syncing)
-                if best_height == last_height {
-                    stable_height_count += 1;
-                } else {
-                    stable_height_count = 0;
-                    last_height = best_height;
-                }
+                let current_peers = *peer_count.read().await;
+                let best_height = chain.best_block_height().await;
 
-                // If we're at genesis with peers, start mining after short wait (20 seconds = 10 attempts)
-                if best_height == 0 {
-                    if sync_attempts >= 10 {
-                        // At genesis with peers - time to bootstrap the network!
-                        info!(peer_count = current_peers, "at genesis with peers, starting mining to bootstrap network");
+                // Check if we have peers
+                if current_peers > 0 {
+                    // Check if height is stable (not actively syncing)
+                    if best_height == last_height {
+                        stable_height_count += 1;
+                    } else {
+                        stable_height_count = 0;
+                        last_height = best_height;
+                    }
+
+                    // If we're at genesis with peers, start mining after short wait (20 seconds = 10 attempts)
+                    if best_height == 0 {
+                        if sync_attempts >= 10 {
+                            // At genesis with peers - time to bootstrap the network!
+                            info!(
+                                peer_count = current_peers,
+                                "at genesis with peers, starting mining to bootstrap network"
+                            );
+                            break;
+                        } else if sync_attempts >= 5 {
+                            debug!(
+                                peer_count = current_peers,
+                                attempt = sync_attempts,
+                                "connected at genesis, preparing to mine"
+                            );
+                        }
+                    } else if stable_height_count >= STABLE_HEIGHT_THRESHOLD {
+                        // Height is stable - we're either synced or caught up
+                        info!(
+                            peer_count = current_peers,
+                            block_height = best_height,
+                            "chain stable, starting mining"
+                        );
                         break;
-                    } else if sync_attempts >= 5 {
-                        debug!(peer_count = current_peers, attempt = sync_attempts, "connected at genesis, preparing to mine");
+                    } else {
+                        // Height is changing - actively syncing
+                        if sync_attempts % 10 == 0 {
+                            debug!(
+                                block_height = best_height,
+                                attempt = sync_attempts,
+                                max_attempts = MAX_SYNC_WAIT_ATTEMPTS,
+                                "syncing chain"
+                            );
+                        }
                     }
-                } else if stable_height_count >= STABLE_HEIGHT_THRESHOLD {
-                    // Height is stable - we're either synced or caught up
-                    info!(peer_count = current_peers, block_height = best_height, "chain stable, starting mining");
-                    break;
                 } else {
-                    // Height is changing - actively syncing
-                    if sync_attempts % 10 == 0 {
-                        debug!(block_height = best_height, attempt = sync_attempts, max_attempts = MAX_SYNC_WAIT_ATTEMPTS, "syncing chain");
+                    // No peers yet
+                    if sync_attempts % 5 == 0 {
+                        debug!(
+                            attempt = sync_attempts,
+                            max_attempts = MAX_SYNC_WAIT_ATTEMPTS,
+                            peer_count = current_peers,
+                            "waiting for peers"
+                        );
                     }
                 }
-            } else {
-                // No peers yet
-                if sync_attempts % 5 == 0 {
-                    debug!(attempt = sync_attempts, max_attempts = MAX_SYNC_WAIT_ATTEMPTS, peer_count = current_peers, "waiting for peers");
+
+                if sync_attempts >= MAX_SYNC_WAIT_ATTEMPTS {
+                    if current_peers == 0 {
+                        // Never start solo-mining after timeout: that produces a guaranteed private fork.
+                        if !warned_no_peer_after_timeout {
+                            warn!(
+                                elapsed_secs = sync_attempts * 2,
+                                block_height = best_height,
+                                "sync wait elapsed with zero peers; refusing to mine until at least one CPP peer connects (open :707 / check COINJECT_BOOTNODES)"
+                            );
+                            warned_no_peer_after_timeout = true;
+                        } else if sync_attempts % 75 == 0 {
+                            warn!(
+                                block_height = best_height,
+                                "still no CPP peers; mining remains disabled"
+                            );
+                        }
+                    } else {
+                        warn!(
+                            elapsed_secs = sync_attempts * 2,
+                            block_height = best_height,
+                            peer_count = current_peers,
+                            "sync wait timeout, starting mining anyway"
+                        );
+                        break;
+                    }
                 }
             }
-
-            if sync_attempts >= MAX_SYNC_WAIT_ATTEMPTS {
-                warn!(elapsed_secs = sync_attempts * 2, block_height = best_height, "sync wait timeout, starting mining anyway");
-                break;
-            }
-        }
         } // end of else block (non-dev mode peer sync)
 
         // Start mining loop
         info!("starting mining loop");
         let mut last_mined_height = chain.best_block_height().await;
         debug!(block_height = last_mined_height, "mining loop initialized");
+        // Bump each mining tick; rate-limit `warn!` when peer consensus blocks mining.
+        let mut mining_gate_log_counter: u32 = 0;
 
         loop {
             // Use blocking sleep to bypass Tokio timer issues
@@ -108,7 +157,9 @@ impl CoinjectNode {
             // Use spawn_blocking with std::thread::sleep
             tokio::task::spawn_blocking(|| {
                 std::thread::sleep(Duration::from_secs(5));
-            }).await.unwrap();
+            })
+            .await
+            .unwrap();
 
             trace!("mining loop woke up after blocking sleep");
             let _ = std::io::stderr().flush();
@@ -124,7 +175,11 @@ impl CoinjectNode {
             // v4.7.44 FIX: Don't skip mining entirely - just update last_mined_height and continue
             // to the consensus check. This fixes the race condition where only one node could mine.
             if best_height > last_mined_height {
-                debug!(prev_height = last_mined_height, block_height = best_height, "chain advanced, block received from peer");
+                debug!(
+                    prev_height = last_mined_height,
+                    block_height = best_height,
+                    "chain advanced, block received from peer"
+                );
                 last_mined_height = best_height;
                 // Note: We continue to consensus check below - this allows ALL nodes to potentially mine
                 // The consensus check will properly coordinate who should mine
@@ -136,14 +191,29 @@ impl CoinjectNode {
             if !dev_mode {
                 let (should_mine, reason) = peer_consensus.should_mine(best_height).await;
                 if !should_mine {
-                    debug!(reason = %reason, "mining paused");
+                    mining_gate_log_counter = mining_gate_log_counter.wrapping_add(1);
+                    // Default RUST_LOG=info hides `debug!`; surface gate reason periodically during forks.
+                    if mining_gate_log_counter % 6 == 1 {
+                        warn!(
+                            reason = %reason,
+                            height = best_height,
+                            "mining paused (peer consensus / sync gate); mesh heights disagree or reorg incomplete — see CPP fork / historical-sync warnings"
+                        );
+                    } else {
+                        debug!(reason = %reason, "mining paused");
+                    }
 
                     // Fallback: Also check simple best-peer height (for bootstrap with <5 peers)
                     let peer_best = *best_known_peer_height.read().await;
                     const SYNC_THRESHOLD: u64 = 10;
                     if peer_best > 0 && best_height + SYNC_THRESHOLD < peer_best {
                         let blocks_behind = peer_best - best_height;
-                        debug!(blocks_behind = blocks_behind, our_height = best_height, peer_best = peer_best, "behind best peer");
+                        debug!(
+                            blocks_behind = blocks_behind,
+                            our_height = best_height,
+                            peer_best = peer_best,
+                            "behind best peer"
+                        );
                     }
                     continue; // Skip mining, check again next interval
                 }
@@ -158,18 +228,41 @@ impl CoinjectNode {
             // Ready to mine!
             debug!(block_height = best_height + 1, "mining block");
 
-            // Select transactions from pool (top 100 by fee)
+            // Select transactions: fee-priority plus reserved FIFO slots for zero-fee transfers
             let pool = tx_pool.read().await;
             let pool_size = pool.len();
-            let transactions = pool.get_top_n(100);
+            let transactions = pool.get_block_template_transactions(
+                BLOCK_TEMPLATE_MAX_TRANSACTIONS,
+                BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
+            );
             drop(pool);
 
-            debug!(pool_size = pool_size, tx_count = transactions.len(), "fetching transactions for block");
+            debug!(
+                pool_size = pool_size,
+                tx_count = transactions.len(),
+                "fetching transactions for block"
+            );
+
+            let parent_cumulative_work = match chain.cumulative_work_at_tip_hash(best_hash) {
+                Ok(w) => w,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "could not read parent cumulative work for emission; skipping mining round"
+                    );
+                    continue;
+                }
+            };
 
             // Mine block
             let mut miner_lock = miner.write().await;
             if let Some(block) = miner_lock
-                .mine_block(best_hash, best_height + 1, transactions.clone())
+                .mine_block(
+                    best_hash,
+                    best_height + 1,
+                    parent_cumulative_work,
+                    transactions.clone(),
+                )
                 .await
             {
                 info!(block_height = block.header.height, block_hash = ?block.header.hash(), "mined new block");
@@ -186,11 +279,13 @@ impl CoinjectNode {
 
                 // RUNTIME INTEGRATION: Calculate and save dimensional consensus state
                 // τ = block_height / τ_c (dimensionless time progression)
-                use coinject_core::{TAU_C, ConsensusState};
+                use coinject_core::{ConsensusState, TAU_C};
                 let tau = (block.header.height as f64) / TAU_C;
                 let consensus_state = ConsensusState::at_tau(tau);
 
-                if let Err(e) = dimensional_pool_state.save_consensus_state(block.header.height, &consensus_state) {
+                if let Err(e) = dimensional_pool_state
+                    .save_consensus_state(block.header.height, &consensus_state)
+                {
                     warn!(block_height = block.header.height, error = %e, "failed to save consensus state");
                 } else {
                     debug!(
@@ -202,19 +297,19 @@ impl CoinjectNode {
                 }
 
                 // EMPIRICAL MEASUREMENT: Record work score for convergence analysis
-                let block_time = if block.header.height > 1 {
-                    // Approximate block time from timestamp difference
-                    // In full implementation, track previous block timestamp
-                    60.0 // Default to ~60s target block time
-                } else {
-                    0.0
-                };
+                let block_time =
+                    match chain.get_block_by_height(block.header.height.saturating_sub(1)) {
+                        Ok(Some(parent)) if block.header.height > 0 => {
+                            (block.header.timestamp - parent.header.timestamp).max(0) as f64
+                        }
+                        _ => 0.0,
+                    };
 
                 if let Err(e) = dimensional_pool_state.record_work_score(
                     block.header.height,
                     consensus_state.tau,
                     block.header.work_score,
-                    block_time
+                    block_time,
                 ) {
                     warn!(block_height = block.header.height, error = %e, "failed to record work score");
                 }
@@ -229,7 +324,9 @@ impl CoinjectNode {
                         300
                     };
 
-                    match dimensional_pool_state.update_consensus_metrics(block.header.height, window_size) {
+                    match dimensional_pool_state
+                        .update_consensus_metrics(block.header.height, window_size)
+                    {
                         Ok(metrics) => {
                             info!(
                                 block_height = block.header.height,
@@ -244,15 +341,20 @@ impl CoinjectNode {
                             if let Some(status) = dimensional_pool_state.test_conjecture() {
                                 debug!(
                                     eta_converged = status.eta_convergence,
-                                    eta_error = (metrics.measured_eta - 0.707107).abs(),
+                                    eta_error = (metrics.measured_eta
+                                        - std::f64::consts::FRAC_1_SQRT_2)
+                                        .abs(),
                                     lambda_converged = status.lambda_convergence,
-                                    lambda_error = (metrics.measured_lambda - 0.707107).abs(),
+                                    lambda_error = (metrics.measured_lambda
+                                        - std::f64::consts::FRAC_1_SQRT_2)
+                                        .abs(),
                                     oracle_aligned = status.oracle_alignment,
-                                    oracle_delta_error = (metrics.measured_oracle_delta - 0.231).abs(),
+                                    oracle_delta_error =
+                                        (metrics.measured_oracle_delta - 0.231).abs(),
                                     "conjecture status"
                                 );
                             }
-                        },
+                        }
                         Err(e) => {
                             warn!(block_height = block.header.height, error = %e, "failed to update consensus metrics");
                         }
@@ -261,13 +363,17 @@ impl CoinjectNode {
 
                 // RUNTIME INTEGRATION: Distribute block reward dynamically across dimensional pools
                 let block_reward = block.coinbase.reward;
-                if let Err(e) = dimensional_pool_state.distribute_block_reward(block_reward, block.header.height) {
+                if let Err(e) = dimensional_pool_state
+                    .distribute_block_reward(block_reward, block.header.height)
+                {
                     warn!(block_height = block.header.height, error = %e, "failed to distribute block reward");
                 }
 
                 // RUNTIME INTEGRATION: Execute unlock schedules (every 10 blocks to reduce spam)
                 if block.header.height % 10 == 0 {
-                    if let Err(e) = dimensional_pool_state.execute_unlock_schedules(block.header.height) {
+                    if let Err(e) =
+                        dimensional_pool_state.execute_unlock_schedules(block.header.height)
+                    {
                         warn!(block_height = block.header.height, error = %e, "failed to execute unlock schedules");
                     }
                 }
@@ -280,7 +386,16 @@ impl CoinjectNode {
                 }
 
                 // Apply block transactions to state
-                let applied_txs = match Self::apply_block_transactions(&block, &state, &timelock_state, &escrow_state, &channel_state, &trustline_state, &dimensional_pool_state, &marketplace_state) {
+                let applied_txs = match Self::apply_block_transactions(
+                    &block,
+                    &state,
+                    &timelock_state,
+                    &escrow_state,
+                    &channel_state,
+                    &trustline_state,
+                    &dimensional_pool_state,
+                    &marketplace_state,
+                ) {
                     Ok(txs) => txs,
                     Err(e) => {
                         error!(block_height = block.header.height, error = %e, "failed to apply mined block transactions");
@@ -295,6 +410,9 @@ impl CoinjectNode {
                 }
                 drop(pool);
 
+                Self::retarget_header_pow_from_stored_block(&Some(miner.clone()), &chain, &block)
+                    .await;
+
                 // Broadcast to network
                 if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block.clone())) {
                     error!(block_height = block.header.height, error = %e, "failed to broadcast block");
@@ -303,19 +421,47 @@ impl CoinjectNode {
                 }
 
                 // Update CPP network chain state so it broadcasts correct height to peers
-                if let Err(e) = cpp_network_tx.send(coinject_network::cpp::NetworkCommand::UpdateChainState {
-                    best_height: block.header.height,
-                    best_hash: block.header.hash(),
-                }) {
+                let cum = chain.best_cumulative_work().await;
+                if let Err(e) =
+                    cpp_network_tx.send(coinject_network::cpp::NetworkCommand::UpdateChainState {
+                        best_height: block.header.height,
+                        best_hash: block.header.hash(),
+                        cumulative_work: cum,
+                    })
+                {
                     warn!(block_height = block.header.height, error = %e, "failed to update cpp chain state");
                 }
 
                 // Push consensus block to Hugging Face (inline within mining loop)
                 if let Some(ref hf_sync) = hf_sync {
-                    debug!(block_height = block.header.height, "uploading mined block to hugging face");
-                    match hf_sync.push_consensus_block(&block, true).await {
-                        Ok(()) => debug!(block_height = block.header.height, "block queued for hugging face upload"),
-                        Err(e) => error!(block_height = block.header.height, error = %e, "hugging face upload error"),
+                    debug!(
+                        block_height = block.header.height,
+                        "uploading mined block to hugging face"
+                    );
+                    let peer_n = *peer_count.read().await;
+                    let peer_best = *best_known_peer_height.read().await;
+                    let tip = block.header.height;
+                    let sync_lag_blocks = if peer_best > tip {
+                        (peer_best - tip) as i64
+                    } else {
+                        0
+                    };
+                    let net_ctx = NetworkContext {
+                        peer_count: peer_n as u32,
+                        sync_lag_blocks,
+                        propagation_time_ms: None,
+                    };
+                    match hf_sync
+                        .push_consensus_block_with_context(&block, true, Some(net_ctx))
+                        .await
+                    {
+                        Ok(()) => debug!(
+                            block_height = block.header.height,
+                            "block queued for hugging face upload"
+                        ),
+                        Err(e) => {
+                            error!(block_height = block.header.height, error = %e, "hugging face upload error")
+                        }
                     }
 
                     // Upload marketplace transactions from this mined block
@@ -333,7 +479,7 @@ impl CoinjectNode {
         marketplace_state: &Arc<MarketplaceState>,
         hf_sync: &Arc<HuggingFaceSync>,
     ) {
-        use coinject_core::{Transaction, MarketplaceOperation};
+        use coinject_core::{MarketplaceOperation, Transaction};
 
         // Scan block for marketplace transactions
         for tx in &block.transactions {
@@ -362,7 +508,10 @@ impl CoinjectNode {
                                         warn!(problem_id = ?problem_id, "problem submitter is all-zeros — testnet placeholder address, not valid for mainnet");
                                     }
                                     debug!(problem_id = ?problem_id, "uploading problem submission to hugging face");
-                                    if let Err(e) = hf_clone.push_problem_submission(&submission, block_height).await {
+                                    if let Err(e) = hf_clone
+                                        .push_problem_submission(&submission, block_height)
+                                        .await
+                                    {
                                         error!(problem_id = ?problem_id, error = %e, "failed to upload problem submission");
                                     } else {
                                         debug!(problem_id = ?problem_id, "problem submission uploaded");
@@ -391,19 +540,24 @@ impl CoinjectNode {
 
                                     // For now, use estimated timing (we'll refine this later with actual measurements)
                                     // Estimate based on problem complexity
-                                    let solve_time = std::time::Duration::from_secs((submission.min_work_score * 10.0) as u64);
+                                    let solve_time = std::time::Duration::from_secs(
+                                        (submission.min_work_score * 10.0) as u64,
+                                    );
                                     let verify_time = std::time::Duration::from_millis(100);
                                     let solve_memory = 1024 * 1024; // 1 MB estimate
                                     let verify_memory = 512 * 1024; // 512 KB estimate
 
-                                    if let Err(e) = hf_clone.push_solution_submission(
-                                        &submission,
-                                        block_height,
-                                        solve_time,
-                                        verify_time,
-                                        solve_memory,
-                                        verify_memory,
-                                    ).await {
+                                    if let Err(e) = hf_clone
+                                        .push_solution_submission(
+                                            &submission,
+                                            block_height,
+                                            solve_time,
+                                            verify_time,
+                                            solve_memory,
+                                            verify_memory,
+                                        )
+                                        .await
+                                    {
                                         error!(problem_id = ?problem_id, error = %e, "failed to upload solution submission");
                                     } else {
                                         debug!(problem_id = ?problem_id, "solution submission uploaded");

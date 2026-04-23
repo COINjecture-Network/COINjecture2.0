@@ -162,6 +162,9 @@ mod tests {
             ..good_peer.clone()
         };
 
-        assert!(PeerScorer::connection_priority(&good_peer) > PeerScorer::connection_priority(&bad_peer));
+        assert!(
+            PeerScorer::connection_priority(&good_peer)
+                > PeerScorer::connection_priority(&bad_peer)
+        );
     }
 }

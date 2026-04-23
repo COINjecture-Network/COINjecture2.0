@@ -1,10 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { BrandLogo } from "@/components/BrandLogo";
 import { ArrowRight, Download, Code, Award, Target, TrendingUp, Database, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { rpcClient } from "@/lib/rpc-client";
+import { cn } from "@/lib/utils";
+import { formatBeans, parseBalance } from "@/lib/chain-metrics";
 
 const useHeroVideo = () => {
   const [showVideo, setShowVideo] = useState(
@@ -84,6 +87,9 @@ export const Hero = () => {
         <div className="container mx-auto px-6 relative z-10 flex-1 flex flex-col justify-center">
           <div className="max-w-6xl mx-auto w-full">
             <div className="text-center mb-16 animate-fade-in">
+              <div className="flex justify-center mb-6">
+                <BrandLogo size="lg" />
+              </div>
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-effect border-white/10 mb-6 subtle-shadow">
                 <div className={`w-2 h-2 rounded-full ${chainInfo ? 'bg-success animate-pulse' : 'bg-muted'}`} />
                 <span
@@ -114,7 +120,7 @@ export const Hero = () => {
               <p className="text-xl text-white max-w-3xl mx-auto mb-8 text-shadow-medium leading-relaxed">
                 COINjecture harnesses the solve-verify asymmetry of NP problems to replace traditional proof-of-work hashing, providing utility beyond network security.
               </p>
-              
+
               <div className="flex flex-wrap gap-4 justify-center mb-12">
                 <Link to="/solver-lab">
                   <Button size="lg" className="glow-hover gentle-animation px-8">
@@ -139,76 +145,76 @@ export const Hero = () => {
               </div>
 
               {/* Quick Stats */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-3xl mx-auto">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto">
                 {chainInfo ? (
                   <>
-                    <Card className="p-4 glass-effect interactive-lift border-white/10">
-                      <div className="text-2xl font-bold text-primary mb-1">
+                    <Card className="signal-card interactive-lift border-white/10 bg-background/70">
+                      <div className="signal-kicker">Blocks mined</div>
+                      <div className="signal-value text-primary">
                         {chainInfo.best_height.toLocaleString()}
                       </div>
-                      <div className="text-xs text-muted-foreground">Blocks Mined</div>
                     </Card>
-                    <Card className="p-4 glass-effect interactive-lift border-white/10">
-                      <div className="text-2xl font-bold text-primary mb-1">{chainInfo.peer_count}</div>
-                      <div className="text-xs text-muted-foreground">Network Peers</div>
+                    <Card className="signal-card interactive-lift border-white/10 bg-background/70">
+                      <div className="signal-kicker">Network peers</div>
+                      <div className="signal-value text-primary">{chainInfo.peer_count}</div>
                     </Card>
                     {marketplaceStats ? (
                       <>
-                        <Card className="p-4 glass-effect interactive-lift border-white/10">
-                          <div className="text-2xl font-bold text-primary mb-1">
+                        <Card className="signal-card interactive-lift border-white/10 bg-background/70">
+                          <div className="signal-kicker">Open bounties</div>
+                          <div className="signal-value text-primary">
                             {marketplaceStats.open_problems}
                           </div>
-                          <div className="text-xs text-muted-foreground">Open Problems</div>
                         </Card>
-                        <Card className="p-4 glass-effect interactive-lift border-white/10">
-                          <div className="text-2xl font-bold text-primary mb-1">
-                            {(marketplaceStats.total_bounty_pool / 1e9).toFixed(2)}B
+                        <Card className="signal-card interactive-lift border-white/10 bg-background/70">
+                          <div className="signal-kicker">Bounty pool</div>
+                          <div className="signal-value text-primary tabular-nums">
+                            {formatBeans(parseBalance(marketplaceStats.total_bounty_pool) ?? 0n)}
                           </div>
-                          <div className="text-xs text-muted-foreground">Bounty Pool</div>
                         </Card>
                       </>
                     ) : (
                       <>
-                        <Card className="p-4 glass-effect interactive-lift border-white/10">
+                        <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                           <div className="flex items-center justify-center h-8">
                             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                           </div>
-                          <div className="text-xs text-muted-foreground">Loading...</div>
+                          <div className="signal-kicker mt-2">Loading</div>
                         </Card>
-                        <Card className="p-4 glass-effect interactive-lift border-white/10">
+                        <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                           <div className="flex items-center justify-center h-8">
                             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                           </div>
-                          <div className="text-xs text-muted-foreground">Loading...</div>
+                          <div className="signal-kicker mt-2">Loading</div>
                         </Card>
                       </>
                     )}
                   </>
                 ) : (
                   <>
-                    <Card className="p-4 glass-effect interactive-lift border-white/10">
+                    <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                       <div className="flex items-center justify-center h-8">
                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       </div>
-                      <div className="text-xs text-muted-foreground">Loading...</div>
+                      <div className="signal-kicker mt-2">Loading</div>
                     </Card>
-                    <Card className="p-4 glass-effect interactive-lift border-white/10">
+                    <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                       <div className="flex items-center justify-center h-8">
                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       </div>
-                      <div className="text-xs text-muted-foreground">Loading...</div>
+                      <div className="signal-kicker mt-2">Loading</div>
                     </Card>
-                    <Card className="p-4 glass-effect interactive-lift border-white/10">
+                    <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                       <div className="flex items-center justify-center h-8">
                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       </div>
-                      <div className="text-xs text-muted-foreground">Loading...</div>
+                      <div className="signal-kicker mt-2">Loading</div>
                     </Card>
-                    <Card className="p-4 glass-effect interactive-lift border-white/10">
+                    <Card className="signal-card interactive-lift border-white/10 bg-background/70">
                       <div className="flex items-center justify-center h-8">
                         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       </div>
-                      <div className="text-xs text-muted-foreground">Loading...</div>
+                      <div className="signal-kicker mt-2">Loading</div>
                     </Card>
                   </>
                 )}
@@ -335,7 +341,10 @@ export const Hero = () => {
                       All solutions and metrics are publicly available on HuggingFace
                     </p>
                     <a 
-                      href="https://huggingface.co/datasets/COINjecture/NP_Solutions" 
+                      href={
+                        (import.meta.env.VITE_HF_DATASET_URL as string | undefined)?.trim() ||
+                        "https://huggingface.co/datasets/COINjecture/NP-Solutions"
+                      }
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="text-sm text-primary hover:underline inline-flex items-center gap-1"
@@ -366,9 +375,9 @@ export const Hero = () => {
                   Open Solver Lab <Code className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
-              <Link to="/metrics">
+              <Link to="/explore">
                 <Button size="lg" variant="outline" className="gentle-animation px-8">
-                  View Live Metrics <TrendingUp className="ml-2 h-4 w-4" />
+                  Open Explorer <TrendingUp className="ml-2 h-4 w-4" />
                 </Button>
               </Link>
             </div>

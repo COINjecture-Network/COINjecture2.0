@@ -57,10 +57,9 @@ fn is_valid_email(email: &str) -> bool {
 fn require_supabase(
     state: &AppState,
 ) -> Result<&std::sync::Arc<crate::supabase::SupabaseClient>, ApiError> {
-    state
-        .supabase
-        .as_ref()
-        .ok_or_else(|| ApiError::ServiceUnavailable("Email auth requires Supabase configuration".into()))
+    state.supabase.as_ref().ok_or_else(|| {
+        ApiError::ServiceUnavailable("Email auth requires Supabase configuration".into())
+    })
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────
@@ -82,14 +81,15 @@ pub async fn signup(
 
     let supabase = require_supabase(&state)?;
 
-    let result = supabase.email_signup(&req.email, &req.password).await.map_err(|e| {
-        match e {
+    let result = supabase
+        .email_signup(&req.email, &req.password)
+        .await
+        .map_err(|e| match e {
             crate::supabase::SupabaseError::UserAlreadyExists(_) => {
                 ApiError::BadRequest("An account with this email already exists".into())
             }
             _ => ApiError::Internal(format!("Signup failed: {e}")),
-        }
-    })?;
+        })?;
 
     if result.needs_confirmation {
         return Ok(Json(json!({
@@ -124,14 +124,17 @@ pub async fn signin(
     Json(req): Json<SigninRequest>,
 ) -> Result<Json<Value>, ApiError> {
     if req.email.is_empty() || req.password.is_empty() {
-        return Err(ApiError::BadRequest("Email and password are required".into()));
+        return Err(ApiError::BadRequest(
+            "Email and password are required".into(),
+        ));
     }
 
     let supabase = require_supabase(&state)?;
 
-    let result = supabase.email_signin(&req.email, &req.password).await.map_err(|e| {
-        ApiError::Unauthorized(format!("Sign-in failed: {e}"))
-    })?;
+    let result = supabase
+        .email_signin(&req.email, &req.password)
+        .await
+        .map_err(|e| ApiError::Unauthorized(format!("Sign-in failed: {e}")))?;
 
     // Look up wallet binding for this user
     let wallet_address = match supabase.find_wallets_for_user(&result.user_id).await {
@@ -237,7 +240,9 @@ pub async fn bind_wallet(
         ));
     }
     if hex::decode(&req.wallet_address).is_err() {
-        return Err(ApiError::BadRequest("wallet_address must be valid hex".into()));
+        return Err(ApiError::BadRequest(
+            "wallet_address must be valid hex".into(),
+        ));
     }
 
     let supabase = require_supabase(&state)?;
@@ -264,12 +269,11 @@ pub async fn bind_wallet(
     // Verify Ed25519 signature
     let pubkey_bytes =
         hex::decode(&req.wallet_address).map_err(|_| ApiError::BadRequest("Invalid hex".into()))?;
-    let sig_bytes =
-        hex::decode(&req.signature).map_err(|_| ApiError::BadRequest("Invalid signature hex".into()))?;
+    let sig_bytes = hex::decode(&req.signature)
+        .map_err(|_| ApiError::BadRequest("Invalid signature hex".into()))?;
 
-    let valid =
-        verify_ed25519_signature(&pubkey_bytes, req.message.as_bytes(), &sig_bytes)
-            .map_err(|_| ApiError::Unauthorized("Signature verification failed".into()))?;
+    let valid = verify_ed25519_signature(&pubkey_bytes, req.message.as_bytes(), &sig_bytes)
+        .map_err(|_| ApiError::Unauthorized("Signature verification failed".into()))?;
 
     if !valid {
         return Err(ApiError::Unauthorized("Invalid signature".into()));

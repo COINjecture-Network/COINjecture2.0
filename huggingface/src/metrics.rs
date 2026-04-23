@@ -4,7 +4,10 @@
 
 use crate::client::DatasetRecord;
 use crate::energy::{EnergyConfig, EnergyMeasurer};
-use crate::serialize::{extract_problem_from_submission, serialize_problem, serialize_solution};
+use crate::serialize::{
+    coerce_json_object_for_hub, extract_problem_from_submission, serialize_problem,
+    serialize_solution,
+};
 use crate::SyncConfig;
 use coinject_consensus::WorkScoreCalculator;
 use coinject_state::ProblemSubmission;
@@ -120,11 +123,11 @@ impl MetricsCollector {
             submission.problem_reveal.as_ref(),
         )?;
 
-        let problem_data = if let Some(ref p) = problem {
+        let problem_data = coerce_json_object_for_hub(if let Some(ref p) = problem {
             serialize_problem(p)?
         } else {
             serde_json::json!({}) // Private problem not revealed
-        };
+        });
 
         let problem_type = match &submission.submission_mode {
             coinject_core::SubmissionMode::Public { problem } => format!("{:?}", problem)
@@ -140,7 +143,7 @@ impl MetricsCollector {
             .unwrap()
             .as_secs() as i64;
 
-        Ok(DatasetRecord {
+        let mut rec = DatasetRecord {
             // Primary content
             problem_id: hex::encode(submission.problem_id.as_bytes()),
             problem_type,
@@ -226,10 +229,13 @@ impl MetricsCollector {
             // Data provenance (v3.0)
             metrics_source: "not_applicable".to_string(),
             measurement_confidence: "not_applicable".to_string(),
-            data_version: "v3.0".to_string(),
+            data_version: "v3.1".to_string(),
             node_version: Some(self.node_version.clone()),
             node_id: self.node_id.clone(),
-        })
+            explorer_card: String::new(),
+        };
+        rec.explorer_card = crate::explorer_card::render(&rec);
+        Ok(rec)
     }
 
     /// Collect solution record (when solution is submitted)
@@ -251,11 +257,11 @@ impl MetricsCollector {
             submission.problem_reveal.as_ref(),
         )?;
 
-        let problem_data = if let Some(ref p) = problem {
+        let problem_data = coerce_json_object_for_hub(if let Some(ref p) = problem {
             serialize_problem(p)?
         } else {
             serde_json::json!({})
-        };
+        });
 
         let problem_type = match &submission.submission_mode {
             coinject_core::SubmissionMode::Public { problem } => format!("{:?}", problem)
@@ -271,7 +277,8 @@ impl MetricsCollector {
             .solution
             .as_ref()
             .map(serialize_solution)
-            .transpose()?;
+            .transpose()?
+            .map(coerce_json_object_for_hub);
 
         // Calculate metrics
         let time_asymmetry = solve_time.as_secs_f64() / verify_time.as_secs_f64().max(0.001);
@@ -314,7 +321,7 @@ impl MetricsCollector {
             .unwrap()
             .as_secs() as i64;
 
-        Ok(DatasetRecord {
+        let mut rec = DatasetRecord {
             // Primary content
             problem_id: hex::encode(submission.problem_id.as_bytes()),
             problem_type,
@@ -407,10 +414,13 @@ impl MetricsCollector {
             // Data provenance (v3.0)
             metrics_source: "measured_marketplace".to_string(),
             measurement_confidence: "medium".to_string(),
-            data_version: "v3.0".to_string(),
+            data_version: "v3.1".to_string(),
             node_version: Some(self.node_version.clone()),
             node_id: self.node_id.clone(),
-        })
+            explorer_card: String::new(),
+        };
+        rec.explorer_card = crate::explorer_card::render(&rec);
+        Ok(rec)
     }
 
     /// Collect consensus block record (for mined or validated blocks)
@@ -419,31 +429,35 @@ impl MetricsCollector {
         &self,
         block: &coinject_core::Block,
         is_mined: bool,
+        mining_difficulty_bits: u32,
     ) -> Result<DatasetRecord, MetricsError> {
-        self.collect_consensus_block_record_with_context(block, is_mined, None)
+        self.collect_consensus_block_record_with_context(
+            block,
+            is_mined,
+            None,
+            mining_difficulty_bits,
+        )
     }
 
     /// Collect consensus block record with network context
-    /// INSTITUTIONAL GRADE v3.0 - comprehensive metrics collection
+    /// INSTITUTIONAL GRADE v3.1 - comprehensive metrics collection
     pub fn collect_consensus_block_record_with_context(
         &self,
         block: &coinject_core::Block,
         is_mined: bool,
         network_ctx: Option<&NetworkContext>,
+        mining_difficulty_bits: u32,
     ) -> Result<DatasetRecord, MetricsError> {
-        // Extract consensus block data
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        // Chain time from header (not upload wall clock)
+        let timestamp = block.header.timestamp;
 
         // Extract mining problem and solution from the block
         let problem = &block.solution_reveal.problem;
         let solution = &block.solution_reveal.solution;
 
-        // Serialize the problem and solution
-        let problem_data = serialize_problem(problem)?;
-        let solution_data = serialize_solution(solution)?;
+        // Serialize the problem and solution (coerce so Hub never sees string-typed JSON blobs)
+        let problem_data = coerce_json_object_for_hub(serialize_problem(problem)?);
+        let solution_data = coerce_json_object_for_hub(serialize_solution(solution)?);
 
         // Determine problem type
         let problem_type = format!("{:?}", problem)
@@ -539,7 +553,7 @@ impl MetricsCollector {
         // ═══════════════════════════════════════════════════════════════════════════
         let hw = &self.hardware_context;
 
-        Ok(DatasetRecord {
+        let mut rec = DatasetRecord {
             // Primary content
             problem_id: format!("mining_block_{}", block.header.height),
             problem_type,
@@ -568,7 +582,8 @@ impl MetricsCollector {
             solve_time_us: Some(solve_time_us),
             verify_time_us: Some(verify_time_us),
             block_time_seconds: None, // Requires previous block timestamp
-            mining_attempts: Some(nonce), // Nonce is proxy for attempts
+            // Header nonce is the only on-chain proxy for “attempts”; keeps column populated for HF viewer.
+            mining_attempts: Some(nonce),
 
             // Asymmetry metrics
             time_asymmetry: Some(time_asymmetry),
@@ -593,7 +608,7 @@ impl MetricsCollector {
             sync_lag_blocks,
 
             // Difficulty & mining
-            difficulty_target: Some(4), // TODO: get from config
+            difficulty_target: Some(mining_difficulty_bits),
             nonce: Some(nonce),
             hash_rate_estimate,
 
@@ -623,13 +638,16 @@ impl MetricsCollector {
             submission_mode: "mining".to_string(),
             energy_measurement_method: format!("{:?}", self.energy_measurer.config.method),
 
-            // Institutional-grade data provenance (v3.0)
+            // Institutional-grade data provenance (v3.1)
             metrics_source: "block_header_actual".to_string(),
             measurement_confidence: "high".to_string(),
-            data_version: "v3.0".to_string(),
+            data_version: "v3.1".to_string(),
             node_version: Some(self.node_version.clone()),
             node_id: self.node_id.clone(),
-        })
+            explorer_card: String::new(),
+        };
+        rec.explorer_card = crate::explorer_card::render(&rec);
+        Ok(rec)
     }
 }
 

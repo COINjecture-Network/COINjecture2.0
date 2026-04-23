@@ -5,7 +5,6 @@ use coinject_rpc::websocket::{
     ClientId, MiningWork, RpcCommand, RpcEvent, RpcMessage, WebSocketRpc, WorkQueue,
 };
 use std::net::SocketAddr;
-use tokio::time::{timeout, Duration};
 
 #[tokio::test]
 async fn test_websocket_rpc_creation() {
@@ -218,7 +217,7 @@ async fn test_rpc_event_types() {
         signature: Ed25519Signature::from_bytes([0u8; 64]),
     });
     let _event4 = RpcEvent::TransactionSubmitted {
-        transaction: tx,
+        transaction: Box::new(tx),
         client_id,
     };
 }

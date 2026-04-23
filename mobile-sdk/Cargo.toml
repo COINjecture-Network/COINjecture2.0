@@ -36,19 +36,3 @@ wasm = []
 ffi = []
 # Enable all platform targets
 all-platforms = ["wasm", "ffi"]
-
-[profile.release]
-# Optimize for size (important for mobile)
-opt-level = "s"
-lto = true
-codegen-units = 1
-panic = "abort"
-
-[profile.release.package."*"]
-opt-level = "s"
-
-# WASM-specific profile
-[profile.wasm-release]
-inherits = "release"
-opt-level = "z"  # Even more size optimization for WASM
-
