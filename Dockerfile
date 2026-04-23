@@ -4,7 +4,7 @@
 
 # ── Builder stage ────────────────────────────────────────────────────────────
 # `rustls` → `aws-lc-sys` needs CMake to compile native code in Linux builds.
-FROM rust:1.88-slim AS builder
+FROM rust:1.94-slim AS builder
 
 # Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
 RUN echo 'Types: deb\nURIs: http://mirrors.kernel.org/debian\nSuites: bookworm bookworm-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg' > /etc/apt/sources.list.d/debian.sources
