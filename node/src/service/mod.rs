@@ -800,6 +800,10 @@ impl CoinjectNode {
                 }) as MiningDifficultyTipProvider
             });
 
+        // Updated by the periodic reorg/sync task: true when our tip is behind the peer median
+        // (or best peer height) by more than `sync_threshold_blocks` — see `docs/FORKING_AND_REORG.md`.
+        let is_syncing = Arc::new(tokio::sync::RwLock::new(false));
+
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
             timelock_state: Arc::clone(&self.timelock_state),
@@ -819,7 +823,7 @@ impl CoinjectNode {
             block_submission_handler,
             local_peer_id: Some(local_peer_id_str.clone()),
             listen_addresses: Arc::clone(&listen_addresses),
-            is_syncing: Arc::new(tokio::sync::RwLock::new(false)), // Node starts not syncing
+            is_syncing: Arc::clone(&is_syncing),
             mining_work_provider,
             mining_difficulty_tip_provider,
         });
@@ -2396,6 +2400,7 @@ impl CoinjectNode {
         let network_tx_periodic = network_cmd_tx.clone();
         let cpp_network_cmd_tx_periodic = cpp_network_cmd_tx.clone();
         let peer_consensus_periodic = Arc::clone(&peer_consensus);
+        let is_syncing_periodic = Arc::clone(&is_syncing);
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(15));
@@ -2418,6 +2423,15 @@ impl CoinjectNode {
                     &peer_consensus_periodic,
                 )
                 .await;
+
+                let cur = chain_periodic.best_block_height().await;
+                let median = peer_consensus_periodic.median_peer_height().await;
+                let best_ph = peer_consensus_periodic.best_peer_height().await;
+                let thresh = peer_consensus_periodic.sync_threshold_blocks();
+                let behind_median = cur.saturating_add(thresh) < median;
+                let behind_best_peer = cur.saturating_add(thresh) < best_ph;
+                let syncing = behind_median || behind_best_peer;
+                *is_syncing_periodic.write().await = syncing;
             }
         });
 

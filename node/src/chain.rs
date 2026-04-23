@@ -515,12 +515,37 @@ impl ChainState {
         }
     }
 
-    /// Find common ancestor between current best chain and a target block
-    /// Returns (common_ancestor_hash, common_ancestor_height)
-    pub async fn find_common_ancestor(
+    /// Resolve a header by hash from committed chain storage, or from `alt_chain` (typically the
+    /// in-memory P2P sync buffer holding blocks not yet written to disk).
+    ///
+    /// [`Self::find_common_ancestor_with_alt_chain`] needs this so walking a peer's alternate branch
+    /// does not return `None` just because intermediate blocks only exist in the buffer.
+    fn block_by_hash_or_alt(
+        &self,
+        hash: &Hash,
+        alt_chain: &[Block],
+    ) -> Result<Option<Block>, ChainError> {
+        if let Some(b) = self.get_block_by_hash(hash)? {
+            return Ok(Some(b));
+        }
+        for b in alt_chain {
+            if b.header.hash() == *hash {
+                return Ok(Some(b.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Find common ancestor between our canonical best chain and a target header, optionally
+    /// resolving the **competing** branch from `alt_chain` (sync buffer) when hashes are not
+    /// stored yet.
+    ///
+    /// Pass `alt_chain: &[]` for behaviour identical to [`Self::find_common_ancestor`].
+    pub async fn find_common_ancestor_with_alt_chain(
         &self,
         target_hash: &Hash,
         target_height: u64,
+        alt_chain: &[Block],
     ) -> Result<Option<(Hash, u64)>, ChainError> {
         let current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
@@ -563,7 +588,7 @@ impl ChainState {
         }
 
         while their_height > our_height {
-            if let Some(block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
                 // Check if this block's prev_hash matches our chain at the previous height
                 // This allows finding common ancestors even when intermediate blocks are missing
                 if their_height > 0 {
@@ -599,7 +624,7 @@ impl ChainState {
             } else {
                 // Missing block in our chain - check if their chain has a block that matches our height
                 // This handles gaps in our chain
-                if let Ok(Some(their_block)) = self.get_block_by_hash(&their_hash) {
+                if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
                     // Check if their prev_hash matches any block we have at this height
                     if let Ok(Some(our_block_at_height)) = self.get_block_by_height(our_height) {
                         if their_block.header.prev_hash == our_block_at_height.header.hash() {
@@ -611,7 +636,7 @@ impl ChainState {
                 return Ok(None);
             }
 
-            if let Some(their_block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
                 // Check if their block's prev_hash matches our block at the previous height
                 if their_height > 0 {
                     if let Ok(Some(our_block_at_height)) =
@@ -645,6 +670,17 @@ impl ChainState {
         } else {
             Ok(None)
         }
+    }
+
+    /// Find common ancestor between current best chain and a target block
+    /// Returns (common_ancestor_hash, common_ancestor_height)
+    pub async fn find_common_ancestor(
+        &self,
+        target_hash: &Hash,
+        target_height: u64,
+    ) -> Result<Option<(Hash, u64)>, ChainError> {
+        self.find_common_ancestor_with_alt_chain(target_hash, target_height, &[])
+            .await
     }
 
     /// Get chain path from start_hash to end_hash (inclusive)

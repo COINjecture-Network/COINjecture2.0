@@ -1,5 +1,7 @@
-// Fork Detection and Chain Reorganization
-// Handles chain reorganization, fork detection, and chain comparison
+//! Fork detection and chain reorganization.
+//!
+//! High-level behaviour and operator notes: see repository **`docs/FORKING_AND_REORG.md`**.
+//! This module coordinates buffer scans, common-ancestor discovery, and reorg attempts.
 #![allow(dead_code)]
 
 use super::*;
@@ -29,6 +31,12 @@ impl CoinjectNode {
 
         debug!(block_height = current_best_height, block_hash = ?current_best_hash, "reorganization check");
 
+        // One snapshot for all ancestor walks this tick (buffered + stored-head analysis).
+        let alt_snapshot: Vec<coinject_core::Block> = {
+            let buffer = block_buffer.read().await;
+            buffer.values().cloned().collect()
+        };
+
         // Check if we have blocks in buffer that might form a longer chain
         let buffer = block_buffer.read().await;
         let buffer_info = if buffer.is_empty() {
@@ -47,7 +55,7 @@ impl CoinjectNode {
         // v4.7.45 FIX: Use find_common_ancestor() for buffered blocks to handle earlier forks properly
         // If we have blocks that extend beyond our current best, check if they form a valid chain
         if max_buffered_height > current_best_height {
-            // Re-acquire buffer lock to check for chain path
+            // Re-acquire buffer lock to read the highest buffered block
             let buffer = block_buffer.read().await;
 
             // Find the highest buffered block and use find_common_ancestor to check for forks
@@ -55,9 +63,14 @@ impl CoinjectNode {
                 let highest_hash = highest_block.header.hash();
                 drop(buffer); // Release lock before async call
 
-                // Use find_common_ancestor to properly detect if this is a fork from earlier
+                // Include `alt_snapshot` so we do not mis-classify a buffered extension as a
+                // "complete fork" just because intermediate alternate blocks are not stored yet.
                 match chain
-                    .find_common_ancestor(&highest_hash, max_buffered_height)
+                    .find_common_ancestor_with_alt_chain(
+                        &highest_hash,
+                        max_buffered_height,
+                        &alt_snapshot,
+                    )
                     .await
                 {
                     Ok(Some((_common_hash, common_height))) => {
@@ -623,7 +636,11 @@ impl CoinjectNode {
             // Check if this chain has no common ancestor (complete fork)
             // If so, we need to validate from genesis
             match chain
-                .find_common_ancestor(&max_stored_hash, max_stored_height)
+                .find_common_ancestor_with_alt_chain(
+                    &max_stored_hash,
+                    max_stored_height,
+                    &alt_snapshot,
+                )
                 .await
             {
                 Ok(Some((_common_hash, common_height))) => {
@@ -709,8 +726,19 @@ impl CoinjectNode {
         // 1. At least 6 blocks deep (to prevent shallow reorganizations)
         // 2. Valid and stored in our chain
         // 3. Not at genesis (unless absolutely necessary)
+        let alt_chain: Vec<coinject_core::Block> = if let Some(buf) = block_buffer {
+            let g = buf.read().await;
+            g.values().cloned().collect()
+        } else {
+            Vec::new()
+        };
+
         let (_common_hash, common_height) = match chain
-            .find_common_ancestor(&new_chain_end_hash, new_chain_end_height)
+            .find_common_ancestor_with_alt_chain(
+                &new_chain_end_hash,
+                new_chain_end_height,
+                &alt_chain,
+            )
             .await
             .map_err(|e| format!("Failed to find common ancestor: {}", e))
         {

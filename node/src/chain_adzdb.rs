@@ -281,22 +281,56 @@ impl AdzdbChainState {
         Ok(db.contains(hash.as_bytes()))
     }
 
-    /// Find common ancestor between current best chain and a target block
-    pub async fn find_common_ancestor(
+    /// See `chain::ChainState::block_by_hash_or_alt` — keep logic aligned when editing.
+    fn block_by_hash_or_alt(
+        &self,
+        hash: &Hash,
+        alt_chain: &[Block],
+    ) -> Result<Option<Block>, ChainError> {
+        if let Some(b) = self.get_block_by_hash(hash)? {
+            return Ok(Some(b));
+        }
+        for b in alt_chain {
+            if b.header.hash() == *hash {
+                return Ok(Some(b.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Same contract as `chain::ChainState::find_common_ancestor_with_alt_chain`.
+    pub async fn find_common_ancestor_with_alt_chain(
         &self,
         target_hash: &Hash,
         target_height: u64,
+        alt_chain: &[Block],
     ) -> Result<Option<(Hash, u64)>, ChainError> {
         let current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
 
-        // Walk back both chains to find common ancestor
+        if target_height <= current_best_height {
+            let mut current_hash = current_best_hash;
+            let mut current_height = current_best_height;
+
+            while current_height > target_height {
+                if let Some(block) = self.get_block_by_hash(&current_hash)? {
+                    current_hash = block.header.prev_hash;
+                    current_height -= 1;
+                } else {
+                    return Ok(None);
+                }
+            }
+
+            if current_hash == *target_hash {
+                return Ok(Some((current_hash, current_height)));
+            }
+        }
+
         let mut our_hash = current_best_hash;
         let mut our_height = current_best_height;
         let mut their_hash = *target_hash;
         let mut their_height = target_height;
 
-        // Align heights
         while our_height > their_height {
             if let Some(block) = self.get_block_by_hash(&our_hash)? {
                 our_hash = block.header.prev_hash;
@@ -307,25 +341,59 @@ impl AdzdbChainState {
         }
 
         while their_height > our_height {
-            if let Some(block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
+                if their_height > 0 {
+                    if let Ok(Some(our_block_at_height)) =
+                        self.get_block_by_height(their_height - 1)
+                    {
+                        if block.header.prev_hash == our_block_at_height.header.hash() {
+                            return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
+                        }
+                    }
+                }
                 their_hash = block.header.prev_hash;
                 their_height -= 1;
             } else {
+                if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height) {
+                    if their_hash == our_block_at_height.header.hash() {
+                        return Ok(Some((their_hash, their_height)));
+                    }
+                }
                 return Ok(None);
             }
         }
 
-        // Now both at same height, walk back until we find common ancestor
         while our_height > 0 && our_hash != their_hash {
             if let Some(our_block) = self.get_block_by_hash(&our_hash)? {
                 our_hash = our_block.header.prev_hash;
             } else {
+                if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
+                    if let Ok(Some(our_block_at_height)) = self.get_block_by_height(our_height) {
+                        if their_block.header.prev_hash == our_block_at_height.header.hash() {
+                            return Ok(Some((our_block_at_height.header.hash(), our_height)));
+                        }
+                    }
+                }
                 return Ok(None);
             }
 
-            if let Some(their_block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
+                if their_height > 0 {
+                    if let Ok(Some(our_block_at_height)) =
+                        self.get_block_by_height(their_height - 1)
+                    {
+                        if their_block.header.prev_hash == our_block_at_height.header.hash() {
+                            return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
+                        }
+                    }
+                }
                 their_hash = their_block.header.prev_hash;
             } else {
+                if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height) {
+                    if their_hash == our_block_at_height.header.hash() {
+                        return Ok(Some((their_hash, their_height)));
+                    }
+                }
                 return Ok(None);
             }
 
@@ -337,6 +405,16 @@ impl AdzdbChainState {
         } else {
             Ok(None)
         }
+    }
+
+    /// Find common ancestor between current best chain and a target block
+    pub async fn find_common_ancestor(
+        &self,
+        target_hash: &Hash,
+        target_height: u64,
+    ) -> Result<Option<(Hash, u64)>, ChainError> {
+        self.find_common_ancestor_with_alt_chain(target_hash, target_height, &[])
+            .await
     }
 
     /// Get chain path from start to end (sync for compatibility)
