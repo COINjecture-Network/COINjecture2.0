@@ -613,8 +613,8 @@ impl ReputationManager {
             return None;
         }
 
-        let mut rng = rand::thread_rng();
-        let target = rng.gen_range(0.0..total_weight);
+        let mut rng = rand::rng();
+        let target = rng.random_range(0.0..total_weight);
 
         let mut cumulative = 0.0;
         for (id, peer) in eligible {

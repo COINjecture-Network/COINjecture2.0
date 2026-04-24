@@ -2179,7 +2179,7 @@ impl CppNetwork {
         for peer in peers.values_mut() {
             // Check if ping is needed
             if peer.needs_ping() {
-                let nonce: u64 = rand::thread_rng().gen();
+                let nonce: u64 = rand::rng().random();
                 let ping = PingMessage {
                     nonce,
                     timestamp: coinject_core::unix_now_secs(),
@@ -2400,7 +2400,7 @@ impl CppNetwork {
                 );
 
                 // === FIX: Actually request the blocks instead of sending placeholder event ===
-                let request_id: u64 = rand::thread_rng().gen();
+                let request_id: u64 = rand::rng().random();
                 if let Err(e) = self
                     .request_blocks(peer_id, from_height, to_height, request_id)
                     .await

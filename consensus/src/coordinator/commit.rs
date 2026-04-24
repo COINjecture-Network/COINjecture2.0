@@ -237,7 +237,7 @@ impl CommitCollector {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
-    use rand::rngs::OsRng;
+    use rand_core::OsRng;
 
     fn make_unsigned_commit(node_byte: u8, score: f64) -> SolutionCommit {
         let mut node_id = [0u8; 32];

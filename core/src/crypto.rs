@@ -1,5 +1,6 @@
 use crate::{golden::GoldenGenerator, Address, Hash};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 
 /// Domain separator for golden-enhanced merkle node hashing
@@ -12,8 +13,7 @@ pub struct KeyPair {
 
 impl KeyPair {
     pub fn generate() -> Self {
-        let mut csprng = rand::thread_rng();
-        let signing_key = SigningKey::generate(&mut csprng);
+        let signing_key = SigningKey::generate(&mut OsRng);
         KeyPair { signing_key }
     }
 

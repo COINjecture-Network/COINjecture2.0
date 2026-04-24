@@ -6,11 +6,8 @@
 # `rustls` → `aws-lc-sys` needs CMake to compile native code in Linux builds.
 FROM rust:1.94-slim AS builder
 
-# Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
-RUN echo 'Types: deb\nURIs: http://mirrors.kernel.org/debian\nSuites: bookworm bookworm-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg' > /etc/apt/sources.list.d/debian.sources
-
 # Install build dependencies (cmake: required by aws-lc-sys)
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
     libssl-dev \
@@ -58,13 +55,10 @@ COPY api-server ./api-server
 RUN cargo build --release -p coinject-node --bin coinject
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim
-
-# Use kernel.org mirror (deb.debian.org/Fastly CDN unreachable from some Docker networks)
-RUN echo 'Types: deb\nURIs: http://mirrors.kernel.org/debian\nSuites: bookworm bookworm-updates\nComponents: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg' > /etc/apt/sources.list.d/debian.sources
+FROM debian:trixie-slim
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     curl \

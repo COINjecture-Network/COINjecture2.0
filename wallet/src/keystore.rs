@@ -29,7 +29,7 @@ use anyhow::{anyhow, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
 use coinject_core::Address;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use rand::{rngs::OsRng, RngCore};
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
@@ -327,11 +327,8 @@ impl Default for Keystore {
 
 /// Encrypt a 32-byte secret key, returning the encrypted file bytes.
 fn encrypt_secret_key(secret_key: &[u8; 32], password: &str) -> Result<Vec<u8>, String> {
-    let mut rng = OsRng;
-    let mut salt = [0u8; 32];
-    let mut nonce_bytes = [0u8; 12];
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut nonce_bytes);
+    let salt: [u8; 32] = rand::random();
+    let nonce_bytes: [u8; 12] = rand::random();
 
     let mut enc_key = [0u8; KEY_LEN];
     derive_key(password, &salt, &mut enc_key)?;

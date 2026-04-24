@@ -42,7 +42,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
@@ -426,7 +426,7 @@ pub async fn write_encrypted_frame_half(
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
+    use rand_core::OsRng;
 
     fn random_signing_key() -> SigningKey {
         SigningKey::generate(&mut OsRng)
