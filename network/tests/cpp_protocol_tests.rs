@@ -7,17 +7,15 @@ use coinject_core::{
     Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, SolutionReveal,
 };
 use coinject_network::cpp::{
-    config::{CppConfig, NodeType, MAGIC, VERSION},
+    config::{NodeType, MAGIC, VERSION},
     message::*,
-    peer::{Peer, PeerId, PeerState},
+    peer::PeerId,
     protocol::{MessageCodec, MessageEnvelope, ProtocolError},
     router::EquilibriumRouter,
 };
 use coinject_network::reputation::{FaultType, ReputationManager};
-use std::net::SocketAddr;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, Duration};
 
 // =============================================================================
 // Test Helpers
@@ -113,6 +111,8 @@ async fn test_cpp_handshake_success() {
             node_type: NodeType::Full.as_u8(),
             timestamp: 1700000000,
             connection_nonce: 67890, // Test nonce for ack
+            ed25519_pubkey: [0u8; 32],
+            auth_signature: [0u8; 64],
         };
         MessageCodec::send_hello_ack(&mut stream, &hello_ack)
             .await
@@ -136,6 +136,8 @@ async fn test_cpp_handshake_success() {
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
         connection_nonce: 12345, // Test nonce
+        ed25519_pubkey: [0u8; 32],
+        auth_signature: [0u8; 64],
     };
     MessageCodec::send_hello(&mut client_stream, &hello)
         .await
@@ -157,6 +159,7 @@ async fn test_cpp_handshake_success() {
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
         flock_state: None,
+        cumulative_work: 0,
     };
     MessageCodec::send_status(&mut client_stream, &status)
         .await
@@ -173,7 +176,7 @@ async fn test_cpp_handshake_genesis_mismatch() {
     let correct_genesis = create_test_genesis_hash();
     let wrong_genesis = Hash::from_bytes([0xFFu8; 32]);
     let peer1_id = create_test_peer_id(1);
-    let peer2_id = create_test_peer_id(2);
+    let _peer2_id = create_test_peer_id(2);
 
     let server_task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -199,6 +202,8 @@ async fn test_cpp_handshake_genesis_mismatch() {
         node_type: NodeType::Full.as_u8(),
         timestamp: 1700000000,
         connection_nonce: 12345, // Test nonce
+        ed25519_pubkey: [0u8; 32],
+        auth_signature: [0u8; 64],
     };
     MessageCodec::send_hello(&mut client_stream, &hello)
         .await
@@ -323,7 +328,7 @@ async fn test_cpp_block_broadcast_multiple_peers() {
     let selected = router.select_broadcast_peers();
 
     // Should select √n × η peers (for n=3: √3 × 0.707 ≈ 1.22 → 2 peers)
-    assert!(selected.len() >= 1 && selected.len() <= 3);
+    assert!(!selected.is_empty() && selected.len() <= 3);
 
     // Verify selected peers are valid
     for peer_id in &selected {
@@ -616,7 +621,7 @@ fn test_reputation_stake_ratio() {
 // Protocol Error Tests
 // =============================================================================
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_protocol_invalid_version() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server_addr = listener.local_addr().unwrap();
@@ -636,15 +641,19 @@ async fn test_protocol_invalid_version() {
 
     let mut client_stream = TcpStream::connect(server_addr).await.unwrap();
 
-    // Send message with invalid version
+    // Send message with invalid version (99 > CURRENT_PROTOCOL_VERSION, must be rejected)
     let mut buf = Vec::new();
     buf.extend_from_slice(&MAGIC);
     buf.push(99); // Invalid version
     buf.push(MessageType::Hello as u8);
     buf.extend_from_slice(&0u32.to_be_bytes()); // Length
+
     client_stream.write_all(&buf).await.unwrap();
 
-    server_task.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+        .await
+        .expect("server task timed out — version was not rejected quickly")
+        .unwrap();
 }
 
 #[tokio::test]

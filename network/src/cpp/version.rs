@@ -63,7 +63,7 @@ impl ProtocolVersion {
 
     /// Whether this version is within the supported range.
     pub fn is_supported(v: u8) -> bool {
-        v >= MIN_SUPPORTED_VERSION && v <= CURRENT_PROTOCOL_VERSION
+        (MIN_SUPPORTED_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&v)
     }
 
     /// Returns the feature flags enabled for this version.
@@ -226,7 +226,7 @@ pub enum ConnectionPolicy {
 
 impl ConnectionPolicy {
     pub fn evaluate(remote_version: u8) -> Self {
-        if remote_version < MIN_SUPPORTED_VERSION {
+        if !(MIN_SUPPORTED_VERSION..=CURRENT_PROTOCOL_VERSION).contains(&remote_version) {
             ConnectionPolicy::Reject { remote_version }
         } else if remote_version < CURRENT_PROTOCOL_VERSION {
             ConnectionPolicy::AllowWithWarning { remote_version }
@@ -294,6 +294,12 @@ mod tests {
             ConnectionPolicy::AllowWithWarning { remote_version: 1 }
         );
         assert_eq!(ConnectionPolicy::evaluate(2), ConnectionPolicy::Allow);
+        // Future / unknown versions must be rejected — accepting them would cause
+        // the decoder to hang waiting for a checksum that never arrives.
+        assert_eq!(
+            ConnectionPolicy::evaluate(99),
+            ConnectionPolicy::Reject { remote_version: 99 }
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ use coinject_core::{
     SubmissionMode, WellformednessProof,
 };
 use coinject_state::{MarketplaceState, ProblemStatus};
+
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -24,7 +25,7 @@ fn create_test_private_problem() -> (ProblemType, [u8; 32], WellformednessProof,
         target: 60,
     };
 
-    let salt = [42u8; 32];
+    let salt: [u8; 32] = rand::random();
 
     let public_params = ProblemParameters {
         problem_type: "SubsetSum".to_string(),
@@ -132,7 +133,7 @@ fn test_private_bounty_full_lifecycle() {
 fn test_private_bounty_duplicate_rejection() {
     let (marketplace, _temp_dir) = create_test_marketplace();
 
-    let (problem, _salt, proof, commitment) = create_test_private_problem();
+    let (_problem, _salt, proof, commitment) = create_test_private_problem();
 
     let submitter = Address::from_bytes([1u8; 32]);
 
@@ -161,7 +162,7 @@ fn test_private_bounty_duplicate_rejection() {
 fn test_private_bounty_invalid_reveal() {
     let (marketplace, _temp_dir) = create_test_marketplace();
 
-    let (problem, salt, proof, commitment) = create_test_private_problem();
+    let (_problem, salt, proof, commitment) = create_test_private_problem();
 
     let submitter = Address::from_bytes([1u8; 32]);
 
@@ -263,7 +264,7 @@ fn test_reveal_public_problem_fails() {
         .expect("Failed to submit public problem");
 
     // Try to reveal a public problem (should fail)
-    let salt = [99u8; 32];
+    let salt: [u8; 32] = rand::random();
     let reveal = ProblemReveal::new(problem, salt);
 
     let result = marketplace.reveal_problem(problem_id, reveal);
@@ -321,7 +322,7 @@ fn test_commitment_determinism() {
         target: 21,
     };
 
-    let salt = [123u8; 32];
+    let salt: [u8; 32] = rand::random();
 
     let public_params = ProblemParameters {
         problem_type: "SubsetSum".to_string(),
@@ -329,10 +330,10 @@ fn test_commitment_determinism() {
         complexity_estimate: 5.0,
     };
 
-    let (proof1, commitment1) = WellformednessProof::create(&problem, &salt, &public_params)
+    let (_proof1, commitment1) = WellformednessProof::create(&problem, &salt, &public_params)
         .expect("Failed to create proof 1");
 
-    let (proof2, commitment2) = WellformednessProof::create(&problem, &salt, &public_params)
+    let (_proof2, commitment2) = WellformednessProof::create(&problem, &salt, &public_params)
         .expect("Failed to create proof 2");
 
     assert_eq!(commitment1, commitment2);
@@ -340,7 +341,7 @@ fn test_commitment_determinism() {
 
 #[test]
 fn test_different_problems_different_commitments() {
-    let salt = [123u8; 32];
+    let salt: [u8; 32] = rand::random();
 
     let problem1 = ProblemType::SubsetSum {
         numbers: vec![1, 2, 3],

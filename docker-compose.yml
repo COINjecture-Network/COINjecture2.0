@@ -2,10 +2,37 @@ version: '3.8'
 
 # COINjecture Custom P2P Network — Docker Testnet
 # Uses CPP protocol on port 707 (NOT libp2p)
+# Follower hosts (no mining): add `-f docker-compose.follower-no-mine.yml` — see that file.
 # Health endpoint: GET /health on metrics port (9090)
 #
 # Environment: copy .env.example to .env and fill in values before running.
 # Secrets: sensitive values come from .env file — never hardcode in this file.
+#
+# ── Node image: local build vs GHCR (bootnode, node1, node2, node3) ─────────
+# All four services use `image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}`.
+#
+# Local build (default): omit COINJECT_NODE_IMAGE → tag `coinject-node:latest`; use `docker compose up -d --build`.
+#
+# Prebuilt image from GitHub Container Registry (saves disk / compile time on VPS):
+#   1. In .env (same on every host):
+#        COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0:latest
+#   2. If the package is private: `docker login ghcr.io` (PAT with read:packages).
+#   3. Pull and start without compiling the node image:
+#        docker compose pull bootnode node1 node2 node3
+#        docker compose up -d --no-build bootnode node1 node2 node3 api-server
+# Package UI: https://github.com/COINjecture-Network/COINjecture2.0/pkgs/container/coinjecture2.0
+#
+# Pin by digest instead of :latest (recommended for production); refresh when CI publishes a new image:
+#   COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0@sha256:575e023fd9508d5bbec27cb0ece08a515153cbde760e0d12257549e87ddac3ba
+#
+# api-server still uses Dockerfile.api → `coinject-api:latest` (build once or supply a prebuilt image).
+#
+# Log rotation: without this, json-file logs can grow until the host disk fills (e.g. verbose bootnode).
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
 
 services:
   # ── Bootnode ─────────────────────────────────────────────────────────────
@@ -14,11 +41,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-bootnode
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
+    # HF_TOKEN / HUGGINGFACE_TOKEN / HF_DATASET_NAME: set in .env (env_file). Do not pass them here as
+    # HF_TOKEN=${HF_TOKEN:-} — Compose resolves that on the host and overrides env_file with empty.
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
@@ -43,25 +73,32 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          # Sync + HF + many peers can exceed ~2G RSS; cgroup OOM otherwise restarts the fleet.
+          memory: 4G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 512M
+    # Require JSON-RPC (9933), not only metrics — otherwise api-server starts while /node-rpc and /chain/info still see "connection refused".
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://localhost:9090/health && curl -sf --max-time 15 -X POST http://127.0.0.1:9933/ -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"chain_getInfo\",\"params\":[],\"id\":1}' | grep -q '\"jsonrpc\"'",
+        ]
       interval: 15s
-      timeout: 5s
+      timeout: 20s
       retries: 5
-      start_period: 40s
+      start_period: 120s
 
   # ── Node 1 ────────────────────────────────────────────────────────────────
   node1:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node1
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
     environment:
@@ -92,10 +129,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: 3G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 15s
@@ -108,14 +145,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node2
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+      - RPC_MAX_BODY_BYTES=${RPC_MAX_BODY_BYTES:-67108864}
+      - RPC_TIMEOUT_SECS=${RPC_TIMEOUT_SECS:-300}
     ports:
       - "709:707"      # CPP P2P (host 709 → container 707)
       - "9092:9090"    # Metrics + Health
@@ -139,10 +179,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: 3G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 15s
@@ -155,9 +195,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: coinject-node:latest
+    image: ${COINJECT_NODE_IMAGE:-coinject-node:latest}
     container_name: coinject-node3
     restart: unless-stopped
+    logging: *json-logging
     env_file:
       - .env
     environment:
@@ -188,10 +229,10 @@ services:
       resources:
         limits:
           cpus: '1.0'
-          memory: 512M
+          memory: 3G
         reservations:
           cpus: '0.25'
-          memory: 128M
+          memory: 256M
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 15s
@@ -201,23 +242,37 @@ services:
 
   # ── API Server ──────────────────────────────────────────────────────────────
   # Separate image from P2P nodes (`coinject-node:latest`). Build: docker build -f Dockerfile.api -t coinject-api:latest .
+  # Uses `coinject-rpc` + `NODE_RPC_URL=http://bootnode:9933`. Do not use `network_mode: service:bootnode`: if the bootnode
+  # container restarts, Docker recreates its netns while the API keeps the old one — REST then listens on the wrong namespace
+  # and host :3030/nginx get connection resets / 502.
   api-server:
     build:
       context: .
       dockerfile: Dockerfile.api
     image: coinject-api:latest
     container_name: coinject-api
+    logging: *json-logging
     ports:
       - "3030:3030"
-      - "9094:9090"  # metrics
+    depends_on:
+      bootnode:
+        condition: service_healthy
     environment:
       - COINJECTURE_API_HOST=0.0.0.0
       - COINJECTURE_API_PORT=3030
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
-      - RUST_LOG=info
-      - COINJECTURE_NETWORK=testnet
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - JWT_EXPIRY_SECONDS=${JWT_EXPIRY_SECONDS:-86400}
+      - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-100}
+      - RUST_LOG=${RUST_LOG:-info}
+      - COINJECTURE_NETWORK=${COINJECTURE_NETWORK:-testnet}
+      - NODE_RPC_URL=${NODE_RPC_URL:-http://bootnode:9933}
+      - INDEXER_ENABLED=${INDEXER_ENABLED:-true}
+      - INDEXER_POLL_INTERVAL=${INDEXER_POLL_INTERVAL:-5}
+      - INDEXER_CONFIRMATIONS=${INDEXER_CONFIRMATIONS:-6}
+      - CORS_EXTRA_ORIGINS=${CORS_EXTRA_ORIGINS:-}
     restart: unless-stopped
     networks:
       - coinject-rpc

@@ -212,6 +212,7 @@ async fn accept_loop(
 }
 
 /// Perform inbound handshake, then finalize the connection.
+#[allow(clippy::too_many_arguments)]
 async fn handle_inbound(
     mut stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
@@ -253,6 +254,7 @@ async fn handle_inbound(
 // ─── Dial helper ─────────────────────────────────────────────────────────────
 
 /// Dial a remote peer, perform outbound handshake, then finalize the connection.
+#[allow(clippy::too_many_arguments)]
 async fn dial_and_handshake(
     addr: SocketAddr,
     keypair: Arc<Keypair>,
@@ -302,6 +304,7 @@ async fn dial_and_handshake(
 // ─── Main event loop ─────────────────────────────────────────────────────────
 
 /// The core event loop that coordinates all mesh networking activity.
+#[allow(clippy::too_many_arguments)]
 async fn event_loop(
     config: NetworkConfig,
     keypair: Arc<Keypair>,

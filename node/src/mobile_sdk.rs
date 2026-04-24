@@ -15,6 +15,8 @@
 // - aarch64-linux-android (Android)
 //
 // Size budget: < 500KB compiled WASM
+// FFI functions intentionally accept raw pointer args from C callers
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use serde::{Deserialize, Serialize};
 

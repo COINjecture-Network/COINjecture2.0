@@ -1,5 +1,8 @@
 export type AuthMethod = 'wallet' | 'email' | 'magic_link';
 
+/** Which panel the auth dialog opens on (welcome hub vs wallet vs email flows). */
+export type AuthModalTab = 'welcome' | 'wallet' | 'email';
+
 export type AuthModalEmailSection = 'signin' | 'signup' | 'magic';
 
 export interface AuthState {

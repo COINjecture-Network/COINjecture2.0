@@ -1,5 +1,7 @@
-// Fork Detection and Chain Reorganization
-// Handles chain reorganization, fork detection, and chain comparison
+//! Fork detection and chain reorganization.
+//!
+//! High-level behaviour and operator notes: see repository **`docs/FORKING_AND_REORG.md`**.
+//! This module coordinates buffer scans, common-ancestor discovery, and reorg attempts.
 #![allow(dead_code)]
 
 use super::*;
@@ -8,6 +10,7 @@ use tracing::{debug, error, info, trace, warn};
 impl CoinjectNode {
     /// Check for chain reorganization opportunities
     /// When we have blocks that form a longer valid chain, reorganize to it
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn check_and_reorganize_chain(
         chain: &Arc<ChainState>,
         state: &Arc<AccountState>,
@@ -28,6 +31,12 @@ impl CoinjectNode {
 
         debug!(block_height = current_best_height, block_hash = ?current_best_hash, "reorganization check");
 
+        // One snapshot for all ancestor walks this tick (buffered + stored-head analysis).
+        let alt_snapshot: Vec<coinject_core::Block> = {
+            let buffer = block_buffer.read().await;
+            buffer.values().cloned().collect()
+        };
+
         // Check if we have blocks in buffer that might form a longer chain
         let buffer = block_buffer.read().await;
         let buffer_info = if buffer.is_empty() {
@@ -46,7 +55,7 @@ impl CoinjectNode {
         // v4.7.45 FIX: Use find_common_ancestor() for buffered blocks to handle earlier forks properly
         // If we have blocks that extend beyond our current best, check if they form a valid chain
         if max_buffered_height > current_best_height {
-            // Re-acquire buffer lock to check for chain path
+            // Re-acquire buffer lock to read the highest buffered block
             let buffer = block_buffer.read().await;
 
             // Find the highest buffered block and use find_common_ancestor to check for forks
@@ -54,9 +63,14 @@ impl CoinjectNode {
                 let highest_hash = highest_block.header.hash();
                 drop(buffer); // Release lock before async call
 
-                // Use find_common_ancestor to properly detect if this is a fork from earlier
+                // Include `alt_snapshot` so we do not mis-classify a buffered extension as a
+                // "complete fork" just because intermediate alternate blocks are not stored yet.
                 match chain
-                    .find_common_ancestor(&highest_hash, max_buffered_height)
+                    .find_common_ancestor_with_alt_chain(
+                        &highest_hash,
+                        max_buffered_height,
+                        &alt_snapshot,
+                    )
                     .await
                 {
                     Ok(Some((_common_hash, common_height))) => {
@@ -168,9 +182,12 @@ impl CoinjectNode {
                                 // Get best peer from peer_consensus (highest height)
                                 let active_peers = peer_consensus.active_peers().await;
 
-                                if let Some((peer_id_str, peer_state)) = active_peers
-                                    .iter()
-                                    .max_by_key(|(_, state)| state.best_height)
+                                if let Some((peer_id_str, peer_state)) =
+                                    active_peers.iter().max_by(|(_, a), (_, b)| {
+                                        a.cumulative_work
+                                            .cmp(&b.cumulative_work)
+                                            .then_with(|| a.best_height.cmp(&b.best_height))
+                                    })
                                 {
                                     // Parse peer_id from hex string
                                     if let Ok(peer_id_bytes) = hex::decode(peer_id_str) {
@@ -184,8 +201,10 @@ impl CoinjectNode {
                                             // bootnode's short-ban rate limiter before we learned anything
                                             // useful about the competing branch.
                                             const CHUNK_SIZE: u64 = 16; // MAX_BLOCKS_PER_RESPONSE
-                                            let from_height = current_best_height.saturating_sub(CHUNK_SIZE);
-                                            let to_height = max_buffered_height.min(current_best_height + CHUNK_SIZE);
+                                            let from_height =
+                                                current_best_height.saturating_sub(CHUNK_SIZE);
+                                            let to_height = max_buffered_height
+                                                .min(current_best_height + CHUNK_SIZE);
                                             let request_id: u64 = rand::random();
 
                                             debug!(
@@ -225,7 +244,8 @@ impl CoinjectNode {
                                                     }
 
                                                     let conflicts_with_local =
-                                                        match chain_for_requests.get_block_by_height(*height)
+                                                        match chain_for_requests
+                                                            .get_block_by_height(*height)
                                                         {
                                                             Ok(Some(existing_block)) => {
                                                                 existing_block.header.hash()
@@ -259,7 +279,7 @@ impl CoinjectNode {
                                             // Backfill multiple earlier windows per cycle so complete-fork
                                             // validation can reach a sufficiently anchored competing branch
                                             // without waiting for one stalled validation round per chunk.
-                                            const MAX_RECOVERY_WINDOWS_PER_CYCLE: u64 = 4;
+                                            const MAX_RECOVERY_WINDOWS_PER_CYCLE: u64 = 32;
                                             let mut recovery_cursor = ancestor_probe_height;
 
                                             for recovery_step in 0..MAX_RECOVERY_WINDOWS_PER_CYCLE {
@@ -616,7 +636,11 @@ impl CoinjectNode {
             // Check if this chain has no common ancestor (complete fork)
             // If so, we need to validate from genesis
             match chain
-                .find_common_ancestor(&max_stored_hash, max_stored_height)
+                .find_common_ancestor_with_alt_chain(
+                    &max_stored_hash,
+                    max_stored_height,
+                    &alt_snapshot,
+                )
                 .await
             {
                 Ok(Some((_common_hash, common_height))) => {
@@ -666,6 +690,7 @@ impl CoinjectNode {
 
     /// Attempt chain reorganization when we have a longer valid chain available
     /// This is called when we've received blocks that form a longer chain than our current best
+    #[allow(clippy::too_many_arguments)]
     async fn attempt_reorganization_if_longer_chain(
         new_chain_end_hash: coinject_core::Hash,
         new_chain_end_height: u64,
@@ -685,6 +710,13 @@ impl CoinjectNode {
 
         // Only reorganize if new chain is actually longer
         if new_chain_end_height <= current_best_height {
+            warn!(
+                new_tip_height = new_chain_end_height,
+                current_best_height,
+                current_best_hash = ?current_best_hash,
+                new_tip_hash = ?new_chain_end_hash,
+                "skipping reorganization attempt: candidate tip not above current best height"
+            );
             return Ok(false);
         }
 
@@ -694,8 +726,19 @@ impl CoinjectNode {
         // 1. At least 6 blocks deep (to prevent shallow reorganizations)
         // 2. Valid and stored in our chain
         // 3. Not at genesis (unless absolutely necessary)
+        let alt_chain: Vec<coinject_core::Block> = if let Some(buf) = block_buffer {
+            let g = buf.read().await;
+            g.values().cloned().collect()
+        } else {
+            Vec::new()
+        };
+
         let (_common_hash, common_height) = match chain
-            .find_common_ancestor(&new_chain_end_hash, new_chain_end_height)
+            .find_common_ancestor_with_alt_chain(
+                &new_chain_end_hash,
+                new_chain_end_height,
+                &alt_chain,
+            )
             .await
             .map_err(|e| format!("Failed to find common ancestor: {}", e))
         {
@@ -967,6 +1010,7 @@ impl CoinjectNode {
     }
 
     /// Perform chain reorganization: unwind old chain and apply new chain
+    #[allow(clippy::too_many_arguments)]
     async fn reorganize_chain(
         old_chain_blocks: Vec<coinject_core::Block>,
         new_chain_blocks: Vec<coinject_core::Block>,
@@ -1039,12 +1083,27 @@ impl CoinjectNode {
                 ));
             }
 
+            let emission_w = if block.header.height == 0 {
+                None
+            } else {
+                match chain.cumulative_work_at_tip_hash(block.header.prev_hash) {
+                    Ok(w) => Some(w),
+                    Err(e) => {
+                        return Err(format!(
+                            "Emission parent work at height {}: {}",
+                            block.header.height, e
+                        ));
+                    }
+                }
+            };
+
             // Validate block (skip timestamp age check during chain reorganization/sync)
             match validator.validate_block_with_options(
                 block,
                 &prev_hash,
                 block.header.height,
                 true,
+                emission_w,
             ) {
                 Ok(()) => {
                     prev_hash = block.header.hash();
@@ -1212,10 +1271,24 @@ impl CoinjectNode {
             let block = &chain_blocks[i];
             let prev_hash = chain_blocks[i - 1].header.hash();
 
+            let emission_w = if block.header.height == 0 {
+                None
+            } else {
+                let mut w = 0u128;
+                for block_j in &chain_blocks[..i] {
+                    w = w.saturating_add((block_j.header.work_score.max(0.0) as u64) as u128);
+                }
+                Some(w)
+            };
+
             // Validate block (skip timestamp age check during chain validation)
-            if let Err(e) =
-                validator.validate_block_with_options(block, &prev_hash, block.header.height, true)
-            {
+            if let Err(e) = validator.validate_block_with_options(
+                block,
+                &prev_hash,
+                block.header.height,
+                true,
+                emission_w,
+            ) {
                 return Err(format!(
                     "Block {} validation failed: {}",
                     block.header.height, e
@@ -1225,9 +1298,7 @@ impl CoinjectNode {
 
         info!(
             block_count = chain_blocks.len(),
-            total_work,
-            end_height,
-            "candidate chain validated from genesis"
+            total_work, end_height, "candidate chain validated from genesis"
         );
         Ok((chain_blocks, total_work))
     }
@@ -1240,7 +1311,12 @@ impl CoinjectNode {
         match chain.get_block_by_hash(target_hash) {
             Ok(Some(block)) => return Ok(Some(block)),
             Ok(None) => {}
-            Err(e) => return Err(format!("Error getting block by hash {:?}: {}", target_hash, e)),
+            Err(e) => {
+                return Err(format!(
+                    "Error getting block by hash {:?}: {}",
+                    target_hash, e
+                ))
+            }
         }
 
         if let Some(buffer) = block_buffer {
@@ -1324,6 +1400,7 @@ impl CoinjectNode {
 
     /// Perform complete chain reorganization from genesis
     /// Unwinds all blocks to genesis and applies new chain from genesis
+    #[allow(clippy::too_many_arguments)]
     async fn reorganize_chain_from_genesis(
         old_chain_blocks: Vec<coinject_core::Block>,
         new_chain_blocks: Vec<coinject_core::Block>,

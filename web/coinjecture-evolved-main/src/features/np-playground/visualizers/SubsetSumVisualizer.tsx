@@ -11,7 +11,8 @@ export function SubsetSumVisualizer({ numbers, selected }: Props) {
   return (
     <div className="space-y-2">
       <p className="text-xs text-muted-foreground">
-        Bar height ∝ value. Highlight = chosen subset (same indices miners prove on-chain).
+        Bar height ∝ value. Highlight = chosen subset (0-based indices into <code className="text-[10px]">numbers</code>,
+        same as on-chain <code className="text-[10px]">Solution::SubsetSum</code>).
       </p>
       <div className="flex items-end gap-1 h-32 border border-border/60 rounded-md p-2 bg-muted/20">
         {numbers.map((n, i) => {

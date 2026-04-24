@@ -27,8 +27,8 @@ pub struct PeerState {
     pub best_height: u64,
     /// Last known block hash from this peer
     pub best_hash: [u8; 32],
-    /// Cumulative work score (for chain comparison)
-    pub work_score: u64,
+    /// Cumulative work on peer's advertised best chain (`0` = unknown / legacy status).
+    pub cumulative_work: u128,
     /// Last time we received a status update
     pub last_seen: Instant,
     /// Number of consensus rounds this peer missed
@@ -42,7 +42,7 @@ impl PeerState {
         Self {
             best_height: height,
             best_hash: hash,
-            work_score: height, // Simplified: work = height for now
+            cumulative_work: 0,
             last_seen: Instant::now(),
             missed_rounds: 0,
             is_filtered: false,
@@ -58,6 +58,29 @@ impl PeerState {
     }
 }
 
+/// Largest subset of sorted heights where `max - min ≤ 1` (single-block propagation skew).
+/// Returns `(cluster_size, representative_height)` using the median index of the best window.
+fn largest_height_cluster_within_one_block(heights: &[u64]) -> (usize, u64) {
+    if heights.is_empty() {
+        return (0, 0);
+    }
+    let mut best_len = 0usize;
+    let mut best_height = 0u64;
+    let mut i = 0usize;
+    for j in 0..heights.len() {
+        while heights[j].saturating_sub(heights[i]) > 1 {
+            i += 1;
+        }
+        let len = j - i + 1;
+        if len > best_len {
+            best_len = len;
+            let mid = (i + j) / 2;
+            best_height = heights[mid];
+        }
+    }
+    (best_len, best_height)
+}
+
 /// Configuration for consensus decisions
 #[derive(Debug, Clone)]
 pub struct ConsensusConfig {
@@ -65,6 +88,9 @@ pub struct ConsensusConfig {
     pub min_peers_for_mining: usize,
     /// How many blocks behind peers we can be and still mine
     pub sync_threshold_blocks: u64,
+    /// If our tip is more than this many blocks **above** the peer median, refuse to mine.
+    /// Prevents extending a local fork when the mesh agrees on a lower canonical tip.
+    pub max_ahead_of_peers_blocks: u64,
     /// Percentage of peers that must agree (0.0-1.0)
     pub consensus_threshold: f64,
     /// How long before a peer is considered stale
@@ -79,6 +105,9 @@ impl Default for ConsensusConfig {
             // Minimum 1 peer to mine (allows 2-node bootstrap)
             min_peers_for_mining: 1,
             sync_threshold_blocks: 10, // Within 10 blocks
+            // Allow normal propagation skew (we may be one or a few blocks ahead briefly).
+            // Anything larger vs peer median is almost certainly a fork / partition.
+            max_ahead_of_peers_blocks: 96,
             // ADAPTIVE CONSENSUS: Threshold adjusts based on peer count
             // BOOTSTRAP MODE (peers < 4): 50% - prioritizes liveness
             // SECURE MODE (peers >= 4): 80% - prioritizes safety (BFT)
@@ -151,15 +180,25 @@ impl PeerConsensus {
         self.config.sync_threshold_blocks
     }
 
-    /// Update a peer's state when we receive a StatusUpdate
-    pub async fn update_peer(&self, peer_id: String, height: u64, hash: [u8; 32]) {
+    pub fn max_ahead_of_peers_blocks(&self) -> u64 {
+        self.config.max_ahead_of_peers_blocks
+    }
+
+    /// Update a peer's state when we receive a StatusUpdate (or handshake with `cumulative_work = 0`).
+    pub async fn update_peer(
+        &self,
+        peer_id: String,
+        height: u64,
+        hash: [u8; 32],
+        cumulative_work: u128,
+    ) {
         let mut peers = self.peers.write().await;
 
         if let Some(peer) = peers.get_mut(&peer_id) {
             let old_height = peer.best_height;
             peer.best_height = height;
             peer.best_hash = hash;
-            peer.work_score = height; // TODO: Implement proper work score
+            peer.cumulative_work = cumulative_work;
             peer.last_seen = Instant::now();
             peer.missed_rounds = 0; // Reset missed rounds on update
 
@@ -200,7 +239,10 @@ impl PeerConsensus {
     pub async fn mark_peer_disconnected(&self, peer_id: &str) {
         let mut peers = self.peers.write().await;
         if peers.remove(peer_id).is_some() {
-            println!("📡 Peer {} disconnected and removed from active consensus tracking", peer_id);
+            println!(
+                "📡 Peer {} disconnected and removed from active consensus tracking",
+                peer_id
+            );
         }
     }
 
@@ -276,20 +318,12 @@ impl PeerConsensus {
         // Get adaptive threshold based on network size
         let (threshold, _mode) = self.config.get_adaptive_threshold(peer_count);
 
-        // Count how many peers agree on each height (within 1 block tolerance)
-        let mut height_votes: HashMap<u64, usize> = HashMap::new();
-        for (_, state) in &active {
-            // Group heights within 1 block of each other
-            let normalized_height = state.best_height;
-            *height_votes.entry(normalized_height).or_insert(0) += 1;
-        }
-
-        // Find the height with most agreement
-        let (consensus_height, max_votes) = height_votes
-            .iter()
-            .max_by_key(|(_, votes)| *votes)
-            .map(|(h, v)| (*h, *v))
-            .unwrap_or((0, 0));
+        // Count agreement using a **≤1 block** spread (propagation skew: 100 vs 101 is normal).
+        // Previously we bucketed exact heights only, which split votes and made `should_mine`
+        // fail on most nodes while one peer cluster still passed — only that node appeared to mine.
+        let mut heights: Vec<u64> = active.iter().map(|(_, s)| s.best_height).collect();
+        heights.sort_unstable();
+        let (max_votes, consensus_height) = largest_height_cluster_within_one_block(&heights);
 
         let agreement = max_votes as f64 / peer_count as f64;
         let has_consensus = agreement >= threshold; // Use adaptive threshold!
@@ -350,6 +384,23 @@ impl PeerConsensus {
                 format!(
                     "Behind peers: {} blocks (our: {}, median: {})",
                     blocks_behind, our_height, median_height
+                ),
+            );
+        }
+
+        // Check 2b: Not far *ahead* of peer-reported tips (local fork / eclipse)
+        if median_height > 0
+            && our_height > median_height.saturating_add(self.config.max_ahead_of_peers_blocks)
+        {
+            let ahead = our_height - median_height;
+            return (
+                false,
+                format!(
+                    "Ahead of peers: {} blocks above median (our: {}, median: {}, max allowed: {}) — pause mining until reorg/sync",
+                    ahead,
+                    our_height,
+                    median_height,
+                    self.config.max_ahead_of_peers_blocks
                 ),
             );
         }
@@ -433,20 +484,20 @@ impl WorkScoreCalculator {
     /// work = asymmetry × space × quality × energy_eff
     pub fn block_work_score(problem_size: u64, solve_time_us: u64, verify_time_us: u64) -> u64 {
         // Asymmetry ratio: how much harder to solve than verify
-        let asymmetry = if verify_time_us > 0 {
-            solve_time_us / verify_time_us
-        } else {
-            solve_time_us
-        };
+        let asymmetry = solve_time_us
+            .checked_div(verify_time_us)
+            .unwrap_or(solve_time_us);
 
         // Space complexity (problem size)
         let space = problem_size;
 
         // Quality: smaller solve time per unit of problem size = better
-        let quality = if solve_time_us > 0 {
-            (problem_size * 1_000_000) / solve_time_us
-        } else {
+        let quality = if solve_time_us == 0 {
             problem_size
+        } else {
+            (problem_size * 1_000_000)
+                .checked_div(solve_time_us)
+                .unwrap_or(problem_size)
         };
 
         // Combined work score (simplified)
@@ -479,19 +530,52 @@ impl WorkScoreCalculator {
 mod tests {
     use super::*;
 
+    #[test]
+    fn largest_cluster_within_one_block() {
+        assert_eq!(largest_height_cluster_within_one_block(&[]), (0, 0));
+        assert_eq!(largest_height_cluster_within_one_block(&[100]), (1, 100));
+        assert_eq!(
+            largest_height_cluster_within_one_block(&[100, 100, 101]),
+            (3, 100)
+        );
+        assert_eq!(
+            largest_height_cluster_within_one_block(&[100, 102, 104]),
+            (1, 100)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_consensus_one_block_skew() {
+        let consensus = PeerConsensus::with_defaults();
+        consensus
+            .update_peer("a".to_string(), 100, [0; 32], 0)
+            .await;
+        consensus
+            .update_peer("b".to_string(), 101, [0; 32], 0)
+            .await;
+        consensus
+            .update_peer("c".to_string(), 100, [0; 32], 0)
+            .await;
+
+        let (has, height, agreement) = consensus.check_consensus().await;
+        assert!(has, "100/101 skew should not split the quorum");
+        assert_eq!(height, 100);
+        assert!((agreement - 1.0).abs() < f64::EPSILON);
+    }
+
     #[tokio::test]
     async fn test_peer_consensus_basic() {
         let consensus = PeerConsensus::with_defaults();
 
         // Add some peers
         consensus
-            .update_peer("peer1".to_string(), 100, [0; 32])
+            .update_peer("peer1".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer2".to_string(), 100, [0; 32])
+            .update_peer("peer2".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer3".to_string(), 100, [0; 32])
+            .update_peer("peer3".to_string(), 100, [0; 32], 0)
             .await;
 
         // Should have 3 active peers
@@ -515,13 +599,13 @@ mod tests {
 
         // Add 3 peers at height 100
         consensus
-            .update_peer("peer1".to_string(), 100, [0; 32])
+            .update_peer("peer1".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer2".to_string(), 100, [0; 32])
+            .update_peer("peer2".to_string(), 100, [0; 32], 0)
             .await;
         consensus
-            .update_peer("peer3".to_string(), 100, [0; 32])
+            .update_peer("peer3".to_string(), 100, [0; 32], 0)
             .await;
 
         // We're at 100, peers at 100 - should mine
@@ -532,6 +616,11 @@ mod tests {
         let (should, reason) = consensus.should_mine(50).await;
         assert!(!should);
         assert!(reason.contains("Behind peers"));
+
+        // Peers at 100, we're far ahead on a local fork — should NOT mine
+        let (should, reason) = consensus.should_mine(250).await;
+        assert!(!should);
+        assert!(reason.contains("Ahead of peers"));
     }
 
     #[test]

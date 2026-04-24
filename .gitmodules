@@ -1,3 +1,6 @@
 [submodule "proofs/eigenverse"]
 	path = proofs/eigenverse
 	url = https://github.com/beanapologist/Eigenverse.git
+[submodule "latest-upstream"]
+	path = latest-upstream
+	url = https://github.com/Quigles1337/COINjecture2.0.git

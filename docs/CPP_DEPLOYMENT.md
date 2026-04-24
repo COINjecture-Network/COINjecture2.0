@@ -201,6 +201,30 @@ coinject_block_propagation_time_seconds
 rate(coinject_network_errors_total[5m])
 ```
 
+## Reliable multi-site mesh (recommended production shape)
+
+Treat the CPP mesh as **one public `IP:707` endpoint per site**. That keeps connectivity **boring and stable**.
+
+1. **One mesh face per public IPv4**  
+   Run **one** `bootnode` (or one process) that dials peers from `COINJECT_BOOTNODES` / `BOOTNODES`.  
+   If you run **node1–node3** on the **same** host, they must **not** inherit the same public bootnode list, or every outbound CPP dial shares one NAT address and hits **per-IP limits / rate limits** on peers.  
+   Use **`docker-compose.local-ram.yml`** with base compose: it clears env bootnodes for **node1–node3** so they only use `--bootnodes bootnode:707` to the local bootnode.
+
+2. **Symmetric bootnode lists, never self**  
+   On each machine, `.env` should list **every other** mesh member as `IPv4:707` only (omit this host’s own public IP).  
+   Helper: `scripts/deployment/print-mesh-bootnodes.sh` with `SELF_IP` and `PEERS` (comma list of all mesh IPs).
+
+3. **707/tcp everywhere**  
+   Open **inbound and outbound** **707** on every host (cloud firewall + `ufw`). RPC **9933** alone is not enough for P2P.
+
+4. **Resync stragglers before “protocol” debugging**  
+   If one host’s `best_height` is far behind or logs show **HelloAck reset / timeout** after TCP connects, wipe and resync that host (see `scripts/deployment/destructive-chain-resync-remote.sh`) so its chain matches the mesh.
+
+5. **Stagger restarts**  
+   Avoid restarting all public peers in the same minute (handshake storms).
+
+**Note:** Bootnode strings are **`Host:707`** (TCP). Multiaddr `/p2p/…` in config is currently reduced to **IP:PORT** for CPP dialing in the node — see `node/src/service/mod.rs` bootnode parsing.
+
 ## Troubleshooting
 
 ### Node Won't Start
@@ -216,17 +240,21 @@ rate(coinject_network_errors_total[5m])
    ```bash
    export COINJECT_BOOTNODES=203.0.113.11:707,203.0.113.12:707
    ```
-   The node merges CLI `--bootnodes` with these env vars at startup.
+   The node merges CLI `--bootnodes` with these env vars at startup **only when** the CLI did not already set `--bootnodes` (Docker followers that pass `--bootnodes bootnode:707` skip env merge on purpose).
 
-2. **Firewall / security groups:** **707/tcp** must be **open inbound** on every peer that should accept P2P (not only 9933 for RPC). Check Hostinger panel, `ufw`, or cloud SGs.
+   **Symmetric mesh:** On each host, set `COINJECT_BOOTNODES` (and `BOOTNODES`) to the **same comma list on every machine is OK only if you omit this host’s own `PublicIP:707`**. Listing your own address causes redundant self-connections and competes for `SECURITY_MAX_CONNS_PER_IP` against your other containers on the same NAT.
 
-3. Verify bootnode is listening: `ss -tlnp | grep 707` (or `netstat`).
+2. **Handshake works but `peer_count` stays 0** (or logs show `HelloAck` timeout / **connection reset by peer** after TCP connect): often a **stale or forked local chain** (this node’s `best_height` far below the rest of the mesh). Align tips with `chain_getInfo` across hosts; if one machine is hundreds of blocks behind with no peers, prefer a **guarded volume wipe + resync** (see `scripts/deployment/destructive-chain-resync-remote.sh`) rather than chasing P2P in a bad state.
 
-4. Check logs for `connecting to bootnode` and handshake errors: `docker logs coinject-node` or `journalctl`.
+3. **Firewall / security groups:** **707/tcp** must be **open inbound** on every peer that should accept P2P (not only 9933 for RPC). Check Hostinger panel, `ufw`, or cloud SGs.
 
-5. Check network connectivity: `nc -zv OTHER_IP 707` from each host.
+4. Verify bootnode is listening: `ss -tlnp | grep 707` (or `netstat`).
 
-6. Legacy multi-node docs mention 7071 for a **second** local port; on separate servers both often use **707** inside the container with `-p 707:707`.
+5. Check logs for `connecting to bootnode` and handshake errors: `docker logs coinject-node` or `journalctl`.
+
+6. Check network connectivity: `nc -zv OTHER_IP 707` from each host.
+
+7. Legacy multi-node docs mention 7071 for a **second** local port; on separate servers both often use **707** inside the container with `-p 707:707`.
 
 ### WebSocket Not Working
 

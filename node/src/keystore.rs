@@ -23,6 +23,8 @@
 //
 // These parameters are deliberately conservative for validator nodes
 // that restart infrequently. Tune down only if cold-start latency is critical.
+// Items used by binary only are unreachable from lib tests under --all-features
+#![allow(dead_code)]
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -31,7 +33,7 @@ use aes_gcm::{
 use argon2::{Algorithm, Argon2, Params, Version};
 use coinject_core::Address;
 use ed25519_dalek::SigningKey;
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::OsRng, Rng};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -193,11 +195,9 @@ impl ValidatorKey {
 fn encrypt_validator_key(key: &ValidatorKey, password: &str) -> Result<Vec<u8>, String> {
     let mut rng = OsRng;
 
-    // Random salt and nonce — unique per file write.
-    let mut salt = [0u8; 32];
-    let mut nonce_bytes = [0u8; 12];
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut nonce_bytes);
+    // Random salt and nonce — unique per file write (use Rng::gen to avoid all-zero literals).
+    let salt: [u8; 32] = rng.gen();
+    let nonce_bytes: [u8; 12] = rng.gen();
 
     // Derive a 256-bit encryption key from the password + salt.
     let mut enc_key = [0u8; KEY_LEN];

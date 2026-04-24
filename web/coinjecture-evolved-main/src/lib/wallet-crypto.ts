@@ -124,20 +124,29 @@ export const KeyStore = {
 export interface TransactionPayload {
   from: string;
   to: string;
-  amount: number;
-  fee: number;
+  amount: bigint;
+  fee: bigint;
   nonce: number;
+}
+
+function writeU128LE(view: DataView, value: bigint): void {
+  const mask = (1n << 64n) - 1n;
+  const lo = value & mask;
+  const hi = value >> 64n;
+  view.setBigUint64(0, lo, true);
+  view.setBigUint64(8, hi, true);
 }
 
 /**
  * Create and sign a transfer transaction
  * Returns a JSON-serialized Transaction enum matching Rust format
+ * (`amount` / `fee` are ledger atoms — e.g. display BEANS × `REWARD_FIXED_POINT_SCALE` from chain-metrics).
  */
 export function createSignedTransferTransaction(
   from: string,
   to: string,
-  amount: number,
-  fee: number,
+  amount: bigint,
+  fee: bigint,
   nonce: number,
   privateKeyHex: string,
   publicKeyHex: string
@@ -163,15 +172,13 @@ export function createSignedTransferTransaction(
 
   // amount (16 bytes, little-endian u128)
   const amountView = new DataView(new ArrayBuffer(16));
-  amountView.setBigUint64(0, BigInt(amount), true); // lower 64 bits, little-endian
-  amountView.setBigUint64(8, 0n, true); // upper 64 bits = 0
+  writeU128LE(amountView, amount);
   signingMessage.set(new Uint8Array(amountView.buffer), offset);
   offset += 16;
 
   // fee (16 bytes, little-endian u128)
   const feeView = new DataView(new ArrayBuffer(16));
-  feeView.setBigUint64(0, BigInt(fee), true); // lower 64 bits, little-endian
-  feeView.setBigUint64(8, 0n, true); // upper 64 bits = 0
+  writeU128LE(feeView, fee);
   signingMessage.set(new Uint8Array(feeView.buffer), offset);
   offset += 16;
 
@@ -188,13 +195,13 @@ export function createSignedTransferTransaction(
   const signatureHex = signMessage(signingMessage, privateKeyHex);
   const signatureBytes = Array.from(hexToBytes(signatureHex));
 
-  // Create final transaction in Rust enum format
+  // Create final transaction in Rust enum format (amount/fee as strings for u128 JSON)
   const transaction = {
     Transfer: {
       from: fromBytes,
       to: toBytes,
-      amount,
-      fee,
+      amount: amount.toString(),
+      fee: fee.toString(),
       nonce,
       public_key: publicKeyBytes,
       signature: signatureBytes

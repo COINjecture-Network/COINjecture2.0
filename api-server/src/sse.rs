@@ -6,7 +6,9 @@
 
 use axum::response::sse::Event;
 use serde::Serialize;
+use serde_json::Value;
 use std::convert::Infallible;
+use std::time::Instant;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 
@@ -55,6 +57,11 @@ pub enum MarketplaceEvent {
 
 // ── Broadcaster ─────────────────────────────────────────────────────────────
 
+struct CachedChainInfo {
+    value: Value,
+    fetched_at: Instant,
+}
+
 pub struct EventBroadcaster {
     block_tx: broadcast::Sender<BlockEvent>,
     mempool_tx: broadcast::Sender<MempoolEvent>,
@@ -63,6 +70,8 @@ pub struct EventBroadcaster {
     pub latest_block: RwLock<Option<BlockEvent>>,
     /// Cached latest mempool snapshot.
     pub latest_mempool: RwLock<Option<MempoolEvent>>,
+    /// Cached chain info for `/chain/info` and `chain_getInfo` fast path (short TTL).
+    cached_chain_info: RwLock<Option<CachedChainInfo>>,
 }
 
 impl EventBroadcaster {
@@ -73,6 +82,7 @@ impl EventBroadcaster {
             marketplace_tx: broadcast::channel(capacity).0,
             latest_block: RwLock::new(None),
             latest_mempool: RwLock::new(None),
+            cached_chain_info: RwLock::new(None),
         }
     }
 
@@ -158,5 +168,23 @@ impl EventBroadcaster {
                 }
             }
         }
+    }
+
+    /// Return cached chain info if it was fetched within the last few seconds (dashboards + `/node-rpc` fast path).
+    pub async fn get_cached_chain_info(&self) -> Option<Value> {
+        const CHAIN_INFO_CACHE_TTL_SECS: u64 = 15;
+        let guard = self.cached_chain_info.read().await;
+        guard
+            .as_ref()
+            .filter(|c| c.fetched_at.elapsed().as_secs() < CHAIN_INFO_CACHE_TTL_SECS)
+            .map(|c| c.value.clone())
+    }
+
+    /// Store a fresh chain info response.
+    pub async fn set_cached_chain_info(&self, value: Value) {
+        *self.cached_chain_info.write().await = Some(CachedChainInfo {
+            value,
+            fetched_at: Instant::now(),
+        });
     }
 }

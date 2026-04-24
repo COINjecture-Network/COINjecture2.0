@@ -4,7 +4,10 @@
 //! signature validation inside the pool is exercised correctly.
 
 use coinject_core::{Address, KeyPair, Transaction};
-use coinject_mempool::{PoolConfig, PoolError, TransactionPool};
+use coinject_mempool::{
+    PoolConfig, PoolError, TransactionPool, BLOCK_TEMPLATE_MAX_TRANSACTIONS,
+    BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -17,6 +20,20 @@ fn make_tx(amount: u128, fee: u128, nonce: u64) -> Transaction {
         kp.address(),
         Address::from_bytes([0xAB; 32]),
         amount,
+        fee,
+        nonce,
+        &kp,
+    )
+}
+
+/// Time-lock still uses the pool minimum fee (unlike transfers).
+fn make_timelock_tx(amount: u128, fee: u128, nonce: u64) -> Transaction {
+    let kp = KeyPair::generate();
+    Transaction::new_timelock(
+        kp.address(),
+        Address::from_bytes([0xAB; 32]),
+        amount,
+        i64::MAX / 4,
         fee,
         nonce,
         &kp,
@@ -132,9 +149,21 @@ fn test_fee_below_minimum_rejected() {
         max_size_bytes: 10 * 1024 * 1024,
     };
     let mut pool = TransactionPool::with_config(pool_config);
-    let tx = make_tx(5_000, 999, 1); // fee 999 < min_fee 10_000
+    // Transfers may be zero-fee; use a time-lock which still requires pool min fee.
+    let tx = make_timelock_tx(5_000, 999, 1); // fee 999 < min_fee 10_000
     let err = pool.add(tx).unwrap_err();
     assert_eq!(err, PoolError::FeeTooLow);
+}
+
+#[test]
+fn test_transfer_zero_fee_accepted() {
+    let mut pool = small_pool();
+    let tx = make_tx(5_000, 0, 1);
+    assert!(
+        pool.add(tx).is_ok(),
+        "Signed transfers with zero fee must be accepted"
+    );
+    assert_eq!(pool.len(), 1);
 }
 
 #[test]
@@ -192,6 +221,32 @@ fn test_get_top_n_larger_than_pool_returns_all() {
 
     let top10 = pool.get_top_n(10);
     assert_eq!(top10.len(), 2, "top_n capped at pool size");
+}
+
+#[test]
+fn test_block_template_includes_zero_fee_transfers_when_congested() {
+    let mut pool = TransactionPool::with_config(PoolConfig {
+        min_fee: 1,
+        max_transactions: 500,
+        max_size_bytes: 10 * 1024 * 1024,
+    });
+    for i in 1..=95u64 {
+        pool.add(make_tx(1_000, 2_000, i)).unwrap();
+    }
+    for i in 96..=100u64 {
+        pool.add(make_tx(1_000, 0, i)).unwrap();
+    }
+
+    let tpl = pool.get_block_template_transactions(
+        BLOCK_TEMPLATE_MAX_TRANSACTIONS,
+        BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS,
+    );
+    assert_eq!(tpl.len(), BLOCK_TEMPLATE_MAX_TRANSACTIONS);
+    let zero_n = tpl.iter().filter(|t| t.fee() == 0).count();
+    assert_eq!(
+        zero_n, 5,
+        "all zero-fee transfers must be included despite fee congestion"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -323,10 +323,7 @@ impl SupabaseClient {
             .await
             .map_err(|e| SupabaseError::Unknown(e.to_string()))?;
 
-        let user_id = data["user"]["id"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let user_id = data["user"]["id"].as_str().unwrap_or("").to_string();
         let user_email = data["user"]["email"].as_str().map(String::from);
 
         Ok(AuthResult {
@@ -386,10 +383,7 @@ impl SupabaseClient {
             .await
             .map_err(|e| SupabaseError::Unknown(e.to_string()))?;
 
-        let user_id = data["user"]["id"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let user_id = data["user"]["id"].as_str().unwrap_or("").to_string();
 
         Ok(AuthResult {
             user_id,
@@ -432,10 +426,7 @@ impl SupabaseClient {
 
     /// Call the `get_user_stats()` RPC function via PostgREST.
     pub async fn get_user_stats(&self) -> Result<Value, SupabaseError> {
-        let key = self
-            .service_key
-            .as_deref()
-            .unwrap_or(&self.anon_key);
+        let key = self.service_key.as_deref().unwrap_or(&self.anon_key);
 
         let resp = self
             .http
@@ -481,11 +472,7 @@ impl SupabaseClient {
             .map_err(|e| SupabaseError::Unknown(e.to_string()))
     }
 
-    async fn postgrest_get_with_key(
-        &self,
-        path: &str,
-        key: &str,
-    ) -> Result<Value, SupabaseError> {
+    async fn postgrest_get_with_key(&self, path: &str, key: &str) -> Result<Value, SupabaseError> {
         let resp = self
             .http
             .get(format!("{}/rest/v1/{path}", self.url))
@@ -610,6 +597,59 @@ impl SupabaseClient {
         self.postgrest_get(path).await
     }
 
+    /// Indexed transactions signed by `address` (outgoing / authored on-chain actions).
+    pub async fn get_wallet_transactions(
+        &self,
+        address: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let path = format!(
+            "block_transactions?signer=eq.{address}&select=block_height,tx_index,tx_hash,tx_type,signer,payload&order=block_height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
+    /// Transfer txs where `payload.Transfer.to` matches `address` (hex-encoded pubkey bytes).
+    /// Uses JSONB `@>` (PostgREST `cs`) so receivers see inbound transfers.
+    pub async fn get_wallet_incoming_transfers(
+        &self,
+        address_hex: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let needle = crate::wallet_activity::transfer_to_contains_filter(address_hex)
+            .map_err(SupabaseError::RequestFailed)?;
+        let filter_value = format!("cs.{}", needle);
+        let enc = crate::wallet_activity::encode_uri_query_value(&filter_value);
+        let path = format!(
+            "block_transactions?tx_type=eq.Transfer&payload={enc}&select=block_height,tx_index,tx_hash,tx_type,signer,payload&order=block_height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
+    /// Blocks this address mined (coinbase rewards).
+    pub async fn get_wallet_mined_blocks(
+        &self,
+        address: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let path = format!(
+            "blocks?miner=eq.{address}&select=height,hash,block_timestamp,miner,raw_block&order=height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
+    /// Marketplace / PoUW events where this wallet is the actor (bounty submit, etc.).
+    pub async fn get_wallet_marketplace_events(
+        &self,
+        address: &str,
+        limit: u32,
+    ) -> Result<Value, SupabaseError> {
+        let path = format!(
+            "marketplace_block_events?actor_wallet=eq.{address}&select=block_height,tx_hash,tx_index,event_index,event_type,problem_id,amount,event_payload&order=block_height.desc&limit={limit}"
+        );
+        self.postgrest_get_public(&path).await
+    }
+
     /// UPSERT a row (for sync_state, etc.).
     pub async fn upsert_row(&self, table: &str, body: Value) -> Result<Value, SupabaseError> {
         let key = self.write_key()?;
@@ -618,7 +658,10 @@ impl SupabaseClient {
             .post(format!("{}/rest/v1/{table}", self.url))
             .header("Authorization", format!("Bearer {key}"))
             .header("apikey", &self.anon_key)
-            .header("Prefer", "resolution=merge-duplicates,return=representation")
+            .header(
+                "Prefer",
+                "resolution=merge-duplicates,return=representation",
+            )
             .json(&body)
             .send()
             .await
@@ -627,7 +670,9 @@ impl SupabaseClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(SupabaseError::RequestFailed(text));
         }
-        resp.json().await.map_err(|e| SupabaseError::Unknown(e.to_string()))
+        resp.json()
+            .await
+            .map_err(|e| SupabaseError::Unknown(e.to_string()))
     }
 
     /// UPSERT multiple rows with explicit conflict columns.
@@ -646,7 +691,10 @@ impl SupabaseClient {
             ))
             .header("Authorization", format!("Bearer {key}"))
             .header("apikey", &self.anon_key)
-            .header("Prefer", "resolution=merge-duplicates,return=representation")
+            .header(
+                "Prefer",
+                "resolution=merge-duplicates,return=representation",
+            )
             .json(&body)
             .send()
             .await
@@ -655,7 +703,9 @@ impl SupabaseClient {
             let text = resp.text().await.unwrap_or_default();
             return Err(SupabaseError::RequestFailed(text));
         }
-        resp.json().await.map_err(|e| SupabaseError::Unknown(e.to_string()))
+        resp.json()
+            .await
+            .map_err(|e| SupabaseError::Unknown(e.to_string()))
     }
 
     /// PATCH rows matching a filter.
@@ -699,10 +749,7 @@ impl SupabaseClient {
     }
 
     /// Get open PoUW tasks with optional class filter.
-    pub async fn get_open_tasks(
-        &self,
-        class_filter: Option<&str>,
-    ) -> Result<Value, SupabaseError> {
+    pub async fn get_open_tasks(&self, class_filter: Option<&str>) -> Result<Value, SupabaseError> {
         let filter = match class_filter {
             Some(c) => format!("&problem_class=eq.{c}"),
             None => String::new(),

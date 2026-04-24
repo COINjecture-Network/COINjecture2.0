@@ -13,6 +13,7 @@ pub mod routes;
 pub mod siwb;
 pub mod sse;
 pub mod supabase;
+pub mod wallet_activity;
 
 use config::Config;
 use matching::engine::EngineHandle;

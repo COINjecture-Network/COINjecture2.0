@@ -17,20 +17,20 @@ pub struct Config {
     pub indexer_enabled: bool,
     pub indexer_poll_interval_secs: u64,
     pub indexer_confirmations: u64,
+    /// Comma-separated full origins, e.g. `https://d111.cloudfront.net` (no path). Optional.
+    pub cors_extra_origins: Vec<String>,
 }
 
 impl Config {
     /// Read configuration from environment variables (with `dotenvy` already loaded).
     pub fn from_env() -> Result<Self, String> {
         Ok(Config {
-            host: std::env::var("COINJECTURE_API_HOST")
-                .unwrap_or_else(|_| "0.0.0.0".into()),
+            host: std::env::var("COINJECTURE_API_HOST").unwrap_or_else(|_| "0.0.0.0".into()),
             port: std::env::var("COINJECTURE_API_PORT")
                 .unwrap_or_else(|_| "3030".into())
                 .parse()
                 .map_err(|e| format!("Invalid COINJECTURE_API_PORT: {e}"))?,
-            supabase_url: std::env::var("SUPABASE_URL")
-                .map_err(|_| "SUPABASE_URL is required")?,
+            supabase_url: std::env::var("SUPABASE_URL").map_err(|_| "SUPABASE_URL is required")?,
             supabase_anon_key: std::env::var("SUPABASE_ANON_KEY")
                 .map_err(|_| "SUPABASE_ANON_KEY is required")?,
             supabase_jwt_secret: std::env::var("SUPABASE_JWT_SECRET")
@@ -44,13 +44,12 @@ impl Config {
                 .unwrap_or_else(|_| "100".into())
                 .parse()
                 .map_err(|e| format!("Invalid RATE_LIMIT_RPS: {e}"))?,
-            network: std::env::var("COINJECTURE_NETWORK")
-                .unwrap_or_else(|_| "testnet".into()),
+            network: std::env::var("COINJECTURE_NETWORK").unwrap_or_else(|_| "testnet".into()),
             node_rpc_url: std::env::var("NODE_RPC_URL").ok(),
-            indexer_enabled: std::env::var("INDEXER_ENABLED")
-                .unwrap_or_else(|_| "true".into())
+            indexer_enabled: std::env::var("INDEXER_ENABLED").unwrap_or_else(|_| "true".into())
                 == "true",
             indexer_poll_interval_secs: std::env::var("INDEXER_POLL_INTERVAL")
+                .or_else(|_| std::env::var("INDEXER_POLL_INTERVAL_SECS"))
                 .unwrap_or_else(|_| "5".into())
                 .parse()
                 .unwrap_or(5),
@@ -58,6 +57,12 @@ impl Config {
                 .unwrap_or_else(|_| "6".into())
                 .parse()
                 .unwrap_or(6),
+            cors_extra_origins: std::env::var("CORS_EXTRA_ORIGINS")
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
         })
     }
 

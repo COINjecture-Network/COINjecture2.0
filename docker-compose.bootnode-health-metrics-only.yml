@@ -1,0 +1,17 @@
+# Optional overlay for a busy bootnode (heavy P2P block serving + mining).
+# Default healthcheck also curls JSON-RPC; under load the RPC server can stall and
+# Docker marks the container unhealthy even though the process is fine.
+#
+# Usage on the canonical host (e.g. 193):
+#   docker compose -f docker-compose.yml -f docker-compose.bootnode-health-metrics-only.yml up -d
+#
+# Health = GET /health on metrics only (same as node1–node3 checks).
+
+services:
+  bootnode:
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s

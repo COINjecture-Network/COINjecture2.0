@@ -1,7 +1,7 @@
 //! Tracks the indexer's sync position, persisted to Supabase.
 
-use chrono::{DateTime, Utc};
 use crate::supabase::SupabaseClient;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
 pub struct SyncState {
@@ -32,16 +32,12 @@ impl SyncState {
             Ok(data) => {
                 if let Some(row) = data.as_array().and_then(|a| a.first()) {
                     Ok(Self {
-                        last_indexed_height: row["last_indexed_height"]
-                            .as_u64()
-                            .unwrap_or(0),
+                        last_indexed_height: row["last_indexed_height"].as_u64().unwrap_or(0),
                         last_indexed_hash: row["last_indexed_hash"]
                             .as_str()
                             .unwrap_or("")
                             .to_string(),
-                        last_finalized_height: row["last_finalized_height"]
-                            .as_u64()
-                            .unwrap_or(0),
+                        last_finalized_height: row["last_finalized_height"].as_u64().unwrap_or(0),
                         last_sync_at: Utc::now(),
                     })
                 } else {

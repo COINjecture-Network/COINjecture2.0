@@ -8,6 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUST_TOOLCHAIN: stable
 
 jobs:
   # ─── Build release binaries for all platforms ──────────────────────────────
@@ -50,15 +51,29 @@ jobs:
             binary_ext: ".exe"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
+      - name: Guard — ensure toolchain is set
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
+      - name: Verify Rust toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rustc -V
+          cargo -V
+
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -82,10 +97,11 @@ jobs:
 
       - name: Build binaries (native)
         if: '!matrix.use_cross'
+        shell: bash
         run: |
           cargo build --release \
             --target ${{ matrix.target }} \
-            --bin coinject-node \
+            --bin coinject \
             --bin coinject-wallet
 
       - name: Build binaries (cross)
@@ -93,7 +109,7 @@ jobs:
         run: |
           cross build --release \
             --target ${{ matrix.target }} \
-            --bin coinject-node \
+            --bin coinject \
             --bin coinject-wallet
 
       # ── Package artifacts ──────────────────────────────────────────────────
@@ -103,7 +119,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           mkdir -p dist
 
-          cp target/${{ matrix.target }}/release/coinject-node \
+          cp target/${{ matrix.target }}/release/coinject \
              dist/coinject-node-${TAG}-${{ matrix.artifact_suffix }}
           cp target/${{ matrix.target }}/release/coinject-wallet \
              dist/coinject-wallet-${TAG}-${{ matrix.artifact_suffix }}
@@ -121,7 +137,7 @@ jobs:
           $TAG = "${{ github.ref_name }}"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-          Copy-Item "target\${{ matrix.target }}\release\coinject-node.exe" `
+          Copy-Item "target\${{ matrix.target }}\release\coinject.exe" `
                     "dist\coinject-node-${TAG}-${{ matrix.artifact_suffix }}.exe"
           Copy-Item "target\${{ matrix.target }}\release\coinject-wallet.exe" `
                     "dist\coinject-wallet-${TAG}-${{ matrix.artifact_suffix }}.exe"
@@ -134,7 +150,7 @@ jobs:
             Out-File "checksums-${{ matrix.artifact_suffix }}.txt" -Encoding utf8
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.artifact_suffix }}
           path: dist/
@@ -149,10 +165,10 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist/
@@ -203,13 +219,13 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -217,7 +233,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -227,7 +243,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push release Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true

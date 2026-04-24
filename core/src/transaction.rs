@@ -1,8 +1,8 @@
-use crate::{Address, Balance, Ed25519Signature, Hash, PublicKey};
 use crate::validation::{
-    validate_transfer_fields, validate_timelock_fields, validate_escrow_fields,
-    validate_additional_signatures_count, validate_dispute_proof, validate_data_payload,
+    validate_additional_signatures_count, validate_data_payload, validate_dispute_proof,
+    validate_escrow_fields, validate_timelock_fields, validate_transfer_fields,
 };
+use crate::{Address, Balance, Ed25519Signature, Hash, PublicKey};
 use serde::{Deserialize, Serialize};
 
 /// Transaction types supported by Network B
@@ -181,10 +181,10 @@ pub enum TrustLineType {
         account_b: Address,
         limit_a_to_b: Balance,
         limit_b_to_a: Balance,
-        quality_in: u16,           // Basis points (0-10000)
-        quality_out: u16,          // Basis points (0-10000)
+        quality_in: u16,  // Basis points (0-10000)
+        quality_out: u16, // Basis points (0-10000)
         ripple_enabled: bool,
-        dimensional_scale: u8,     // 1-8
+        dimensional_scale: u8, // 1-8
     },
     /// Update credit limits on existing trustline
     UpdateLimits {
@@ -196,9 +196,7 @@ pub enum TrustLineType {
     /// Close trustline (requires zero balance)
     Close,
     /// Evolve phase parameter (periodic dimensional adjustment)
-    EvolvePhase {
-        delta_tau: f64,
-    },
+    EvolvePhase { delta_tau: f64 },
 }
 
 /// Dimensional pool types based on exponential tokenomics
@@ -272,7 +270,8 @@ impl Transaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let timelock = TimeLockTransaction::new(from, recipient, amount, unlock_time, fee, nonce, keypair);
+        let timelock =
+            TimeLockTransaction::new(from, recipient, amount, unlock_time, fee, nonce, keypair);
         Transaction::TimeLock(timelock)
     }
 
@@ -362,6 +361,20 @@ impl Transaction {
         match self {
             Transaction::Transfer(tx) => Some(tx.amount),
             _ => None,
+        }
+    }
+
+    /// Minimum fee required for this transaction to enter a pool with default `pool_min`.
+    /// Simple transfers and most marketplace ops are free; posting a new bounty uses `pool_min`.
+    #[must_use]
+    pub fn required_minimum_fee(&self, pool_min: Balance) -> Balance {
+        match self {
+            Transaction::Transfer(_) => 0,
+            Transaction::Marketplace(m) => match &m.operation {
+                MarketplaceOperation::SubmitProblem { .. } => pool_min,
+                _ => 0,
+            },
+            _ => pool_min,
         }
     }
 }
@@ -550,13 +563,16 @@ impl EscrowTransaction {
         msg.extend_from_slice(self.public_key.as_bytes());
 
         // Include escrow type specific data
-        match &self.escrow_type {
-            EscrowType::Create { recipient, amount, timeout, .. } => {
-                msg.extend_from_slice(recipient.as_bytes());
-                msg.extend_from_slice(&amount.to_le_bytes());
-                msg.extend_from_slice(&timeout.to_le_bytes());
-            }
-            _ => {}
+        if let EscrowType::Create {
+            recipient,
+            amount,
+            timeout,
+            ..
+        } = &self.escrow_type
+        {
+            msg.extend_from_slice(recipient.as_bytes());
+            msg.extend_from_slice(&amount.to_le_bytes());
+            msg.extend_from_slice(&timeout.to_le_bytes());
         }
 
         msg
@@ -616,11 +632,18 @@ impl ChannelTransaction {
 
         // Include channel type specific data
         match &self.channel_type {
-            ChannelType::Open { deposit_a, deposit_b, .. } => {
+            ChannelType::Open {
+                deposit_a,
+                deposit_b,
+                ..
+            } => {
                 msg.extend_from_slice(&deposit_a.to_le_bytes());
                 msg.extend_from_slice(&deposit_b.to_le_bytes());
             }
-            ChannelType::CooperativeClose { final_balance_a, final_balance_b } => {
+            ChannelType::CooperativeClose {
+                final_balance_a,
+                final_balance_b,
+            } => {
                 msg.extend_from_slice(&final_balance_a.to_le_bytes());
                 msg.extend_from_slice(&final_balance_b.to_le_bytes());
             }
@@ -649,7 +672,11 @@ impl ChannelTransaction {
 
         // 4. Channel-type-specific bounds checks
         match &self.channel_type {
-            ChannelType::Open { deposit_a, deposit_b, .. } => {
+            ChannelType::Open {
+                deposit_a,
+                deposit_b,
+                ..
+            } => {
                 // Both deposits must be non-zero and within bounds
                 if crate::validation::validate_amount(*deposit_a).is_err() {
                     return false;
@@ -803,7 +830,10 @@ impl TrustLineTransaction {
                     return false;
                 }
             }
-            TrustLineType::UpdateLimits { limit_a_to_b, limit_b_to_a } => {
+            TrustLineType::UpdateLimits {
+                limit_a_to_b,
+                limit_b_to_a,
+            } => {
                 // At least one limit must be specified
                 if limit_a_to_b.is_none() && limit_b_to_a.is_none() {
                     return false;
@@ -826,6 +856,7 @@ impl TrustLineTransaction {
 
 impl PoolSwapTransaction {
     /// Create and sign a new pool swap transaction
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool_from: DimensionalPool,
         pool_to: DimensionalPool,
@@ -836,7 +867,7 @@ impl PoolSwapTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key().clone();
+        let public_key = keypair.public_key();
 
         // Create unsigned transaction
         let mut tx = PoolSwapTransaction {
@@ -959,17 +990,14 @@ pub enum MarketplaceOperation {
         solution: crate::Solution,
     },
     /// Claim bounty for solved problem
-    ClaimBounty {
-        problem_id: Hash,
-    },
+    ClaimBounty { problem_id: Hash },
     /// Cancel open problem and refund bounty
-    CancelProblem {
-        problem_id: Hash,
-    },
+    CancelProblem { problem_id: Hash },
 }
 
 impl MarketplaceTransaction {
     /// Create and sign a new problem submission transaction
+    #[allow(clippy::too_many_arguments)]
     pub fn new_problem_submission(
         problem: crate::ProblemType,
         from: Address,
@@ -980,7 +1008,7 @@ impl MarketplaceTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key().clone();
+        let public_key = keypair.public_key();
         let operation = MarketplaceOperation::SubmitProblem {
             problem,
             bounty,
@@ -1011,7 +1039,7 @@ impl MarketplaceTransaction {
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
     ) -> Self {
-        let public_key = keypair.public_key().clone();
+        let public_key = keypair.public_key();
         let operation = MarketplaceOperation::SubmitSolution {
             problem_id,
             solution,
@@ -1065,14 +1093,26 @@ impl MarketplaceTransaction {
             return false;
         }
 
-        // 3. Fee must be valid
-        if crate::validation::validate_fee(self.fee).is_err() {
+        // 3. Fee rules: bounty posts pay at least MIN_FEE_BOUNTY_SUBMISSION; other marketplace ops may be free.
+        let fee_ok = match &self.operation {
+            MarketplaceOperation::SubmitProblem { .. } => {
+                self.fee >= crate::validation::MIN_FEE_BOUNTY_SUBMISSION
+                    && self.fee <= crate::validation::MAX_AMOUNT
+            }
+            _ => crate::validation::validate_fee_allow_zero(self.fee).is_ok(),
+        };
+        if !fee_ok {
             return false;
         }
 
         // 4. Validate operation-specific constraints
         match &self.operation {
-            MarketplaceOperation::SubmitProblem { bounty, min_work_score, expiration_days, problem } => {
+            MarketplaceOperation::SubmitProblem {
+                bounty,
+                min_work_score,
+                expiration_days,
+                problem,
+            } => {
                 // Bounty must be non-zero and within bounds
                 if crate::validation::validate_amount(*bounty).is_err() {
                     return false;
@@ -1134,6 +1174,16 @@ mod tests {
     }
 
     #[test]
+    fn test_transfer_zero_fee_valid() {
+        let keypair = KeyPair::generate();
+        let from = keypair.address();
+        let to = Address::from_bytes([1u8; 32]);
+        let tx = Transaction::new_transfer(from, to, 1000, 0, 1, &keypair);
+        assert!(tx.is_valid());
+        assert_eq!(tx.required_minimum_fee(1000), 0);
+    }
+
+    #[test]
     fn test_invalid_transfer_transaction() {
         let keypair = KeyPair::generate();
         let from = keypair.address();
@@ -1183,7 +1233,8 @@ mod tests {
         // Set unlock time in the past
         let unlock_time = chrono::Utc::now().timestamp() - 3600;
 
-        let timelock_tx = TimeLockTransaction::new(from, recipient, 5000, unlock_time, 10, 1, &keypair);
+        let timelock_tx =
+            TimeLockTransaction::new(from, recipient, 5000, unlock_time, 10, 1, &keypair);
 
         // Should be invalid because unlock time is in the past
         assert!(!timelock_tx.is_valid());
@@ -1200,5 +1251,19 @@ mod tests {
         assert_eq!(tx.from(), &from);
         assert_eq!(tx.fee(), 10);
         assert_eq!(tx.nonce(), 1);
+    }
+
+    #[test]
+    fn transfer_serde_json_roundtrip_large_u128_atoms() {
+        let keypair = KeyPair::generate();
+        let from = keypair.address();
+        let to = Address::from_bytes([7u8; 32]);
+        let amount = 12_000_000_000_000u128;
+        let fee = 1_000_000_000_000u128;
+        let tx = Transaction::new_transfer(from, to, amount, fee, 2, &keypair);
+        let json = serde_json::to_string(&tx).expect("serialize");
+        let back: Transaction = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(tx.fee(), back.fee());
+        assert_eq!(tx.amount(), back.amount());
     }
 }

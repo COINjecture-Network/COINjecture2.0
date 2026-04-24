@@ -38,7 +38,7 @@
 // =============================================================================
 
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, Payload},
+    aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -432,9 +432,13 @@ mod tests {
         SigningKey::generate(&mut OsRng)
     }
 
+    fn random_session_key() -> [u8; 32] {
+        rand::random::<[u8; 32]>()
+    }
+
     #[test]
     fn test_session_cipher_encrypt_decrypt_roundtrip() {
-        let key = [0x42u8; 32];
+        let key = random_session_key();
         let mut enc = SessionCipher::new(key);
         let mut dec = SessionCipher::new(key);
 
@@ -469,7 +473,7 @@ mod tests {
 
     #[test]
     fn test_session_cipher_counter_increments() {
-        let key = [0xABu8; 32];
+        let key = random_session_key();
         let mut cipher = SessionCipher::new(key);
         assert_eq!(cipher.current_counter(), 0);
 

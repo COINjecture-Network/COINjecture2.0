@@ -2,7 +2,10 @@ use coinjecture_api_server::{
     build_router,
     config::Config,
     indexer::service::IndexerService,
-    matching::{engine::{EngineHandle, MatchingEngine}, outbox::TradeOutbox},
+    matching::{
+        engine::{EngineHandle, MatchingEngine},
+        outbox::TradeOutbox,
+    },
     metrics::init_metrics,
     middleware::rate_limit::create_rate_limiter,
     node_poller::NodePoller,
@@ -12,6 +15,7 @@ use coinjecture_api_server::{
     supabase::SupabaseClient,
     AppState,
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -85,6 +89,16 @@ async fn main() {
 
     // Start node poller if RPC URL is configured
     if let Some(ref rpc) = node_rpc {
+        // One-shot warm so first browser `/node-rpc` + `GET /chain/info` can hit cache immediately.
+        {
+            let rpc = rpc.clone();
+            let broadcaster = broadcaster.clone();
+            tokio::spawn(async move {
+                if let Ok(info) = rpc.get_chain_info().await {
+                    broadcaster.set_cached_chain_info(info).await;
+                }
+            });
+        }
         let poller = NodePoller::new(rpc.clone(), broadcaster.clone(), Duration::from_secs(2));
         tokio::spawn(async move {
             poller.run().await;
@@ -155,5 +169,10 @@ async fn main() {
         .unwrap_or_else(|e| panic!("Failed to bind to {addr}: {e}"));
 
     tracing::info!("Listening on {addr}");
-    axum::serve(listener, app).await.expect("server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("server error");
 }

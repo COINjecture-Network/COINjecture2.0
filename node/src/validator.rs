@@ -6,6 +6,7 @@
 
 use coinject_core::{Block, Hash};
 use coinject_state::AccountState;
+use coinject_tokenomics::RewardCalculator;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -39,8 +40,8 @@ pub enum ValidationError {
     TransactionOrderViolation,
     #[error("Transaction validation failed: {0}")]
     InvalidTransaction(String),
-    #[error("Coinbase amount exceeds maximum")]
-    InvalidCoinbase,
+    #[error("Coinbase reward mismatch: expected {expected}, got {actual}")]
+    InvalidCoinbaseAmount { expected: u128, actual: u128 },
     #[error("State error: {0}")]
     StateError(String),
 }
@@ -49,7 +50,7 @@ pub enum ValidationError {
 pub struct BlockValidator {
     /// Minimum work score required
     min_work_score: f64,
-    /// Minimum difficulty (leading zeros)
+    /// Minimum header PoW: **leading hex zero characters** in `hex(header_hash)` (not Bitcoin nBits).
     min_difficulty: u32,
     /// Maximum timestamp drift (seconds into future)
     max_timestamp_drift: i64,
@@ -74,7 +75,7 @@ impl BlockValidator {
         prev_hash: &Hash,
         expected_height: u64,
     ) -> Result<(), ValidationError> {
-        self.validate_block_with_options(block, prev_hash, expected_height, false)
+        self.validate_block_with_options(block, prev_hash, expected_height, false, None)
     }
 
     /// Validate a block with options
@@ -84,6 +85,9 @@ impl BlockValidator {
         prev_hash: &Hash,
         expected_height: u64,
         skip_timestamp_age_check: bool,
+        // Σ truncated `work_score` through the parent block (`W`). When `Some`, coinbase must match
+        // Tokenomics: `⌊w_trunc·S·K / W⌋` atoms (`S`/`K` = `REWARD_FIXED_POINT_SCALE` / `REWARD_EMISSION_MULTIPLIER`).
+        parent_cumulative_work_for_emission: Option<u128>,
     ) -> Result<(), ValidationError> {
         // 1. Validate block height
         if block.header.height != expected_height {
@@ -166,6 +170,19 @@ impl BlockValidator {
                 return Err(ValidationError::InvalidTransaction(
                     "Invalid signature".to_string(),
                 ));
+            }
+        }
+
+        if block.header.height > 0 {
+            if let Some(w) = parent_cumulative_work_for_emission {
+                let expected =
+                    RewardCalculator::new().calculate_block_reward(block.header.work_score, w);
+                if block.coinbase.reward != expected {
+                    return Err(ValidationError::InvalidCoinbaseAmount {
+                        expected,
+                        actual: block.coinbase.reward,
+                    });
+                }
             }
         }
 

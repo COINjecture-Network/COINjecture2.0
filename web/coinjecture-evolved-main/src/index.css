@@ -129,6 +129,55 @@ All colors MUST be HSL.
     @apply backdrop-blur-2xl bg-background/70 supports-[backdrop-filter]:bg-background/55;
   }
 
+  .market-surface {
+    @apply rounded-2xl border border-border/60 bg-card/80 backdrop-blur-xl;
+    box-shadow:
+      0 12px 36px -20px hsl(var(--foreground) / 0.18),
+      0 0 0 1px hsl(var(--border) / 0.35);
+  }
+
+  .market-surface-strong {
+    @apply rounded-3xl border border-primary/20 bg-card/90 backdrop-blur-xl;
+    box-shadow:
+      0 24px 80px -28px hsl(var(--primary) / 0.32),
+      0 0 0 1px hsl(var(--border) / 0.35);
+  }
+
+  .signal-card {
+    @apply rounded-2xl border border-border/60 bg-background/75 p-4 md:p-5;
+  }
+
+  .signal-card-strong {
+    @apply rounded-2xl border border-primary/20 bg-primary/5 p-4 md:p-5;
+  }
+
+  .signal-kicker {
+    @apply text-[11px] uppercase tracking-[0.16em] text-muted-foreground;
+  }
+
+  .signal-value {
+    @apply mt-2 text-2xl md:text-3xl font-bold tracking-tight text-foreground;
+  }
+
+  .provenance-row {
+    @apply flex flex-wrap items-center gap-2 text-xs text-muted-foreground;
+  }
+
+  .role-segment {
+    @apply grid grid-cols-2 rounded-2xl border border-border/60 bg-muted/30 p-1.5;
+  }
+
+  .role-segment-item {
+    @apply rounded-xl px-4 py-3 text-sm md:text-base font-semibold text-muted-foreground transition-all;
+  }
+
+  .hero-panel {
+    @apply rounded-3xl border border-border/60 bg-card/75 backdrop-blur-xl;
+    box-shadow:
+      0 18px 60px -28px hsl(var(--foreground) / 0.2),
+      0 0 0 1px hsl(var(--border) / 0.3);
+  }
+
   .gentle-animation {
     @apply transition-all duration-300 ease-out;
   }

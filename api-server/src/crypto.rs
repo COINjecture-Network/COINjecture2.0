@@ -18,8 +18,8 @@ pub fn verify_ed25519_signature(
         .try_into()
         .map_err(|_| "Invalid public key length (expected 32 bytes)".to_string())?;
 
-    let pubkey = VerifyingKey::from_bytes(&pubkey_array)
-        .map_err(|e| format!("Invalid public key: {e}"))?;
+    let pubkey =
+        VerifyingKey::from_bytes(&pubkey_array).map_err(|e| format!("Invalid public key: {e}"))?;
 
     let sig_array: [u8; 64] = signature_bytes
         .try_into()

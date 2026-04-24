@@ -1,8 +1,18 @@
 /**
  * Display helpers aligned with consensus + tokenomics (Rust):
  * - Work score: consensus/src/work_score.rs — bits = log₂(solve/verify) × quality
- * - Block reward: tokenomics/src/rewards.rs — reward = base_constant × (work_score / epoch_average_work)
+ * - Block reward: `tokenomics/src/rewards.rs` — minted **atoms** = `⌊w_trunc·S·K / W_parent⌋`
+ *   with `S = REWARD_FIXED_POINT_SCALE`, `K = REWARD_EMISSION_MULTIPLIER`; one **display BEANS** = S atoms.
  */
+
+/** Must match `coinject_tokenomics::REWARD_FIXED_POINT_SCALE` (10^12). */
+export const REWARD_FIXED_POINT_SCALE = 1_000_000_000_000n;
+
+/** Must match `coinject_core::validation::MIN_FEE_BOUNTY_SUBMISSION` (0.001 display BEANS in atoms). */
+export const MIN_BOUNTY_SUBMISSION_FEE_ATOMS = REWARD_FIXED_POINT_SCALE / 1000n;
+
+/** Must match `coinject_tokenomics::REWARD_EMISSION_MULTIPLIER`. */
+export const REWARD_EMISSION_MULTIPLIER = 50n;
 
 /** Match `consensus/src/work_score.rs` — same floors as the f64 `calculate` path. */
 const MIN_VERIFY_TIME_US = 1;
@@ -25,17 +35,47 @@ export function workScoreBitsFromPouw(
   return Math.log2(ratio) * q;
 }
 
-/** `RewardCalculator::new()` in tokenomics/src/rewards.rs */
-export const REWARD_BASE_CONSTANT = 10_000_000;
+/**
+ * Same as Rust `RewardCalculator::calculate_block_reward`:
+ * `⌊w_trunc·S·K / W_parent⌋` minted **atoms**.
+ */
+export function blockRewardFromTruncWorkAndParentW(
+  blockWorkTrunc: bigint,
+  parentCumulativeWork: bigint
+): bigint {
+  if (parentCumulativeWork <= 0n) return 0n;
+  return (blockWorkTrunc * REWARD_FIXED_POINT_SCALE * REWARD_EMISSION_MULTIPLIER) / parentCumulativeWork;
+}
 
-/** Default epoch average when not tuned */
-export const DEFAULT_EPOCH_AVG_WORK = 1.0;
+/** Convert whole display BEANS to ledger atoms. */
+export function displayBeansToAtoms(displayBeans: bigint): bigint {
+  return displayBeans * REWARD_FIXED_POINT_SCALE;
+}
 
-/** Same formula as `RewardCalculator::calculate_reward` (truncates to integer Balance). */
-export function blockRewardFromWorkScore(workScore: number): bigint {
-  if (!Number.isFinite(workScore) || workScore <= 0) return 0n;
-  const reward = REWARD_BASE_CONSTANT * (workScore / DEFAULT_EPOCH_AVG_WORK);
-  return BigInt(Math.floor(reward));
+/**
+ * Work units summed into chain cumulative W (`node/src/chain.rs`):
+ * `(header.work_score.max(0.0) as u64) as u128` — uses the **stored** header field only
+ * (not the PoUW recompute used for display bits).
+ */
+export function truncatedHeaderWorkScoreU128(workScore: unknown): bigint {
+  if (workScore == null) return 0n;
+  const x =
+    typeof workScore === "number"
+      ? workScore
+      : typeof workScore === "string" && workScore.trim() !== ''
+        ? Number(workScore)
+        : NaN;
+  if (!Number.isFinite(x) || x <= 0) return 0n;
+  const t = Math.trunc(x);
+  if (t <= 0) return 0n;
+  if (t > Number.MAX_SAFE_INTEGER) {
+    try {
+      return BigInt(Math.floor(x));
+    } catch {
+      return 0n;
+    }
+  }
+  return BigInt(t);
 }
 
 export function parseBalance(raw: unknown): bigint | null {
@@ -49,8 +89,37 @@ export function parseBalance(raw: unknown): bigint | null {
   return null;
 }
 
-export function formatBeans(n: bigint): string {
-  return n.toLocaleString();
+/** Decimal string `u128` from RPC/API (digits only). */
+export function parseU128DecimalString(raw: unknown): bigint | null {
+  return parseBalance(raw);
+}
+
+/** Format ledger **atoms** as display BEANS (trim fractional zeros). */
+export function formatBeans(atoms: bigint): string {
+  let a: bigint;
+  if (typeof atoms === "bigint") {
+    a = atoms;
+  } else if (typeof atoms === "number" && Number.isFinite(atoms)) {
+    a = BigInt(Math.trunc(atoms));
+  } else if (typeof atoms === "string" && /^\d+$/.test(atoms.trim())) {
+    a = BigInt(atoms.trim());
+  } else {
+    return "—";
+  }
+  const s = REWARD_FIXED_POINT_SCALE;
+  if (a === 0n) return "0";
+  const neg = a < 0n;
+  const aAbs = neg ? -a : a;
+  const whole = aAbs / s;
+  const frac = aAbs % s;
+  if (frac === 0n) {
+    return (neg ? "-" : "") + whole.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  }
+  const fracStr = frac
+    .toString()
+    .padStart(12, "0")
+    .replace(/0+$/, "");
+  return (neg ? "-" : "") + whole.toLocaleString(undefined, { maximumFractionDigits: 0 }) + "." + fracStr;
 }
 
 /** Bits from header — match display precision to typical chain values */

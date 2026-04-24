@@ -33,7 +33,7 @@ export default function BountySubmissionForm({
 
   const [problemType, setProblemType] = useState<'SubsetSum' | 'SAT' | 'TSP'>('SubsetSum');
   const [isPrivate, setIsPrivate] = useState(false);
-  const [bounty, setBounty] = useState('1000');
+  const [bounty, setBounty] = useState('10');
   const [minWorkScore, setMinWorkScore] = useState('10.0');
   const [expirationDays, setExpirationDays] = useState('7');
   const [submitting, setSubmitting] = useState(false);
