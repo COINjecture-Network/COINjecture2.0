@@ -1,4 +1,5 @@
 [advisories]
 ignore = [
   "RUSTSEC-2026-0097", # rand advisory currently affects transitive deps without compatible upstream fixes
+  "RUSTSEC-2023-0071", # rsa Marvin Attack timing side-channel — no fixed version available; only HMAC (HS256) operations are used in production, not RSA
 ]
