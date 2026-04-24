@@ -21,8 +21,8 @@ struct PriceLevel {
 impl Ord for PriceLevel {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.side {
-            Side::Buy => other.price.cmp(&self.price),   // descending
-            Side::Sell => self.price.cmp(&other.price),   // ascending
+            Side::Buy => other.price.cmp(&self.price),  // descending
+            Side::Sell => self.price.cmp(&other.price), // ascending
         }
     }
 }
@@ -143,11 +143,7 @@ impl OrderBook {
 
     // ── Matching ────────────────────────────────────────────────────────
 
-    fn match_against_book(
-        &mut self,
-        order: &mut InternalOrder,
-        trades: &mut Vec<MatchedTrade>,
-    ) {
+    fn match_against_book(&mut self, order: &mut InternalOrder, trades: &mut Vec<MatchedTrade>) {
         let opposite = match order.side {
             Side::Buy => &mut self.asks,
             Side::Sell => &mut self.bids,

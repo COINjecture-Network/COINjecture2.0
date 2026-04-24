@@ -90,10 +90,10 @@ impl MetricsCollector {
                 if let Some(&prev_time) = times.get(&(height - 1)) {
                     now.duration_since(prev_time).as_secs_f64()
                 } else {
-                    8.64 // Default target
+                    10.0 // Default target (tokenomics ~10s block pacing)
                 }
             } else {
-                8.64
+                10.0
             }
         };
 

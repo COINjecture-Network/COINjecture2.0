@@ -30,14 +30,11 @@ fn require_node_rpc(
     state
         .node_rpc
         .as_ref()
-        .ok_or_else(|| {
-            ApiError::ServiceUnavailable("Node RPC not available".into())
-        })
+        .ok_or_else(|| ApiError::ServiceUnavailable("Node RPC not available".into()))
 }
 
 fn is_valid_socket_addr(addr: &str) -> bool {
-    addr.parse::<std::net::SocketAddr>().is_ok()
-        || (addr.contains(':') && !addr.is_empty())
+    addr.parse::<std::net::SocketAddr>().is_ok() || (addr.contains(':') && !addr.is_empty())
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────────

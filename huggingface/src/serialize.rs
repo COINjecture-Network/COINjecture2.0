@@ -5,6 +5,22 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use coinject_core::{ProblemReveal, ProblemType, Solution, SubmissionMode};
 use serde_json::{json, Value};
 
+/// Normalize a field for Hub JSONL so PyArrow / the Data Studio viewer see a **JSON object**
+/// per row (some legacy exports stored `problem_data` / `solution_data` as stringified JSON).
+pub fn coerce_json_object_for_hub(value: Value) -> Value {
+    match value {
+        Value::String(s) => match serde_json::from_str::<Value>(s.trim()) {
+            Ok(Value::Object(map)) => Value::Object(map),
+            Ok(Value::Array(items)) => json!({ "items": items }),
+            Ok(other) => json!({ "value": other }),
+            Err(_) => json!({ "_legacy_unparsed": s }),
+        },
+        Value::Object(map) => Value::Object(map),
+        Value::Array(items) => json!({ "items": items }),
+        other => json!({ "value": other }),
+    }
+}
+
 /// Serialize problem to JSON with clean, type-specific structure
 ///
 /// Each problem type gets its own clean schema without null fields.
@@ -91,4 +107,23 @@ pub fn extract_problem_from_submission(
 pub enum SerializationError {
     #[error("Serialization failed: {0}")]
     Failed(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coerce_parses_stringified_object() {
+        let inner = json!({"a": 1});
+        let s = inner.to_string();
+        let out = coerce_json_object_for_hub(Value::String(s));
+        assert_eq!(out, inner);
+    }
+
+    #[test]
+    fn coerce_keeps_object() {
+        let v = json!({"x": [1, 2]});
+        assert_eq!(coerce_json_object_for_hub(v.clone()), v);
+    }
 }

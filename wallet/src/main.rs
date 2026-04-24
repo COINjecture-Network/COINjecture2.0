@@ -7,6 +7,7 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 
+mod atoms_display;
 mod commands;
 mod keystore;
 mod rpc_client;

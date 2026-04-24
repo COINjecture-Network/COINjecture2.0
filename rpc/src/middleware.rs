@@ -64,7 +64,7 @@ fn make_rejection(status: StatusCode, message: &'static str) -> Response<RpcBoxB
 
 #[derive(Clone, Debug)]
 pub struct SecurityConfig {
-    /// Max requests per minute per IP (env: RPC_RATE_LIMIT_RPM, default 100)
+    /// Max requests per minute per IP (env: RPC_RATE_LIMIT_RPM, default 600)
     pub requests_per_minute: u32,
     /// Whether a valid Bearer token is required (env: RPC_REQUIRE_AUTH)
     pub require_auth: bool,
@@ -85,7 +85,7 @@ impl Default for SecurityConfig {
         let requests_per_minute = std::env::var("RPC_RATE_LIMIT_RPM")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(100u32);
+            .unwrap_or(600u32);
 
         let require_auth = std::env::var("RPC_REQUIRE_AUTH").as_deref() == Ok("true");
 
@@ -160,7 +160,7 @@ impl SecurityConfig {
             return true; // No keys configured → open access
         }
         let candidate = *blake3::hash(token.as_bytes()).as_bytes();
-        self.api_key_hashes.iter().any(|h| *h == candidate)
+        self.api_key_hashes.contains(&candidate)
     }
 }
 

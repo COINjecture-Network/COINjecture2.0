@@ -141,7 +141,7 @@ pub enum RpcEvent {
 
     /// Transaction submitted
     TransactionSubmitted {
-        transaction: Transaction,
+        transaction: Box<Transaction>,
         client_id: ClientId,
     },
 }

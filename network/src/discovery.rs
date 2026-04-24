@@ -70,7 +70,8 @@ impl PeerDiscovery {
             for seed in &self.config.hardcoded_seeds {
                 if !peers.contains(seed) {
                     peers.push(*seed);
-                    let stored = crate::peer_store::new_stored_peer(*seed, PeerSource::HardcodedSeed);
+                    let stored =
+                        crate::peer_store::new_stored_peer(*seed, PeerSource::HardcodedSeed);
                     let _ = self.peer_store.upsert_peer(stored);
                 }
             }
@@ -105,11 +106,8 @@ impl PeerDiscovery {
                 format!("{domain}:707")
             };
 
-            let resolved = tokio::time::timeout(
-                Duration::from_secs(5),
-                tokio::net::lookup_host(host),
-            )
-            .await;
+            let resolved =
+                tokio::time::timeout(Duration::from_secs(5), tokio::net::lookup_host(host)).await;
 
             match resolved {
                 Ok(Ok(iter)) => {

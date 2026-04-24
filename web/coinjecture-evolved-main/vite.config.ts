@@ -9,12 +9,23 @@ export default defineConfig(({ mode }) => {
   
   // Get the first RPC URL from VITE_RPC_URL (comma-separated)
   const rpcUrl = (env.VITE_RPC_URL || 'http://localhost:9933').split(',')[0].trim();
-  
+  const metricsTarget = (env.VITE_METRICS_PROXY_TARGET || 'http://127.0.0.1:9090').trim();
+  const marketplaceExportTarget = (env.VITE_MARKETPLACE_PROXY_TARGET || 'http://127.0.0.1:8080').trim();
+
   return {
     server: {
       host: "::",
       port: 8080,
       proxy: {
+        '/metrics': {
+          target: metricsTarget,
+          changeOrigin: true,
+        },
+        '/marketplace': {
+          target: marketplaceExportTarget,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/marketplace/, '') || '/',
+        },
         // Proxy RPC requests to avoid CORS issues in development
         '/api/rpc': {
           target: rpcUrl,

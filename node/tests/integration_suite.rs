@@ -3,6 +3,10 @@
 // =============================================================================
 //
 // 10 integration test scenarios:
+// These tests rely on the non-adzdb AccountState API (from_db / from path).
+// They are excluded from the adzdb feature build to avoid API mismatch errors.
+#![cfg(not(feature = "adzdb"))]
+
 //   1.  Multi-node test harness       — spin up 2-4 in-process nodes
 //   2.  Transaction lifecycle         — create → mempool → block → state
 //   3.  Block propagation             — node A mines → node B receives
@@ -15,23 +19,19 @@
 //  10.  Stress test                   — 500 transactions processed correctly
 // =============================================================================
 
-use coinject_core::{
-    Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash,
-    KeyPair, MerkleTree, ProblemType, Solution, SolutionReveal, Transaction,
-};
 use coinject_consensus::{
     CoordinatorCommand, CoordinatorConfig, CoordinatorEvent, EpochCoordinator,
 };
-use coinject_mempool::{PoolConfig, ProblemMarketplace, TransactionPool};
-use coinject_network::cpp::{
-    CppConfig, CppNetwork, NetworkCommand, NodeType as CppNodeType,
+use coinject_core::{
+    Address, Block, BlockHeader, CoinbaseTransaction, Commitment, Hash, KeyPair, MerkleTree,
+    ProblemType, Solution, SolutionReveal, Transaction,
 };
+use coinject_mempool::{PoolConfig, ProblemMarketplace, TransactionPool};
+use coinject_network::cpp::{CppConfig, CppNetwork, NetworkCommand, NodeType as CppNodeType};
 use coinject_node::chain::ChainState;
 use coinject_node::genesis::{create_genesis_block, GenesisConfig};
-use coinject_rpc::{BlockchainReader, RpcServer, RpcServerState};
-use coinject_state::{
-    AccountState, ChannelState, EscrowState, MarketplaceState, TimeLockState,
-};
+use coinject_rpc::{BlockchainReader, NetworkPeerInfo, RpcServer, RpcServerState};
+use coinject_state::{AccountState, ChannelState, EscrowState, MarketplaceState, TimeLockState};
 use redb::Database;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -68,18 +68,22 @@ impl TestNode {
         let genesis_hash = genesis.header.hash();
 
         let chain = Arc::new(
-            ChainState::new(dir.path().join("chain.db"), &genesis)
-                .expect("ChainState::new"),
+            ChainState::new(dir.path().join("chain.db"), &genesis, 512).expect("ChainState::new"),
         );
 
-        let state_db = Arc::new(
-            Database::create(dir.path().join("state.db")).expect("state db"),
-        );
+        let state_db = Arc::new(Database::create(dir.path().join("state.db")).expect("state db"));
         let state = Arc::new(AccountState::from_db(state_db));
 
         let tx_pool = Arc::new(RwLock::new(TransactionPool::with_config(pool_cfg)));
 
-        TestNode { chain, state, tx_pool, genesis, genesis_hash, _dir: dir }
+        TestNode {
+            chain,
+            state,
+            tx_pool,
+            genesis,
+            genesis_hash,
+            _dir: dir,
+        }
     }
 
     async fn best_height(&self) -> u64 {
@@ -104,8 +108,7 @@ fn make_block_with_txs(height: u64, prev_hash: Hash, txs: Vec<Transaction>) -> B
     let miner = Address::from_bytes([0xABu8; 32]);
 
     // Compute real tx merkle root so block.verify() doesn't choke.
-    let tx_hashes: Vec<Vec<u8>> =
-        txs.iter().map(|tx| tx.hash().to_vec()).collect();
+    let tx_hashes: Vec<Vec<u8>> = txs.iter().map(|tx| tx.hash().to_vec()).collect();
     let transactions_root = MerkleTree::new(tx_hashes).root();
 
     let header = BlockHeader {
@@ -193,7 +196,10 @@ impl BlockchainReader for MockChain {
         }
     }
 
-    fn get_header_by_height(&self, height: u64) -> Result<Option<coinject_core::BlockHeader>, String> {
+    fn get_header_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<coinject_core::BlockHeader>, String> {
         Ok(self.get_block_by_height(height)?.map(|b| b.header))
     }
 }
@@ -245,7 +251,10 @@ async fn test_1_multi_node_harness() {
 /// block → apply state changes → verify balances updated.
 #[tokio::test]
 async fn test_2_transaction_lifecycle() {
-    let pool_cfg = PoolConfig { min_fee: 1_000, ..Default::default() };
+    let pool_cfg = PoolConfig {
+        min_fee: 1_000,
+        ..Default::default()
+    };
     let node = TestNode::with_pool_config(pool_cfg);
 
     let genesis_hash = node.genesis_hash;
@@ -335,6 +344,7 @@ async fn test_3_block_propagation() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..Default::default()
     };
     let cfg_b = CppConfig { ..cfg_a.clone() };
 
@@ -350,7 +360,9 @@ async fn test_3_block_propagation() {
 
     // Node A broadcasts the block — command must be accepted without error.
     cmd_a
-        .send(NetworkCommand::BroadcastBlock { block: block.clone() })
+        .send(NetworkCommand::BroadcastBlock {
+            block: block.clone(),
+        })
         .expect("BroadcastBlock send");
 
     // Node B updates its known chain state.
@@ -358,6 +370,7 @@ async fn test_3_block_propagation() {
         .send(NetworkCommand::UpdateChainState {
             best_height: 1,
             best_hash: block_hash,
+            cumulative_work: 0,
         })
         .expect("UpdateChainState send");
 
@@ -390,8 +403,7 @@ async fn test_4_consensus_round() {
         failover_depth: 2,
     };
 
-    let (coordinator, _shared) =
-        EpochCoordinator::new(node_id, config, 0, Hash::ZERO);
+    let (coordinator, _shared) = EpochCoordinator::new(node_id, config, 0, Hash::ZERO, 0);
 
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<CoordinatorCommand>();
     let (evt_tx, mut evt_rx) = tokio::sync::mpsc::unbounded_channel::<CoordinatorEvent>();
@@ -448,6 +460,7 @@ async fn test_4_consensus_round() {
                             epoch: *epoch,
                             commit: coinject_consensus::SolutionCommit {
                                 node_id: peer_id,
+                                public_key: [0u8; 32],
                                 solution_hash: peer_hash,
                                 work_score: 150.0,
                                 signature: vec![],
@@ -465,8 +478,8 @@ async fn test_4_consensus_round() {
                 }
                 _ => {}
             },
-            Ok(None) => break,   // channel closed
-            Err(_) => break,     // timeout
+            Ok(None) => break, // channel closed
+            Err(_) => break,   // timeout
         }
     }
 
@@ -507,15 +520,18 @@ async fn test_5_fork_resolution() {
     // Build fork block at height 1 with different nonce → different hash.
     let b1_fork = {
         let mut blk = make_block(1, genesis_hash);
-        blk.header.nonce = 9_999;        // ensure different hash
-        blk.header.work_score = 1000.0;  // heavier work score
+        blk.header.nonce = 9_999; // ensure different hash
+        blk.header.work_score = 1000.0; // heavier work score
         blk
     };
     let b1_fork_hash = b1_fork.header.hash();
 
     // Store the fork block — does NOT advance best chain (height 1 < 3).
     let advanced = node.chain.store_block(&b1_fork).await.unwrap();
-    assert!(!advanced, "fork block at height 1 should NOT replace best chain at 3");
+    assert!(
+        !advanced,
+        "fork block at height 1 should NOT replace best chain at 3"
+    );
 
     // Canonical chain unchanged.
     assert_eq!(node.best_height().await, 3);
@@ -546,7 +562,10 @@ async fn test_5_fork_resolution() {
         // Fork block's prev_hash doesn't chain correctly off our stored tip
         // (ChainState stores the block but only advances if prev_hash == best).
         // Either way, the canonical chain must still be valid.
-        assert!(node.best_height().await >= 3, "best chain is at least height 3");
+        assert!(
+            node.best_height().await >= 3,
+            "best chain is at least height 3"
+        );
     }
 
     // Both fork and main blocks are stored and retrievable.
@@ -576,6 +595,7 @@ async fn test_6_peer_discovery() {
         max_peers: 20,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..Default::default()
     };
 
     let new_peer_id = [0x33u8; 32];
@@ -592,6 +612,7 @@ async fn test_6_peer_discovery() {
         .send(NetworkCommand::UpdateChainState {
             best_height: 42,
             best_hash: peer_block_hash,
+            cumulative_work: 0,
         })
         .expect("UpdateChainState");
 
@@ -632,19 +653,14 @@ async fn test_7_rpc_integration() {
     let dir = tempfile::tempdir().unwrap();
 
     // ── State objects ──────────────────────────────────────────────────────
-    let state_db = Arc::new(
-        Database::create(dir.path().join("state.db")).unwrap(),
-    );
+    let state_db = Arc::new(Database::create(dir.path().join("state.db")).unwrap());
     let state = Arc::new(AccountState::from_db(Arc::clone(&state_db)));
 
-    let adv_db = Arc::new(
-        Database::create(dir.path().join("adv.db")).unwrap(),
-    );
+    let adv_db = Arc::new(Database::create(dir.path().join("adv.db")).unwrap());
     let timelock_state = Arc::new(TimeLockState::new(Arc::clone(&adv_db)).unwrap());
     let escrow_state = Arc::new(EscrowState::new(Arc::clone(&adv_db)).unwrap());
     let channel_state = Arc::new(ChannelState::new(Arc::clone(&adv_db)).unwrap());
-    let marketplace_state =
-        Arc::new(MarketplaceState::from_db(Arc::clone(&adv_db)).unwrap());
+    let marketplace_state = Arc::new(MarketplaceState::from_db(Arc::clone(&adv_db)).unwrap());
 
     let genesis = create_genesis_block(GenesisConfig::default());
     let genesis_hash = genesis.header.hash();
@@ -652,6 +668,19 @@ async fn test_7_rpc_integration() {
     // Pre-fund an account so balance endpoint has data.
     let test_addr = Address::from_bytes([0x55u8; 32]);
     state.set_balance(&test_addr, 123_456).unwrap();
+
+    let peer_id_hex = "01".repeat(32);
+    let mut seed_peers = HashMap::new();
+    seed_peers.insert(
+        peer_id_hex.clone(),
+        NetworkPeerInfo {
+            peer_id: peer_id_hex.clone(),
+            address: "192.0.2.1:707".to_string(),
+            best_height: 99,
+            best_hash: "ab".repeat(32),
+            cumulative_work: "12345678901234567890".to_string(),
+        },
+    );
 
     // ── Server state ───────────────────────────────────────────────────────
     let server_state = Arc::new(RpcServerState {
@@ -668,12 +697,14 @@ async fn test_7_rpc_integration() {
         best_hash: Arc::new(RwLock::new(genesis_hash)),
         genesis_hash,
         peer_count: Arc::new(RwLock::new(3)),
+        peer_directory: Arc::new(RwLock::new(seed_peers)),
         faucet_handler: None,
         block_submission_handler: None,
         local_peer_id: Some("test-peer-0xABCD".to_string()),
         listen_addresses: Arc::new(RwLock::new(vec![])),
         is_syncing: Arc::new(RwLock::new(false)),
         mining_work_provider: None,
+        mining_difficulty_tip_provider: None,
     });
 
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -709,7 +740,11 @@ async fn test_7_rpc_integration() {
         .await
         .expect("account_getBalance");
 
-    assert_eq!(balance.as_u64().unwrap(), 123_456, "balance matches funded amount");
+    assert_eq!(
+        balance.as_u64().unwrap(),
+        123_456,
+        "balance matches funded amount"
+    );
 
     // ── chain_getBlock (genesis height 0) ──────────────────────────────────
     let block: serde_json::Value = client
@@ -734,10 +769,19 @@ async fn test_7_rpc_integration() {
         .await
         .expect("network_getInfo");
 
-    assert_eq!(
-        net_info["peer_id"].as_str().unwrap(),
-        "test-peer-0xABCD"
-    );
+    assert_eq!(net_info["peer_id"].as_str().unwrap(), "test-peer-0xABCD");
+
+    // ── network_listPeers ───────────────────────────────────────────────────
+    let peers: serde_json::Value = client
+        .request("network_listPeers", rpc_params![])
+        .await
+        .expect("network_listPeers");
+
+    let arr = peers.as_array().expect("peers array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["address"].as_str().unwrap(), "192.0.2.1:707");
+    assert_eq!(arr[0]["peer_id"].as_str().unwrap(), peer_id_hex);
+    assert_eq!(arr[0]["best_height"].as_u64().unwrap(), 99);
 
     server.stop().expect("server stop");
 }
@@ -787,10 +831,13 @@ async fn test_8_mempool_sync() {
         max_peers: 10,
         enable_websocket: false,
         node_type: CppNodeType::Full,
+        ..Default::default()
     };
     let (_net, cmd_tx, _evt_rx) = CppNetwork::new(cfg, [0x44u8; 32], genesis);
     cmd_tx
-        .send(NetworkCommand::BroadcastTransaction { transaction: tx.clone() })
+        .send(NetworkCommand::BroadcastTransaction {
+            transaction: tx.clone(),
+        })
         .expect("BroadcastTransaction");
 
     // 3. Simulate node B receiving the broadcast and adding to its pool.
@@ -824,8 +871,7 @@ async fn test_8_mempool_sync() {
 async fn test_9_state_consistency() {
     // ── Setup 3 independent state stores ──────────────────────────────────
     fn make_state(dir: &TempDir, name: &str) -> Arc<AccountState> {
-        let db =
-            Arc::new(Database::create(dir.path().join(name)).expect("db"));
+        let db = Arc::new(Database::create(dir.path().join(name)).expect("db"));
         Arc::new(AccountState::from_db(db))
     }
 
@@ -879,18 +925,21 @@ async fn test_9_state_consistency() {
     apply(&state_c, &txs);
 
     // ── Assert identical final state across all 3 replicas ────────────────
-    let total_transferred: u128 = txs
-        .iter()
-        .filter_map(|tx| tx.amount())
-        .sum();
+    let total_transferred: u128 = txs.iter().filter_map(|tx| tx.amount()).sum();
 
     // Recipient balance must be identical on all nodes.
     let bal_a = state_a.get_balance(&recipient);
     let bal_b = state_b.get_balance(&recipient);
     let bal_c = state_c.get_balance(&recipient);
 
-    assert_eq!(bal_a, bal_b, "state A and B must agree on recipient balance");
-    assert_eq!(bal_b, bal_c, "state B and C must agree on recipient balance");
+    assert_eq!(
+        bal_a, bal_b,
+        "state A and B must agree on recipient balance"
+    );
+    assert_eq!(
+        bal_b, bal_c,
+        "state B and C must agree on recipient balance"
+    );
     assert_eq!(bal_a, total_transferred, "recipient received all transfers");
 
     // Sender balances are also consistent.
@@ -948,11 +997,12 @@ async fn test_10_stress_transactions() {
     assert_eq!(stats.transactions_rejected, 0, "zero rejections");
 
     // Every hash is individually retrievable.
-    let missing: Vec<_> = tx_hashes
-        .iter()
-        .filter(|h| pool.get(h).is_none())
-        .collect();
-    assert!(missing.is_empty(), "{} hashes not found in pool", missing.len());
+    let missing: Vec<_> = tx_hashes.iter().filter(|h| pool.get(h).is_none()).collect();
+    assert!(
+        missing.is_empty(),
+        "{} hashes not found in pool",
+        missing.len()
+    );
 
     // Verify pending list length.
     let pending = pool.get_pending();

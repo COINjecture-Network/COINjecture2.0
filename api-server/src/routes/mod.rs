@@ -7,6 +7,7 @@ pub mod health;
 pub mod jsonrpc_proxy;
 pub mod marketplace;
 pub mod peers;
+pub mod wallet;
 
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
@@ -24,6 +25,8 @@ use crate::AppState;
 /// SSE routes are separated from API routes so the 30 s timeout doesn't
 /// kill long-lived event streams.
 pub fn build_routes(state: AppState) -> Router {
+    let cors_origins = state.config.cors_extra_origins.clone();
+
     // ── Public chain/RPC routes (NO rate limiter) ───────────────────────
     let open_routes = Router::new()
         // Health + chain data
@@ -62,11 +65,9 @@ pub fn build_routes(state: AppState) -> Router {
             post(email_auth::verify_magic_link),
         )
         .route("/auth/email/bind-wallet", post(email_auth::bind_wallet))
+        .route("/wallet/transactions", get(wallet::get_transactions))
         // Marketplace
-        .route(
-            "/marketplace/pairs",
-            get(marketplace::get_pairs),
-        )
+        .route("/marketplace/pairs", get(marketplace::get_pairs))
         .route(
             "/marketplace/orders",
             get(marketplace::get_orders).post(marketplace::place_order),
@@ -77,7 +78,14 @@ pub fn build_routes(state: AppState) -> Router {
         )
         .route("/marketplace/trades", get(marketplace::get_trades))
         .route("/marketplace/datasets", get(marketplace::get_datasets))
-        .route("/marketplace/solution-sets", get(marketplace::get_solution_sets))
+        .route(
+            "/marketplace/datasets/{slug}/download",
+            get(marketplace::download_dataset),
+        )
+        .route(
+            "/marketplace/solution-sets",
+            get(marketplace::get_solution_sets),
+        )
         .route(
             "/marketplace/tasks",
             get(marketplace::get_tasks).post(marketplace::create_task),
@@ -117,6 +125,8 @@ pub fn build_routes(state: AppState) -> Router {
             crate::metrics::metrics_middleware,
         ))
         .layer(crate::middleware::tracing::tracing_layer())
-        .layer(cors::cors_layer())
+        // Axum: last `.layer()` is outermost on the request path — CORS outside Compression so
+        // preflight and responses (including errors) are handled before gzip.
         .layer(CompressionLayer::new())
+        .layer(cors::cors_layer(cors_origins))
 }

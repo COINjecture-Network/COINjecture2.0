@@ -6,6 +6,7 @@
 //! Enable with: --features adzdb
 
 #![cfg(feature = "adzdb")]
+#![allow(dead_code)]
 
 use adzdb::{Config as AdzConfig, Database as AdzDatabase, Error as AdzError};
 use coinject_core::{Block, BlockHeader, Hash};
@@ -42,6 +43,10 @@ pub struct AdzdbChainState {
     best_height: Arc<RwLock<u64>>,
     /// Best block hash (cached)
     best_hash: Arc<RwLock<Hash>>,
+    /// Σ `work_score` on canonical path to tip (recomputed on tip change).
+    best_cumulative_work: Arc<RwLock<u128>>,
+    /// Σ `coinbase.reward` on canonical path to tip (recomputed on tip change).
+    best_total_minted_rewards: Arc<RwLock<u128>>,
     /// Genesis hash
     genesis_hash: Hash,
 }
@@ -96,12 +101,64 @@ impl AdzdbChainState {
             db.entry_count()
         );
 
+        let best_cumulative_work = Self::compute_cumulative_tip_work(&db, best_hash).unwrap_or(0);
+        let best_total_minted_rewards =
+            Self::compute_total_minted_tip(&db, best_hash).unwrap_or(genesis_block.coinbase.reward);
+
         Ok(AdzdbChainState {
             db: Arc::new(RwLock::new(db)),
             best_height: Arc::new(RwLock::new(best_height)),
             best_hash: Arc::new(RwLock::new(best_hash)),
+            best_cumulative_work: Arc::new(RwLock::new(best_cumulative_work)),
+            best_total_minted_rewards: Arc::new(RwLock::new(best_total_minted_rewards)),
             genesis_hash,
         })
+    }
+
+    fn compute_cumulative_tip_work(db: &AdzDatabase, mut tip: Hash) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let block_bytes = match db.get(tip.as_bytes()) {
+                Ok(b) => b,
+                Err(AdzError::NotFound) => return Err(ChainError::BlockNotFound),
+                Err(e) => return Err(ChainError::from(e)),
+            };
+            let block: Block = bincode::deserialize(&block_bytes)?;
+            sum = sum.saturating_add((block.header.work_score.max(0.0) as u64) as u128);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    fn compute_total_minted_tip(db: &AdzDatabase, mut tip: Hash) -> Result<u128, ChainError> {
+        let mut sum = 0u128;
+        loop {
+            let block_bytes = match db.get(tip.as_bytes()) {
+                Ok(b) => b,
+                Err(AdzError::NotFound) => return Err(ChainError::BlockNotFound),
+                Err(e) => return Err(ChainError::from(e)),
+            };
+            let block: Block = bincode::deserialize(&block_bytes)?;
+            sum = sum.saturating_add(block.coinbase.reward);
+            if block.header.height == 0 {
+                break;
+            }
+            tip = block.header.prev_hash;
+        }
+        Ok(sum)
+    }
+
+    /// Cumulative work through `tip_hash` (inclusive).
+    pub fn cumulative_work_at_tip_hash(&self, tip_hash: Hash) -> Result<u128, ChainError> {
+        let db = futures::executor::block_on(self.db.read());
+        Self::compute_cumulative_tip_work(&db, tip_hash)
+    }
+
+    pub async fn best_total_minted_rewards_value(&self) -> u128 {
+        *self.best_total_minted_rewards.read().await
     }
 
     /// Store a block and update best chain if needed
@@ -125,6 +182,18 @@ impl AdzdbChainState {
             // New best block
             *self.best_height.write().await = block_height;
             *self.best_hash.write().await = block_hash;
+
+            let cum = {
+                let db = self.db.read().await;
+                Self::compute_cumulative_tip_work(&db, block_hash).unwrap_or(0)
+            };
+            *self.best_cumulative_work.write().await = cum;
+
+            let minted = {
+                let db = self.db.read().await;
+                Self::compute_total_minted_tip(&db, block_hash).unwrap_or(0)
+            };
+            *self.best_total_minted_rewards.write().await = minted;
 
             println!(
                 "🗄️  ADZDB: New best block height={} hash={:?}",
@@ -181,6 +250,10 @@ impl AdzdbChainState {
         *self.best_hash.read().await
     }
 
+    pub async fn best_cumulative_work(&self) -> u128 {
+        *self.best_cumulative_work.read().await
+    }
+
     /// Get the best block
     pub async fn best_block(&self) -> Result<Option<Block>, ChainError> {
         let hash = self.best_block_hash().await;
@@ -208,22 +281,56 @@ impl AdzdbChainState {
         Ok(db.contains(hash.as_bytes()))
     }
 
-    /// Find common ancestor between current best chain and a target block
-    pub async fn find_common_ancestor(
+    /// See `chain::ChainState::block_by_hash_or_alt` — keep logic aligned when editing.
+    fn block_by_hash_or_alt(
+        &self,
+        hash: &Hash,
+        alt_chain: &[Block],
+    ) -> Result<Option<Block>, ChainError> {
+        if let Some(b) = self.get_block_by_hash(hash)? {
+            return Ok(Some(b));
+        }
+        for b in alt_chain {
+            if b.header.hash() == *hash {
+                return Ok(Some(b.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Same contract as `chain::ChainState::find_common_ancestor_with_alt_chain`.
+    pub async fn find_common_ancestor_with_alt_chain(
         &self,
         target_hash: &Hash,
         target_height: u64,
+        alt_chain: &[Block],
     ) -> Result<Option<(Hash, u64)>, ChainError> {
         let current_best_hash = self.best_block_hash().await;
         let current_best_height = self.best_block_height().await;
 
-        // Walk back both chains to find common ancestor
+        if target_height <= current_best_height {
+            let mut current_hash = current_best_hash;
+            let mut current_height = current_best_height;
+
+            while current_height > target_height {
+                if let Some(block) = self.get_block_by_hash(&current_hash)? {
+                    current_hash = block.header.prev_hash;
+                    current_height -= 1;
+                } else {
+                    return Ok(None);
+                }
+            }
+
+            if current_hash == *target_hash {
+                return Ok(Some((current_hash, current_height)));
+            }
+        }
+
         let mut our_hash = current_best_hash;
         let mut our_height = current_best_height;
         let mut their_hash = *target_hash;
         let mut their_height = target_height;
 
-        // Align heights
         while our_height > their_height {
             if let Some(block) = self.get_block_by_hash(&our_hash)? {
                 our_hash = block.header.prev_hash;
@@ -234,25 +341,59 @@ impl AdzdbChainState {
         }
 
         while their_height > our_height {
-            if let Some(block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
+                if their_height > 0 {
+                    if let Ok(Some(our_block_at_height)) =
+                        self.get_block_by_height(their_height - 1)
+                    {
+                        if block.header.prev_hash == our_block_at_height.header.hash() {
+                            return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
+                        }
+                    }
+                }
                 their_hash = block.header.prev_hash;
                 their_height -= 1;
             } else {
+                if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height) {
+                    if their_hash == our_block_at_height.header.hash() {
+                        return Ok(Some((their_hash, their_height)));
+                    }
+                }
                 return Ok(None);
             }
         }
 
-        // Now both at same height, walk back until we find common ancestor
         while our_height > 0 && our_hash != their_hash {
             if let Some(our_block) = self.get_block_by_hash(&our_hash)? {
                 our_hash = our_block.header.prev_hash;
             } else {
+                if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
+                    if let Ok(Some(our_block_at_height)) = self.get_block_by_height(our_height) {
+                        if their_block.header.prev_hash == our_block_at_height.header.hash() {
+                            return Ok(Some((our_block_at_height.header.hash(), our_height)));
+                        }
+                    }
+                }
                 return Ok(None);
             }
 
-            if let Some(their_block) = self.get_block_by_hash(&their_hash)? {
+            if let Some(their_block) = self.block_by_hash_or_alt(&their_hash, alt_chain)? {
+                if their_height > 0 {
+                    if let Ok(Some(our_block_at_height)) =
+                        self.get_block_by_height(their_height - 1)
+                    {
+                        if their_block.header.prev_hash == our_block_at_height.header.hash() {
+                            return Ok(Some((our_block_at_height.header.hash(), their_height - 1)));
+                        }
+                    }
+                }
                 their_hash = their_block.header.prev_hash;
             } else {
+                if let Ok(Some(our_block_at_height)) = self.get_block_by_height(their_height) {
+                    if their_hash == our_block_at_height.header.hash() {
+                        return Ok(Some((their_hash, their_height)));
+                    }
+                }
                 return Ok(None);
             }
 
@@ -264,6 +405,16 @@ impl AdzdbChainState {
         } else {
             Ok(None)
         }
+    }
+
+    /// Find common ancestor between current best chain and a target block
+    pub async fn find_common_ancestor(
+        &self,
+        target_hash: &Hash,
+        target_height: u64,
+    ) -> Result<Option<(Hash, u64)>, ChainError> {
+        self.find_common_ancestor_with_alt_chain(target_hash, target_height, &[])
+            .await
     }
 
     /// Get chain path from start to end (sync for compatibility)
@@ -378,6 +529,18 @@ impl AdzdbChainState {
         *self.best_height.write().await = new_best_height;
         *self.best_hash.write().await = new_best_hash;
 
+        let cum = {
+            let db = self.db.read().await;
+            Self::compute_cumulative_tip_work(&db, new_best_hash).unwrap_or(0)
+        };
+        *self.best_cumulative_work.write().await = cum;
+
+        let minted = {
+            let db = self.db.read().await;
+            Self::compute_total_minted_tip(&db, new_best_hash).unwrap_or(0)
+        };
+        *self.best_total_minted_rewards.write().await = minted;
+
         // Sync database
         {
             let mut db = self.db.write().await;
@@ -470,6 +633,14 @@ impl coinject_rpc::BlockchainReader for AdzdbChainState {
 
     fn get_header_by_height(&self, height: u64) -> Result<Option<BlockHeader>, String> {
         self.get_header_by_height(height).map_err(|e| e.to_string())
+    }
+
+    fn best_cumulative_work_decimal(&self) -> Option<String> {
+        Some(futures::executor::block_on(self.best_cumulative_work.read()).to_string())
+    }
+
+    fn total_minted_rewards_decimal(&self) -> Option<String> {
+        Some(futures::executor::block_on(self.best_total_minted_rewards.read()).to_string())
     }
 }
 

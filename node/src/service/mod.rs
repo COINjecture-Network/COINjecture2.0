@@ -11,7 +11,7 @@ mod mining;
 
 // Conditional ChainState: uses ADZDB when compiled with --features adzdb
 #[cfg(not(feature = "adzdb"))]
-use crate::chain::{ChainState, ChainBlockProvider};
+use crate::chain::{ChainBlockProvider, ChainState};
 #[cfg(feature = "adzdb")]
 use crate::chain_adzdb::{AdzdbChainState as ChainState, ChainBlockProvider};
 use crate::config::NodeConfig;
@@ -19,31 +19,36 @@ use crate::faucet::{Faucet, FaucetConfig};
 use crate::genesis::{create_genesis_block, GenesisConfig};
 use crate::peer_consensus::PeerConsensus;
 use crate::validator::BlockValidator;
-use coinject_consensus::{Miner, MiningConfig, default_registry};
+use coinject_consensus::{default_registry, Miner, MiningConfig};
 use coinject_core::Address;
 use coinject_mempool::{ProblemMarketplace, TransactionPool};
 // libp2p removed - using CPP protocol only
-use coinject_network::cpp::{
-    CppNetwork, NetworkEvent as CppNetworkEvent, NetworkCommand as CppNetworkCommand, 
-    CppConfig, NodeType as CppNodeType, PeerId as CppPeerId, BlockProvider
-};
-use coinject_rpc::server::{MiningWork, MiningWorkFuture};
-use coinject_rpc::{MiningWorkProvider, RpcServer, RpcServerState};
-use coinject_rpc::websocket::{WebSocketRpc, RpcEvent as WebSocketRpcEvent, RpcCommand as WebSocketRpcCommand};
-use coinject_state::{AccountState, TimeLockState, EscrowState, ChannelState, TrustLineState, DimensionalPoolState, MarketplaceState};
 use coinject_huggingface::{
-    HuggingFaceSync, HuggingFaceConfig, EnergyConfig, EnergyMeasurementMethod, SyncConfig,
-    DualFeedStreamer, StreamerConfig,
+    DualFeedStreamer, EnergyConfig, EnergyMeasurementMethod, HuggingFaceConfig, HuggingFaceSync,
+    StreamerConfig, SyncConfig,
 };
-use tracing::{debug, info, warn, error};
-use rand;
+use coinject_network::cpp::{
+    BlockProvider, CppConfig, CppNetwork, NetworkCommand as CppNetworkCommand,
+    NetworkEvent as CppNetworkEvent, NodeType as CppNodeType, PeerId as CppPeerId,
+};
+use coinject_rpc::server::{
+    MiningDifficultyTip, MiningDifficultyTipFuture, MiningWork, MiningWorkFuture, NetworkPeerInfo,
+};
+use coinject_rpc::websocket::{
+    RpcCommand as WebSocketRpcCommand, RpcEvent as WebSocketRpcEvent, WebSocketRpc,
+};
+use coinject_rpc::{MiningDifficultyTipProvider, MiningWorkProvider, RpcServer, RpcServerState};
+use coinject_state::{
+    AccountState, ChannelState, DimensionalPoolState, EscrowState, MarketplaceState, TimeLockState,
+    TrustLineState,
+};
+use coinject_tokenomics::NetworkMetrics;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
-use blake3;
-use hex;
+use tracing::{debug, error, info, warn};
 
 /// Get the debug log path from DATA_DIR environment variable
 pub fn get_debug_log_path() -> std::path::PathBuf {
@@ -58,38 +63,79 @@ pub(crate) enum NetworkCommand {
     BroadcastBlock(coinject_core::Block),
     /// Send historical block for sync with unique request_id (bypasses gossipsub dedup)
     /// This is the INSTITUTIONAL-GRADE solution for reliable sync
-    SendSyncBlock { block: coinject_core::Block, request_id: u64 },
+    SendSyncBlock {
+        block: coinject_core::Block,
+        request_id: u64,
+    },
     BroadcastTransaction(coinject_core::Transaction),
-    BroadcastStatus { 
-        best_height: u64, 
-        best_hash: coinject_core::Hash, 
+    BroadcastStatus {
+        best_height: u64,
+        best_hash: coinject_core::Hash,
         genesis_hash: coinject_core::Hash,
         node_type: coinject_network::NetworkNodeType,
     },
-    RequestBlocks { from_height: u64, to_height: u64 },
+    RequestBlocks {
+        from_height: u64,
+        to_height: u64,
+    },
     /// Legacy: Send block to specific peer (kept for compatibility)
-    SendBlockToPeer { block: coinject_core::Block, peer: CppPeerId },
+    SendBlockToPeer {
+        block: coinject_core::Block,
+        peer: CppPeerId,
+    },
     // === REQUEST-RESPONSE SYNC COMMANDS ===
     // Reliable, ordered block delivery - bypasses GossipSub deduplication issues
     /// Request blocks from a specific peer via request-response (preferred for sync)
-    RequestBlocksRR { peer: CppPeerId, from_height: u64, to_height: u64 },
+    RequestBlocksRR {
+        peer: CppPeerId,
+        from_height: u64,
+        to_height: u64,
+    },
     /// Send blocks response via request-response
-    SendBlocksResponse { request_id: u64, blocks: Vec<coinject_core::Block> },
+    SendBlocksResponse {
+        request_id: u64,
+        blocks: Vec<coinject_core::Block>,
+    },
     /// Send error response via request-response
-    SendErrorResponse { request_id: u64, message: String },
+    SendErrorResponse {
+        request_id: u64,
+        message: String,
+    },
     // === LIGHT SYNC COMMANDS ===
     /// Send headers to a requesting peer
-    SendHeaders { headers: Vec<coinject_core::BlockHeader>, request_id: u64 },
+    SendHeaders {
+        headers: Vec<coinject_core::BlockHeader>,
+        request_id: u64,
+    },
     /// Send FlyClient proof response
-    SendFlyClientProof { proof_data: Vec<u8>, request_id: u64 },
+    SendFlyClientProof {
+        proof_data: Vec<u8>,
+        request_id: u64,
+    },
     /// Send MMR proof response
-    SendMMRProof { header: coinject_core::BlockHeader, proof_data: Vec<u8>, mmr_root: coinject_core::Hash, request_id: u64 },
+    SendMMRProof {
+        header: coinject_core::BlockHeader,
+        proof_data: Vec<u8>,
+        mmr_root: coinject_core::Hash,
+        request_id: u64,
+    },
     /// Send chain tip response
-    SendChainTip { height: u64, hash: coinject_core::Hash, mmr_root: coinject_core::Hash, total_work: u128, request_id: u64 },
+    SendChainTip {
+        height: u64,
+        hash: coinject_core::Hash,
+        mmr_root: coinject_core::Hash,
+        total_work: u128,
+        request_id: u64,
+    },
     /// Request headers (for Light client sync)
-    RequestHeaders { start_height: u64, max_headers: u32 },
+    RequestHeaders {
+        start_height: u64,
+        max_headers: u32,
+    },
     /// Request FlyClient proof
-    RequestFlyClientProof { security_param: u32 },
+    RequestFlyClientProof {
+        security_param: u32,
+    },
 }
 
 /// Main node service coordinating all blockchain components
@@ -160,7 +206,13 @@ impl CoinjectNode {
         if let Some(parent) = chain_db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let chain = Arc::new(ChainState::new(chain_db_path, &genesis, config.block_cache_size)?);
+        let chain = Arc::new({
+            #[cfg(not(feature = "adzdb"))]
+            let cs = ChainState::new(chain_db_path, &genesis, config.block_cache_size)?;
+            #[cfg(feature = "adzdb")]
+            let cs = ChainState::new(chain_db_path, &genesis)?;
+            cs
+        });
         let best_height = chain.best_block_height().await;
         info!(best_height, "blockchain state initialized");
 
@@ -182,7 +234,8 @@ impl CoinjectNode {
 
         // Advanced transaction states still use redb (they don't have Windows locking issues)
         // Create a separate redb database for advanced states
-        let advanced_state_db_path = state_db_path.parent()
+        let advanced_state_db_path = state_db_path
+            .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("advanced_state.db");
         let advanced_state_db = Arc::new(redb::Database::create(&advanced_state_db_path)?);
@@ -190,8 +243,10 @@ impl CoinjectNode {
         let escrow_state = Arc::new(EscrowState::new(Arc::clone(&advanced_state_db))?);
         let channel_state = Arc::new(ChannelState::new(Arc::clone(&advanced_state_db))?);
         let trustline_state = Arc::new(TrustLineState::new(Arc::clone(&advanced_state_db))?);
-        let dimensional_pool_state = Arc::new(DimensionalPoolState::new(Arc::clone(&advanced_state_db))?);
-        let marketplace_state = Arc::new(MarketplaceState::from_db(Arc::clone(&advanced_state_db))?);
+        let dimensional_pool_state =
+            Arc::new(DimensionalPoolState::new(Arc::clone(&advanced_state_db))?);
+        let marketplace_state =
+            Arc::new(MarketplaceState::from_db(Arc::clone(&advanced_state_db))?);
 
         // Apply genesis if this is a new chain
         if best_height == 0 {
@@ -214,7 +269,6 @@ impl CoinjectNode {
 
         // Initialize miner if enabled
         let miner = if config.mine {
-
             let miner_address = if let Some(ref addr_hex) = config.miner_address {
                 // Use explicitly provided miner address
                 let addr_bytes = hex::decode(addr_hex)?;
@@ -227,7 +281,8 @@ impl CoinjectNode {
             } else {
                 // Load or generate validator key from data directory
                 let keystore = crate::keystore::ValidatorKeystore::new(&config.data_dir);
-                let validator_key = keystore.get_or_create_key()
+                let validator_key = keystore
+                    .get_or_create_key()
                     .map_err(|e| format!("Failed to get validator key: {}", e))?;
                 validator_key.address()
             };
@@ -236,7 +291,6 @@ impl CoinjectNode {
                 miner_address,
                 target_block_time: Duration::from_secs(config.block_time),
                 min_difficulty: config.difficulty,
-                max_difficulty: config.difficulty + 20,
                 golden_activation_height: config.golden_activation_height,
             };
 
@@ -251,6 +305,9 @@ impl CoinjectNode {
             let registry = default_registry();
 
             let mut miner = Miner::new(mining_config);
+            miner
+                .set_network_metrics(Arc::new(RwLock::new(NetworkMetrics::default_window())))
+                .await;
             miner.set_registry(registry).await;
             Some(Arc::new(RwLock::new(miner)))
         } else {
@@ -277,10 +334,14 @@ impl CoinjectNode {
 
         // Initialize HuggingFace sync if configured
         // Fix 1: Resolve token from config, falling back to env vars HUGGINGFACE_TOKEN / HF_TOKEN
-        let hf_token_resolved = config.hf_token.clone()
+        let hf_token_resolved = config
+            .hf_token
+            .clone()
             .or_else(|| std::env::var("HUGGINGFACE_TOKEN").ok())
             .or_else(|| std::env::var("HF_TOKEN").ok());
-        let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) = (&hf_token_resolved, &config.hf_dataset_name) {
+        let hf_sync = if let (Some(hf_token), Some(hf_dataset_name)) =
+            (&hf_token_resolved, &config.hf_dataset_name)
+        {
             info!(dataset = %hf_dataset_name, "initializing huggingface sync");
 
             let hf_config = HuggingFaceConfig {
@@ -304,6 +365,7 @@ impl CoinjectNode {
                 batch_size: 10,
                 batch_interval: Duration::from_secs(60),
                 min_confirmations: 20, // k-confirmation guard for reorg safety
+                mining_difficulty_bits: config.difficulty,
             };
 
             match HuggingFaceSync::new(hf_config, energy_config, sync_config.clone()) {
@@ -344,12 +406,13 @@ impl CoinjectNode {
         let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
 
         // Initialize Node Classification Manager
-        let mut classification_manager = crate::node_types::NodeClassificationManager::new(best_height);
-        
+        let mut classification_manager =
+            crate::node_types::NodeClassificationManager::new(best_height);
+
         // Set target type from config
         let target_type = config.target_node_type();
         classification_manager.set_target_type(target_type);
-        
+
         // Set headers-only mode if configured
         if config.is_light_mode() {
             classification_manager.set_headers_only(true);
@@ -358,13 +421,11 @@ impl CoinjectNode {
 
         let node_classification = Arc::new(RwLock::new(classification_manager));
         info!(target_type = %target_type, "node classification manager initialized");
-        
+
         // Initialize Light Client if in headers-only mode
         let light_client = if config.is_light_mode() {
-            let light_state = crate::light_client::LightClientState::new(
-                genesis_hash,
-                genesis.header.clone(),
-            );
+            let light_state =
+                crate::light_client::LightClientState::new(genesis_hash, genesis.header.clone());
             info!("light client initialized for header sync");
             Some(Arc::new(light_state))
         } else {
@@ -372,13 +433,14 @@ impl CoinjectNode {
         };
 
         // Initialize Node Type Manager (Central Orchestrator)
-        let (node_manager, _manager_rx, _classification_rx) = crate::node_manager::NodeTypeManager::new(
-            best_height,
-            target_type,
-            Some(genesis.header.clone()),
-        );
+        let (node_manager, _manager_rx, _classification_rx) =
+            crate::node_manager::NodeTypeManager::new(
+                best_height,
+                target_type,
+                Some(genesis.header.clone()),
+            );
         let node_manager = Arc::new(node_manager);
-        
+
         // Initialize Capability Router
         let capability_router = Arc::new(crate::node_manager::CapabilityRouter::new());
 
@@ -430,6 +492,8 @@ impl CoinjectNode {
 
         // Create shared peer count for RPC
         let peer_count = Arc::new(RwLock::new(0));
+        let peer_directory: Arc<RwLock<HashMap<String, NetworkPeerInfo>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         // Generate CPP PeerId — random per instance to avoid collisions in Docker
         // (Previous deterministic scheme used data_dir + chain_id, which collided
@@ -442,7 +506,7 @@ impl CoinjectNode {
         };
         let local_peer_id_str = hex::encode(local_peer_id_bytes);
         info!(peer_id = %local_peer_id_str, "local peer id generated");
-        
+
         // Track listen addresses for RPC (CPP addresses)
         let listen_addresses: Arc<RwLock<Vec<String>>> = Arc::new(RwLock::new(vec![
             format!("cpp://{}", self.config.cpp_p2p_addr),
@@ -466,10 +530,10 @@ impl CoinjectNode {
 
         // NOTE: peer_count was already created at line 255 and passed to NetworkService
         // DO NOT create a new one here - use the same Arc so network updates are visible!
-        
+
         // Track best known peer height for sync-before-mine logic
         let best_known_peer_height = Arc::new(RwLock::new(0u64));
-        
+
         // Multi-peer consensus tracker (XRPL-inspired, requires 5+ peers for 80% threshold)
         let peer_consensus = Arc::new(PeerConsensus::with_defaults());
 
@@ -485,66 +549,125 @@ impl CoinjectNode {
         let marketplace_state_for_submission = Arc::clone(&self.marketplace_state);
         let validator_for_submission = Arc::clone(&self.validator);
         let tx_pool_for_submission = Arc::clone(&self.tx_pool);
+        let miner_for_submission = self.miner.clone();
         let network_tx_for_submission = network_cmd_tx.clone();
         let hf_sync_for_submission = self.hf_sync.clone();
-        
-        let block_submission_handler: Option<coinject_rpc::BlockSubmissionHandler> = Some(Arc::new(move |block: coinject_core::Block| -> Result<String, String> {
-            // Get runtime handle for async operations
-            let rt_handle = tokio::runtime::Handle::try_current()
-                .map_err(|_| "No async runtime available".to_string())?;
-            
-            // Use a standard blocking channel so the sync RPC handler does not
-            // try to re-enter the Tokio runtime while waiting for completion.
-            let (tx, rx) = std::sync::mpsc::sync_channel(1);
-            
-            let chain = Arc::clone(&chain_for_submission);
-            let state = Arc::clone(&state_for_submission);
-            let timelock_state = Arc::clone(&timelock_state_for_submission);
-            let escrow_state = Arc::clone(&escrow_state_for_submission);
-            let channel_state = Arc::clone(&channel_state_for_submission);
-            let trustline_state = Arc::clone(&trustline_state_for_submission);
-            let dimensional_pool_state = Arc::clone(&dimensional_pool_state_for_submission);
-            let marketplace_state = Arc::clone(&marketplace_state_for_submission);
-            let validator = Arc::clone(&validator_for_submission);
-            let tx_pool = Arc::clone(&tx_pool_for_submission);
-            let network_tx = network_tx_for_submission.clone();
-            let hf_sync = hf_sync_for_submission.clone();
-            
-            // Spawn async task to handle block submission
-            rt_handle.spawn(async move {
-                let result = async {
+
+        let block_submission_handler: Option<coinject_rpc::BlockSubmissionHandler> = Some(
+            Arc::new(
+                move |block: coinject_core::Block| -> coinject_rpc::server::BlockSubmissionFuture {
+                    let submission_started_at = Instant::now();
+                    let submission_height = block.header.height;
+                    let block_hash = block.hash();
+                    let submission_trace = format!(
+                        "{}:{}",
+                        submission_height,
+                        hex::encode(&block_hash.as_bytes()[..4])
+                    );
+                    info!(
+                        trace = %submission_trace,
+                        height = submission_height,
+                        elapsed_ms = submission_started_at.elapsed().as_millis(),
+                        "rpc block submission received"
+                    );
+
+                    let chain = Arc::clone(&chain_for_submission);
+                    let state = Arc::clone(&state_for_submission);
+                    let timelock_state = Arc::clone(&timelock_state_for_submission);
+                    let escrow_state = Arc::clone(&escrow_state_for_submission);
+                    let channel_state = Arc::clone(&channel_state_for_submission);
+                    let trustline_state = Arc::clone(&trustline_state_for_submission);
+                    let dimensional_pool_state = Arc::clone(&dimensional_pool_state_for_submission);
+                    let marketplace_state = Arc::clone(&marketplace_state_for_submission);
+                    let validator = Arc::clone(&validator_for_submission);
+                    let tx_pool = Arc::clone(&tx_pool_for_submission);
+                    let miner_opt = miner_for_submission.clone();
+                    let network_tx = network_tx_for_submission.clone();
+                    let hf_sync = hf_sync_for_submission.clone();
+                    let submission_trace_for_task = submission_trace.clone();
+
+                    Box::pin(async move {
+                        let task_started_at = Instant::now();
+                        let result = async {
                     // Get current chain state
                     let best_height = chain.best_block_height().await;
                     let best_hash = chain.best_block_hash().await;
                     let expected_height = best_height + 1;
-                    
+                    info!(
+                        trace = %submission_trace_for_task,
+                        height = block.header.height,
+                        elapsed_ms = task_started_at.elapsed().as_millis(),
+                        best_height,
+                        expected_height,
+                        best_hash = %best_hash,
+                        "rpc block submission fetched chain tip"
+                    );
+
                     // Validate block height
                     if block.header.height != expected_height {
                         return Err(format!("Invalid block height: expected {}, got {}", expected_height, block.header.height));
                     }
-                    
+
                     // Validate previous hash
                     if block.header.prev_hash != best_hash {
                         return Err(format!("Invalid previous hash: expected {}, got {}", best_hash, block.header.prev_hash));
                     }
-                    
+
                     // Validate block (skip timestamp age check for RPC submissions)
-                    match validator.validate_block_with_options(&block, &best_hash, expected_height, false) {
-                        Ok(()) => {},
+                    let validation_started_at = Instant::now();
+                    let emission_w = if block.header.height == 0 {
+                        None
+                    } else {
+                        match chain.cumulative_work_at_tip_hash(block.header.prev_hash) {
+                            Ok(w) => Some(w),
+                            Err(e) => {
+                                return Err(format!(
+                                    "Could not compute parent cumulative work: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    };
+                    match validator.validate_block_with_options(
+                        &block,
+                        &best_hash,
+                        expected_height,
+                        false,
+                        emission_w,
+                    ) {
+                        Ok(()) => {
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = validation_started_at.elapsed().as_millis(),
+                                "rpc block submission validation completed"
+                            );
+                        },
                         Err(e) => return Err(format!("Block validation failed: {:?}", e)),
                     }
-                    
+
                     // Store block
+                    let store_started_at = Instant::now();
                     match chain.store_block(&block).await {
                         Ok(is_new_best) => {
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = store_started_at.elapsed().as_millis(),
+                                is_new_best,
+                                "rpc block submission store completed"
+                            );
                             if !is_new_best {
                                 return Err("Block did not extend the chain".to_string());
                             }
                         },
                         Err(e) => return Err(format!("Failed to store block: {}", e)),
                     }
-                    
+
                     // Apply block transactions
+                    let apply_started_at = Instant::now();
                     match Self::apply_block_transactions(
                         &block,
                         &state,
@@ -556,18 +679,37 @@ impl CoinjectNode {
                         &marketplace_state,
                     ) {
                         Ok(applied_txs) => {
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = apply_started_at.elapsed().as_millis(),
+                                applied_tx_count = applied_txs.len(),
+                                "rpc block submission applied block transactions"
+                            );
                             // Remove applied transactions from pool
                             let mut pool = tx_pool.write().await;
                             for tx_hash in &applied_txs {
                                 pool.remove(tx_hash);
                             }
                             drop(pool);
-                            
+
+                            Self::retarget_header_pow_from_stored_block(&miner_opt, &chain, &block)
+                                .await;
+
                             // Broadcast block to network
+                            let broadcast_started_at = Instant::now();
                             if let Err(e) = network_tx.send(NetworkCommand::BroadcastBlock(block.clone())) {
                                 return Err(format!("Failed to broadcast block: {}", e));
                             }
-                            
+                            info!(
+                                trace = %submission_trace_for_task,
+                                height = block.header.height,
+                                elapsed_ms = task_started_at.elapsed().as_millis(),
+                                stage_elapsed_ms = broadcast_started_at.elapsed().as_millis(),
+                                "rpc block submission queued network broadcast"
+                            );
+
                             // Push to Hugging Face if enabled
                             if let Some(ref hf_sync) = hf_sync {
                                 let hf_sync_clone = Arc::clone(hf_sync);
@@ -577,34 +719,39 @@ impl CoinjectNode {
                                         warn!(error = %e, "failed to push rpc-submitted block to huggingface");
                                     }
                                 });
+                                info!(
+                                    trace = %submission_trace_for_task,
+                                    height = block.header.height,
+                                    elapsed_ms = task_started_at.elapsed().as_millis(),
+                                    "rpc block submission spawned huggingface push"
+                                );
                             }
-                            
+
                             Ok(block.hash().to_string())
                         },
                         Err(e) => Err(format!("Failed to apply block transactions: {}", e)),
                     }
                 }.await;
-                
-                // Send result back to synchronous handler
-                let _ = tx.send(result);
-            });
-            
-            // Wait for result (with timeout)
-            {
-                // Timeout should be network-derived: ETA * network_median_block_time
-                // For now, using ETA-scaled default: 10s * ETA ≈ 7s effective
-                use coinject_core::ETA;
-                rx.recv_timeout(Duration::from_secs_f64(10.0 * ETA))
-            }
-            .map_err(|e| match e {
-                std::sync::mpsc::RecvTimeoutError::Timeout => {
-                    "Block submission timeout".to_string()
-                }
-                std::sync::mpsc::RecvTimeoutError::Disconnected => {
-                    "Failed to receive result".to_string()
-                }
-            })?
-        }));
+
+                        info!(
+                            trace = %submission_trace_for_task,
+                            height = block.header.height,
+                            elapsed_ms = task_started_at.elapsed().as_millis(),
+                            ok = result.is_ok(),
+                            "rpc block submission async handler completed"
+                        );
+                        info!(
+                            trace = %submission_trace,
+                            height = submission_height,
+                            elapsed_ms = submission_started_at.elapsed().as_millis(),
+                            ok = result.is_ok(),
+                            "rpc block submission completed"
+                        );
+                        result
+                    })
+                },
+            ),
+        );
 
         let mining_work_provider: Option<MiningWorkProvider> = self.miner.as_ref().map(|miner| {
             let miner = Arc::clone(miner);
@@ -618,19 +765,44 @@ impl CoinjectNode {
                     let bh = *best_height.read().await;
                     let prev = *best_hash.read().await;
                     let next_height = bh + 1;
-                    let problem = miner
-                        .read()
-                        .await
-                        .generate_problem(next_height, prev)
-                        .await;
+                    let miner = miner.read().await;
+                    let difficulty = miner.current_difficulty();
+                    let problem = miner.generate_problem(next_height, prev).await;
                     Ok(MiningWork {
                         next_height,
                         prev_hash: hex::encode(prev.as_bytes()),
+                        difficulty,
                         problem,
                     })
                 }) as MiningWorkFuture
             }) as MiningWorkProvider
         });
+
+        let mining_difficulty_tip_provider: Option<MiningDifficultyTipProvider> =
+            self.miner.as_ref().map(|miner| {
+                let miner = Arc::clone(miner);
+                Arc::new(move || -> MiningDifficultyTipFuture {
+                    let miner = Arc::clone(&miner);
+                    Box::pin(async move {
+                        let header_pow_difficulty = {
+                            let m = miner.read().await;
+                            m.current_difficulty()
+                        };
+                        let np_problem_size = {
+                            let m = miner.read().await;
+                            m.current_np_problem_size().await
+                        };
+                        Ok(MiningDifficultyTip {
+                            header_pow_difficulty,
+                            np_problem_size,
+                        })
+                    }) as MiningDifficultyTipFuture
+                }) as MiningDifficultyTipProvider
+            });
+
+        // Updated by the periodic reorg/sync task: true when our tip is behind the peer median
+        // (or best peer height) by more than `sync_threshold_blocks` — see `docs/FORKING_AND_REORG.md`.
+        let is_syncing = Arc::new(tokio::sync::RwLock::new(false));
 
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
@@ -646,12 +818,14 @@ impl CoinjectNode {
             best_hash: self.chain.best_hash_ref(),
             genesis_hash: self.chain.genesis_hash(),
             peer_count: Arc::clone(&peer_count),
+            peer_directory: Arc::clone(&peer_directory),
             faucet_handler,
             block_submission_handler,
             local_peer_id: Some(local_peer_id_str.clone()),
             listen_addresses: Arc::clone(&listen_addresses),
-            is_syncing: Arc::new(tokio::sync::RwLock::new(false)), // Node starts not syncing
+            is_syncing: Arc::clone(&is_syncing),
             mining_work_provider,
+            mining_difficulty_tip_provider,
         });
 
         let rpc_server = RpcServer::new(rpc_addr, rpc_state).await?;
@@ -668,7 +842,7 @@ impl CoinjectNode {
             ws_addr = %self.config.cpp_ws_addr,
             "starting cpp network"
         );
-        
+
         let genesis_hash = self.chain.genesis_hash();
         let local_peer_id_bytes: [u8; 32] = {
             let decoded = hex::decode(&local_peer_id_str)
@@ -677,14 +851,16 @@ impl CoinjectNode {
             bytes.copy_from_slice(&decoded[..32]);
             bytes
         };
-        
+
         // Parse CPP bootnodes from config (format: "IP:PORT" or multiaddr "/ip4/IP/tcp/PORT/p2p/PEER_ID")
         // For CPP, we extract IP:PORT from multiaddr format or use as-is if already IP:PORT
         // If no bootnodes provided, CPP will work in standalone mode
         let cpp_bootnodes: Vec<String> = if self.config.bootnodes.is_empty() {
             vec![] // No bootnodes - standalone mode
         } else {
-            self.config.bootnodes.iter()
+            self.config
+                .bootnodes
+                .iter()
                 .filter_map(|addr| {
                     // Try parsing as multiaddr first
                     if addr.starts_with('/') {
@@ -703,7 +879,7 @@ impl CoinjectNode {
                 })
                 .collect()
         };
-        
+
         let cpp_config = CppConfig {
             p2p_listen: self.config.cpp_p2p_addr.clone(),
             ws_listen: self.config.cpp_ws_addr.clone(),
@@ -715,31 +891,40 @@ impl CoinjectNode {
             require_encryption: false,
             ..Default::default()
         };
-        
+
         // Get current chain state before creating CPP network
         let current_height = self.chain.best_block_height().await;
         let current_hash = self.chain.best_block_hash().await;
-        
+        let current_tip_cumulative_work = self.chain.best_cumulative_work().await;
+
         // Create block provider for serving sync requests to peers
-        let block_provider: Arc<dyn BlockProvider> = Arc::new(ChainBlockProvider::new(self.chain.clone()));
-        
-        let (cpp_network, cpp_network_cmd_tx, mut cpp_network_event_rx) = 
-            CppNetwork::new_with_block_provider(cpp_config, local_peer_id_bytes, genesis_hash, current_height, current_hash, block_provider);
-        
+        let block_provider: Arc<dyn BlockProvider> =
+            Arc::new(ChainBlockProvider::new(self.chain.clone()));
+
+        let (cpp_network, cpp_network_cmd_tx, mut cpp_network_event_rx) =
+            CppNetwork::new_with_block_provider(
+                cpp_config,
+                local_peer_id_bytes,
+                genesis_hash,
+                current_height,
+                current_hash,
+                block_provider,
+            );
+
         info!(height = current_height, hash = ?current_hash, "cpp network initialized with block provider");
-        
+
         // Clone cpp_network_cmd_tx for multiple uses (before any moves)
         let cpp_network_cmd_tx_for_bootnodes = cpp_network_cmd_tx.clone();
         let cpp_network_cmd_tx_for_legacy = cpp_network_cmd_tx.clone();
         let cpp_network_cmd_tx_for_mining = cpp_network_cmd_tx.clone(); // For mining loop
         let cpp_network_cmd_tx_for_storage = cpp_network_cmd_tx.clone(); // Store for later use
-        
+
         // Connect to CPP bootnodes after a short delay
         let cpp_bootnodes_for_connect = cpp_bootnodes.clone();
         tokio::spawn(async move {
             // Wait a bit for network to start listening
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-            
+
             // Connect to each bootnode
             for bootnode_addr in cpp_bootnodes_for_connect {
                 // Try direct SocketAddr parse first, then DNS resolution for hostnames (e.g. Docker service names)
@@ -756,9 +941,9 @@ impl CoinjectNode {
                 };
                 if let Some(addr) = resolved {
                     info!(addr = %addr, bootnode = %bootnode_addr, "connecting to bootnode");
-                    if let Err(e) = cpp_network_cmd_tx_for_bootnodes.send(
-                        coinject_network::cpp::NetworkCommand::ConnectBootnode { addr }
-                    ) {
+                    if let Err(e) = cpp_network_cmd_tx_for_bootnodes
+                        .send(coinject_network::cpp::NetworkCommand::ConnectBootnode { addr })
+                    {
                         error!(error = %e, "failed to send bootnode connect command");
                     }
                 } else {
@@ -766,7 +951,7 @@ impl CoinjectNode {
                 }
             }
         });
-        
+
         // Spawn CPP network task
         let cpp_p2p_addr_clone = self.config.cpp_p2p_addr.clone();
         tokio::spawn(async move {
@@ -780,9 +965,10 @@ impl CoinjectNode {
                 }
             }
         });
-        
+
         // Create block buffer for out-of-order blocks (used by CPP sync)
-        let block_buffer: Arc<RwLock<HashMap<u64, coinject_core::Block>>> = Arc::new(RwLock::new(HashMap::new()));
+        let block_buffer: Arc<RwLock<HashMap<u64, coinject_core::Block>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         // Spawn CPP network event handler - fully integrated
         let chain_clone = Arc::clone(&self.chain);
@@ -797,6 +983,7 @@ impl CoinjectNode {
         let tx_pool_clone = Arc::clone(&self.tx_pool);
         let best_known_peer_height_clone = Arc::clone(&best_known_peer_height);
         let peer_count_clone = Arc::clone(&peer_count);
+        let peer_directory_clone = Arc::clone(&peer_directory);
         let peer_consensus_clone = Arc::clone(&peer_consensus);
         let network_cmd_tx_for_events = network_cmd_tx.clone();
         let cpp_network_cmd_tx_for_events = cpp_network_cmd_tx.clone();
@@ -804,11 +991,15 @@ impl CoinjectNode {
         let block_buffer_clone = Arc::clone(&block_buffer);
         // Clone config for version checking in event handler
         let config_clone = self.config.clone();
+        let miner_clone = self.miner.clone();
 
         tokio::spawn(async move {
             while let Some(event) = cpp_network_event_rx.recv().await {
                 match event {
-                    CppNetworkEvent::BlockReceived { block, peer_id: _peer_id } => {
+                    CppNetworkEvent::BlockReceived {
+                        block,
+                        peer_id: _peer_id,
+                    } => {
                         // Log block with version info (P2P.F: Prove the F)
                         let version_info = config_clone.version_info(block.header.version);
                         info!(
@@ -819,7 +1010,9 @@ impl CoinjectNode {
                         );
 
                         // Check version policy before validation
-                        if let Err(reason) = config_clone.should_accept_version(block.header.version) {
+                        if let Err(reason) =
+                            config_clone.should_accept_version(block.header.version)
+                        {
                             warn!(
                                 block_height = block.header.height,
                                 version = %version_info,
@@ -828,42 +1021,70 @@ impl CoinjectNode {
                             );
                             continue;
                         }
-                        
+
                         let best_height = chain_clone.best_block_height().await;
                         let best_hash = chain_clone.best_block_hash().await;
                         let expected_height = best_height + 1;
-                        
+
                         // Validate block height
                         if block.header.height != expected_height {
-                            warn!(expected_height, block_height = block.header.height, "block height mismatch");
+                            warn!(
+                                expected_height,
+                                block_height = block.header.height,
+                                "block height mismatch"
+                            );
                             continue;
                         }
 
                         // Validate previous hash
                         if block.header.prev_hash != best_hash {
-                            warn!(block_height = block.header.height, "block prev_hash mismatch");
+                            warn!(
+                                block_height = block.header.height,
+                                "block prev_hash mismatch"
+                            );
                             continue;
                         }
-                        
+
                         // Validate block
-                        match validator_clone.validate_block_with_options(&block, &best_hash, expected_height, false) {
+                        let emission_w = if block.header.height == 0 {
+                            None
+                        } else {
+                            match chain_clone.cumulative_work_at_tip_hash(block.header.prev_hash) {
+                                Ok(w) => Some(w),
+                                Err(e) => {
+                                    error!(block_height = block.header.height, error = %e, "parent cumulative work for emission");
+                                    continue;
+                                }
+                            }
+                        };
+                        match validator_clone.validate_block_with_options(
+                            &block,
+                            &best_hash,
+                            expected_height,
+                            false,
+                            emission_w,
+                        ) {
                             Ok(()) => {
                                 // Store block
                                 match chain_clone.store_block(&block).await {
                                     Ok(is_new_best) => {
                                         if is_new_best {
                                             info!(block_height = block.header.height, block_hash = ?block.header.hash(), "block applied as new best");
-                                            
+
                                             // Update CPP network chain state
                                             let new_height = block.header.height;
                                             let new_hash = block.header.hash();
-                                            if let Err(e) = cpp_network_cmd_tx_for_legacy.send(CppNetworkCommand::UpdateChainState {
-                                                best_height: new_height,
-                                                best_hash: new_hash,
-                                            }) {
+                                            let cum = chain_clone.best_cumulative_work().await;
+                                            if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
+                                                CppNetworkCommand::UpdateChainState {
+                                                    best_height: new_height,
+                                                    best_hash: new_hash,
+                                                    cumulative_work: cum,
+                                                },
+                                            ) {
                                                 warn!(error = %e, "failed to update cpp network chain state");
                                             }
-                                            
+
                                             // Apply block transactions
                                             if let Err(e) = Self::apply_block_transactions(
                                                 &block,
@@ -882,19 +1103,33 @@ impl CoinjectNode {
                                                 for tx in &block.transactions {
                                                     pool.remove(&tx.hash());
                                                 }
-                                                
+
+                                                CoinjectNode::retarget_header_pow_from_stored_block(
+                                                    &miner_clone,
+                                                    &chain_clone,
+                                                    &block,
+                                                )
+                                                .await;
+
                                                 // Update best known peer height
-                                                let mut best_peer = best_known_peer_height_clone.write().await;
+                                                let mut best_peer =
+                                                    best_known_peer_height_clone.write().await;
                                                 if block.header.height > *best_peer {
                                                     *best_peer = block.header.height;
                                                 }
-                                                
+
                                                 // Push to Hugging Face if enabled
                                                 if let Some(ref hf_sync) = hf_sync_clone {
                                                     let hf_sync_clone2 = Arc::clone(hf_sync);
                                                     let block_clone = block.clone();
                                                     tokio::spawn(async move {
-                                                        if let Err(e) = hf_sync_clone2.push_consensus_block(&block_clone, false).await {
+                                                        if let Err(e) = hf_sync_clone2
+                                                            .push_consensus_block(
+                                                                &block_clone,
+                                                                false,
+                                                            )
+                                                            .await
+                                                        {
                                                             warn!(error = %e, "failed to push block to huggingface");
                                                         }
                                                     });
@@ -912,14 +1147,21 @@ impl CoinjectNode {
                             }
                         }
                     }
-                    CppNetworkEvent::TransactionReceived { transaction, peer_id } => {
+                    CppNetworkEvent::TransactionReceived {
+                        transaction,
+                        peer_id,
+                    } => {
                         debug!(tx_hash = ?transaction.hash(), peer_id = %hex::encode(peer_id), "transaction received");
                         let mut pool = tx_pool_clone.write().await;
                         if let Err(e) = pool.add(transaction) {
                             warn!(error = %e, "failed to add transaction to pool");
                         }
                     }
-                    CppNetworkEvent::BlocksReceived { blocks, request_id: _, peer_id } => {
+                    CppNetworkEvent::BlocksReceived {
+                        blocks,
+                        request_id: _,
+                        peer_id,
+                    } => {
                         debug!(count = blocks.len(), peer_id = %hex::encode(peer_id), "sync blocks received");
 
                         let mut highest_received: u64 = 0;
@@ -930,7 +1172,9 @@ impl CoinjectNode {
                         for block in blocks {
                             // Check version policy first (P2P.F: Prove the F)
                             let version_info = config_clone.version_info(block.header.version);
-                            if let Err(reason) = config_clone.should_accept_version(block.header.version) {
+                            if let Err(reason) =
+                                config_clone.should_accept_version(block.header.version)
+                            {
                                 warn!(
                                     block_height = block.header.height,
                                     version = %version_info,
@@ -949,20 +1193,43 @@ impl CoinjectNode {
                                 highest_received = block.header.height;
                             }
 
-                            if block.header.height == expected_height && block.header.prev_hash == best_hash {
+                            if block.header.height == expected_height
+                                && block.header.prev_hash == best_hash
+                            {
                                 // Validate and store (skip age check for sync blocks)
-                                if let Ok(()) = validator_clone.validate_block_with_options(&block, &best_hash, expected_height, true) {
+                                let emission_w = if block.header.height == 0 {
+                                    None
+                                } else {
+                                    match chain_clone
+                                        .cumulative_work_at_tip_hash(block.header.prev_hash)
+                                    {
+                                        Ok(w) => Some(w),
+                                        Err(_) => continue,
+                                    }
+                                };
+                                if let Ok(()) = validator_clone.validate_block_with_options(
+                                    &block,
+                                    &best_hash,
+                                    expected_height,
+                                    true,
+                                    emission_w,
+                                ) {
                                     if let Ok(is_new_best) = chain_clone.store_block(&block).await {
                                         if is_new_best {
                                             blocks_applied += 1;
                                             debug!(block_height = block.header.height, version = %version_info, "sync block applied");
+
                                             // Update CPP network chain state
                                             let new_height = block.header.height;
                                             let new_hash = block.header.hash();
-                                            if let Err(e) = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::UpdateChainState {
-                                                best_height: new_height,
-                                                best_hash: new_hash,
-                                            }) {
+                                            let cum = chain_clone.best_cumulative_work().await;
+                                            if let Err(e) = cpp_network_cmd_tx_for_events.send(
+                                                CppNetworkCommand::UpdateChainState {
+                                                    best_height: new_height,
+                                                    best_hash: new_hash,
+                                                    cumulative_work: cum,
+                                                },
+                                            ) {
                                                 warn!(error = %e, "failed to update cpp network chain state");
                                             }
 
@@ -977,7 +1244,12 @@ impl CoinjectNode {
                                                 &marketplace_state_clone,
                                             ) {
                                                 Ok(_) => {
-                                                    // Success - sync block applied
+                                                    CoinjectNode::retarget_header_pow_from_stored_block(
+                                                        &miner_clone,
+                                                        &chain_clone,
+                                                        &block,
+                                                    )
+                                                    .await;
                                                 }
                                                 Err(e) => {
                                                     error!(block_height = block.header.height, error = %e, "failed to apply sync block transactions");
@@ -986,7 +1258,10 @@ impl CoinjectNode {
                                         }
                                     }
                                 } else {
-                                    warn!(block_height = block.header.height, "block validation failed, buffering");
+                                    warn!(
+                                        block_height = block.header.height,
+                                        "block validation failed, buffering"
+                                    );
                                     let mut buffer = block_buffer_clone.write().await;
                                     buffer.insert(block.header.height, block);
                                 }
@@ -1003,7 +1278,10 @@ impl CoinjectNode {
                                 buffer.insert(block.header.height, block);
                             } else if block.header.height > expected_height {
                                 // Future block - buffer it for later
-                                debug!(block_height = block.header.height, expected_height, "buffering future block");
+                                debug!(
+                                    block_height = block.header.height,
+                                    expected_height, "buffering future block"
+                                );
                                 let mut buffer = block_buffer_clone.write().await;
                                 buffer.insert(block.header.height, block);
                             } else {
@@ -1011,21 +1289,22 @@ impl CoinjectNode {
                                 // need for complete-fork validation. If the local block at this height
                                 // has a different hash, keep the incoming block in the fork buffer
                                 // instead of dropping it as "already known".
-                                let conflicting_historical_block =
-                                    match chain_clone.get_block_by_height(block.header.height) {
-                                        Ok(Some(existing_block)) => {
-                                            existing_block.header.hash() != block.header.hash()
-                                        }
-                                        Ok(None) => true,
-                                        Err(e) => {
-                                            warn!(
-                                                block_height = block.header.height,
-                                                error = %e,
-                                                "failed to inspect local historical block, buffering incoming block"
-                                            );
-                                            true
-                                        }
-                                    };
+                                let conflicting_historical_block = match chain_clone
+                                    .get_block_by_height(block.header.height)
+                                {
+                                    Ok(Some(existing_block)) => {
+                                        existing_block.header.hash() != block.header.hash()
+                                    }
+                                    Ok(None) => true,
+                                    Err(e) => {
+                                        warn!(
+                                            block_height = block.header.height,
+                                            error = %e,
+                                            "failed to inspect local historical block, buffering incoming block"
+                                        );
+                                        true
+                                    }
+                                };
 
                                 if conflicting_historical_block {
                                     warn!(
@@ -1036,7 +1315,10 @@ impl CoinjectNode {
                                     let mut buffer = block_buffer_clone.write().await;
                                     buffer.insert(block.header.height, block);
                                 } else {
-                                    debug!(block_height = block.header.height, best_height, "skipping already-known block");
+                                    debug!(
+                                        block_height = block.header.height,
+                                        best_height, "skipping already-known block"
+                                    );
                                 }
                             }
                         }
@@ -1055,8 +1337,11 @@ impl CoinjectNode {
                             match block_opt {
                                 Some(block) => {
                                     // Check version policy for buffered blocks (P2P.F: Prove the F)
-                                    let buffer_version_info = config_clone.version_info(block.header.version);
-                                    if let Err(reason) = config_clone.should_accept_version(block.header.version) {
+                                    let buffer_version_info =
+                                        config_clone.version_info(block.header.version);
+                                    if let Err(reason) =
+                                        config_clone.should_accept_version(block.header.version)
+                                    {
                                         warn!(
                                             block_height = block.header.height,
                                             version = %buffer_version_info,
@@ -1068,18 +1353,42 @@ impl CoinjectNode {
                                     }
 
                                     if block.header.prev_hash == best_hash {
-                                        if let Ok(()) = validator_clone.validate_block_with_options(&block, &best_hash, next_height, true) {
-                                            if let Ok(is_new_best) = chain_clone.store_block(&block).await {
+                                        let emission_w = if block.header.height == 0 {
+                                            None
+                                        } else {
+                                            match chain_clone
+                                                .cumulative_work_at_tip_hash(block.header.prev_hash)
+                                            {
+                                                Ok(w) => Some(w),
+                                                Err(_) => continue,
+                                            }
+                                        };
+                                        if let Ok(()) = validator_clone.validate_block_with_options(
+                                            &block,
+                                            &best_hash,
+                                            next_height,
+                                            true,
+                                            emission_w,
+                                        ) {
+                                            if let Ok(is_new_best) =
+                                                chain_clone.store_block(&block).await
+                                            {
                                                 if is_new_best {
                                                     blocks_applied += 1;
                                                     debug!(block_height = block.header.height, version = %buffer_version_info, "buffered block applied");
+
                                                     let new_height = block.header.height;
                                                     let new_hash = block.header.hash();
-                                                    let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::UpdateChainState {
-                                                        best_height: new_height,
-                                                        best_hash: new_hash,
-                                                    });
-                                                    let _ = Self::apply_block_transactions(
+                                                    let cum =
+                                                        chain_clone.best_cumulative_work().await;
+                                                    let _ = cpp_network_cmd_tx_for_events.send(
+                                                        CppNetworkCommand::UpdateChainState {
+                                                            best_height: new_height,
+                                                            best_hash: new_hash,
+                                                            cumulative_work: cum,
+                                                        },
+                                                    );
+                                                    if Self::apply_block_transactions(
                                                         &block,
                                                         &state_clone,
                                                         &timelock_state_clone,
@@ -1088,7 +1397,16 @@ impl CoinjectNode {
                                                         &trustline_state_clone,
                                                         &dimensional_pool_state_clone,
                                                         &marketplace_state_clone,
-                                                    );
+                                                    )
+                                                    .is_ok()
+                                                    {
+                                                        CoinjectNode::retarget_header_pow_from_stored_block(
+                                                            &miner_clone,
+                                                            &chain_clone,
+                                                            &block,
+                                                        )
+                                                        .await;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1105,14 +1423,14 @@ impl CoinjectNode {
 
                         // Check if we need to request more blocks (continuation)
                         let current_height = chain_clone.best_block_height().await;
-                        let peer_height = peer_consensus_clone.get_peer_height(&hex::encode(peer_id)).await.unwrap_or(0);
+                        let peer_height = peer_consensus_clone
+                            .get_peer_height(&hex::encode(peer_id))
+                            .await
+                            .unwrap_or(0);
 
                         info!(
                             blocks_applied,
-                            blocks_rejected_version,
-                            current_height,
-                            peer_height,
-                            "sync progress"
+                            blocks_rejected_version, current_height, peer_height, "sync progress"
                         );
 
                         let expected_height = current_height + 1;
@@ -1138,7 +1456,32 @@ impl CoinjectNode {
                                 Some(&network_cmd_tx_for_events),
                                 Some(&cpp_network_cmd_tx_for_events),
                                 &peer_consensus_clone,
-                            ).await;
+                            )
+                            .await;
+
+                            // After reorg attempt, schedule a delayed sync continuation so we re-request
+                            // blocks instead of waiting only for the next periodic tick. Use the max of
+                            // tracker height and this batch's highest block so we still request when
+                            // peer_height is briefly stale. The delay lets in-flight reorg work finish
+                            // and avoids tight-looping the bootnode rate limiter.
+                            let effective_peer_tip = peer_height.max(highest_received);
+                            if effective_peer_tip > current_height {
+                                let delayed_from = current_height + 1;
+                                let delayed_to = effective_peer_tip.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
+                                if delayed_from <= delayed_to {
+                                    let cpp_tx = cpp_network_cmd_tx_for_events.clone();
+                                    let peer_id_delayed = peer_id;
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(Duration::from_secs(5)).await;
+                                        let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+                                            peer_id: peer_id_delayed,
+                                            from_height: delayed_from,
+                                            to_height: delayed_to,
+                                            request_id: rand::random(),
+                                        });
+                                    });
+                                }
+                            }
                         }
 
                         if peer_height > current_height {
@@ -1154,12 +1497,14 @@ impl CoinjectNode {
                                     peer_id = %hex::encode(peer_id),
                                     "requesting continuation blocks"
                                 );
-                                let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
-                                    peer_id,
-                                    from_height,
-                                    to_height,
-                                    request_id: rand::random(),
-                                });
+                                let _ = cpp_network_cmd_tx_for_events.send(
+                                    CppNetworkCommand::RequestBlocks {
+                                        peer_id,
+                                        from_height,
+                                        to_height,
+                                        request_id: rand::random(),
+                                    },
+                                );
                             } else {
                                 warn!(
                                     peer_id = %hex::encode(peer_id),
@@ -1171,8 +1516,28 @@ impl CoinjectNode {
                             }
                         }
                     }
-                    CppNetworkEvent::PeerConnected { peer_id, addr, node_type: _, best_height, best_hash } => {
+                    CppNetworkEvent::PeerConnected {
+                        peer_id,
+                        addr,
+                        node_type: _,
+                        best_height,
+                        best_hash,
+                    } => {
                         info!(peer_id = %hex::encode(peer_id), addr = %addr, "peer connected");
+                        let peer_key = hex::encode(peer_id);
+                        {
+                            let mut dir = peer_directory_clone.write().await;
+                            dir.insert(
+                                peer_key.clone(),
+                                NetworkPeerInfo {
+                                    peer_id: peer_key,
+                                    address: addr.to_string(),
+                                    best_height,
+                                    best_hash: format!("{}", best_hash),
+                                    cumulative_work: "0".to_string(),
+                                },
+                            );
+                        }
                         // Update peer count
                         {
                             let mut count = peer_count_clone.write().await;
@@ -1182,7 +1547,9 @@ impl CoinjectNode {
                         // Update peer consensus tracker
                         let peer_id_str = hex::encode(peer_id);
                         let best_hash_bytes: [u8; 32] = *best_hash.as_bytes();
-                        peer_consensus_clone.update_peer(peer_id_str, best_height, best_hash_bytes).await;
+                        peer_consensus_clone
+                            .update_peer(peer_id_str, best_height, best_hash_bytes, 0)
+                            .await;
                         // Update best known peer height
                         {
                             let mut best_height_guard = best_known_peer_height_clone.write().await;
@@ -1195,7 +1562,7 @@ impl CoinjectNode {
                         let current_height = chain_clone.best_block_height().await;
                         let median_height = peer_consensus_clone.median_peer_height().await;
                         let sync_threshold = peer_consensus_clone.sync_threshold_blocks();
-                        
+
                         // Check if we're behind the median peer height by more than sync_threshold
                         // This is more robust than checking individual peer heights
                         if current_height + sync_threshold < median_height {
@@ -1211,27 +1578,41 @@ impl CoinjectNode {
                                 to_height,
                                 "behind median peer height, requesting sync blocks"
                             );
-                            let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
-                                peer_id,
-                                from_height,
-                                to_height,
-                                request_id: rand::random(),
-                            });
+                            let _ = cpp_network_cmd_tx_for_events.send(
+                                CppNetworkCommand::RequestBlocks {
+                                    peer_id,
+                                    from_height,
+                                    to_height,
+                                    request_id: rand::random(),
+                                },
+                            );
                         } else if best_height > current_height {
                             // Fallback: if this specific peer is ahead (but median check didn't trigger)
                             let from_height = current_height + 1;
                             let to_height = best_height.min(current_height + 100);
-                            debug!(peer_height = best_height, current_height, from_height, to_height, "peer is ahead, requesting sync blocks");
-                            let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
-                                peer_id,
+                            debug!(
+                                peer_height = best_height,
+                                current_height,
                                 from_height,
                                 to_height,
-                                request_id: rand::random(),
-                            });
+                                "peer is ahead, requesting sync blocks"
+                            );
+                            let _ = cpp_network_cmd_tx_for_events.send(
+                                CppNetworkCommand::RequestBlocks {
+                                    peer_id,
+                                    from_height,
+                                    to_height,
+                                    request_id: rand::random(),
+                                },
+                            );
                         }
                     }
                     CppNetworkEvent::PeerDisconnected { peer_id, reason: _ } => {
                         info!(peer_id = %hex::encode(peer_id), "peer disconnected");
+                        {
+                            let mut dir = peer_directory_clone.write().await;
+                            dir.remove(&hex::encode(peer_id));
+                        }
                         // Update peer count
                         {
                             let mut count = peer_count_clone.write().await;
@@ -1242,22 +1623,50 @@ impl CoinjectNode {
                         }
                         // Mark peer as disconnected in consensus tracker
                         let peer_id_str = hex::encode(peer_id);
-                        peer_consensus_clone.mark_peer_disconnected(&peer_id_str).await;
+                        peer_consensus_clone
+                            .mark_peer_disconnected(&peer_id_str)
+                            .await;
                     }
-                    CppNetworkEvent::StatusUpdate { peer_id, best_height, best_hash, node_type: _node_type } => {
-                        debug!(peer_id = %hex::encode(peer_id), best_height, best_hash = ?best_hash, "status update received");
+                    CppNetworkEvent::StatusUpdate {
+                        peer_id,
+                        best_height,
+                        best_hash,
+                        node_type: _node_type,
+                        cumulative_work,
+                    } => {
+                        debug!(peer_id = %hex::encode(peer_id), best_height, best_hash = ?best_hash, cumulative_work, "status update received");
+
+                        {
+                            let peer_key = hex::encode(peer_id);
+                            let mut dir = peer_directory_clone.write().await;
+                            let entry = dir.entry(peer_key.clone()).or_insert(NetworkPeerInfo {
+                                peer_id: peer_key.clone(),
+                                address: String::new(),
+                                best_height: 0,
+                                best_hash: String::new(),
+                                cumulative_work: "0".to_string(),
+                            });
+                            entry.best_height = best_height;
+                            entry.best_hash = format!("{}", best_hash);
+                            entry.cumulative_work = format!("{}", cumulative_work);
+                        }
 
                         // Update peer consensus tracker
                         let peer_id_str = hex::encode(peer_id);
                         let hash_bytes: [u8; 32] = *best_hash.as_bytes();
-                        peer_consensus_clone.update_peer(peer_id_str, best_height, hash_bytes).await;
+                        peer_consensus_clone
+                            .update_peer(peer_id_str, best_height, hash_bytes, cumulative_work)
+                            .await;
 
                         // Update best known peer height
                         {
                             let mut best_height_guard = best_known_peer_height_clone.write().await;
                             if best_height > *best_height_guard {
                                 *best_height_guard = best_height;
-                                debug!(best_known_peer_height = best_height, "best known peer height updated");
+                                debug!(
+                                    best_known_peer_height = best_height,
+                                    "best known peer height updated"
+                                );
                             }
                         }
 
@@ -1267,15 +1676,26 @@ impl CoinjectNode {
                             let from_height = current_height + 1;
                             // Request up to 100 blocks at a time, capped by MAX_BLOCKS_PER_RESPONSE (16)
                             let to_height = best_height.min(current_height + 100);
-                            debug!(peer_height = best_height, current_height, from_height, to_height, "peer ahead, requesting sync blocks");
-                            let _ = cpp_network_cmd_tx_for_events.send(CppNetworkCommand::RequestBlocks {
-                                peer_id,
+                            debug!(
+                                peer_height = best_height,
+                                current_height,
                                 from_height,
                                 to_height,
-                                request_id: rand::random(),
-                            });
+                                "peer ahead, requesting sync blocks"
+                            );
+                            let _ = cpp_network_cmd_tx_for_events.send(
+                                CppNetworkCommand::RequestBlocks {
+                                    peer_id,
+                                    from_height,
+                                    to_height,
+                                    request_id: rand::random(),
+                                },
+                            );
                         } else {
-                            debug!(peer_height = best_height, current_height, "in sync with peer");
+                            debug!(
+                                peer_height = best_height,
+                                current_height, "in sync with peer"
+                            );
                         }
                     }
                     _ => {
@@ -1284,12 +1704,14 @@ impl CoinjectNode {
                 }
             }
         });
-        
+
         // ─── Mesh Network (optional parallel transport) ────────────────────
         if self.config.enable_mesh {
             info!("starting mesh network");
 
-            let mesh_listen_addr: std::net::SocketAddr = self.config.mesh_listen
+            let mesh_listen_addr: std::net::SocketAddr = self
+                .config
+                .mesh_listen
                 .parse()
                 .map_err(|e| format!("Invalid mesh listen address: {}", e))?;
 
@@ -1314,8 +1736,10 @@ impl CoinjectNode {
                     let mesh_cmd_tx = mesh_service.command_sender();
 
                     // Create bridge channels
-                    let (bridge_cmd_tx, bridge_cmd_rx) = mpsc::unbounded_channel::<coinject_network::MeshBridgeCommand>();
-                    let (bridge_event_tx, mut bridge_event_rx) = mpsc::unbounded_channel::<coinject_network::MeshBridgeEvent>();
+                    let (bridge_cmd_tx, bridge_cmd_rx) =
+                        mpsc::unbounded_channel::<coinject_network::MeshBridgeCommand>();
+                    let (bridge_event_tx, mut bridge_event_rx) =
+                        mpsc::unbounded_channel::<coinject_network::MeshBridgeEvent>();
 
                     // Create bridge state with current chain tip
                     let bridge_state = Arc::new(RwLock::new(coinject_network::MeshBridgeState {
@@ -1333,7 +1757,8 @@ impl CoinjectNode {
                             mesh_cmd_tx,
                             mesh_event_rx,
                             bridge_state_clone,
-                        ).await;
+                        )
+                        .await;
                     });
 
                     // Forward mined blocks to mesh (clone of bridge_cmd_tx for mining)
@@ -1342,19 +1767,23 @@ impl CoinjectNode {
 
                     // ── Epoch Coordinator (optional, alongside mesh) ─────
                     // Create coordinator channels
-                    let (coord_cmd_tx, coord_cmd_rx) = mpsc::unbounded_channel::<coinject_consensus::CoordinatorCommand>();
-                    let (coord_event_tx, mut coord_event_rx) = mpsc::unbounded_channel::<coinject_consensus::CoordinatorEvent>();
+                    let (coord_cmd_tx, coord_cmd_rx) =
+                        mpsc::unbounded_channel::<coinject_consensus::CoordinatorCommand>();
+                    let (coord_event_tx, mut coord_event_rx) =
+                        mpsc::unbounded_channel::<coinject_consensus::CoordinatorEvent>();
 
                     // Use mesh node identity as coordinator ID
                     let coord_node_id: [u8; 32] = mesh_service.local_id().0;
 
                     let coord_config = coinject_consensus::CoordinatorConfig::default();
-                    let (coordinator, _coord_shared_state) = coinject_consensus::EpochCoordinator::new(
-                        coord_node_id,
-                        coord_config,
-                        current_height,
-                        current_hash,
-                    );
+                    let (coordinator, _coord_shared_state) =
+                        coinject_consensus::EpochCoordinator::new(
+                            coord_node_id,
+                            coord_config,
+                            current_height,
+                            current_hash,
+                            current_tip_cumulative_work,
+                        );
 
                     // Spawn coordinator task
                     tokio::spawn(async move {
@@ -1371,14 +1800,27 @@ impl CoinjectNode {
                     tokio::spawn(async move {
                         while let Some(event) = coord_event_rx.recv().await {
                             match event {
-                                coinject_consensus::CoordinatorEvent::BroadcastSalt { epoch, salt } => {
-                                    tracing::info!(epoch, "coordinator: broadcasting salt via mesh");
+                                coinject_consensus::CoordinatorEvent::BroadcastSalt {
+                                    epoch,
+                                    salt,
+                                } => {
+                                    tracing::info!(
+                                        epoch,
+                                        "coordinator: broadcasting salt via mesh"
+                                    );
                                     let _ = bridge_cmd_for_coord.send(
                                         coinject_network::MeshBridgeCommand::BroadcastConsensusSalt { epoch, salt }
                                     );
                                 }
-                                coinject_consensus::CoordinatorEvent::BroadcastCommit { epoch, solution_hash, work_score } => {
-                                    tracing::info!(epoch, "coordinator: broadcasting commit via mesh");
+                                coinject_consensus::CoordinatorEvent::BroadcastCommit {
+                                    epoch,
+                                    solution_hash,
+                                    work_score,
+                                } => {
+                                    tracing::info!(
+                                        epoch,
+                                        "coordinator: broadcasting commit via mesh"
+                                    );
                                     let _ = bridge_cmd_for_coord.send(
                                         coinject_network::MeshBridgeCommand::BroadcastCommit {
                                             epoch,
@@ -1386,33 +1828,61 @@ impl CoinjectNode {
                                             node_id: coord_node_id,
                                             work_score,
                                             signature: Vec::new(),
-                                        }
+                                        },
                                     );
                                 }
-                                coinject_consensus::CoordinatorEvent::EpochStarted { epoch, leader, .. } => {
-                                    tracing::info!(epoch, leader = hex::encode(&leader[..4]), "coordinator: epoch started");
+                                coinject_consensus::CoordinatorEvent::EpochStarted {
+                                    epoch,
+                                    leader,
+                                    ..
+                                } => {
+                                    tracing::info!(
+                                        epoch,
+                                        leader = hex::encode(&leader[..4]),
+                                        "coordinator: epoch started"
+                                    );
                                 }
-                                coinject_consensus::CoordinatorEvent::MinePhaseStarted { epoch, .. } => {
+                                coinject_consensus::CoordinatorEvent::MinePhaseStarted {
+                                    epoch,
+                                    ..
+                                } => {
                                     tracing::info!(epoch, "coordinator: mine phase started");
                                 }
-                                coinject_consensus::CoordinatorEvent::CommitPhaseStarted { epoch } => {
+                                coinject_consensus::CoordinatorEvent::CommitPhaseStarted {
+                                    epoch,
+                                } => {
                                     tracing::info!(epoch, "coordinator: commit phase started");
                                 }
-                                coinject_consensus::CoordinatorEvent::EpochSealed { epoch, winner, work_score, commit_count } => {
+                                coinject_consensus::CoordinatorEvent::EpochSealed {
+                                    epoch,
+                                    winner,
+                                    work_score,
+                                    commit_count,
+                                } => {
                                     tracing::info!(
-                                        epoch, winner = hex::encode(&winner[..4]),
-                                        work_score, commit_count,
+                                        epoch,
+                                        winner = hex::encode(&winner[..4]),
+                                        work_score,
+                                        commit_count,
                                         "coordinator: epoch sealed"
                                     );
                                 }
-                                coinject_consensus::CoordinatorEvent::EpochStalled { epoch, phase, reason } => {
+                                coinject_consensus::CoordinatorEvent::EpochStalled {
+                                    epoch,
+                                    phase,
+                                    reason,
+                                } => {
                                     tracing::warn!(epoch, phase = %phase, reason = %reason, "coordinator: epoch stalled");
                                 }
-                                coinject_consensus::CoordinatorEvent::BlockProduced { block, epoch } => {
+                                coinject_consensus::CoordinatorEvent::BlockProduced {
+                                    block,
+                                    epoch,
+                                } => {
                                     let block_hash = block.header.hash();
                                     let height = block.header.height;
                                     tracing::info!(
-                                        epoch, height,
+                                        epoch,
+                                        height,
                                         hash = hex::encode(&block_hash.as_bytes()[..4]),
                                         "coordinator: block produced, broadcasting via mesh"
                                     );
@@ -1442,11 +1912,15 @@ impl CoinjectNode {
                     let cpp_cmd_for_mesh = cpp_network_cmd_tx.clone();
                     let bridge_state_for_events = Arc::clone(&bridge_state);
                     let coord_cmd_for_events = coord_cmd_tx.clone();
+                    let miner_for_mesh = self.miner.clone();
 
                     tokio::spawn(async move {
                         while let Some(event) = bridge_event_rx.recv().await {
                             match event {
-                                coinject_network::MeshBridgeEvent::BlockReceived { block, peer_id } => {
+                                coinject_network::MeshBridgeEvent::BlockReceived {
+                                    block,
+                                    peer_id,
+                                } => {
                                     let height = block.header.height;
                                     tracing::info!(height, peer = %peer_id.short(), "mesh: block received");
 
@@ -1455,7 +1929,11 @@ impl CoinjectNode {
                                     let expected_height = best_height + 1;
 
                                     if height != expected_height {
-                                        tracing::debug!(height, expected_height, "mesh: unexpected block height");
+                                        tracing::debug!(
+                                            height,
+                                            expected_height,
+                                            "mesh: unexpected block height"
+                                        );
                                         continue;
                                     }
 
@@ -1464,50 +1942,90 @@ impl CoinjectNode {
                                         continue;
                                     }
 
-                                    match validator_for_mesh.validate_block_with_options(&block, &best_hash, expected_height, false) {
+                                    let emission_w = if block.header.height == 0 {
+                                        None
+                                    } else {
+                                        match chain_for_mesh
+                                            .cumulative_work_at_tip_hash(block.header.prev_hash)
+                                        {
+                                            Ok(w) => Some(w),
+                                            Err(e) => {
+                                                tracing::warn!(height, error = %e, "mesh: emission parent work");
+                                                continue;
+                                            }
+                                        }
+                                    };
+
+                                    match validator_for_mesh.validate_block_with_options(
+                                        &block,
+                                        &best_hash,
+                                        expected_height,
+                                        false,
+                                        emission_w,
+                                    ) {
                                         Ok(()) => {
                                             match chain_for_mesh.store_block(&block).await {
                                                 Ok(is_new_best) => {
                                                     if is_new_best {
-                                                        tracing::info!(height, "mesh: block stored as new best");
+                                                        tracing::info!(
+                                                            height,
+                                                            "mesh: block stored as new best"
+                                                        );
                                                         let new_hash = block.header.hash();
 
                                                         // Apply state transitions
-                                                        if let Err(e) = CoinjectNode::apply_block_transactions(
-                                                            &block,
-                                                            &state_for_mesh,
-                                                            &timelock_for_mesh,
-                                                            &escrow_for_mesh,
-                                                            &channel_for_mesh,
-                                                            &trustline_for_mesh,
-                                                            &dim_pool_for_mesh,
-                                                            &marketplace_for_mesh,
-                                                        ) {
+                                                        if let Err(e) =
+                                                            CoinjectNode::apply_block_transactions(
+                                                                &block,
+                                                                &state_for_mesh,
+                                                                &timelock_for_mesh,
+                                                                &escrow_for_mesh,
+                                                                &channel_for_mesh,
+                                                                &trustline_for_mesh,
+                                                                &dim_pool_for_mesh,
+                                                                &marketplace_for_mesh,
+                                                            )
+                                                        {
                                                             tracing::warn!(height, error = %e, "mesh: apply txs failed");
                                                         } else {
+                                                            CoinjectNode::retarget_header_pow_from_stored_block(
+                                                                &miner_for_mesh,
+                                                                &chain_for_mesh,
+                                                                &block,
+                                                            )
+                                                            .await;
                                                             // Remove applied txs from pool
-                                                            let mut pool = tx_pool_for_mesh.write().await;
+                                                            let mut pool =
+                                                                tx_pool_for_mesh.write().await;
                                                             for tx in &block.transactions {
                                                                 pool.remove(&tx.hash());
                                                             }
                                                         }
 
                                                         // Update bridge state
-                                                        let mut bs = bridge_state_for_events.write().await;
+                                                        let mut bs =
+                                                            bridge_state_for_events.write().await;
                                                         bs.best_height = height;
                                                         bs.best_hash = new_hash;
 
                                                         // Update CPP with new chain state
-                                                        let _ = cpp_cmd_for_mesh.send(CppNetworkCommand::UpdateChainState {
-                                                            best_height: height,
-                                                            best_hash: new_hash,
-                                                        });
+                                                        let cum = chain_for_mesh
+                                                            .best_cumulative_work()
+                                                            .await;
+                                                        let _ = cpp_cmd_for_mesh.send(
+                                                            CppNetworkCommand::UpdateChainState {
+                                                                best_height: height,
+                                                                best_hash: new_hash,
+                                                                cumulative_work: cum,
+                                                            },
+                                                        );
 
                                                         // Update coordinator chain tip
                                                         let _ = coord_cmd_for_events.send(
                                                             coinject_consensus::CoordinatorCommand::ChainTipUpdated {
                                                                 height,
                                                                 hash: new_hash,
+                                                                best_cumulative_work: cum,
                                                             }
                                                         );
                                                     }
@@ -1522,27 +2040,49 @@ impl CoinjectNode {
                                         }
                                     }
                                 }
-                                coinject_network::MeshBridgeEvent::TransactionReceived { transaction, peer_id } => {
+                                coinject_network::MeshBridgeEvent::TransactionReceived {
+                                    transaction,
+                                    peer_id,
+                                } => {
                                     tracing::debug!(peer = %peer_id.short(), "mesh: transaction received");
                                     let mut pool = tx_pool_for_mesh.write().await;
                                     let _ = pool.add(transaction);
                                 }
-                                coinject_network::MeshBridgeEvent::PeerConnected { peer_id, best_height, .. } => {
+                                coinject_network::MeshBridgeEvent::PeerConnected {
+                                    peer_id,
+                                    best_height,
+                                    ..
+                                } => {
                                     tracing::info!(peer = %peer_id.short(), best_height, "mesh: peer connected");
                                     let _ = coord_cmd_for_events.send(
-                                        coinject_consensus::CoordinatorCommand::PeerJoined { node_id: peer_id.0 }
+                                        coinject_consensus::CoordinatorCommand::PeerJoined {
+                                            node_id: peer_id.0,
+                                        },
                                     );
                                 }
-                                coinject_network::MeshBridgeEvent::PeerDisconnected { peer_id, reason } => {
+                                coinject_network::MeshBridgeEvent::PeerDisconnected {
+                                    peer_id,
+                                    reason,
+                                } => {
                                     tracing::info!(peer = %peer_id.short(), reason = %reason, "mesh: peer disconnected");
                                     let _ = coord_cmd_for_events.send(
-                                        coinject_consensus::CoordinatorCommand::PeerLeft { node_id: peer_id.0 }
+                                        coinject_consensus::CoordinatorCommand::PeerLeft {
+                                            node_id: peer_id.0,
+                                        },
                                     );
                                 }
-                                coinject_network::MeshBridgeEvent::StatusUpdate { peer_id, best_height, .. } => {
+                                coinject_network::MeshBridgeEvent::StatusUpdate {
+                                    peer_id,
+                                    best_height,
+                                    ..
+                                } => {
                                     tracing::debug!(peer = %peer_id.short(), best_height, "mesh: status update");
                                 }
-                                coinject_network::MeshBridgeEvent::BlocksReceived { blocks, request_id, peer_id } => {
+                                coinject_network::MeshBridgeEvent::BlocksReceived {
+                                    blocks,
+                                    request_id,
+                                    peer_id,
+                                } => {
                                     tracing::info!(
                                         count = blocks.len(), request_id,
                                         peer = %peer_id.short(), "mesh: sync blocks received"
@@ -1551,7 +2091,19 @@ impl CoinjectNode {
                                         let height = block.header.height;
                                         let best_hash = chain_for_mesh.best_block_hash().await;
                                         let expected = chain_for_mesh.best_block_height().await + 1;
-                                        match validator_for_mesh.validate_block_with_options(&block, &best_hash, expected, false) {
+                                        let emission_w = if block.header.height == 0 {
+                                            None
+                                        } else {
+                                            match chain_for_mesh
+                                                .cumulative_work_at_tip_hash(block.header.prev_hash)
+                                            {
+                                                Ok(w) => Some(w),
+                                                Err(_) => continue,
+                                            }
+                                        };
+                                        match validator_for_mesh.validate_block_with_options(
+                                            &block, &best_hash, expected, false, emission_w,
+                                        ) {
                                             Ok(()) => {
                                                 match chain_for_mesh.store_block(&block).await {
                                                     Ok(is_new_best) => {
@@ -1567,28 +2119,48 @@ impl CoinjectNode {
                                                                 &marketplace_for_mesh,
                                                             ) {
                                                                 tracing::warn!(height, error = %e, "mesh: sync apply failed");
+                                                            } else {
+                                                                CoinjectNode::retarget_header_pow_from_stored_block(
+                                                                    &miner_for_mesh,
+                                                                    &chain_for_mesh,
+                                                                    &block,
+                                                                )
+                                                                .await;
                                                             }
                                                         }
                                                     }
-                                                    Err(e) => tracing::warn!(height, error = %e, "mesh: sync store failed"),
+                                                    Err(e) => {
+                                                        tracing::warn!(height, error = %e, "mesh: sync store failed")
+                                                    }
                                                 }
                                             }
-                                            Err(e) => tracing::warn!(height, error = ?e, "mesh: sync block invalid"),
+                                            Err(e) => {
+                                                tracing::warn!(height, error = ?e, "mesh: sync block invalid")
+                                            }
                                         }
                                     }
                                 }
                                 // ── Consensus payloads → Coordinator ─────────────
-                                coinject_network::MeshBridgeEvent::ConsensusSaltReceived { epoch, salt, from } => {
+                                coinject_network::MeshBridgeEvent::ConsensusSaltReceived {
+                                    epoch,
+                                    salt,
+                                    from,
+                                } => {
                                     tracing::debug!(epoch, peer = %from.short(), "mesh: consensus salt received");
                                     let _ = coord_cmd_for_events.send(
                                         coinject_consensus::CoordinatorCommand::SaltReceived {
                                             epoch,
                                             salt,
                                             from: from.0,
-                                        }
+                                        },
                                     );
                                 }
-                                coinject_network::MeshBridgeEvent::ConsensusCommitReceived { epoch, block_hash: _, commits, from } => {
+                                coinject_network::MeshBridgeEvent::ConsensusCommitReceived {
+                                    epoch,
+                                    block_hash: _,
+                                    commits,
+                                    from,
+                                } => {
                                     tracing::debug!(epoch, peer = %from.short(), "mesh: consensus commit received");
                                     for commit in commits {
                                         let _ = coord_cmd_for_events.send(
@@ -1630,13 +2202,15 @@ impl CoinjectNode {
         }
 
         // Initialize WebSocket RPC
-        let ws_addr: std::net::SocketAddr = self.config.cpp_ws_addr
+        let ws_addr: std::net::SocketAddr = self
+            .config
+            .cpp_ws_addr
             .parse()
             .map_err(|e| format!("Invalid WebSocket address: {}", e))?;
-        
-        let (websocket_rpc, websocket_rpc_cmd_tx, mut websocket_rpc_event_rx) = 
+
+        let (websocket_rpc, websocket_rpc_cmd_tx, mut websocket_rpc_event_rx) =
             WebSocketRpc::new(ws_addr);
-        
+
         // Spawn WebSocket RPC task
         let ws_addr_clone = self.config.cpp_ws_addr.clone();
         tokio::spawn(async move {
@@ -1650,20 +2224,28 @@ impl CoinjectNode {
                 }
             }
         });
-        
+
         // Spawn WebSocket RPC event handler
         let tx_pool_clone2 = Arc::clone(&self.tx_pool);
         tokio::spawn(async move {
             while let Some(event) = websocket_rpc_event_rx.recv().await {
                 match event {
-                    WebSocketRpcEvent::WorkSubmitted { client_id: _, work_id: _, solution: _, nonce: _ } => {
+                    WebSocketRpcEvent::WorkSubmitted {
+                        client_id: _,
+                        work_id: _,
+                        solution: _,
+                        nonce: _,
+                    } => {
                         // TODO: Validate and process PoW submission
                         debug!("websocket rpc: work submission received");
                     }
-                    WebSocketRpcEvent::TransactionSubmitted { transaction, client_id: _ } => {
+                    WebSocketRpcEvent::TransactionSubmitted {
+                        transaction,
+                        client_id: _,
+                    } => {
                         // TODO: Add transaction to pool
                         let mut pool = tx_pool_clone2.write().await;
-                        let _ = pool.add(transaction);
+                        let _ = pool.add(*transaction);
                     }
                     _ => {
                         // Handle other events
@@ -1671,10 +2253,10 @@ impl CoinjectNode {
                 }
             }
         });
-        
+
         self.cpp_network_cmd_tx = Some(cpp_network_cmd_tx_for_storage);
         self.websocket_rpc_cmd_tx = Some(websocket_rpc_cmd_tx);
-        
+
         info!(
             cpp_p2p_addr = %self.config.cpp_p2p_addr,
             ws_addr = %self.config.cpp_ws_addr,
@@ -1684,26 +2266,112 @@ impl CoinjectNode {
         // libp2p network task removed - using CPP protocol only
         // Legacy NetworkCommand channel kept for compatibility but commands are routed to CPP network
         let cpp_network_cmd_tx_for_legacy = cpp_network_cmd_tx.clone();
+        let peer_consensus_for_legacy = Arc::clone(&peer_consensus);
         let mut network_cmd_rx_for_legacy = _network_cmd_rx;
         tokio::spawn(async move {
             while let Some(cmd) = network_cmd_rx_for_legacy.recv().await {
                 // Route legacy NetworkCommand to CPP network
                 match cmd {
                     NetworkCommand::BroadcastBlock(block) => {
-                        debug!(block_height = block.header.height, "forwarding broadcast block to cpp");
+                        debug!(
+                            block_height = block.header.height,
+                            "forwarding broadcast block to cpp"
+                        );
                         // Route to CPP network
-                        if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
-                            CppNetworkCommand::BroadcastBlock { block }
-                        ) {
+                        if let Err(e) = cpp_network_cmd_tx_for_legacy
+                            .send(CppNetworkCommand::BroadcastBlock { block })
+                        {
                             error!(error = %e, "failed to broadcast block via cpp");
                         }
                     }
                     NetworkCommand::BroadcastTransaction(tx) => {
                         // Route to CPP network
-                        if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
-                            CppNetworkCommand::BroadcastTransaction { transaction: tx }
-                        ) {
+                        if let Err(e) = cpp_network_cmd_tx_for_legacy
+                            .send(CppNetworkCommand::BroadcastTransaction { transaction: tx })
+                        {
                             error!(error = %e, "failed to broadcast transaction via cpp");
+                        }
+                    }
+                    NetworkCommand::RequestBlocks {
+                        from_height,
+                        to_height,
+                    } => {
+                        // Fork/sync gap-fill and block_processing used to send this into a dead-end.
+                        // Route to CPP using the same peer pick as fork recovery: heaviest chain work, then height.
+                        let active_peers = peer_consensus_for_legacy.active_peers().await;
+                        if active_peers.is_empty() {
+                            warn!(
+                                from_height,
+                                to_height,
+                                "legacy RequestBlocks: no active CPP peers; will retry when mesh connects"
+                            );
+                            continue;
+                        }
+                        if let Some((peer_id_str, peer_state)) =
+                            active_peers.iter().max_by(|(_, a), (_, b)| {
+                                a.cumulative_work
+                                    .cmp(&b.cumulative_work)
+                                    .then_with(|| a.best_height.cmp(&b.best_height))
+                            })
+                        {
+                            if let Ok(peer_id_bytes) = hex::decode(peer_id_str) {
+                                if peer_id_bytes.len() == 32 {
+                                    let mut peer_id = [0u8; 32];
+                                    peer_id.copy_from_slice(&peer_id_bytes[..32]);
+                                    let request_id: u64 = rand::random();
+                                    debug!(
+                                        from_height,
+                                        to_height,
+                                        peer = &peer_id_str[..peer_id_str.len().min(16)],
+                                        peer_height = peer_state.best_height,
+                                        "routing legacy RequestBlocks to cpp"
+                                    );
+                                    if let Err(e) = cpp_network_cmd_tx_for_legacy.send(
+                                        CppNetworkCommand::RequestBlocks {
+                                            peer_id,
+                                            from_height,
+                                            to_height,
+                                            request_id,
+                                        },
+                                    ) {
+                                        error!(
+                                            error = %e,
+                                            from_height,
+                                            to_height,
+                                            "failed to send cpp RequestBlocks from legacy channel"
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        peer_len = peer_id_bytes.len(),
+                                        "legacy RequestBlocks: bad peer id length"
+                                    );
+                                }
+                            } else {
+                                warn!(peer = %peer_id_str, "legacy RequestBlocks: peer id hex decode failed");
+                            }
+                        }
+                    }
+                    NetworkCommand::RequestBlocksRR {
+                        peer,
+                        from_height,
+                        to_height,
+                    } => {
+                        let request_id: u64 = rand::random();
+                        if let Err(e) =
+                            cpp_network_cmd_tx_for_legacy.send(CppNetworkCommand::RequestBlocks {
+                                peer_id: peer,
+                                from_height,
+                                to_height,
+                                request_id,
+                            })
+                        {
+                            error!(
+                                error = %e,
+                                from_height,
+                                to_height,
+                                "failed to send cpp RequestBlocks from RequestBlocksRR"
+                            );
                         }
                     }
                     _ => {
@@ -1718,7 +2386,7 @@ impl CoinjectNode {
         // CPP network handles status updates internally
         // TODO: Re-enable with CPP network status broadcasting
 
-        // Spawn periodic reorganization check task (every 60 seconds)
+        // Spawn periodic reorganization check task (every 15 seconds)
         let chain_periodic = Arc::clone(&self.chain);
         let state_periodic = Arc::clone(&self.state);
         let timelock_periodic = Arc::clone(&self.timelock_state);
@@ -1732,9 +2400,10 @@ impl CoinjectNode {
         let network_tx_periodic = network_cmd_tx.clone();
         let cpp_network_cmd_tx_periodic = cpp_network_cmd_tx.clone();
         let peer_consensus_periodic = Arc::clone(&peer_consensus);
+        let is_syncing_periodic = Arc::clone(&is_syncing);
 
         tokio::spawn(async move {
-            let mut interval = time::interval(Duration::from_secs(60)); // Check every minute
+            let mut interval = time::interval(Duration::from_secs(15));
             loop {
                 interval.tick().await;
                 debug!("periodic reorganization check triggered");
@@ -1752,7 +2421,17 @@ impl CoinjectNode {
                     Some(&network_tx_periodic),
                     Some(&cpp_network_cmd_tx_periodic),
                     &peer_consensus_periodic,
-                ).await;
+                )
+                .await;
+
+                let cur = chain_periodic.best_block_height().await;
+                let median = peer_consensus_periodic.median_peer_height().await;
+                let best_ph = peer_consensus_periodic.best_peer_height().await;
+                let thresh = peer_consensus_periodic.sync_threshold_blocks();
+                let behind_median = cur.saturating_add(thresh) < median;
+                let behind_best_peer = cur.saturating_add(thresh) < best_ph;
+                let syncing = behind_median || behind_best_peer;
+                *is_syncing_periodic.write().await = syncing;
             }
         });
 
@@ -1779,7 +2458,8 @@ impl CoinjectNode {
                 let unlock_fractions = dimensional_pool_state_for_metrics.get_unlock_fractions();
                 let yield_rates = dimensional_pool_state_for_metrics.get_yield_rates();
 
-                for pool_id in 1..=8 {  // All 8 pools: D1-D8
+                for pool_id in 1..=8 {
+                    // All 8 pools: D1-D8
                     let pool = match pool_id {
                         1 => DimensionalPool::D1,
                         2 => DimensionalPool::D2,
@@ -1792,7 +2472,9 @@ impl CoinjectNode {
                         _ => continue,
                     };
 
-                    if let Some(liquidity) = dimensional_pool_state_for_metrics.get_pool_liquidity(&pool) {
+                    if let Some(liquidity) =
+                        dimensional_pool_state_for_metrics.get_pool_liquidity(&pool)
+                    {
                         let dimension_label = format!("D{}", pool_id);
 
                         // Total balance
@@ -1837,7 +2519,9 @@ impl CoinjectNode {
                 use coinject_core::{ETA, LAMBDA, TAU_C};
 
                 // Export live consensus state (τ, |ψ|, θ) from database
-                if let Some(consensus_state) = dimensional_pool_state_for_metrics.get_current_consensus_state() {
+                if let Some(consensus_state) =
+                    dimensional_pool_state_for_metrics.get_current_consensus_state()
+                {
                     crate::metrics::CONSENSUS_TAU.set(consensus_state.tau);
                     crate::metrics::CONSENSUS_MAGNITUDE.set(consensus_state.magnitude);
                     crate::metrics::CONSENSUS_PHASE.set(consensus_state.phase);
@@ -1866,8 +2550,8 @@ impl CoinjectNode {
                     crate::metrics::LAMBDA_CONVERGENCE_ERROR.set(lambda_error);
 
                     // Update unit circle constraint: |μ|² = η² + λ² should equal 1
-                    let constraint = metrics.measured_eta * metrics.measured_eta +
-                                   metrics.measured_lambda * metrics.measured_lambda;
+                    let constraint = metrics.measured_eta * metrics.measured_eta
+                        + metrics.measured_lambda * metrics.measured_lambda;
                     crate::metrics::UNIT_CIRCLE_CONSTRAINT.set(constraint);
 
                     // Update damping coefficient: ζ = η/√2
@@ -1895,20 +2579,20 @@ impl CoinjectNode {
                 // Update classification manager with current chain height and metrics
                 {
                     let mut classification = node_classification_for_metrics.write().await;
-                    
+
                     // Update chain height for classification calculations
                     classification.update_chain_height(block_height);
-                    
+
                     // Update storage tracking (blocks stored = chain height for Full nodes)
                     // In a real implementation, this would track actual blocks stored
                     classification.local_metrics.blocks_stored = block_height;
-                    
+
                     // Update uptime (seconds since start)
                     if let Some(started) = classification.local_metrics.observation_started {
                         let uptime_secs = started.elapsed().as_secs();
                         classification.update_uptime(uptime_secs, uptime_secs);
                     }
-                    
+
                     // Attempt reclassification if enough blocks have passed
                     if let Some(result) = classification.maybe_reclassify(block_height) {
                         // Log classification change
@@ -1918,15 +2602,15 @@ impl CoinjectNode {
                             reason = %result.reason,
                             "node reclassified"
                         );
-                        
+
                         // Update classification scores in metrics
                         crate::metrics::update_node_type_scores(&result);
                     }
-                    
+
                     // Always export current classification status to Prometheus
                     let status = classification.status();
                     crate::metrics::update_node_classification(&status);
-                    
+
                     // Check if meeting target and log advice
                     if let Some((meeting_target, advice)) = classification.is_meeting_target() {
                         if !meeting_target {
@@ -1960,7 +2644,26 @@ impl CoinjectNode {
             let cpp_tx_for_mining = cpp_network_cmd_tx_for_mining;
             tokio::spawn(async move {
                 info!("mining task started");
-                Self::mining_loop(miner, chain, state, timelock_state, escrow_state, channel_state, trustline_state, dimensional_pool_state, marketplace_state, tx_pool, network_tx, cpp_tx_for_mining, hf_sync_for_mining, peer_count_for_mining, best_peer_height_for_mining, peer_consensus_for_mining, dev_mode).await;
+                Self::mining_loop(
+                    miner,
+                    chain,
+                    state,
+                    timelock_state,
+                    escrow_state,
+                    channel_state,
+                    trustline_state,
+                    dimensional_pool_state,
+                    marketplace_state,
+                    tx_pool,
+                    network_tx,
+                    cpp_tx_for_mining,
+                    hf_sync_for_mining,
+                    peer_count_for_mining,
+                    best_peer_height_for_mining,
+                    peer_consensus_for_mining,
+                    dev_mode,
+                )
+                .await;
                 warn!("mining loop exited unexpectedly");
             });
         }
@@ -1976,11 +2679,16 @@ impl CoinjectNode {
                     // Use blocking sleep to avoid tokio timer issues
                     tokio::task::spawn_blocking(|| {
                         std::thread::sleep(Duration::from_secs(120)); // Check every 2 minutes
-                    }).await.unwrap();
-                    
+                    })
+                    .await
+                    .unwrap();
+
                     let current_height = chain_for_flush.best_block_height().await;
                     if current_height > last_flush_height + 50 {
-                        debug!(blocks_since_last = current_height - last_flush_height, "huggingface periodic flush");
+                        debug!(
+                            blocks_since_last = current_height - last_flush_height,
+                            "huggingface periodic flush"
+                        );
                         if let Err(e) = hf_sync_for_flush.flush().await {
                             warn!(error = %e, "huggingface flush error");
                         }
@@ -1999,12 +2707,17 @@ impl CoinjectNode {
                     // Process confirmations every 30 seconds
                     tokio::task::spawn_blocking(|| {
                         std::thread::sleep(Duration::from_secs(30));
-                    }).await.unwrap();
+                    })
+                    .await
+                    .unwrap();
 
                     let current_height = chain_for_streamer.best_block_height().await;
 
                     // Process pending blocks for k-confirmation promotion
-                    if let Err(e) = streamer_for_task.process_confirmations(current_height).await {
+                    if let Err(e) = streamer_for_task
+                        .process_confirmations(current_height)
+                        .await
+                    {
                         warn!(error = %e, "dual-feed streamer confirmation error");
                     }
                 }

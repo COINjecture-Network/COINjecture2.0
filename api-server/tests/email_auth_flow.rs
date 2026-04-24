@@ -5,12 +5,8 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use coinjecture_api_server::{
-    build_router,
-    config::Config,
-    jwt::issue_token,
-    middleware::rate_limit::create_rate_limiter,
-    nonce_store::NonceStore,
-    AppState,
+    build_router, config::Config, jwt::issue_token, middleware::rate_limit::create_rate_limiter,
+    nonce_store::NonceStore, AppState,
 };
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -46,6 +42,7 @@ fn test_config() -> Config {
         indexer_enabled: false,
         indexer_poll_interval_secs: 5,
         indexer_confirmations: 6,
+        cors_extra_origins: vec![],
     }
 }
 
@@ -276,7 +273,12 @@ async fn test_sse_blocks_returns_event_stream() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(ct.contains("text/event-stream"));
 }
 

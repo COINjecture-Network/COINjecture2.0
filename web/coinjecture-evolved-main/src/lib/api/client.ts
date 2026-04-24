@@ -29,4 +29,49 @@ export async function apiFetch<T = any>(
   return res.json();
 }
 
+/** Unified activity row from `GET /wallet/transactions` (signed txs, receives, mining, marketplace). */
+/** Older APIs return flat `block_transactions` rows without `kind` / `label` — fields optional where needed. */
+export interface WalletActivityItem {
+  id?: string;
+  kind?: string;
+  label?: string;
+  block_height?: number;
+  block_timestamp?: string | null;
+  tx_hash?: string | null;
+  tx_index?: number | null;
+  amount?: string | null;
+  fee?: string | null;
+  /** Truncated hex address or display string */
+  counterparty?: string | null | unknown;
+  tx_type?: string;
+  event_type?: string | null;
+  problem_id?: string | null;
+  detail?: unknown;
+}
+
+export async function getWalletTransactions(
+  address: string,
+  limit = 40,
+): Promise<WalletActivityItem[]> {
+  const q = new URLSearchParams({ address, limit: String(limit) });
+  const res = await fetch(`${API_BASE}/wallet/transactions?${q.toString()}`, {
+    headers: { Accept: 'application/json' },
+  });
+  // Older API builds or edge configs without `GET /wallet/transactions` return 404 — treat as empty history.
+  if (res.status === 404) {
+    return [];
+  }
+  if (!res.ok) {
+    const error = await res
+      .json()
+      .catch(() => ({ error: { message: res.statusText } }));
+    throw new Error(error.error?.message || `API error: ${res.status}`);
+  }
+  const raw: unknown = await res.json();
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw as WalletActivityItem[];
+}
+
 export { API_BASE };

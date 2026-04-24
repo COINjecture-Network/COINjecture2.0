@@ -28,7 +28,7 @@ version = "4.8.4"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1.41", features = ["full"] }
+tokio = { version = "1.51", features = ["full"] }
 async-trait = "0.1"
 futures = "0.3"
 
@@ -38,7 +38,7 @@ futures = "0.3"
 # Cryptography
 sha2 = "0.10"
 sha3 = "0.10"
-blake3 = "1.5"
+blake3 = "1.8"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = "2.0"
 chacha20poly1305 = "0.10"
@@ -57,8 +57,8 @@ num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"
 
-# Caches
-lru = "0.12"
+# Caches (>=0.16.3 fixes RUSTSEC-2026-0002)
+lru = "0.16"
 
 # Codec
 tokio-util = { version = "0.7", features = ["codec"] }
@@ -90,9 +90,10 @@ tempfile = "3"
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
 
 # Metrics
+# 0.14+ pulls protobuf ^3.7.2 (fixes RUSTSEC-2024-0437 via prometheus 0.13 → protobuf 2.x).
 prometheus = { version = "0.14", features = ["process"] }
 lazy_static = "1.4"
-hyper = { version = "1.5", features = ["full"] }
+hyper = { version = "1.9", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 http-body = "1.0"
@@ -101,7 +102,8 @@ bytes = "1.5"
 dashmap = "6"
 rustls = { version = "0.23", features = ["ring"] }
 tokio-rustls = "0.26"
-rustls-pemfile = "2"
+# PEM loading lives in rustls-pki-types (avoid unmaintained rustls-pemfile / RUSTSEC-2025-0134)
+rustls-pki-types = { version = "1.14", features = ["std"] }
 
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -110,3 +112,12 @@ criterion = { version = "0.5", features = ["html_reports"] }
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# mobile-sdk: size-optimized release (profiles must live at workspace root).
+# `panic` is not allowed in per-package profiles; set it on [profile.release] if you need abort workspace-wide.
+[profile.release.package.coinject-mobile-sdk]
+opt-level = "s"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"

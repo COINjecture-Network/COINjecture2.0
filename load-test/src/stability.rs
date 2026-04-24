@@ -56,7 +56,7 @@ pub async fn run_stability_test(
     });
 
     // Submit transactions at the configured TPS for the full duration
-    let interval = Duration::from_micros(if tps > 0 { 1_000_000 / tps } else { 1_000_000 });
+    let interval = Duration::from_micros(1_000_000u64.checked_div(tps).unwrap_or(1_000_000));
     let deadline = Instant::now() + Duration::from_secs(duration_secs);
     let mut tx_ok = 0u64;
     let mut tx_err = 0u64;

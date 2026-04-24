@@ -85,7 +85,7 @@ impl Default for NetworkSnapshot {
             block_height: 0,
             timestamp: 0,
             hash_rate: 1.0,
-            block_time: 8.64,
+            block_time: 10.0,
             solve_time: 1.0,
             problem_category: 0,
             total_fees: 0,
@@ -158,7 +158,7 @@ impl NetworkMetrics {
             min_samples: 10, // Minimum for stable statistics
             current_block: 0,
             cached_median_hash_rate: 1.0,
-            cached_median_block_time: 8.64,
+            cached_median_block_time: 10.0,
             cached_median_fees: 0,
             cached_median_stake: 0,
             cached_median_solve_times: [1.0; 10],
@@ -211,7 +211,7 @@ impl NetworkMetrics {
     /// Get median block time from network history
     pub fn median_block_time(&self) -> f64 {
         if !self.is_bootstrapped() {
-            return 8.64; // Target block time (derived from 86400s/day / 10000 blocks)
+            return 10.0; // Tokenomics default: ~10s optimal block pacing until oracle has samples
         }
         self.cached_median_block_time
     }

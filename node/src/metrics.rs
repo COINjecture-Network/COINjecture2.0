@@ -755,10 +755,10 @@ pub fn update_dimensional_scales(dimension: u8, theoretical: f64, observed: f64,
     let dim_label = format!("D{}", dimension);
 
     DIMENSIONAL_SCALE
-        .with_label_values(&[&dim_label, "theoretical"])
+        .with_label_values(&[dim_label.as_str(), "theoretical"])
         .set(theoretical);
     DIMENSIONAL_SCALE
-        .with_label_values(&[&dim_label, "observed"])
+        .with_label_values(&[dim_label.as_str(), "observed"])
         .set(observed);
     DIMENSIONAL_DECAY_RATE
         .with_label_values(&[&dim_label])

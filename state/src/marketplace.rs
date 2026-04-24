@@ -396,6 +396,49 @@ impl MarketplaceState {
         Ok(problems)
     }
 
+    /// All marketplace problems posted by `submitter` (any status).
+    pub fn list_problems_for_submitter(
+        &self,
+        submitter: Address,
+    ) -> Result<Vec<ProblemSubmission>, MarketplaceError> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(PROBLEMS_TABLE)?;
+
+        let mut out = Vec::new();
+        for item in table.iter()? {
+            let (_, data) = item?;
+            let submission: ProblemSubmission = bincode::deserialize(data.value())?;
+            if submission.submitter == submitter {
+                out.push(submission);
+            }
+        }
+
+        // Newest first (rough sort by submitted_at descending)
+        out.sort_by_key(|submission| std::cmp::Reverse(submission.submitted_at));
+        Ok(out)
+    }
+
+    /// Problems this address solved (winning submission), any status after solve.
+    pub fn list_problems_for_solver(
+        &self,
+        solver: Address,
+    ) -> Result<Vec<ProblemSubmission>, MarketplaceError> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(PROBLEMS_TABLE)?;
+
+        let mut out = Vec::new();
+        for item in table.iter()? {
+            let (_, data) = item?;
+            let submission: ProblemSubmission = bincode::deserialize(data.value())?;
+            if submission.solver == Some(solver) {
+                out.push(submission);
+            }
+        }
+
+        out.sort_by_key(|submission| std::cmp::Reverse(submission.submitted_at));
+        Ok(out)
+    }
+
     /// Get marketplace statistics
     pub fn get_stats(&self) -> Result<MarketplaceStats, MarketplaceError> {
         let read_txn = self.db.begin_read()?;

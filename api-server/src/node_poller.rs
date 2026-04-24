@@ -46,24 +46,11 @@ impl NodePoller {
                         last_height = height;
                         let event = BlockEvent {
                             height,
-                            hash: block_data["hash"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
-                            timestamp: block_data["timestamp"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
-                            tx_count: block_data["tx_count"]
-                                .as_u64()
-                                .unwrap_or(0) as usize,
-                            miner: block_data["miner"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
-                            work_score: block_data["work_score"]
-                                .as_f64()
-                                .unwrap_or(0.0),
+                            hash: block_data["hash"].as_str().unwrap_or("").to_string(),
+                            timestamp: block_data["timestamp"].as_str().unwrap_or("").to_string(),
+                            tx_count: block_data["tx_count"].as_u64().unwrap_or(0) as usize,
+                            miner: block_data["miner"].as_str().unwrap_or("").to_string(),
+                            work_score: block_data["work_score"].as_f64().unwrap_or(0.0),
                         };
                         self.broadcaster.publish_block(event).await;
                     }
@@ -77,10 +64,10 @@ impl NodePoller {
             // NOTE: No dedicated mempool RPC method exists yet.
             // TODO: Add mempool_getInfo to the RPC crate for accurate data.
             if let Ok(info) = self.node_rpc.get_chain_info().await {
+                // Keeps `GET /chain/info` + `POST /node-rpc` `chain_getInfo` fast-path cache warm (same TTL as chain route).
+                self.broadcaster.set_cached_chain_info(info.clone()).await;
                 let event = MempoolEvent {
-                    pending_count: info["pending_transactions"]
-                        .as_u64()
-                        .unwrap_or(0) as usize,
+                    pending_count: info["pending_transactions"].as_u64().unwrap_or(0) as usize,
                     total_size_bytes: 0,
                     oldest_tx_age_seconds: 0,
                 };
