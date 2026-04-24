@@ -35,7 +35,7 @@ ed25519-dalek = { version = "2", features = ["serde", "rand_core"] }
 rand = "0.9"
 hex = "0.4"
 blake3.workspace = true
-jsonwebtoken = "10"
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
@@ -61,3 +61,4 @@ bytes = "1"
 
 [dev-dependencies]
 http-body-util = "0.1"
+rand_core = { version = "0.6", features = ["getrandom"] }

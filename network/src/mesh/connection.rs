@@ -114,8 +114,7 @@ pub async fn perform_outbound_handshake(
     let addr = stream.peer_addr().map_err(NetworkError::Io)?;
 
     // Generate our challenge
-    let mut our_challenge = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut our_challenge);
+    let our_challenge: [u8; 32] = rand::random();
 
     // Step 1: Send Hello
     let hello = WireMessage::Handshake(HandshakeMessage::Hello {
@@ -243,8 +242,7 @@ pub async fn perform_inbound_handshake(
 
         // Step 2: Sign their challenge and send HelloAck with our own challenge
         let our_response = keypair.sign(&their_challenge);
-        let mut our_challenge = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut our_challenge);
+        let our_challenge: [u8; 32] = rand::random();
 
         let hello_ack = WireMessage::Handshake(HandshakeMessage::HelloAck {
             node_id: *keypair.node_id(),

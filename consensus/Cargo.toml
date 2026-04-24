@@ -31,3 +31,5 @@ allow-unsigned-commits = []
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
+rand_core = { version = "0.6", features = ["getrandom"] }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }

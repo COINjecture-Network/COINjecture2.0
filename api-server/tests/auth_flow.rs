@@ -11,6 +11,7 @@ use coinjecture_api_server::{
 };
 use ed25519_dalek::{Signer, SigningKey};
 use http_body_util::BodyExt;
+use rand_core::OsRng;
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
 use tower::ServiceExt;
@@ -85,7 +86,7 @@ async fn test_full_siwb_flow() {
     let app = test_app();
 
     // 1. Generate an Ed25519 keypair
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let signing_key = SigningKey::generate(&mut OsRng);
     let pubkey_hex = hex::encode(signing_key.verifying_key().as_bytes());
 
     // 2. Request challenge
@@ -155,7 +156,7 @@ async fn test_full_siwb_flow() {
 async fn test_invalid_signature_rejected() {
     let app = test_app();
 
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let signing_key = SigningKey::generate(&mut OsRng);
     let pubkey_hex = hex::encode(signing_key.verifying_key().as_bytes());
 
     // Get challenge
@@ -172,7 +173,7 @@ async fn test_invalid_signature_rejected() {
     let message = challenge["message"].as_str().unwrap();
 
     // Sign with a DIFFERENT key
-    let wrong_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let wrong_key = SigningKey::generate(&mut OsRng);
     let bad_sig = hex::encode(wrong_key.sign(message.as_bytes()).to_bytes());
 
     let resp = app
@@ -195,7 +196,7 @@ async fn test_invalid_signature_rejected() {
 async fn test_nonce_replay_prevention() {
     let app = test_app();
 
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let signing_key = SigningKey::generate(&mut OsRng);
     let pubkey_hex = hex::encode(signing_key.verifying_key().as_bytes());
 
     // Get challenge

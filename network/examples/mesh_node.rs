@@ -132,11 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "b" | "broadcast" => {
                     let payload = Payload::ConsensusSalt {
                         epoch: 0,
-                        salt: {
-                            let mut s = [0u8; 32];
-                            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut s);
-                            s
-                        },
+                        salt: rand::random(),
                     };
                     tracing::info!("Broadcasting test ConsensusSalt");
                     let _ = cmd_tx.send(NetworkCommand::Broadcast(payload));

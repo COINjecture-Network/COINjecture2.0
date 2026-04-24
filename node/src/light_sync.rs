@@ -686,7 +686,7 @@ impl LightSyncServer {
                 .collect();
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut sampled = Vec::with_capacity(security_param);
         let mut sampled_heights = std::collections::HashSet::new();
 
@@ -694,7 +694,7 @@ impl LightSyncServer {
         // This is a simplified version - full FlyClient uses difficulty-weighted sampling
         while sampled.len() < security_param && sampled.len() < self.chain_height as usize {
             // Sample from geometric distribution favoring recent blocks
-            let u: f64 = rng.gen();
+            let u: f64 = rng.random();
             let height = ((1.0 - u.powf(0.5)) * self.chain_height as f64) as u64;
 
             if height == 0 || sampled_heights.contains(&height) {

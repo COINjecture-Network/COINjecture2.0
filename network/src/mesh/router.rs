@@ -9,7 +9,6 @@
 // - Delivering messages to the application layer via mpsc channel
 // - Constructing and signing outbound envelopes
 
-use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -50,8 +49,7 @@ pub fn create_envelope(
     payload: Payload,
     ttl: u8,
 ) -> Envelope {
-    let mut rng = rand::rngs::OsRng;
-    let nonce: [u8; 32] = rng.gen();
+    let nonce: [u8; 32] = rand::random();
 
     let sender = *keypair.node_id();
     let msg_id = compute_msg_id(&sender, &nonce, &payload);

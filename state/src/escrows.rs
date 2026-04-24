@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn test_release_with_valid_signature() {
         use ed25519_dalek::{Signer, SigningKey};
-        use rand::rngs::OsRng;
+        use rand_core::OsRng;
 
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::create(dir.path().join("signed_release_test")).unwrap());
@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn test_release_with_wrong_signature_rejected() {
         use ed25519_dalek::{Signer, SigningKey};
-        use rand::rngs::OsRng;
+        use rand_core::OsRng;
 
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::create(dir.path().join("bad_sig_test")).unwrap());
@@ -603,7 +603,7 @@ mod tests {
     #[test]
     fn test_refund_after_timeout_with_valid_signature() {
         use ed25519_dalek::{Signer, SigningKey};
-        use rand::rngs::OsRng;
+        use rand_core::OsRng;
 
         let dir = tempdir().unwrap();
         let db = Arc::new(Database::create(dir.path().join("refund_test")).unwrap());

@@ -7,7 +7,7 @@
 // The NodeId is the SHA-256 hash of the public key (32 bytes, hex-displayed).
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;

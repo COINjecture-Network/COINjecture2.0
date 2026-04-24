@@ -34,10 +34,11 @@ pub fn verify_ed25519_signature(
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
+    use rand_core::OsRng;
 
     #[test]
     fn roundtrip_sign_verify() {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut OsRng);
         let message = b"hello coinjecture";
         let sig = signing_key.sign(message);
 
@@ -52,7 +53,7 @@ mod tests {
 
     #[test]
     fn wrong_message_fails() {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate(&mut OsRng);
         let sig = signing_key.sign(b"original");
 
         let valid = verify_ed25519_signature(

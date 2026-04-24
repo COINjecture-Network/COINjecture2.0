@@ -33,7 +33,7 @@ use aes_gcm::{
 use argon2::{Algorithm, Argon2, Params, Version};
 use coinject_core::Address;
 use ed25519_dalek::SigningKey;
-use rand::{rngs::OsRng, Rng};
+use rand_core::OsRng;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -193,11 +193,9 @@ impl ValidatorKey {
 
 /// Serialize and encrypt `key` under `password`, returning the file bytes.
 fn encrypt_validator_key(key: &ValidatorKey, password: &str) -> Result<Vec<u8>, String> {
-    let mut rng = OsRng;
-
-    // Random salt and nonce — unique per file write (use Rng::gen to avoid all-zero literals).
-    let salt: [u8; 32] = rng.gen();
-    let nonce_bytes: [u8; 12] = rng.gen();
+    // Random salt and nonce — unique per file write.
+    let salt: [u8; 32] = rand::random();
+    let nonce_bytes: [u8; 12] = rand::random();
 
     // Derive a 256-bit encryption key from the password + salt.
     let mut enc_key = [0u8; KEY_LEN];
