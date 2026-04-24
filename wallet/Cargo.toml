@@ -44,7 +44,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # File I/O
-dirs = "5.0"
+dirs = "6.0"
 
 # Time
 chrono = "0.4"
