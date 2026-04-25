@@ -13,11 +13,19 @@ redb uses a **copy-on-write (CoW) B-tree** design with ACID semantics. There is 
 
 ### Crash Recovery
 
-**You do not need to do anything after a crash.** redb recovers automatically:
+**redb recovers each `WriteTransaction::commit()` durably.** What redb itself guarantees:
 
 - On `Database::create(path)`, redb reads the committed root.
 - Any uncommitted data from before the crash is invisible.
-- The node resumes from the last committed block.
+- Per-method state mutations (`set_balance`, `submit_solution`, `claim_bounty`, etc.) survive crash with full ACID at the **individual commit** boundary.
+
+**However**, block storage and state application are managed as **separate redb transactions**. Block headers/bodies are committed by `node/src/chain.rs` independently of per-method state commits in `state/src/{accounts,marketplace,escrows,channels,trustlines,dimensional_pools,timelocks}.rs`. A single `SubmitSolution` lands ~5 sequential redb commits along `node/src/service/block_processing.rs:1333-1370` — fee deduction, problem update, escrow release, solver credit, nonce.
+
+If a crash interrupts a block-apply between those commits, redb recovers each individual commit but the **block-apply as a whole is left partially applied**. Re-running the block on restart is **not** idempotent: `submit_solution` returns `MarketplaceError::ProblemNotOpen` (`state/src/marketplace.rs:185-187`) and the transaction is skipped at `node/src/service/block_processing.rs:373` (`continue`). The resulting state — escrow not released, solver not credited, problem `Solved` — persists locally.
+
+The system relies on **chain consensus**, not storage-level rollback, to recover from this state: a node with partially-applied state diverges from peers in chain hashes, fork detection triggers, and `unwind_block_transactions` (`node/src/service/block_processing.rs:393`) replays the canonical chain from a common ancestor. See [`FORKING_AND_REORG.md`](../FORKING_AND_REORG.md) for the authoritative reorg semantics.
+
+**Mainnet roadmap (Phase 19+)**: compose per-block apply into a single redb `WriteTransaction` so that block storage and all state mutations share one commit boundary — partial-block-apply rollback then becomes automatic. Until that lands, **partial-block-apply recovery in the absence of healthy peers is not guaranteed** and is a known gap to be closed before mainnet.
 
 ### Durability Configuration
 

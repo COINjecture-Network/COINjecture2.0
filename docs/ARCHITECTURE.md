@@ -2,7 +2,7 @@
 
 ## System Overview
 
-COINjecture 2.0 is a Proof-of-Useful-Work (PoUW) Layer 1 blockchain built in Rust. Instead of wasteful hash grinding, miners solve real NP-complete problems (SubsetSum, SAT, TSP) submitted through an on-chain marketplace. Solutions are verified in polynomial time, and bounties are paid atomically in the same block. The protocol uses the equilibrium constant eta = 1/sqrt(2) throughout its design — from dimensional pool economics to network routing fanout.
+COINjecture 2.0 is a Proof-of-Useful-Work (PoUW) Layer 1 blockchain built in Rust. Instead of wasteful hash grinding, miners solve real NP-complete problems (SubsetSum, SAT, TSP) submitted through an on-chain marketplace. Solutions are verified in polynomial time, and bounties are released within the same block-apply call as solution verification (`node/src/service/block_processing.rs:1333-1370` sequences ~5 redb commits per `SubmitSolution`; cross-layer consistency is enforced by consensus reorg recovery, not storage-level rollback — see [`FORKING_AND_REORG.md`](FORKING_AND_REORG.md)). The protocol uses the equilibrium constant eta = 1/sqrt(2) throughout its design — from dimensional pool economics to network routing fanout.
 
 ## CPP Protocol (COINjecture P2P Protocol)
 
@@ -84,7 +84,7 @@ Window-based congestion control:
 2. Miner solves NP-complete problem (exponential time)
 3. Miner submits solution transaction
 4. Block validator verifies solution (polynomial time)
-5. Work score calculated; bounty released from escrow atomically
+5. Work score calculated; bounty released from escrow within the same block-apply path. Each of (fee, problem-update, escrow-release, solver-credit, nonce) is its own redb commit (`state/src/{accounts,marketplace}.rs`). Cross-layer consistency on crash or fork is enforced by consensus reorg recovery (see [`FORKING_AND_REORG.md`](FORKING_AND_REORG.md)), not by storage-level rollback. Single-block-write_txn composition is on the mainnet roadmap.
 
 ### Work Score
 
@@ -139,7 +139,7 @@ OPEN → CANCELLED (submitter cancels → bounty refunded)
 
 ### Escrow
 
-Bounty funds are escrowed on-chain at problem submission. Released atomically to solver in the same block as solution verification.
+Bounty funds are escrowed on-chain at problem submission. Released to the solver within the same block-apply that verifies the solution (`node/src/service/block_processing.rs:1333-1370`). The path composes ~5 sequential redb commits per `SubmitSolution`; per-commit durability is guaranteed by redb but the block-apply is **not** a single storage transaction. Crash or fork recovery is handled by consensus reorg via `unwind_block_transactions` (`node/src/service/block_processing.rs:393`) — see [`FORKING_AND_REORG.md`](FORKING_AND_REORG.md). A single-block-write_txn composition is on the mainnet roadmap.
 
 ## Dimensional Pools
 
