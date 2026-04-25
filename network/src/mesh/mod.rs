@@ -76,6 +76,7 @@ pub enum NetworkEvent {
 pub struct NetworkService {
     cmd_tx: mpsc::UnboundedSender<NetworkCommand>,
     node_id: NodeId,
+    local_addr: std::net::SocketAddr,
     shutdown_tx: watch::Sender<bool>,
     event_loop_handle: Option<tokio::task::JoinHandle<()>>,
     listener_handle: Option<tokio::task::JoinHandle<()>>,
@@ -129,6 +130,7 @@ impl NetworkService {
             Self {
                 cmd_tx,
                 node_id,
+                local_addr: actual_addr,
                 shutdown_tx,
                 event_loop_handle: Some(event_loop_handle),
                 listener_handle: Some(listener_handle),
@@ -152,6 +154,11 @@ impl NetworkService {
     /// Our node's identity.
     pub fn local_id(&self) -> &NodeId {
         &self.node_id
+    }
+
+    /// The actual local address this node is listening on.
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.local_addr
     }
 
     /// Gracefully shut down the network service.
