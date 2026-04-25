@@ -18,15 +18,19 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-/// Helper: create a config for test node on the given port (0 = OS-assigned).
-fn test_config(port: u16, seeds: Vec<std::net::SocketAddr>) -> NetworkConfig {
+/// Helper: create a config for a test node. Always binds on port 0 (OS-assigned)
+/// and uses a unique data directory so each node gets its own keypair.
+fn test_config(seeds: Vec<std::net::SocketAddr>) -> NetworkConfig {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     NetworkConfig {
-        listen_addr: format!("127.0.0.1:{}", port).parse().unwrap(),
+        listen_addr: "127.0.0.1:0".parse().unwrap(),
         seed_nodes: seeds,
         data_dir: PathBuf::from(format!(
             "{}/coinject-mesh-test-{}",
             std::env::temp_dir().display(),
-            port
+            id
         )),
         heartbeat_interval: Duration::from_secs(2),
         max_missed_heartbeats: 3,
@@ -94,13 +98,13 @@ async fn test_three_node_mesh_formation() {
         .try_init();
 
     // Bind node A on port 0 so the OS assigns a free port.
-    let cfg_a = test_config(0, vec![]);
+    let cfg_a = test_config(vec![]);
     let (svc_a, mut rx_a) = NetworkService::start(cfg_a).await.unwrap();
     let seed_a = svc_a.local_addr();
 
     // Nodes B and C use the actual bound address of A as their seed.
-    let cfg_b = test_config(0, vec![seed_a]);
-    let cfg_c = test_config(0, vec![seed_a]);
+    let cfg_b = test_config(vec![seed_a]);
+    let cfg_c = test_config(vec![seed_a]);
 
     let (svc_b, mut rx_b) = NetworkService::start(cfg_b).await.unwrap();
     let (svc_c, mut rx_c) = NetworkService::start(cfg_c).await.unwrap();
@@ -153,11 +157,11 @@ async fn test_broadcast_reaches_all_peers() {
         .with_env_filter("debug")
         .try_init();
 
-    let cfg_a = test_config(0, vec![]);
+    let cfg_a = test_config(vec![]);
     let (svc_a, mut rx_a) = NetworkService::start(cfg_a).await.unwrap();
     let seed_a = svc_a.local_addr();
 
-    let cfg_b = test_config(0, vec![seed_a]);
+    let cfg_b = test_config(vec![seed_a]);
     let (svc_b, mut rx_b) = NetworkService::start(cfg_b).await.unwrap();
 
     let id_a = *svc_a.local_id();
@@ -200,17 +204,13 @@ async fn test_direct_message_reaches_only_target() {
         .with_env_filter("debug")
         .try_init();
 
-    let port_a = 19300 + (rand::random::<u16>() % 1000);
-    let port_b = port_a + 1;
-    let port_c = port_a + 2;
-
-    let seed_a: std::net::SocketAddr = format!("127.0.0.1:{}", port_a).parse().unwrap();
-
-    let cfg_a = test_config(port_a, vec![]);
-    let cfg_b = test_config(port_b, vec![seed_a]);
-    let cfg_c = test_config(port_c, vec![seed_a]);
-
+    let cfg_a = test_config(vec![]);
     let (svc_a, mut rx_a) = NetworkService::start(cfg_a).await.unwrap();
+    let seed_a = svc_a.local_addr();
+
+    let cfg_b = test_config(vec![seed_a]);
+    let cfg_c = test_config(vec![seed_a]);
+
     let (svc_b, mut rx_b) = NetworkService::start(cfg_b).await.unwrap();
     let (svc_c, mut rx_c) = NetworkService::start(cfg_c).await.unwrap();
 
