@@ -24,9 +24,12 @@ jobs:
   formal-fixtures:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: lean4
+          use-mathlib-cache: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

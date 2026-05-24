@@ -326,12 +326,14 @@ fn solve_subset_sum_heuristic_blocking(
 ) -> Option<Solution> {
     use rand::SeedableRng;
     let mut rng = rand::rngs::StdRng::seed_from_u64(
-        numbers.iter().fold(0u64, |h, &x| h.wrapping_mul(31).wrapping_add(x as u64)),
+        numbers
+            .iter()
+            .fold(0u64, |h, &x| h.wrapping_mul(31).wrapping_add(x as u64)),
     );
     *memory += 4096;
 
     for _ in 0..50_000 {
-        let k = rng.gen_range(1..=numbers.len());
+        let k = rng.random_range(1..=numbers.len());
         let mut indices: Vec<usize> = (0..numbers.len()).collect();
         indices.shuffle(&mut rng);
         indices.truncate(k);
@@ -508,10 +510,8 @@ fn tsp_two_opt(tour: &mut [usize], distances: &[Vec<u64>], cities: usize, deadli
                 let b = tour[i + 1];
                 let c = tour[j];
                 let d = tour[(j + 1) % cities];
-                let before =
-                    distances[a][b] + distances[c][d];
-                let after =
-                    distances[a][c] + distances[b][d];
+                let before = distances[a][b] + distances[c][d];
+                let after = distances[a][c] + distances[b][d];
                 if after < before {
                     tour[i + 1..=j].reverse();
                     improved = true;
@@ -697,7 +697,7 @@ impl Miner {
         };
 
         // Randomly choose problem type
-        match rng.gen_range(0..3) {
+        match rng.random_range(0..3) {
             0 => {
                 // Subset Sum - Generate SOLVABLE problem by selecting a random subset first
                 // Use async version if network metrics available, otherwise sync version
@@ -708,11 +708,13 @@ impl Miner {
                     let adjuster = self.difficulty_adjuster.read().await;
                     adjuster.size_for_problem_type("SubsetSum")
                 };
-                let numbers: Vec<i64> = (0..problem_size).map(|_| rng.gen_range(1..1000)).collect();
+                let numbers: Vec<i64> = (0..problem_size)
+                    .map(|_| rng.random_range(1..1000))
+                    .collect();
 
                 // Randomly select which numbers to include in the solution
                 // This guarantees the problem is solvable
-                let subset_size = rng.gen_range(1..=problem_size.min(problem_size - 1).max(1));
+                let subset_size = rng.random_range(1..=problem_size.min(problem_size - 1).max(1));
                 let mut selected_indices: Vec<usize> = (0..problem_size).collect();
                 selected_indices.shuffle(&mut rng);
                 selected_indices.truncate(subset_size);
@@ -735,7 +737,7 @@ impl Miner {
 
                 // Generate a random satisfying assignment first (our "hidden solution")
                 let satisfying_assignment: Vec<bool> =
-                    (0..variables).map(|_| rng.gen_bool(0.5)).collect();
+                    (0..variables).map(|_| rng.random_bool(0.5)).collect();
 
                 use rand::seq::SliceRandom;
                 let clauses: Vec<Clause> = (0..num_clauses)
@@ -754,7 +756,7 @@ impl Miner {
                                 // 70% chance: Create literal that matches assignment (satisfied)
                                 // 30% chance: Create opposite literal (not satisfied by this variable)
                                 // This ensures at least one literal per clause is satisfied
-                                if rng.gen_bool(0.7) {
+                                if rng.random_bool(0.7) {
                                     if assignment_value {
                                         var
                                     } else {
@@ -786,7 +788,7 @@ impl Miner {
                 let mut distances = vec![vec![0u64; cities]; cities];
                 for i in 0..cities {
                     for j in i + 1..cities {
-                        let dist = rng.gen_range(1..100);
+                        let dist = rng.random_range(1..100);
                         distances[i][j] = dist;
                         distances[j][i] = dist;
                     }

@@ -212,9 +212,7 @@ impl DifficultyAdjuster {
             let mut max_size = (estimated_size as f64 * 2.0).min(abs_max as f64) as usize;
             // Network pacing must not shrink instances below the adjuster's canonical size
             // (otherwise `np_problem_size` reads 60 while SAT instances use ~6 variables).
-            max_size = max_size
-                .max(self.current_size())
-                .min(abs_max);
+            max_size = max_size.max(self.current_size()).min(abs_max);
             let min_size = min_size.min(max_size.saturating_sub(1));
 
             (

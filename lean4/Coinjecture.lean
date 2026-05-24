@@ -8,6 +8,7 @@ import Coinjecture.GeneratorInvariants
 import Coinjecture.Rewards
 import Coinjecture.WorkScore
 import Coinjecture.DesignAxioms
+import Coinjecture.ComplexDecomposition
 import Coinjecture.Coherence
 import Coinjecture.DimensionalPools
 import Coinjecture.Falsifiability

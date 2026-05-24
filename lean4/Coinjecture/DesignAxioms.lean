@@ -9,7 +9,7 @@ Tier A: numeric checks via `native_decide` on Float (no `sorry`).
 
 namespace Coinjecture
 
-/-- Satoshi constant η = |Re(μ)| = Im(μ) = 1/√2. -/
+/-- constant η = |Re(μ)| = Im(μ) = 1/√2. -/
 def eta : Float := 1 / Float.sqrt 2
 
 /-- Coupling λ at critical equilibrium (η = λ). -/

@@ -15,6 +15,7 @@ formulas (assumptions → algebra → interpretation), see
 | `Coinjecture/Rewards.lean` | `mintAtoms`, `mintBeans`, first-harvest and floor lemmas — [`tokenomics/src/rewards.rs`](../tokenomics/src/rewards.rs) |
 | `Coinjecture/WorkScore.lean` | `workScoreFixed`, `log2Ratio`, `applyQuality` — [`consensus/src/work_score.rs`](../consensus/src/work_score.rs), [`core/src/fixed_point.rs`](../core/src/fixed_point.rs) |
 | `Coinjecture/DesignAxioms.lean` | η = 1/√2, μ = (−1+i)/√2, 8-cycle closure (Appendix D) |
+| `Coinjecture/ComplexDecomposition.lean` | Mathlib: z = anchor·coherence, octant address, μ uniqueness on ℂ |
 | `Coinjecture/Coherence.lean` | C(r) = 2r/(1+r²), sech perturbation samples, symmetry |
 | `Coinjecture/DimensionalPools.lean` | D(τ) = e^(−ητ), eight pool τₙ samples (Appendix E) |
 | `Coinjecture/Falsifiability.lean` | Three testable predictions + `test_conjecture`-style η tolerance |
@@ -26,7 +27,7 @@ formulas (assumptions → algebra → interpretation), see
 | Whitepaper section | Claim | Lean module | Rust / on-chain |
 |--------------------|-------|-------------|-----------------|
 | **Appendix D — Design axioms** | \|μ\|² = 1, \|x\| = \|y\| ⇒ η = 1/√2 | `DesignAxioms.lean` (`unit_circle_eta`, `symmetry_equal_magnitudes`) | `core/src/dimensional.rs::ETA`, `LAMBDA` |
-| | μ = exp(i·3π/4) = (−1+i)/√2 | `criticalMu`, `mu_on_unit_circle` | `TAU_C`, phase dynamics in dimensional framework |
+| | μ = exp(i·3π/4) = (−1+i)/√2 | `criticalMu`, `mu_on_unit_circle`; `ComplexDecomposition.mu`, `mu_unique` | `TAU_C`, phase dynamics in dimensional framework |
 | | 8-step closure, gcd(3,8)=1 | `eight_cycle_closes_*`, `gear_ratio_coprime` | 8-block cycle prediction in falsifiability |
 | | \|e^{iθ}β\| = \|β\| | `unitary_modulus_preserved` | — (formal invariant) |
 | **Coherence** | C(r) = 2r/(1+r²), C(1)=1 | `Coherence.lean` (`coherence_at_one`) | solve/target ratio in pool metrics |

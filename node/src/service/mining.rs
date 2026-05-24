@@ -20,9 +20,7 @@ pub(crate) async fn refresh_mining_template_cache(
 ) {
     let miner_guard = miner.read().await;
     let difficulty = miner_guard.current_difficulty();
-    let problem = miner_guard
-        .generate_problem(next_height, prev)
-        .await;
+    let problem = miner_guard.generate_problem(next_height, prev).await;
     drop(miner_guard);
     *cache.write().await = Some(MiningWork {
         next_height,

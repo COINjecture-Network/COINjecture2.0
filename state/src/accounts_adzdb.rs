@@ -5,8 +5,6 @@
 //!
 //! Enable with: --features adzdb
 
-#![cfg(feature = "adzdb")]
-
 use coinject_core::{Address, Balance};
 use std::collections::HashMap;
 use std::fs::{self, File};

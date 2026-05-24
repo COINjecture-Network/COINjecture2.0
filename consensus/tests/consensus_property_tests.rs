@@ -196,10 +196,16 @@ fn test_bootstrap_size_and_per_type_mapping() {
 
     let mut adj = DifficultyAdjuster::new();
     assert_eq!(adj.current_size(), BOOTSTRAP_CURRENT_SIZE);
-    assert_eq!(adj.size_for_problem_type("SubsetSum"), BOOTSTRAP_CURRENT_SIZE);
+    assert_eq!(
+        adj.size_for_problem_type("SubsetSum"),
+        BOOTSTRAP_CURRENT_SIZE
+    );
     assert_eq!(adj.size_for_problem_type("SAT"), BOOTSTRAP_CURRENT_SIZE);
     let tsp = adj.size_for_problem_type("TSP");
-    assert_eq!(tsp, ((BOOTSTRAP_CURRENT_SIZE as f64) * 0.9).round() as usize);
+    assert_eq!(
+        tsp,
+        ((BOOTSTRAP_CURRENT_SIZE as f64) * 0.9).round() as usize
+    );
     assert!(tsp <= BOOTSTRAP_CURRENT_SIZE);
 
     adj.penalize_failure();
