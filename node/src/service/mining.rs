@@ -3,15 +3,41 @@
 #![allow(dead_code)]
 
 use super::*;
+use coinject_core::Hash;
 use coinject_huggingface::NetworkContext;
 use coinject_mempool::{BLOCK_TEMPLATE_MAX_TRANSACTIONS, BLOCK_TEMPLATE_ZERO_FEE_TRANSFER_SLOTS};
+use coinject_rpc::MiningWork;
 use tracing::{debug, error, info, trace, warn};
+
+/// Latest template for `best_height + 1`, refreshed before each `mine_block` (read lock only).
+pub(crate) type MiningTemplateCache = Arc<tokio::sync::RwLock<Option<MiningWork>>>;
+
+pub(crate) async fn refresh_mining_template_cache(
+    miner: &Arc<RwLock<Miner>>,
+    cache: &MiningTemplateCache,
+    next_height: u64,
+    prev: Hash,
+) {
+    let miner_guard = miner.read().await;
+    let difficulty = miner_guard.current_difficulty();
+    let problem = miner_guard
+        .generate_problem(next_height, prev)
+        .await;
+    drop(miner_guard);
+    *cache.write().await = Some(MiningWork {
+        next_height,
+        prev_hash: hex::encode(prev.as_bytes()),
+        difficulty,
+        problem,
+    });
+}
 
 impl CoinjectNode {
     /// Mining loop
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn mining_loop(
         miner: Arc<RwLock<Miner>>,
+        mining_template_cache: MiningTemplateCache,
         chain: Arc<ChainState>,
         state: Arc<AccountState>,
         timelock_state: Arc<TimeLockState>,
@@ -254,12 +280,16 @@ impl CoinjectNode {
                 }
             };
 
+            let next_height = best_height + 1;
+            refresh_mining_template_cache(&miner, &mining_template_cache, next_height, best_hash)
+                .await;
+
             // Mine block
             let mut miner_lock = miner.write().await;
             if let Some(block) = miner_lock
                 .mine_block(
                     best_hash,
-                    best_height + 1,
+                    next_height,
                     parent_cumulative_work,
                     transactions.clone(),
                 )

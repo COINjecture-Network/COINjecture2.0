@@ -159,7 +159,7 @@ pub struct NodeConfig {
     pub bootnodes: Vec<String>,
 
     /// Chain ID (v2 = fresh network after 2025-11-30 reset)
-    #[arg(long, default_value = "coinject-network-b-v2")]
+    #[arg(long, default_value = "coinject-network-b-v3")]
     pub chain_id: String,
 
     /// Minimum header PoW: count of **leading hex zero characters** in `hex(block_header_hash)`.

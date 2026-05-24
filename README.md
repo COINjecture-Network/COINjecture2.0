@@ -897,6 +897,9 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 - **GitHub**: https://github.com/COINjecture-Network/COINjecture2.0
 - **Getting started**: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+- **Consensus calculations** (Satoshi-style): [docs/CONSENSUS_CALCULATIONS.md](docs/CONSENSUS_CALCULATIONS.md)
+- **Formal verification (Lean 4)**: [docs/FORMAL_VERIFICATION.md](docs/FORMAL_VERIFICATION.md)
+- **Supabase migration**: [docs/SUPABASE_MIGRATION.md](docs/SUPABASE_MIGRATION.md)
 - **Troubleshooting**: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 - **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 

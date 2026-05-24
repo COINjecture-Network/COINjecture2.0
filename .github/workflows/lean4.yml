@@ -1,0 +1,55 @@
+name: Lean 4 formal specs
+
+on:
+  push:
+    paths:
+      - 'lean4/**'
+      - 'consensus/tests/lean_fixture_alignment.rs'
+      - 'consensus/src/work_score.rs'
+      - 'core/src/fixed_point.rs'
+      - 'tokenomics/src/rewards.rs'
+      - 'scripts/verify-formal-fixtures.sh'
+      - '.github/workflows/lean4.yml'
+  pull_request:
+    paths:
+      - 'lean4/**'
+      - 'consensus/tests/lean_fixture_alignment.rs'
+      - 'consensus/src/work_score.rs'
+      - 'core/src/fixed_point.rs'
+      - 'tokenomics/src/rewards.rs'
+      - 'scripts/verify-formal-fixtures.sh'
+      - '.github/workflows/lean4.yml'
+
+jobs:
+  formal-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: leanprover/lean-action@v1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-lean4-fixtures-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-lean4-fixtures-
+
+      - name: Cache build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-lean4-fixtures-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('lean4/**', 'consensus/tests/lean_fixture_alignment.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-lean4-fixtures-target-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-lean4-fixtures-target-
+
+      - name: Lean build + Rust fixture alignment (Tier C)
+        run: ./scripts/verify-formal-fixtures.sh

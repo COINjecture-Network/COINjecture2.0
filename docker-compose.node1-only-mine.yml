@@ -1,14 +1,14 @@
-# Overlay for mesh **follower** VPSs: run full node stack (P2P + RPC + metrics) **without** mining.
-# Canonical host (e.g. 193) keeps `docker-compose.yml` only (`--mine` on all node services).
+# Overlay for the **canonical** host: `--mine` on `node1` only; bootnode is P2P seed + light RPC.
+# Keeps public :707 on the bootnode while `chain_getMiningWork` is served from node1 without wedging
+# bootnode JSON-RPC during long `mine_block` write locks.
 #
-# Usage on followers (76, 198, …):
-#   docker compose -f docker-compose.yml -f docker-compose.follower-no-mine.yml up -d --no-build
+# Usage on the canonical VPS (e.g. 193):
+#   docker compose -f docker-compose.yml -f docker-compose.node1-only-mine.yml up -d --no-build
 #
-# Requires the same `.env` as the base file (COINJECT_BOOTNODES, COINJECT_NODE_IMAGE, etc.).
+# Set API `NODE_RPC_URL=http://bootnode:9933,http://node1:9933` (bootnode first for fast chain_getInfo;
+# mining work fails over to node1).
 
 services:
-  # No `--bootnodes` on followers: COINJECT_BOOTNODES from `.env` must point at the
-  # canonical host only (e.g. 193.203.164.13:707). CLI bootnodes override env in the node.
   bootnode:
     command: >
       --data-dir /data
@@ -19,11 +19,13 @@ services:
 
   node1:
     command: >
+      --mine
       --data-dir /data
       --chain-id coinject-network-b-v3
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
 
   node2:
     command: >
@@ -32,6 +34,7 @@ services:
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707
 
   node3:
     command: >
@@ -40,3 +43,4 @@ services:
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
+      --bootnodes bootnode:707

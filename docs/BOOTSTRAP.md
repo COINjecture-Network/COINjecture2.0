@@ -21,9 +21,9 @@ operation as history accumulates.
 |-----------|---------------|-----------|---------------------|
 | Block time | 10 seconds | Engineering choice (see below) | Fixed protocol parameter |
 | Difficulty window | 20 blocks | ~200s of history | Fixed protocol parameter |
-| Starting problem size | 20 | Canonical SubsetSum size unit | Adjusted after first window |
-| Optimal solve time | 5.0 seconds | ~block_time / 2 | Refined from observed data |
-| Size limits | (5, 50) | Safety bounds | Overridden by ProblemDescriptor |
+| Starting problem size | 60 | Canonical SubsetSum size unit (`BOOTSTRAP_CURRENT_SIZE`) | Adjusted after first window |
+| Optimal solve time | 10 seconds | Matches `DEFAULT_TARGET_US` / median block time | Refined from observed data |
+| Canonical size cap | 150 | `CANONICAL_MAX_SIZE` sync ceiling | Overridden per-type by `ProblemDescriptor` |
 
 ### Why 10 Seconds?
 
@@ -115,9 +115,9 @@ Problem-type-specific parameters (scaling exponents, size ratios, absolute
 limits) are defined per-descriptor via the `ProblemDescriptor` trait rather
 than hardcoded in system code. During bootstrap:
 
-- **SubsetSum** (size_ratio=1.0, max=60): The canonical reference type
-- **SAT** (size_ratio=0.75, max=120): Scaled relative to SubsetSum
-- **TSP** (size_ratio=0.35, max=30): Factorial complexity requires smaller sizes
+- **SubsetSum** (size_ratio=1.0, max=120): The canonical reference type
+- **SAT** (size_ratio=1.0, max=320): Same canonical unit as item count (variables)
+- **TSP** (size_ratio=0.85, max=120): Cities scale with canonical size; feasibility predicate
 - **GraphColoring** (size_ratio=0.6, max=80): Graph problems scale moderately
 - **Factorization** (size_ratio=0.5, max=200): Sub-exponential, large sizes safe
 - **SVP** (size_ratio=0.4, max=40): Lattice problems, moderate ceiling

@@ -116,8 +116,8 @@ fn test_fast_solve_times_increase_size() {
         new_size > adj.current_size() || new_size >= adj.current_size(),
         "Fast solve times must not decrease size"
     );
-    // Size should be at the max bound (50 for SubsetSum default)
-    assert!(new_size <= 50);
+    use coinject_consensus::difficulty::CANONICAL_MAX_SIZE;
+    assert!(new_size <= CANONICAL_MAX_SIZE);
 }
 
 #[test]
@@ -142,7 +142,11 @@ fn test_size_stays_within_bounds_under_extreme_fast() {
     }
     let size = adj.adjust_difficulty();
     assert!(size >= 5, "Size must not drop below minimum of 5");
-    assert!(size <= 50, "Size must not exceed maximum of 50");
+    use coinject_consensus::difficulty::CANONICAL_MAX_SIZE;
+    assert!(
+        size <= CANONICAL_MAX_SIZE,
+        "Size must not exceed canonical maximum"
+    );
 }
 
 #[test]
@@ -187,26 +191,22 @@ fn test_stats_reports_recovery_mode_after_penalty() {
 }
 
 #[test]
-fn test_size_for_problem_type_sat_smaller_than_base() {
-    let adj = DifficultyAdjuster::new();
-    let base = adj.current_size();
-    let sat_size = adj.size_for_problem_type("SAT");
-    let subset_size = adj.size_for_problem_type("SubsetSum");
-    // SAT uses 0.75× ratio, SubsetSum is 1× capped at 50
-    assert!(
-        sat_size <= subset_size,
-        "SAT size should be <= SubsetSum size"
-    );
-    assert!(sat_size <= base);
-}
+fn test_bootstrap_size_and_per_type_mapping() {
+    use coinject_consensus::difficulty::BOOTSTRAP_CURRENT_SIZE;
 
-#[test]
-fn test_size_for_tsp_is_smallest() {
-    let adj = DifficultyAdjuster::new();
+    let mut adj = DifficultyAdjuster::new();
+    assert_eq!(adj.current_size(), BOOTSTRAP_CURRENT_SIZE);
+    assert_eq!(adj.size_for_problem_type("SubsetSum"), BOOTSTRAP_CURRENT_SIZE);
+    assert_eq!(adj.size_for_problem_type("SAT"), BOOTSTRAP_CURRENT_SIZE);
     let tsp = adj.size_for_problem_type("TSP");
-    let subset = adj.size_for_problem_type("SubsetSum");
-    // TSP uses 0.35× — smallest of the three
-    assert!(tsp <= subset);
+    assert_eq!(tsp, ((BOOTSTRAP_CURRENT_SIZE as f64) * 0.9).round() as usize);
+    assert!(tsp <= BOOTSTRAP_CURRENT_SIZE);
+
+    adj.penalize_failure();
+    assert!(
+        adj.size_for_problem_type("SubsetSum") < BOOTSTRAP_CURRENT_SIZE,
+        "failure penalty must reduce effective SubsetSum size below bootstrap"
+    );
 }
 
 // =============================================================================

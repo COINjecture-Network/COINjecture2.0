@@ -77,6 +77,17 @@ cargo test -p coinject-consensus
 cargo test -p coinject-network
 ```
 
+### Formal verification (optional)
+
+Consensus math and Lean 4 specs (Appendix D/E):
+
+```bash
+./scripts/verify-formal-fixtures.sh   # Lean build + Rust↔Lean fixture tests
+```
+
+Docs: [CONSENSUS_CALCULATIONS.md](CONSENSUS_CALCULATIONS.md) (Satoshi-style derivations),
+[FORMAL_VERIFICATION.md](FORMAL_VERIFICATION.md) (Lean crosswalk).
+
 ---
 
 ## Step 4 — Start the Local Testnet

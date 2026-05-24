@@ -41,9 +41,9 @@ export interface Solution {
 // Constants from Rust implementation
 const TAU_C = Math.SQRT2; // √2 ≈ 1.414
 const MIN_PROBLEM_SIZE = 5;
-const MAX_SUBSET_SUM_SIZE = 50;
-const MAX_SAT_VARIABLES = 30;
-const MAX_TSP_CITIES = 10;
+const MAX_SUBSET_SUM_SIZE = 180;
+const MAX_SAT_VARIABLES = 320;
+const MAX_TSP_CITIES = 150;
 
 /** Leading **hex** zeroes required on `hex(headerHash)` — not Bitcoin difficulty bits / nBits. */
 const DEFAULT_DIFFICULTY = 2;

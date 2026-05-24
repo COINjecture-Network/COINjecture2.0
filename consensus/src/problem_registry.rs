@@ -125,7 +125,7 @@ pub trait ProblemDescriptor: Send + Sync {
 
     /// Size-to-base-size ratio: how this problem's "natural" size at
     /// a given difficulty compares to the network's canonical size unit.
-    /// SubsetSum = 1.0 by convention. TSP = 0.35, SAT = 0.75, etc.
+    /// SubsetSum = 1.0 by convention. TSP = 0.85, SAT = 1.0, etc.
     fn size_ratio(&self) -> f64;
 
     /// Base difficulty weight for work score calculation.
@@ -183,7 +183,7 @@ impl ProblemDescriptor for SubsetSumDescriptor {
         false
     }
     fn absolute_max_size(&self) -> usize {
-        60
+        180
     }
 }
 
@@ -202,7 +202,7 @@ impl ProblemDescriptor for SatDescriptor {
         VerificationCost::Linear
     }
     fn size_ratio(&self) -> f64 {
-        0.75
+        1.0
     }
     fn base_difficulty_weight(&self) -> f64 {
         1.2
@@ -211,7 +211,7 @@ impl ProblemDescriptor for SatDescriptor {
         false
     }
     fn absolute_max_size(&self) -> usize {
-        120
+        320
     }
 }
 
@@ -230,7 +230,7 @@ impl ProblemDescriptor for TspDescriptor {
         VerificationCost::Linear
     }
     fn size_ratio(&self) -> f64 {
-        0.35
+        0.9
     }
     fn base_difficulty_weight(&self) -> f64 {
         1.5
@@ -239,7 +239,7 @@ impl ProblemDescriptor for TspDescriptor {
         true
     }
     fn absolute_max_size(&self) -> usize {
-        30
+        150
     }
 }
 

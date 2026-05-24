@@ -753,27 +753,55 @@ impl CoinjectNode {
             ),
         );
 
+        let mining_template_cache: mining::MiningTemplateCache =
+            Arc::new(tokio::sync::RwLock::new(None));
+
         let mining_work_provider: Option<MiningWorkProvider> = self.miner.as_ref().map(|miner| {
             let miner = Arc::clone(miner);
+            let cache = Arc::clone(&mining_template_cache);
             let best_height = self.chain.best_height_ref();
             let best_hash = self.chain.best_hash_ref();
             Arc::new(move || -> MiningWorkFuture {
                 let miner = Arc::clone(&miner);
+                let cache = Arc::clone(&cache);
                 let best_height = Arc::clone(&best_height);
                 let best_hash = Arc::clone(&best_hash);
                 Box::pin(async move {
                     let bh = *best_height.read().await;
                     let prev = *best_hash.read().await;
                     let next_height = bh + 1;
-                    let miner = miner.read().await;
-                    let difficulty = miner.current_difficulty();
-                    let problem = miner.generate_problem(next_height, prev).await;
-                    Ok(MiningWork {
-                        next_height,
-                        prev_hash: hex::encode(prev.as_bytes()),
-                        difficulty,
-                        problem,
-                    })
+                    let prev_hex = hex::encode(prev.as_bytes());
+
+                    if let Some(cached) = cache.read().await.clone() {
+                        if cached.next_height == next_height && cached.prev_hash == prev_hex {
+                            return Ok(cached);
+                        }
+                    }
+
+                    if let Ok(miner_guard) = miner.try_read() {
+                        let difficulty = miner_guard.current_difficulty();
+                        let problem = miner_guard.generate_problem(next_height, prev).await;
+                        let work = MiningWork {
+                            next_height,
+                            prev_hash: prev_hex.clone(),
+                            difficulty,
+                            problem,
+                        };
+                        *cache.write().await = Some(work.clone());
+                        return Ok(work);
+                    }
+
+                    // Mining loop holds `write()`; return template published just before `mine_block`.
+                    if let Some(cached) = cache.read().await.clone() {
+                        if cached.next_height == next_height && cached.prev_hash == prev_hex {
+                            return Ok(cached);
+                        }
+                    }
+
+                    Err(
+                        "Mining template not ready yet; retry chain_getMiningWork in a few seconds"
+                            .to_string(),
+                    )
                 }) as MiningWorkFuture
             }) as MiningWorkProvider
         });
@@ -2639,6 +2667,7 @@ impl CoinjectNode {
             let best_peer_height_for_mining = Arc::clone(&best_known_peer_height);
             let peer_consensus_for_mining = Arc::clone(&peer_consensus);
             let dev_mode = self.config.dev;
+            let mining_template_cache_for_loop = Arc::clone(&mining_template_cache);
 
             // CRITICAL FIX: Use tokio::spawn for multi-threaded I/O scheduling
             let cpp_tx_for_mining = cpp_network_cmd_tx_for_mining;
@@ -2646,6 +2675,7 @@ impl CoinjectNode {
                 info!("mining task started");
                 Self::mining_loop(
                     miner,
+                    mining_template_cache_for_loop,
                     chain,
                     state,
                     timelock_state,

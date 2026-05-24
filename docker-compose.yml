@@ -63,6 +63,7 @@ services:
     command: >
       --mine
       --data-dir /data
+      --chain-id coinject-network-b-v3
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -115,6 +116,7 @@ services:
     command: >
       --mine
       --data-dir /data
+      --chain-id coinject-network-b-v3
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -165,6 +167,7 @@ services:
     command: >
       --mine
       --data-dir /data
+      --chain-id coinject-network-b-v3
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -215,6 +218,7 @@ services:
     command: >
       --mine
       --data-dir /data
+      --chain-id coinject-network-b-v3
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -268,7 +272,7 @@ services:
       - RATE_LIMIT_RPS=${RATE_LIMIT_RPS:-100}
       - RUST_LOG=${RUST_LOG:-info}
       - COINJECTURE_NETWORK=${COINJECTURE_NETWORK:-testnet}
-      - NODE_RPC_URL=${NODE_RPC_URL:-http://bootnode:9933}
+      - NODE_RPC_URL=${NODE_RPC_URL:-http://bootnode:9933,http://node1:9933}
       - INDEXER_ENABLED=${INDEXER_ENABLED:-true}
       - INDEXER_POLL_INTERVAL=${INDEXER_POLL_INTERVAL:-5}
       - INDEXER_CONFIRMATIONS=${INDEXER_CONFIRMATIONS:-6}

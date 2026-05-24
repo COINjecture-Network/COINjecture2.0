@@ -36,8 +36,9 @@ use tokio::sync::RwLock;
 /// See docs/BOOTSTRAP.md for the full bootstrap → empirical transition.
 const DIFFICULTY_WINDOW: usize = 20;
 
-/// Defer difficulty change when **σ > HIGH_VARIANCE_RATIO × μ** (strict 0.8 from tokenomics spec).
-const HIGH_VARIANCE_RATIO: f64 = 0.8;
+/// Defer difficulty change when **σ > HIGH_VARIANCE_RATIO × μ**.
+/// Relaxed to 1.0 so mixed SAT/TSP/SubsetSum solve times can still retarget.
+const HIGH_VARIANCE_RATIO: f64 = 1.0;
 const RECOVERY_STABLE_RATIO: f64 = 1.2;
 const RECOVERY_STEP: usize = 1;
 
@@ -46,6 +47,12 @@ const ABSOLUTE_MIN_SIZE: usize = 1;
 
 /// Default optimal solve / block pacing target (10 seconds) — matches tokenomics difficulty spec.
 const DEFAULT_TARGET_US: u64 = 10_000_000;
+
+/// Bootstrap canonical size (SubsetSum item count unit at genesis).
+pub const BOOTSTRAP_CURRENT_SIZE: usize = 90;
+
+/// Maximum canonical `current_size` for sync retarget and SubsetSum without registry.
+pub const CANONICAL_MAX_SIZE: usize = 220;
 
 /// Scale factor clamp expressed as a fraction: new_size stays in
 /// [current × MIN_SCALE_NUM/DENOM, current × MAX_SCALE_NUM/DENOM].
@@ -82,7 +89,7 @@ impl DifficultyAdjuster {
     pub fn new() -> Self {
         DifficultyAdjuster {
             recent_solve_times_us: VecDeque::with_capacity(DIFFICULTY_WINDOW),
-            current_size: 20, // Canonical SubsetSum size unit (bootstrap default)
+            current_size: BOOTSTRAP_CURRENT_SIZE,
             recovery_target: None,
             stall_counter: 0,
             network_metrics: None,
@@ -94,7 +101,7 @@ impl DifficultyAdjuster {
     pub fn with_metrics(network_metrics: Arc<RwLock<NetworkMetrics>>) -> Self {
         DifficultyAdjuster {
             recent_solve_times_us: VecDeque::with_capacity(DIFFICULTY_WINDOW),
-            current_size: 20,
+            current_size: BOOTSTRAP_CURRENT_SIZE,
             recovery_target: None,
             stall_counter: 0,
             network_metrics: Some(network_metrics),
@@ -109,7 +116,7 @@ impl DifficultyAdjuster {
     ) -> Self {
         DifficultyAdjuster {
             recent_solve_times_us: VecDeque::with_capacity(DIFFICULTY_WINDOW),
-            current_size: 20,
+            current_size: BOOTSTRAP_CURRENT_SIZE,
             recovery_target: None,
             stall_counter: 0,
             network_metrics: Some(network_metrics),
@@ -176,10 +183,10 @@ impl DifficultyAdjuster {
             }
         } else {
             match problem_type {
-                "TSP" => (0.5, 30, ABSOLUTE_MIN_SIZE),
-                "SAT" => (0.7, 120, ABSOLUTE_MIN_SIZE),
-                "SubsetSum" => (0.8, 60, ABSOLUTE_MIN_SIZE),
-                _ => (0.8, 60, ABSOLUTE_MIN_SIZE),
+                "TSP" => (0.5, 120, ABSOLUTE_MIN_SIZE),
+                "SAT" => (0.7, 320, ABSOLUTE_MIN_SIZE),
+                "SubsetSum" => (0.8, 120, ABSOLUTE_MIN_SIZE),
+                _ => (0.8, 120, ABSOLUTE_MIN_SIZE),
             }
         };
 
@@ -202,7 +209,13 @@ impl DifficultyAdjuster {
             let min_size = (estimated_size as f64 * 0.2)
                 .max(abs_min as f64)
                 .max(ABSOLUTE_MIN_SIZE as f64) as usize;
-            let max_size = (estimated_size as f64 * 2.0).min(abs_max as f64) as usize;
+            let mut max_size = (estimated_size as f64 * 2.0).min(abs_max as f64) as usize;
+            // Network pacing must not shrink instances below the adjuster's canonical size
+            // (otherwise `np_problem_size` reads 60 while SAT instances use ~6 variables).
+            max_size = max_size
+                .max(self.current_size())
+                .min(abs_max);
+            let min_size = min_size.min(max_size.saturating_sub(1));
 
             (
                 min_size.max(ABSOLUTE_MIN_SIZE),
@@ -211,10 +224,10 @@ impl DifficultyAdjuster {
         } else {
             let min = abs_min.max(ABSOLUTE_MIN_SIZE);
             let max = abs_max.min(match problem_type {
-                "SubsetSum" => 50,
-                "SAT" => 100,
-                "TSP" => 25,
-                _ => 50,
+                "SubsetSum" => CANONICAL_MAX_SIZE,
+                "SAT" => 320,
+                "TSP" => 120,
+                _ => CANONICAL_MAX_SIZE,
             });
             (min, max.max(min + 1))
         }
@@ -327,7 +340,7 @@ impl DifficultyAdjuster {
         let max_clamped =
             (self.current_size() as u128 * SCALE_CLAMP_MAX_NUM / SCALE_CLAMP_MAX_DEN) as usize;
 
-        let (global_min, global_max) = (ABSOLUTE_MIN_SIZE, 50usize);
+        let (global_min, global_max) = (ABSOLUTE_MIN_SIZE, CANONICAL_MAX_SIZE);
         let bounded = adjusted_size
             .max(min_clamped.max(global_min))
             .min(max_clamped.min(global_max));
@@ -442,8 +455,8 @@ impl DifficultyAdjuster {
     /// Penalize difficulty immediately after an unsolved block.
     pub fn penalize_failure(&mut self) -> usize {
         let old_size = self.current_size();
-        // Reduce to 85%, floor at ABSOLUTE_MIN_SIZE.
-        let reduced = ((old_size as u128 * 85) / 100).max(ABSOLUTE_MIN_SIZE as u128) as usize;
+        // Reduce to 90%, floor at ABSOLUTE_MIN_SIZE (less aggressive than 85% — fast solvers were over-penalizing).
+        let reduced = ((old_size as u128 * 90) / 100).max(ABSOLUTE_MIN_SIZE as u128) as usize;
         println!("⚠️  Mining failure penalty: {} → {}", old_size, reduced);
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
@@ -455,7 +468,7 @@ impl DifficultyAdjuster {
     pub async fn penalize_failure_async(&mut self) -> usize {
         let old_size = self.current_size();
         let (min_size, _) = self.get_size_limits("SubsetSum").await;
-        let reduced = ((old_size as u128 * 85) / 100)
+        let reduced = ((old_size as u128 * 90) / 100)
             .max(min_size as u128)
             .max(ABSOLUTE_MIN_SIZE as u128) as usize;
         println!(
@@ -484,12 +497,12 @@ impl DifficultyAdjuster {
         }
         // Legacy fallback
         match problem_type {
-            "SubsetSum" => self.current_size().min(50),
+            "SubsetSum" => self.current_size().min(CANONICAL_MAX_SIZE),
             "SAT" => {
-                ((self.current_size() as f64 * 0.75).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 100)
+                ((self.current_size() as f64 * 1.0).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 320)
             }
             "TSP" => {
-                ((self.current_size() as f64 * 0.35).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 25)
+                ((self.current_size() as f64 * 0.9).round() as usize).clamp(ABSOLUTE_MIN_SIZE, 150)
             }
             _ => self.current_size(),
         }
@@ -504,15 +517,15 @@ impl DifficultyAdjuster {
             reg.get(problem_type).map(|d| d.size_ratio()).unwrap_or(1.0)
         } else {
             match problem_type {
-                "SAT" => 0.75,
-                "TSP" => 0.35,
+                "SAT" => 1.0,
+                "TSP" => 0.9,
                 _ => 1.0,
             }
         };
 
         ((self.current_size() as f64 * size_ratio).round() as usize)
             .max(min_size.max(ABSOLUTE_MIN_SIZE))
-            .min(max_size)
+            .min(max_size.max(min_size + 1))
     }
 
     /// Get statistics for monitoring (display/metrics only — NOT consensus).
@@ -737,7 +750,10 @@ mod tests {
         }
 
         let new_size = adjuster.adjust_difficulty();
-        assert!(new_size <= 50, "Size should be clamped to maximum");
+        assert!(
+            new_size <= CANONICAL_MAX_SIZE,
+            "Size should be clamped to maximum"
+        );
     }
 
     #[test]
@@ -797,15 +813,13 @@ mod tests {
     fn test_stall_penalty_applies_before_high_variance_deferral() {
         let mut adjuster = DifficultyAdjuster::new();
         let start_size = adjuster.current_size();
-        assert_eq!(start_size, 20);
+        assert_eq!(start_size, BOOTSTRAP_CURRENT_SIZE);
 
-        // 11 × 60 s + 9 × 1 μs → avg ≈ 33 s > 2 × (10 s × φ), and σ ≫ 0.8 μ.
-        for _ in 0..11 {
-            adjuster.record_solve_time(Duration::from_secs(60));
+        // 19 × 1 ms + 1 × 1000 s → avg ≫ target (stall), σ ≫ μ (defer retarget after stall).
+        for _ in 0..19 {
+            adjuster.record_solve_time(Duration::from_micros(1000));
         }
-        for _ in 0..9 {
-            adjuster.record_solve_time_us(1);
-        }
+        adjuster.record_solve_time(Duration::from_secs(1000));
 
         let new_size = adjuster.adjust_difficulty();
         let expected_penalized =
@@ -813,7 +827,7 @@ mod tests {
 
         assert_eq!(
             new_size, expected_penalized,
-            "stall penalty (70 % size) should apply even when variance deferral skips retarget"
+            "stall penalty (70 % size) should apply when variance deferral skips retarget"
         );
         assert!(
             new_size < start_size,

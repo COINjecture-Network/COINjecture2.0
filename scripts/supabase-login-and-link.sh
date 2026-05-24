@@ -17,7 +17,7 @@ if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
   exit 1
 fi
 
-PROJECT_REF="${SUPABASE_PROJECT_REF:-xmpjbhuzahtqsaspqitz}"
+PROJECT_REF="${SUPABASE_PROJECT_REF:-zmaodanzkfabhvmjiccr}"
 
 echo "Logging in to Supabase CLI..."
 npx supabase login --token "$SUPABASE_ACCESS_TOKEN"

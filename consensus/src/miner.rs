@@ -18,6 +18,16 @@ const MAX_MINING_ATTEMPTS: usize = 5;
 const MINING_TIMEOUT: Duration = Duration::from_secs(60);
 const FAILURE_PENALTY_TIME: Duration = Duration::from_secs(60);
 
+/// DP subset-sum only when table stays bounded.
+const SUBSET_SUM_DP_MAX_CELLS: usize = 8_000_000;
+/// 1D pseudo-polynomial DP when total sum fits (exact, mining-generated instances).
+const SUBSET_SUM_1D_MAX_SUM: usize = 200_000;
+/// Meet-in-the-middle for modest n (2^(n/2) per half).
+const SUBSET_SUM_MITM_MAX_N: usize = 44;
+/// SAT wall-clock budget: 30s + 100ms per variable (capped at mining timeout).
+const SAT_TIMEOUT_BASE: Duration = Duration::from_secs(30);
+const SAT_TIMEOUT_PER_VAR: Duration = Duration::from_millis(100);
+
 /// Header PoW uses hex(`hash`) with 32 bytes → 64 hex chars. At most 64 leading `'0'` can exist;
 /// this is a representation limit, not a network “difficulty ceiling” policy.
 const HEADER_HASH_HEX_DIGITS: u32 = 64;
@@ -91,7 +101,7 @@ pub fn solve_problem_blocking(problem: ProblemType) -> Option<(Solution, Duratio
             solve_subset_sum_blocking(numbers, *target, &mut memory_used)
         }
         ProblemType::SAT { variables, clauses } => {
-            let timeout = Duration::from_secs(30);
+            let timeout = sat_solve_timeout(*variables);
             if *variables <= 32 {
                 solve_sat_brute_force_blocking(
                     *variables,
@@ -111,13 +121,19 @@ pub fn solve_problem_blocking(problem: ProblemType) -> Option<(Solution, Duratio
             }
         }
         ProblemType::TSP { cities, distances } => {
-            solve_tsp_blocking(*cities, distances, &mut memory_used)
+            solve_tsp_blocking(*cities, distances, &mut memory_used, start_time)
         }
         ProblemType::Custom { .. } => None,
     };
 
     let solve_time = start_time.elapsed();
     solution.map(|s| (s, solve_time, memory_used))
+}
+
+fn sat_solve_timeout(variables: usize) -> Duration {
+    SAT_TIMEOUT_BASE
+        .saturating_add(SAT_TIMEOUT_PER_VAR.saturating_mul(variables as u32))
+        .min(MINING_TIMEOUT)
 }
 
 /// Subset sum solver (blocking standalone)
@@ -128,9 +144,33 @@ fn solve_subset_sum_blocking(numbers: &[i64], target: i64, memory: &mut usize) -
     if target > sum || target < 0 {
         return None;
     }
+    if target == 0 {
+        return Some(Solution::SubsetSum(vec![]));
+    }
 
     let offset = sum.unsigned_abs() as usize;
     let range = 2 * offset + 1;
+    let dp_cells = (n + 1).saturating_mul(range);
+
+    if dp_cells <= SUBSET_SUM_DP_MAX_CELLS {
+        solve_subset_sum_dp_blocking(numbers, target, offset, range, memory)
+    } else if sum as usize <= SUBSET_SUM_1D_MAX_SUM {
+        solve_subset_sum_1d_dp_blocking(numbers, target, memory)
+    } else if n <= SUBSET_SUM_MITM_MAX_N {
+        solve_subset_sum_mitm_blocking(numbers, target, memory)
+    } else {
+        solve_subset_sum_heuristic_blocking(numbers, target, memory)
+    }
+}
+
+fn solve_subset_sum_dp_blocking(
+    numbers: &[i64],
+    target: i64,
+    offset: usize,
+    range: usize,
+    memory: &mut usize,
+) -> Option<Solution> {
+    let n = numbers.len();
     let mut dp = vec![vec![false; range]; n + 1];
     *memory += dp.len() * dp[0].len();
 
@@ -170,6 +210,138 @@ fn solve_subset_sum_blocking(numbers: &[i64], target: i64, memory: &mut usize) -
 
     indices.reverse();
     Some(Solution::SubsetSum(indices))
+}
+
+/// Space-efficient exact subset-sum DP (O(n · sum)) for solvable mining instances.
+fn solve_subset_sum_1d_dp_blocking(
+    numbers: &[i64],
+    target: i64,
+    memory: &mut usize,
+) -> Option<Solution> {
+    let total: i64 = numbers.iter().sum();
+    if target < 0 || target > total {
+        return None;
+    }
+    if target == 0 {
+        return Some(Solution::SubsetSum(vec![]));
+    }
+
+    let max = total as usize;
+    let mut dp = vec![false; max + 1];
+    let mut prev: Vec<Option<(usize, usize)>> = vec![None; max + 1];
+    *memory += dp.len() + prev.len() * std::mem::size_of::<Option<(usize, usize)>>();
+
+    dp[0] = true;
+    for (i, &num) in numbers.iter().enumerate() {
+        if num <= 0 {
+            continue;
+        }
+        let v = num as usize;
+        if v > max {
+            continue;
+        }
+        for s in (v..=max).rev() {
+            if !dp[s] && dp[s - v] {
+                dp[s] = true;
+                prev[s] = Some((s - v, i));
+            }
+        }
+    }
+
+    let t = target as usize;
+    if !dp[t] {
+        return None;
+    }
+
+    let mut indices = Vec::new();
+    let mut s = t;
+    while s > 0 {
+        let (prev_s, idx) = prev[s]?;
+        indices.push(idx);
+        s = prev_s;
+    }
+    indices.sort_unstable();
+    Some(Solution::SubsetSum(indices))
+}
+
+fn solve_subset_sum_mitm_blocking(
+    numbers: &[i64],
+    target: i64,
+    memory: &mut usize,
+) -> Option<Solution> {
+    let n = numbers.len();
+    let mid = n / 2;
+    let (left, right) = numbers.split_at(mid);
+
+    let mut left_sums: Vec<(i64, u32)> = Vec::new();
+    let left_count = 1usize << left.len();
+    for mask in 0..left_count {
+        let mut s = 0i64;
+        let mut bits = 0u32;
+        for (i, &v) in left.iter().enumerate() {
+            if mask & (1 << i) != 0 {
+                s += v;
+                bits |= 1 << i;
+            }
+        }
+        left_sums.push((s, bits));
+    }
+    left_sums.sort_by_key(|(s, _)| *s);
+    *memory += left_sums.len() * std::mem::size_of::<(i64, u32)>();
+
+    let right_count = 1usize << right.len();
+    for mask in 0..right_count {
+        let mut s = 0i64;
+        let mut right_bits = 0u32;
+        for (i, &v) in right.iter().enumerate() {
+            if mask & (1 << i) != 0 {
+                s += v;
+                right_bits |= 1 << i;
+            }
+        }
+        let need = target - s;
+        if let Ok(idx) = left_sums.binary_search_by_key(&need, |(v, _)| *v) {
+            let (_, left_bits) = left_sums[idx];
+            let mut indices = Vec::new();
+            for i in 0..left.len() {
+                if left_bits & (1 << i) != 0 {
+                    indices.push(i);
+                }
+            }
+            for i in 0..right.len() {
+                if right_bits & (1 << i) != 0 {
+                    indices.push(mid + i);
+                }
+            }
+            return Some(Solution::SubsetSum(indices));
+        }
+    }
+    None
+}
+
+fn solve_subset_sum_heuristic_blocking(
+    numbers: &[i64],
+    target: i64,
+    memory: &mut usize,
+) -> Option<Solution> {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(
+        numbers.iter().fold(0u64, |h, &x| h.wrapping_mul(31).wrapping_add(x as u64)),
+    );
+    *memory += 4096;
+
+    for _ in 0..50_000 {
+        let k = rng.gen_range(1..=numbers.len());
+        let mut indices: Vec<usize> = (0..numbers.len()).collect();
+        indices.shuffle(&mut rng);
+        indices.truncate(k);
+        let s: i64 = indices.iter().map(|&i| numbers[i]).sum();
+        if s == target {
+            indices.sort_unstable();
+            return Some(Solution::SubsetSum(indices));
+        }
+    }
+    None
 }
 
 /// SAT brute force solver (blocking standalone)
@@ -292,32 +464,16 @@ fn solve_sat_with_timeout_blocking(
     }
 }
 
-/// TSP solver (blocking standalone)
-fn solve_tsp_blocking(
-    cities: usize,
-    distances: &[Vec<u64>],
-    memory: &mut usize,
-) -> Option<Solution> {
-    if cities == 0 {
-        return None;
-    }
-
-    *memory += cities * std::mem::size_of::<usize>();
-
+fn tsp_nearest_neighbor(cities: usize, distances: &[Vec<u64>]) -> Vec<usize> {
     let mut tour = Vec::with_capacity(cities);
     let mut visited = vec![false; cities];
-
     tour.push(0);
     visited[0] = true;
 
     while tour.len() < cities {
-        // SAFETY: tour always has at least one element because we push(0) before the loop.
-        let current = *tour
-            .last()
-            .expect("tour invariant: always non-empty after initial push");
+        let current = *tour.last().expect("tour non-empty");
         let mut best_next = None;
         let mut best_dist = u64::MAX;
-
         for next in 0..cities {
             if !visited[next] {
                 let dist = distances[current][next];
@@ -327,7 +483,6 @@ fn solve_tsp_blocking(
                 }
             }
         }
-
         if let Some(next) = best_next {
             tour.push(next);
             visited[next] = true;
@@ -335,7 +490,59 @@ fn solve_tsp_blocking(
             break;
         }
     }
+    tour
+}
 
+fn tsp_two_opt(tour: &mut [usize], distances: &[Vec<u64>], cities: usize, deadline: Instant) {
+    loop {
+        if Instant::now() >= deadline {
+            break;
+        }
+        let mut improved = false;
+        for i in 0..cities.saturating_sub(1) {
+            for j in (i + 2)..cities {
+                if Instant::now() >= deadline {
+                    return;
+                }
+                let a = tour[i];
+                let b = tour[i + 1];
+                let c = tour[j];
+                let d = tour[(j + 1) % cities];
+                let before =
+                    distances[a][b] + distances[c][d];
+                let after =
+                    distances[a][c] + distances[b][d];
+                if after < before {
+                    tour[i + 1..=j].reverse();
+                    improved = true;
+                }
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+}
+
+/// TSP solver (blocking): nearest-neighbor seed + 2-opt until mining timeout budget.
+fn solve_tsp_blocking(
+    cities: usize,
+    distances: &[Vec<u64>],
+    memory: &mut usize,
+    start_time: Instant,
+) -> Option<Solution> {
+    if cities == 0 {
+        return None;
+    }
+
+    *memory += cities * std::mem::size_of::<usize>();
+    let deadline = start_time + MINING_TIMEOUT;
+
+    let mut tour = tsp_nearest_neighbor(cities, distances);
+    if tour.len() != cities {
+        return None;
+    }
+    tsp_two_opt(&mut tour, distances, cities, deadline);
     Some(Solution::TSP(tour))
 }
 
@@ -438,10 +645,17 @@ impl Miner {
         self.difficulty
     }
 
-    /// Current NP instance size from the post-block difficulty adjuster (subset count, etc. driver).
+    /// Effective NP instance size (max across built-in problem types at current adjuster size).
     pub async fn current_np_problem_size(&self) -> usize {
         let adjuster = self.difficulty_adjuster.read().await;
-        adjuster.current_size()
+        [
+            adjuster.size_for_problem_type("SubsetSum"),
+            adjuster.size_for_problem_type("SAT"),
+            adjuster.size_for_problem_type("TSP"),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or_else(|| adjuster.current_size())
     }
 
     /// Generate a deterministic NP-hard problem for mining
@@ -483,7 +697,7 @@ impl Miner {
         };
 
         // Randomly choose problem type
-        match rng.random_range(0..3) {
+        match rng.gen_range(0..3) {
             0 => {
                 // Subset Sum - Generate SOLVABLE problem by selecting a random subset first
                 // Use async version if network metrics available, otherwise sync version
@@ -494,13 +708,11 @@ impl Miner {
                     let adjuster = self.difficulty_adjuster.read().await;
                     adjuster.size_for_problem_type("SubsetSum")
                 };
-                let numbers: Vec<i64> = (0..problem_size)
-                    .map(|_| rng.random_range(1..1000))
-                    .collect();
+                let numbers: Vec<i64> = (0..problem_size).map(|_| rng.gen_range(1..1000)).collect();
 
                 // Randomly select which numbers to include in the solution
                 // This guarantees the problem is solvable
-                let subset_size = rng.random_range(1..=problem_size.min(problem_size - 1).max(1));
+                let subset_size = rng.gen_range(1..=problem_size.min(problem_size - 1).max(1));
                 let mut selected_indices: Vec<usize> = (0..problem_size).collect();
                 selected_indices.shuffle(&mut rng);
                 selected_indices.truncate(subset_size);
@@ -523,7 +735,7 @@ impl Miner {
 
                 // Generate a random satisfying assignment first (our "hidden solution")
                 let satisfying_assignment: Vec<bool> =
-                    (0..variables).map(|_| rng.random_bool(0.5)).collect();
+                    (0..variables).map(|_| rng.gen_bool(0.5)).collect();
 
                 use rand::seq::SliceRandom;
                 let clauses: Vec<Clause> = (0..num_clauses)
@@ -542,7 +754,7 @@ impl Miner {
                                 // 70% chance: Create literal that matches assignment (satisfied)
                                 // 30% chance: Create opposite literal (not satisfied by this variable)
                                 // This ensures at least one literal per clause is satisfied
-                                if rng.random_bool(0.7) {
+                                if rng.gen_bool(0.7) {
                                     if assignment_value {
                                         var
                                     } else {
@@ -574,7 +786,7 @@ impl Miner {
                 let mut distances = vec![vec![0u64; cities]; cities];
                 for i in 0..cities {
                     for j in i + 1..cities {
-                        let dist = rng.random_range(1..100);
+                        let dist = rng.gen_range(1..100);
                         distances[i][j] = dist;
                         distances[j][i] = dist;
                     }
@@ -585,401 +797,9 @@ impl Miner {
         }
     }
 
-    /// Solve NP-hard problem using backtracking/heuristics
-    /// Returns None if timeout exceeded or problem is unsolvable
+    /// Solve NP-hard problem using backtracking/heuristics (delegates to blocking solvers).
     pub fn solve_problem(&self, problem: &ProblemType) -> Option<(Solution, Duration, usize)> {
-        let start_time = Instant::now();
-        let mut memory_used = 0;
-
-        let solution = match problem {
-            ProblemType::SubsetSum { numbers, target } => {
-                // Dynamic programming solution (pseudo-polynomial time)
-                self.solve_subset_sum(numbers, *target, &mut memory_used)
-            }
-            ProblemType::SAT { variables, clauses } => {
-                // For problems ≤32 vars, use brute force (2^32 = ~4.3B possibilities, manageable)
-                // For larger problems, use DPLL with timeout
-                let timeout = Duration::from_secs(30); // Increase timeout for larger problems
-                if *variables <= 32 {
-                    self.solve_sat_brute_force(
-                        *variables,
-                        clauses,
-                        &mut memory_used,
-                        start_time,
-                        timeout,
-                    )
-                } else {
-                    self.solve_sat_with_timeout(
-                        *variables,
-                        clauses,
-                        &mut memory_used,
-                        timeout,
-                        start_time,
-                    )
-                }
-            }
-            ProblemType::TSP { cities, distances } => {
-                // Greedy nearest neighbor heuristic
-                self.solve_tsp(*cities, distances, &mut memory_used)
-            }
-            ProblemType::Custom { .. } => None,
-        };
-
-        let solve_time = start_time.elapsed();
-        solution.map(|s| (s, solve_time, memory_used))
-    }
-
-    /// Subset sum solver using dynamic programming
-    fn solve_subset_sum(
-        &self,
-        numbers: &[i64],
-        target: i64,
-        memory: &mut usize,
-    ) -> Option<Solution> {
-        let n = numbers.len();
-        let sum: i64 = numbers.iter().sum();
-
-        if target > sum || target < 0 {
-            return None;
-        }
-
-        // DP table
-        let offset = sum.unsigned_abs() as usize;
-        let range = 2 * offset + 1;
-        let mut dp = vec![vec![false; range]; n + 1];
-        *memory += dp.len() * dp[0].len();
-
-        dp[0][offset] = true;
-
-        for i in 1..=n {
-            for j in 0..range {
-                dp[i][j] = dp[i - 1][j];
-                let num = numbers[i - 1];
-                let prev_idx = j as i64 - num;
-                if prev_idx >= 0 && prev_idx < range as i64 {
-                    dp[i][j] |= dp[i - 1][prev_idx as usize];
-                }
-            }
-        }
-
-        let target_idx = (offset as i64 + target) as usize;
-        if !dp[n][target_idx] {
-            return None;
-        }
-
-        // Backtrack to find solution
-        let mut indices = Vec::new();
-        let mut curr_sum = target;
-        for i in (1..=n).rev() {
-            if curr_sum == 0 {
-                break;
-            }
-            let num = numbers[i - 1];
-            if curr_sum >= num {
-                let prev_idx = (offset as i64 + curr_sum - num) as usize;
-                if prev_idx < range && dp[i - 1][prev_idx] {
-                    indices.push(i - 1);
-                    curr_sum -= num;
-                }
-            }
-        }
-
-        Some(Solution::SubsetSum(indices))
-    }
-
-    /// SAT solver using brute force (for problems ≤32 variables)
-    fn solve_sat_brute_force(
-        &self,
-        variables: usize,
-        clauses: &[Clause],
-        memory: &mut usize,
-        start_time: Instant,
-        timeout: Duration,
-    ) -> Option<Solution> {
-        *memory += variables * 8;
-
-        // Brute force: try all 2^variables assignments
-        // Cap at 2^32 for safety (4.3 billion possibilities)
-        let max_assignments = 1u64 << variables.min(32);
-        for i in 0..max_assignments {
-            if start_time.elapsed() > timeout {
-                break;
-            }
-
-            let mut assignment = vec![false; variables];
-            for j in 0..variables.min(32) {
-                assignment[j] = (i >> j) & 1 == 1;
-            }
-
-            // Check if this assignment satisfies all clauses
-            let satisfied = clauses.iter().all(|clause| {
-                clause.literals.iter().any(|&literal| {
-                    let var_idx = (literal.abs() - 1) as usize;
-                    if var_idx < assignment.len() {
-                        (literal > 0) == assignment[var_idx]
-                    } else {
-                        false
-                    }
-                })
-            });
-
-            if satisfied {
-                return Some(Solution::SAT(assignment));
-            }
-        }
-
-        None
-    }
-
-    /// SAT solver using random search (legacy, not used)
-    #[allow(dead_code)]
-    fn solve_sat(
-        &self,
-        variables: usize,
-        clauses: &[Clause],
-        memory: &mut usize,
-    ) -> Option<Solution> {
-        // Simple randomized search (not full DPLL for simplicity)
-        *memory += variables * 8;
-
-        let mut rng = rand::rng();
-        for _ in 0..1000 {
-            // Try 1000 random assignments
-            let assignment: Vec<bool> = (0..variables).map(|_| rng.random_bool(0.5)).collect();
-
-            let satisfied = clauses.iter().all(|clause| {
-                clause.literals.iter().any(|&literal| {
-                    let var_idx = (literal.abs() - 1) as usize;
-                    let value = assignment.get(var_idx).copied().unwrap_or(false);
-                    if literal > 0 {
-                        value
-                    } else {
-                        !value
-                    }
-                })
-            });
-
-            if satisfied {
-                return Some(Solution::SAT(assignment));
-            }
-        }
-
-        None
-    }
-
-    /// SAT solver with timeout protection using DPLL (Davis-Putnam-Logemann-Loveland) algorithm
-    fn solve_sat_with_timeout(
-        &self,
-        variables: usize,
-        clauses: &[Clause],
-        memory: &mut usize,
-        timeout: Duration,
-        start_time: Instant,
-    ) -> Option<Solution> {
-        *memory += variables * 8;
-
-        // DPLL recursive solver - simplified and corrected implementation
-        let mut assignment = vec![None; variables]; // None = unassigned, Some(true/false) = assigned
-
-        fn is_clause_satisfied(clause: &Clause, assignment: &[Option<bool>]) -> bool {
-            clause.literals.iter().any(|&literal| {
-                let var_idx = (literal.abs() - 1) as usize;
-                if var_idx < assignment.len() {
-                    if let Some(value) = assignment[var_idx] {
-                        return (literal > 0) == value;
-                    }
-                }
-                false
-            })
-        }
-
-        fn dpll_solve(
-            clauses: &[Clause],
-            assignment: &mut [Option<bool>],
-            start_time: Instant,
-            timeout: Duration,
-        ) -> bool {
-            // Check timeout
-            if start_time.elapsed() > timeout {
-                return false;
-            }
-
-            // Unit propagation: repeatedly find and propagate unit clauses
-            loop {
-                let mut propagated = false;
-                for clause in clauses {
-                    if is_clause_satisfied(clause, assignment) {
-                        continue;
-                    }
-
-                    // Count unassigned and assigned literals
-                    let mut unassigned_literal: Option<(usize, bool)> = None;
-                    let mut has_satisfied = false;
-
-                    for &literal in &clause.literals {
-                        let var_idx = (literal.abs() - 1) as usize;
-                        if var_idx >= assignment.len() {
-                            continue;
-                        }
-
-                        if let Some(value) = assignment[var_idx] {
-                            if (literal > 0) == value {
-                                has_satisfied = true;
-                                break;
-                            }
-                        } else if unassigned_literal.is_none() {
-                            unassigned_literal = Some((var_idx, literal > 0));
-                        } else {
-                            // More than one unassigned - not a unit clause
-                            unassigned_literal = None;
-                            break;
-                        }
-                    }
-
-                    if has_satisfied {
-                        continue;
-                    }
-
-                    if let Some((var_idx, value)) = unassigned_literal {
-                        // Unit clause found - assign the literal to satisfy the clause
-                        assignment[var_idx] = Some(value);
-                        propagated = true;
-                    } else if unassigned_literal.is_none() {
-                        // All literals assigned but clause not satisfied = conflict
-                        return false;
-                    }
-                }
-
-                if !propagated {
-                    break;
-                }
-            }
-
-            // Check if all clauses are satisfied
-            if clauses
-                .iter()
-                .all(|clause| is_clause_satisfied(clause, assignment))
-            {
-                return true;
-            }
-
-            // Find first unassigned variable for decision
-            if let Some(var_idx) = assignment.iter().position(|&a| a.is_none()) {
-                // Try assigning true
-                assignment[var_idx] = Some(true);
-                if dpll_solve(clauses, assignment, start_time, timeout) {
-                    return true;
-                }
-
-                // Try assigning false
-                assignment[var_idx] = Some(false);
-                if dpll_solve(clauses, assignment, start_time, timeout) {
-                    return true;
-                }
-
-                // Backtrack
-                assignment[var_idx] = None;
-                false
-            } else {
-                // All variables assigned but not all clauses satisfied
-                false
-            }
-        }
-
-        if dpll_solve(clauses, &mut assignment, start_time, timeout) {
-            let solution: Vec<bool> = assignment.iter().map(|&a| a.unwrap_or(false)).collect();
-            Some(Solution::SAT(solution))
-        } else {
-            if start_time.elapsed() > timeout {
-                println!(
-                    "⏱️  SAT solver timeout after {:.2}s ({} vars, {} clauses)",
-                    start_time.elapsed().as_secs_f64(),
-                    variables,
-                    clauses.len()
-                );
-            } else {
-                // Debug: Check if problem is actually satisfiable by trying the known solution
-                // (This is only for debugging - in production we'd remove this)
-                println!("❌ SAT solver failed to find solution ({} vars, {} clauses) - checking satisfiability...", variables, clauses.len());
-
-                // Try brute force check on small problems
-                if variables <= 32 {
-                    let mut test_assignment = vec![false; variables];
-                    let mut found = false;
-                    for i in 0..(1u64 << variables.min(32)) {
-                        for j in 0..variables.min(32) {
-                            test_assignment[j] = (i >> j) & 1 == 1;
-                        }
-                        let satisfied = clauses.iter().all(|clause| {
-                            clause.literals.iter().any(|&literal| {
-                                let var_idx = (literal.abs() - 1) as usize;
-                                if var_idx < test_assignment.len() {
-                                    (literal > 0) == test_assignment[var_idx]
-                                } else {
-                                    false
-                                }
-                            })
-                        });
-                        if satisfied {
-                            found = true;
-                            println!(
-                                "⚠️  Problem IS satisfiable but DPLL failed! Assignment: {:?}",
-                                test_assignment.iter().take(10).collect::<Vec<_>>()
-                            );
-                            break;
-                        }
-                    }
-                    if !found {
-                        println!("⚠️  Problem appears to be UNSATISFIABLE (brute force check)");
-                    }
-                }
-            }
-            None
-        }
-    }
-
-    /// TSP solver using nearest neighbor heuristic
-    fn solve_tsp(
-        &self,
-        cities: usize,
-        distances: &[Vec<u64>],
-        memory: &mut usize,
-    ) -> Option<Solution> {
-        if cities == 0 {
-            return None;
-        }
-
-        *memory += cities * 8;
-
-        let mut tour = Vec::with_capacity(cities);
-        let mut visited = vec![false; cities];
-        let mut current = 0;
-
-        tour.push(current);
-        visited[current] = true;
-
-        for _ in 1..cities {
-            let mut nearest = None;
-            let mut min_dist = u64::MAX;
-
-            for next in 0..cities {
-                if !visited[next] {
-                    let dist = distances[current][next];
-                    if dist < min_dist {
-                        min_dist = dist;
-                        nearest = Some(next);
-                    }
-                }
-            }
-
-            if let Some(next) = nearest {
-                current = next;
-                tour.push(current);
-                visited[current] = true;
-            }
-        }
-
-        Some(Solution::TSP(tour))
+        solve_problem_blocking(problem.clone())
     }
 
     /// Mine a block with commit-reveal protocol

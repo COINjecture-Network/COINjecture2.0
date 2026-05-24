@@ -26,7 +26,11 @@ fn try_next_upstream_after_jsonrpc_error(request_method: Option<&str>, response:
     };
     let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
     let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("");
-    if msg.contains("mining disabled") || msg.contains("Mining work not available") {
+    if msg.contains("mining disabled")
+        || msg.contains("Mining work not available")
+        || msg.contains("Miner is producing a block")
+        || msg.contains("Mining template not ready")
+    {
         return true;
     }
     code == -32602
@@ -71,6 +75,8 @@ impl NodeRpcClient {
     const RETRY_DELAY_MS: u64 = 400;
     const LIGHT_RPC_TIMEOUT_SECS: u64 = 22;
     const HEAVY_RPC_TIMEOUT_SECS: u64 = 90;
+    /// Per-upstream cap for `chain_getMiningWork` so wedged miners fail over before the browser gives up.
+    const MINING_WORK_PROXY_TIMEOUT_SECS: u64 = 35;
 
     pub fn new(url: &str) -> Self {
         let urls = url
@@ -122,11 +128,21 @@ impl NodeRpcClient {
         let mut errors = Vec::new();
         let request_method = jsonrpc_method_from_request_body(&body);
 
+        let mining_work = request_method.as_deref() == Some("chain_getMiningWork");
+
         for url in &self.urls {
-            let resp = match self
-                .send_proxy_with_retry(url, body.clone(), x_forwarded_for)
+            let resp = match if mining_work {
+                self.send_proxy_once_with_timeout(
+                    url,
+                    body.clone(),
+                    x_forwarded_for,
+                    Duration::from_secs(Self::MINING_WORK_PROXY_TIMEOUT_SECS),
+                )
                 .await
-            {
+            } else {
+                self.send_proxy_with_retry(url, body.clone(), x_forwarded_for)
+                    .await
+            } {
                 Ok(resp) => resp,
                 Err(e) => {
                     errors.push(format!("{url}: {e}"));
@@ -237,6 +253,30 @@ impl NodeRpcClient {
     pub async fn get_block_by_height(&self, height: u64) -> Result<Value, NodeRpcError> {
         self.call_on(&self.http_heavy, "chain_getBlock", json!([height]))
             .await
+    }
+
+    async fn send_proxy_once_with_timeout(
+        &self,
+        url: &str,
+        body: Bytes,
+        x_forwarded_for: Option<&str>,
+        timeout: Duration,
+    ) -> Result<reqwest::Response, NodeRpcError> {
+        let client = Client::builder()
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(timeout)
+            .build()
+            .unwrap_or_else(|_| self.http_proxy.clone());
+        let mut req = client
+            .post(url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body);
+        if let Some(ip) = x_forwarded_for.filter(|s| !s.trim().is_empty()) {
+            req = req.header("X-Forwarded-For", ip.trim());
+        }
+        req.send()
+            .await
+            .map_err(|e| NodeRpcError::Unavailable(e.to_string()))
     }
 
     async fn send_proxy_with_retry(
