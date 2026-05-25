@@ -382,7 +382,11 @@ fn test_tsp_quality_is_not_near_zero_for_valid_tour() {
 
     let cities = 7usize;
     let distances: Vec<Vec<u64>> = (0..cities)
-        .map(|i| (0..cities).map(|j| if i == j { 0 } else { 100 + (i + j) as u64 }).collect())
+        .map(|i| {
+            (0..cities)
+                .map(|j| if i == j { 0 } else { 100 + (i + j) as u64 })
+                .collect()
+        })
         .collect();
     let tour: Vec<usize> = (0..cities).collect();
     let problem = ProblemType::TSP {

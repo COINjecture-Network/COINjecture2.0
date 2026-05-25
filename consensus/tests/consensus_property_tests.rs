@@ -156,7 +156,10 @@ fn test_penalize_failure_reduces_size() {
     let mut adj = DifficultyAdjuster::new();
     let before = adj.current_size();
     let after = adj.penalize_failure();
-    assert!(after <= before, "Failure penalty must not increase problem size");
+    assert!(
+        after <= before,
+        "Failure penalty must not increase problem size"
+    );
     assert!(
         after >= MIN_OPERATIONAL_SIZE,
         "Penalized size must stay above operational floor"
