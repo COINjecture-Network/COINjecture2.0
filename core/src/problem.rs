@@ -26,6 +26,47 @@ pub struct Clause {
     pub literals: Vec<i32>, // Positive = variable, negative = negated variable
 }
 
+/// Total length of a TSP tour (returns to city 0).
+fn tsp_tour_length(tour: &[usize], cities: usize, distances: &[Vec<u64>]) -> u64 {
+    (0..cities)
+        .map(|i| {
+            let from = tour[i];
+            let to = tour[(i + 1) % cities];
+            distances[from][to]
+        })
+        .sum()
+}
+
+/// Nearest-neighbor baseline tour length (for normalizing optimization quality).
+fn tsp_nearest_neighbor_length(cities: usize, distances: &[Vec<u64>]) -> u64 {
+    let mut tour = Vec::with_capacity(cities);
+    let mut visited = vec![false; cities];
+    tour.push(0);
+    visited[0] = true;
+
+    while tour.len() < cities {
+        let current = *tour.last().expect("tour non-empty");
+        let mut best_next = None;
+        let mut best_dist = u64::MAX;
+        for next in 0..cities {
+            if !visited[next] {
+                let dist = distances[current][next];
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_next = Some(next);
+                }
+            }
+        }
+        if let Some(next) = best_next {
+            tour.push(next);
+            visited[next] = true;
+        } else {
+            break;
+        }
+    }
+    tsp_tour_length(&tour, cities, distances)
+}
+
 /// Solution to an NP-hard problem
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Solution {
@@ -100,15 +141,11 @@ impl Solution {
                 if !self.verify(problem) {
                     return 0.0;
                 }
-                // Calculate tour length
-                let mut length = 0u64;
-                for i in 0..*cities {
-                    let from = tour[i];
-                    let to = tour[(i + 1) % cities];
-                    length += distances[from][to];
-                }
-                // Lower length = higher quality (inverse ratio)
-                1.0 / (length as f64 + 1.0)
+                let length = tsp_tour_length(tour, *cities, distances);
+                let baseline = tsp_nearest_neighbor_length(*cities, distances).max(1);
+                // Quality in [0, 1]: NN tour = 1.0; longer tours scale down (not 1/(length+1),
+                // which zeroed w_trunc for small instances with large distance matrices).
+                (baseline as f64 / length.max(baseline) as f64).clamp(0.0, 1.0)
             }
             (Solution::SAT(_), ProblemType::SAT { .. }) if self.verify(problem) => {
                 // Exact solution gets 1.0

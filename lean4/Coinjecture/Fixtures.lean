@@ -1,3 +1,6 @@
+import Coinjecture.Rewards
+import Coinjecture.WorkScore
+
 /-!
 Tier C — Rust ↔ Lean fixture alignment.
 
@@ -5,9 +8,6 @@ Canonical test vectors are duplicated in
 [`consensus/tests/lean_fixture_alignment.rs`](../consensus/tests/lean_fixture_alignment.rs).
 Regenerate check: `./scripts/verify-formal-fixtures.sh`
 -/
-
-import Coinjecture.Rewards
-import Coinjecture.WorkScore
 
 namespace Coinjecture.Fixtures
 

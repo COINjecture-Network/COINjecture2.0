@@ -16,7 +16,6 @@ use tokio::sync::RwLock;
 
 const MAX_MINING_ATTEMPTS: usize = 5;
 const MINING_TIMEOUT: Duration = Duration::from_secs(60);
-const FAILURE_PENALTY_TIME: Duration = Duration::from_secs(60);
 
 /// DP subset-sum only when table stays bounded.
 const SUBSET_SUM_DP_MAX_CELLS: usize = 8_000_000;
@@ -852,8 +851,13 @@ impl Miner {
             );
             {
                 let mut adjuster = self.difficulty_adjuster.write().await;
-                adjuster.record_solve_time(FAILURE_PENALTY_TIME);
-                let new_size = adjuster.penalize_failure();
+                // Do not record FAILURE_PENALTY_TIME (60s) into the retarget window — that
+                // falsely shrinks `current_size` and collapses instances to ~7 cities.
+                let new_size = if adjuster.has_metrics() {
+                    adjuster.penalize_failure_async().await
+                } else {
+                    adjuster.penalize_failure()
+                };
                 println!("   → New target problem size: {}", new_size);
             }
 

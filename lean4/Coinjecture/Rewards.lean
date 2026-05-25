@@ -53,27 +53,37 @@ theorem mintAtoms_zero_when_work_zero (wParent : CumulativeWork) (h : wParent �
 /-- **First harvest:** when `W_parent = w_trunc ≥ 1`, mint is exactly `S·K` atoms (= `K` display BEANS). -/
 theorem first_harvest (w : WorkTrunc) (hw : 1 ≤ w) :
     mintAtoms w w = rewardFixedPointScale * rewardEmissionMultiplier := by
-  simp [mintAtoms, hw]
+  unfold mintAtoms
+  have hwpos : 0 < w := Nat.lt_of_lt_of_le (by decide : 0 < 1) hw
+  have hw0 : w ≠ 0 := Nat.ne_of_gt hwpos
+  simp only [if_neg hw0]
+  rw [Nat.mul_assoc]
+  exact Nat.mul_div_cancel_left (rewardFixedPointScale * rewardEmissionMultiplier) hwpos
 
 theorem first_harvest_beans (w : WorkTrunc) (hw : 1 ≤ w) :
     mintBeans w w = rewardEmissionMultiplier := by
-  have h1 := first_harvest w hw
-  simp [mintBeans, h1, Nat.mul_div_cancel_left _ (by decide : rewardFixedPointScale ≠ 0)]
+  unfold mintBeans beansFromAtoms
+  rw [first_harvest w hw, Nat.mul_div_cancel_left rewardEmissionMultiplier (by decide : 0 < rewardFixedPointScale)]
 
 /-- Floor bound: `mint · W_parent ≤ w · S · K`. -/
 theorem mintAtoms_le_numerator (w wParent : Nat) (h : wParent ≠ 0) :
     mintAtoms w wParent * wParent ≤ w * rewardFixedPointScale * rewardEmissionMultiplier := by
   unfold mintAtoms
-  simp [h]
-  exact Nat.div_mul_le _ _ _
+  simp only [if_neg h]
+  rw [Nat.mul_comm]
+  exact Nat.mul_div_le (w * rewardFixedPointScale * rewardEmissionMultiplier) wParent
 
 /-- Monotonic in work for fixed parent cumulative work. -/
 theorem mintAtoms_mono_work {w₁ w₂ wParent : Nat}
     (hle : w₁ ≤ w₂) (hW : wParent ≠ 0) :
     mintAtoms w₁ wParent ≤ mintAtoms w₂ wParent := by
+  have hmul :
+      w₁ * (rewardFixedPointScale * rewardEmissionMultiplier) ≤
+        w₂ * (rewardFixedPointScale * rewardEmissionMultiplier) :=
+    Nat.mul_le_mul_right _ hle
   unfold mintAtoms
-  simp [hW]
-  exact Nat.div_le_div_right (Nat.mul_le_mul_left _ (Nat.mul_le_mul_left _ hle))
+  simp only [if_neg hW, Nat.mul_assoc]
+  exact Nat.div_le_div_right hmul
 
 /-- Sum of truncated work scores for a prefix (parent cumulative work at height `i`). -/
 def cumulativeWorkPrefix (ws : List WorkTrunc) (i : Nat) : CumulativeWork :=

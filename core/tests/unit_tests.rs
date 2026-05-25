@@ -375,3 +375,25 @@ fn test_timelock_transaction_is_valid_for_future_unlock() {
     assert!(tx.verify_signature());
     assert!(tx.is_valid());
 }
+
+#[test]
+fn test_tsp_quality_is_not_near_zero_for_valid_tour() {
+    use coinject_core::{ProblemType, Solution};
+
+    let cities = 7usize;
+    let distances: Vec<Vec<u64>> = (0..cities)
+        .map(|i| (0..cities).map(|j| if i == j { 0 } else { 100 + (i + j) as u64 }).collect())
+        .collect();
+    let tour: Vec<usize> = (0..cities).collect();
+    let problem = ProblemType::TSP {
+        cities,
+        distances: distances.clone(),
+    };
+    let solution = Solution::TSP(tour);
+    assert!(solution.verify(&problem));
+    let q = solution.quality(&problem);
+    assert!(
+        q > 0.5,
+        "TSP quality should scale vs NN baseline, not 1/(length+1); got {q}"
+    );
+}

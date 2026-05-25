@@ -1,3 +1,6 @@
+import Coinjecture.Coherence
+import Coinjecture.DesignAxioms
+
 /-!
 Falsifiable predictions from the COINjecture dynamical hypothesis.
 
@@ -9,9 +12,6 @@ in [`state/src/dimensional_pools.rs`](../state/src/dimensional_pools.rs)).
 2. Difficulty oscillation period relates to the **8-cycle** (3:8 gear).
 3. Work-score log-ratios are **symmetric** about log r = 0 (C(r) = C(1/r)).
 -/
-
-import Coinjecture.Coherence
-import Coinjecture.DesignAxioms
 
 namespace Coinjecture
 

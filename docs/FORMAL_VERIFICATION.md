@@ -3,7 +3,9 @@
 The [`lean4/`](../lean4/) package formalizes PoUW assumptions, on-chain economics,
 and the COINjecture dynamical hypothesis. For Satoshi-style derivations of the same
 formulas (assumptions → algebra → interpretation), see
-[`CONSENSUS_CALCULATIONS.md`](CONSENSUS_CALCULATIONS.md).
+[`CONSENSUS_CALCULATIONS.md`](CONSENSUS_CALCULATIONS.md). For security assumptions and
+confirmation-depth bounds (Bitcoin §11 style), see
+[`SECURITY_CALCULATIONS.md`](SECURITY_CALCULATIONS.md).
 
 ## Tier A (proved in Lean)
 
@@ -15,12 +17,13 @@ formulas (assumptions → algebra → interpretation), see
 | `Coinjecture/Rewards.lean` | `mintAtoms`, `mintBeans`, first-harvest and floor lemmas — [`tokenomics/src/rewards.rs`](../tokenomics/src/rewards.rs) |
 | `Coinjecture/WorkScore.lean` | `workScoreFixed`, `log2Ratio`, `applyQuality` — [`consensus/src/work_score.rs`](../consensus/src/work_score.rs), [`core/src/fixed_point.rs`](../core/src/fixed_point.rs) |
 | `Coinjecture/DesignAxioms.lean` | η = 1/√2, μ = (−1+i)/√2, 8-cycle closure (Appendix D) |
-| `Coinjecture/ComplexDecomposition.lean` | Mathlib: z = anchor·coherence, octant address, μ uniqueness on ℂ |
+| `Coinjecture/ComplexDecomposition.lean` | Euclidean `(euclRadial, euclAngular)` + Lorentzian `(lorRadial, lorRapidity)`; anchors on light cone |
 | `Coinjecture/Coherence.lean` | C(r) = 2r/(1+r²), sech perturbation samples, symmetry |
 | `Coinjecture/DimensionalPools.lean` | D(τ) = e^(−ητ), eight pool τₙ samples (Appendix E) |
 | `Coinjecture/Falsifiability.lean` | Three testable predictions + `test_conjecture`-style η tolerance |
 | `Coinjecture/Fixtures.lean` | Tier C vectors aligned with Rust tests |
 | `Coinjecture/SecurityModel.lean` | PoUW work bits, heaviest-chain rule, reward bounds, trust/adversary structure |
+| `Coinjecture/SecurityCalculations.lean` | Catch-up exponent `q^z < p^z`, chain-work monotonicity, numeric spot-checks |
 
 ## Appendix D/E crosswalk (whitepaper → Lean → Rust)
 
@@ -63,6 +66,9 @@ Runs `lake build` and `cargo test -p coinject-consensus lean_fixture`. Vectors l
 | first harvest | `first_harvest` | w = W ⇒ K BEANS |
 
 ## Security model (`Coinjecture/SecurityModel.lean`)
+
+Satoshi-style derivations and confirmation tables:
+[`SECURITY_CALCULATIONS.md`](SECURITY_CALCULATIONS.md).
 
 | Layer | Content |
 |-------|---------|

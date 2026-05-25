@@ -1,3 +1,5 @@
+import Coinjecture.Rewards
+
 /-!
 Work score in **security bits** — mirrors [`consensus/src/work_score.rs`](../consensus/src/work_score.rs)
 and the deterministic path in [`core/src/fixed_point.rs`](../core/src/fixed_point.rs).
@@ -12,8 +14,6 @@ work_score = log₂(solve_time / verify_time) × quality     (quality ∈ [0, 1]
 Tier A: integer definitions + proved lemmas (no `sorry`, no Mathlib).
 Tier B: real-valued interpretation — see `workScoreBitsIdeal_axiom` in `ClassicalAxioms.lean`.
 -/
-
-import Coinjecture.Rewards
 
 namespace Coinjecture
 
@@ -91,8 +91,9 @@ def workScoreFixed (solveUs verifyUs qualityBps : Nat) : Nat :=
 def workTruncFromFixed (score : Nat) : Nat := score / fpScale
 
 /-- Cumulative chain security in fixed-point units (sum before converting to bits). -/
-def chainSecurityFixed (scores : List Nat) : Nat :=
-  scores.foldl (· + ·) 0
+def chainSecurityFixed : List Nat → Nat
+  | [] => 0
+  | w :: rest => w + chainSecurityFixed rest
 
 theorem workScoreFixed_zero_when_quality_zero (solve verify : Nat) :
     workScoreFixed solve verify 0 = 0 := rfl
@@ -109,7 +110,10 @@ theorem applyQuality_full (score : Nat) :
 
 theorem applyQuality_half (score : Nat) :
     applyQuality score (qualityBpsFull / 2) = score / 2 := by
-  simp [applyQuality, qualityBpsFull]
+  unfold applyQuality qualityBpsFull
+  have hlt : 5000 < 10000 := by decide
+  simp [Nat.not_lt.mpr hlt, ite_false, ↓reduceIte]
+  omega
 
 theorem log2Ratio_none_when_not_asymmetric :
     log2Ratio 1 1 = none := rfl

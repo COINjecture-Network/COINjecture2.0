@@ -1,11 +1,11 @@
+import Coinjecture.DesignAxioms
+
 /-!
 Appendix E — eight dimensional pools D(τ) = e^(−τ/√2) = e^(−η·τ).
 
 Mirrors [`core/src/dimensional.rs`](../core/src/dimensional.rs) `TAU_POINTS` and
 `DimensionalScales::scale_at_tau`.
 -/
-
-import Coinjecture.DesignAxioms
 
 namespace Coinjecture
 

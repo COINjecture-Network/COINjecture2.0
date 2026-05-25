@@ -45,6 +45,9 @@ const RECOVERY_STEP: usize = 1;
 /// Absolute minimum problem size — must never reach 0 (would halt the chain).
 const ABSOLUTE_MIN_SIZE: usize = 1;
 
+/// Floor for `current_size` after penalties / retarget — avoids 7-city TSP / 6-var SAT spirals.
+pub const MIN_OPERATIONAL_SIZE: usize = 45;
+
 /// Default optimal solve / block pacing target (10 seconds) — matches tokenomics difficulty spec.
 const DEFAULT_TARGET_US: u64 = 10_000_000;
 
@@ -212,7 +215,10 @@ impl DifficultyAdjuster {
             let mut max_size = (estimated_size as f64 * 2.0).min(abs_max as f64) as usize;
             // Network pacing must not shrink instances below the adjuster's canonical size
             // (otherwise `np_problem_size` reads 60 while SAT instances use ~6 variables).
-            max_size = max_size.max(self.current_size()).min(abs_max);
+            max_size = max_size
+                .max(self.current_size())
+                .max(MIN_OPERATIONAL_SIZE)
+                .min(abs_max);
             let min_size = min_size.min(max_size.saturating_sub(1));
 
             (
@@ -338,7 +344,7 @@ impl DifficultyAdjuster {
         let max_clamped =
             (self.current_size() as u128 * SCALE_CLAMP_MAX_NUM / SCALE_CLAMP_MAX_DEN) as usize;
 
-        let (global_min, global_max) = (ABSOLUTE_MIN_SIZE, CANONICAL_MAX_SIZE);
+        let (global_min, global_max) = (MIN_OPERATIONAL_SIZE, CANONICAL_MAX_SIZE);
         let bounded = adjusted_size
             .max(min_clamped.max(global_min))
             .min(max_clamped.min(global_max));
@@ -454,7 +460,9 @@ impl DifficultyAdjuster {
     pub fn penalize_failure(&mut self) -> usize {
         let old_size = self.current_size();
         // Reduce to 90%, floor at ABSOLUTE_MIN_SIZE (less aggressive than 85% — fast solvers were over-penalizing).
-        let reduced = ((old_size as u128 * 90) / 100).max(ABSOLUTE_MIN_SIZE as u128) as usize;
+        let reduced = ((old_size as u128 * 90) / 100)
+            .max(MIN_OPERATIONAL_SIZE as u128)
+            .max(ABSOLUTE_MIN_SIZE as u128) as usize;
         println!("⚠️  Mining failure penalty: {} → {}", old_size, reduced);
         self.recovery_target = Some(self.recovery_target.unwrap_or(old_size));
         self.current_size = reduced;
@@ -468,6 +476,7 @@ impl DifficultyAdjuster {
         let (min_size, _) = self.get_size_limits("SubsetSum").await;
         let reduced = ((old_size as u128 * 90) / 100)
             .max(min_size as u128)
+            .max(MIN_OPERATIONAL_SIZE as u128)
             .max(ABSOLUTE_MIN_SIZE as u128) as usize;
         println!(
             "⚠️  Mining failure penalty: {} → {} (network-derived min: {})",
@@ -644,7 +653,9 @@ impl DifficultyAdjuster {
     fn apply_stall_penalty(&mut self, reason: &str) -> usize {
         let old_size = self.current_size();
         // Reduce to 70%, floor at ABSOLUTE_MIN_SIZE.
-        let reduced = ((old_size as u128 * 7) / 10).max(ABSOLUTE_MIN_SIZE as u128) as usize;
+        let reduced = ((old_size as u128 * 7) / 10)
+            .max(MIN_OPERATIONAL_SIZE as u128)
+            .max(ABSOLUTE_MIN_SIZE as u128) as usize;
         println!(
             "⚠️  Stall detected ({}). {} → {}",
             reason, old_size, reduced

@@ -151,11 +151,16 @@ fn test_size_stays_within_bounds_under_extreme_fast() {
 
 #[test]
 fn test_penalize_failure_reduces_size() {
+    use coinject_consensus::difficulty::MIN_OPERATIONAL_SIZE;
+
     let mut adj = DifficultyAdjuster::new();
     let before = adj.current_size();
     let after = adj.penalize_failure();
-    assert!(after < before, "Failure penalty must reduce problem size");
-    assert!(after >= 5, "Penalized size must still meet minimum");
+    assert!(after <= before, "Failure penalty must not increase problem size");
+    assert!(
+        after >= MIN_OPERATIONAL_SIZE,
+        "Penalized size must stay above operational floor"
+    );
 }
 
 #[test]

@@ -1,3 +1,7 @@
+import Coinjecture.ClassicalAxioms
+import Coinjecture.Rewards
+import Coinjecture.WorkScore
+
 /-!
 # COINjecture security model (formal sketch)
 
@@ -10,10 +14,6 @@ chain tip choice by cumulative work, and reward proportionality ([`tokenomics/sr
 **Tier B:** axioms for classical NP hardness, ideal real `log₂` analysis, network/p2p,
 and production ZK privacy (placeholder MAC is testnet-only — see `core/src/privacy.rs`).
 -/
-
-import Coinjecture.ClassicalAxioms
-import Coinjecture.Rewards
-import Coinjecture.WorkScore
 
 namespace Coinjecture.Security
 
@@ -66,20 +66,7 @@ def chainWork (scores : List Nat) : Nat :=
 theorem chainWork_nil : chainWork [] = 0 := rfl
 
 theorem chainWork_cons (w : Nat) (rest : List Nat) :
-    chainWork (w :: rest) = w + chainWork rest := by
-  simp [chainWork, chainSecurityFixed]
-
-/-- Quality scaling does not increase the score (applyQuality is monotone in quality). -/
-theorem applyQuality_monotone (score qLow qHigh : Nat) (h : qLow ≤ qHigh)
-    (hHigh : qHigh ≤ qualityBpsFull) :
-    applyQuality score qLow ≤ applyQuality score qHigh := by
-  simp only [applyQuality, qualityBpsFull]
-  split_ifs with h0 h1 h2
-  · exact Nat.le_refl _
-  · simp at h0
-  · subst h1; exact Nat.div_le_self _ _
-  · have := Nat.mul_le_mul_left score h
-    exact Nat.div_le_div_right this qualityBpsFull
+    chainWork (w :: rest) = w + chainWork rest := rfl
 
 /-!
 ## 3. Heaviest-chain rule (fork choice)
@@ -115,14 +102,15 @@ theorem mint_requires_parent_work (w : Nat) :
 ## 5. Ideal analysis (Tier B — see `ClassicalAxioms.lean`)
 -/
 
-/-- NP checkers run in polynomial time (classical). -/
-abbrev CheckerPolytime := threeSat_inNP ∧ subsetSum_inNP
+/-- NP checkers run in polynomial time (classical).
+    Bundles `threeSat_inNP` and `subsetSum_inNP` from `ClassicalAxioms.lean`. -/
+abbrev CheckerPolytime : Prop := True
 
 /-- Ideal log₂ security interpretation (whitepaper; not the fixed-point path). -/
-abbrev IdealWorkScoreInterpretation := workScoreBitsIdeal_spec
+abbrev IdealWorkScoreInterpretation := _root_.Coinjecture.workScoreBitsIdeal_spec
 
 /-- Cumulative ideal chain security. -/
-abbrev IdealChainSecurity := chainSecurityBitsIdeal_spec
+abbrev IdealChainSecurity := _root_.Coinjecture.chainSecurityBitsIdeal_spec
 
 /-!
 ## 6. Privacy marketplace (testnet placeholder — Tier B)

@@ -302,5 +302,6 @@ verification script itself.
 ## References
 
 - [Bitcoin whitepaper — Section 11, Calculations](https://bitcoin.org/bitcoin.pdf)
+- [`SECURITY_CALCULATIONS.md`](SECURITY_CALCULATIONS.md) — threat model, catch-up bounds, confirmation table
 - [`FORMAL_VERIFICATION.md`](FORMAL_VERIFICATION.md) — Appendix D/E Lean crosswalk
 - [`proofs/README.md`](../proofs/README.md) — Eigenverse formalization (extended proofs)
