@@ -135,6 +135,7 @@ impl ChainState {
             write_txn.commit()?;
 
             Self::store_block_raw(&db, genesis_block)?;
+            Self::set_height_index(&db, 0, genesis_hash)?;
         }
 
         // Load best height and hash
@@ -331,24 +332,111 @@ impl ChainState {
         Ok(())
     }
 
-    /// Store a block in the database
+    /// Store block bytes keyed by hash only (side-chain / buffer blocks must not touch height index).
     fn store_block_raw(db: &Arc<Database>, block: &Block) -> Result<(), ChainError> {
         let block_bytes = bincode::serialize(block)?;
         let hash = block.header.hash();
-        let height = block.header.height;
 
         let write_txn = db.begin_write()?;
         {
-            // Store by hash
             let mut blocks_table = write_txn.open_table(BLOCKS_TABLE)?;
             blocks_table.insert(hash.as_bytes(), block_bytes.as_slice())?;
+        }
+        write_txn.commit()?;
 
-            // Store hash by height (for quick height lookups)
+        Ok(())
+    }
+
+    /// Map height → hash on the canonical best chain only.
+    pub(crate) fn set_height_index(
+        db: &Arc<Database>,
+        height: u64,
+        hash: Hash,
+    ) -> Result<(), ChainError> {
+        let write_txn = db.begin_write()?;
+        {
             let mut height_table = write_txn.open_table(HEIGHT_INDEX_TABLE)?;
             height_table.insert(height, hash.as_bytes())?;
         }
         write_txn.commit()?;
+        Ok(())
+    }
 
+    /// Read canonical tip from metadata (sync-safe; used by P2P block serving).
+    fn read_best_tip_from_db(db: &Arc<Database>) -> Result<(u64, Hash), ChainError> {
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(METADATA_TABLE)?;
+        let height = table
+            .get("best_height")?
+            .map(|v| u64::from_le_bytes(v.value().try_into().unwrap()))
+            .unwrap_or(0);
+        let hash = table
+            .get("best_hash")?
+            .map(|v| Hash::from_bytes(v.value().try_into().unwrap()))
+            .unwrap_or(Hash::ZERO);
+        Ok((height, hash))
+    }
+
+    /// Walk the canonical tip backward to the block at `height`.
+    pub fn get_canonical_block_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<Block>, ChainError> {
+        let (best_height, best_hash) = Self::read_best_tip_from_db(&self.db)?;
+        if height > best_height {
+            return Ok(None);
+        }
+        let mut hash = best_hash;
+        let mut h = best_height;
+        while h > height {
+            let Some(block) = self.get_block_by_hash(&hash)? else {
+                return Ok(None);
+            };
+            hash = block.header.prev_hash;
+            h -= 1;
+        }
+        self.get_block_by_hash(&hash)
+    }
+
+    /// True if `candidate` is an ancestor of `(tip_hash, tip_height)` on stored blocks.
+    pub fn is_hash_on_canonical_chain_from_tip(
+        &self,
+        tip_hash: Hash,
+        tip_height: u64,
+        candidate: &Hash,
+    ) -> Result<bool, ChainError> {
+        crate::sync_canonical::is_hash_on_chain_from_tip(self, tip_hash, tip_height, candidate)
+    }
+
+    /// Test / repair hook: set a single height index entry.
+    #[cfg(test)]
+    pub(crate) fn set_height_index_entry(
+        &self,
+        height: u64,
+        hash: Hash,
+    ) -> Result<(), ChainError> {
+        Self::set_height_index(&self.db, height, hash)
+    }
+
+    /// Rewrite height_index entries along the canonical chain from tip to genesis.
+    pub fn rebuild_height_index_from_canonical_tip(
+        &self,
+        tip_hash: Hash,
+        tip_height: u64,
+    ) -> Result<(), ChainError> {
+        let mut hash = tip_hash;
+        let mut h = tip_height;
+        loop {
+            Self::set_height_index(&self.db, h, hash)?;
+            if h == 0 {
+                break;
+            }
+            let Some(block) = self.get_block_by_hash(&hash)? else {
+                return Err(ChainError::InvalidHeight);
+            };
+            hash = block.header.prev_hash;
+            h -= 1;
+        }
         Ok(())
     }
 
@@ -401,6 +489,8 @@ impl ChainState {
             }
             write_txn.commit()?;
 
+            Self::set_height_index(&self.db, block_height, block_hash)?;
+
             println!(
                 "New best block: height={} hash={:?}",
                 block_height, block_hash
@@ -438,19 +528,9 @@ impl ChainState {
         }
     }
 
-    /// Get block by height
+    /// Get block by height on the **canonical** best chain (walks back from best tip).
     pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, ChainError> {
-        let read_txn = self.db.begin_read()?;
-        let height_table = read_txn.open_table(HEIGHT_INDEX_TABLE)?;
-
-        match height_table.get(height)? {
-            Some(hash_bytes_ref) => {
-                let hash = Hash::from_bytes(*hash_bytes_ref.value());
-                drop(read_txn);
-                self.get_block_by_hash(&hash)
-            }
-            None => Ok(None),
-        }
+        self.get_canonical_block_by_height(height)
     }
 
     /// Get block header by height
@@ -810,6 +890,8 @@ impl ChainState {
         }
         write_txn.commit()?;
 
+        self.rebuild_height_index_from_canonical_tip(new_best_hash, new_best_height)?;
+
         println!(
             "🔄 Chain reorganized: new best block height={} hash={:?}",
             new_best_height, new_best_hash
@@ -1083,6 +1165,72 @@ mod tests {
         // Retrieve genesis
         let retrieved = chain.get_block_by_height(0).unwrap().unwrap();
         assert_eq!(retrieved.header.height, 0);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// After a fork, `height_index` must not make `get_block_by_height` return a stale orphan.
+    #[tokio::test]
+    async fn height_index_serves_canonical_tip_after_index_poison() {
+        use coinject_core::Hash;
+
+        let temp_dir = std::env::temp_dir().join("coinject-chain-height-index-canonical");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        let genesis = create_genesis_block(GenesisConfig::default());
+        let chain = ChainState::new(&temp_dir, &genesis, 64).unwrap();
+
+        let g_hash = genesis.header.hash();
+        let b1 = {
+            let mut h = genesis.header.clone();
+            h.height = 1;
+            h.prev_hash = g_hash;
+            h.nonce = 1;
+            let block = Block {
+                header: h,
+                coinbase: genesis.coinbase.clone(),
+                transactions: vec![],
+                solution_reveal: genesis.solution_reveal.clone(),
+            };
+            chain.store_block(&block).await.unwrap();
+            block
+        };
+        let b1_hash = b1.header.hash();
+
+        let b2 = {
+            let mut h = b1.header.clone();
+            h.height = 2;
+            h.prev_hash = b1_hash;
+            h.nonce = 2;
+            let block = Block {
+                header: h,
+                coinbase: genesis.coinbase.clone(),
+                transactions: vec![],
+                solution_reveal: genesis.solution_reveal.clone(),
+            };
+            chain.store_block(&block).await.unwrap();
+            block
+        };
+        let b2_hash = b2.header.hash();
+
+        // Poison height index at 1 with a fake hash (simulates pre-fix orphan mapping).
+        let orphan_hash = Hash::from_bytes([0xEEu8; 32]);
+        chain.set_height_index_entry(1, orphan_hash).unwrap();
+
+        let at_one = chain.get_block_by_height(1).unwrap().unwrap();
+        assert_eq!(
+            at_one.header.hash(),
+            b1_hash,
+            "canonical walk must ignore stale height_index"
+        );
+
+        chain
+            .rebuild_height_index_from_canonical_tip(b2_hash, 2)
+            .unwrap();
+        assert_eq!(
+            chain.get_block_by_height(1).unwrap().unwrap().header.hash(),
+            b1_hash
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

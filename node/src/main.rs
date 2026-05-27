@@ -15,6 +15,7 @@
 mod chain;
 #[cfg(feature = "adzdb")]
 mod chain_adzdb;
+mod sync_canonical;
 mod config;
 mod faucet;
 mod genesis;

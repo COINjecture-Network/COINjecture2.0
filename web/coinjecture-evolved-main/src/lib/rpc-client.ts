@@ -458,6 +458,17 @@ function jsonRpcBodyChainSubmitBlock(envelope: {
   return body.replace(/"reward":"(0|[1-9]\d*)"/, '"reward":$1');
 }
 
+/**
+ * Web-wallet `transaction_submit` JSON: `Balance` (`u128`) must be JSON numbers, not quoted strings.
+ */
+export function jsonRpcNormalizeTransactionSubmitPayload(txPayload: string): string {
+  const t = txPayload.trim();
+  if (!t.startsWith('{')) return txPayload;
+  return t
+    .replace(/"amount":"(0|[1-9]\d*)"/g, '"amount":$1')
+    .replace(/"fee":"(0|[1-9]\d*)"/g, '"fee":$1');
+}
+
 /** `Hash` / `Address` JSON is `[u8;32]` — reject non-integers / out-of-range (serde "invalid number"). */
 function u8Tuple32FromMixed(hash: string | number[] | Uint8Array): number[] {
   if (hash instanceof Uint8Array) {
@@ -1283,7 +1294,11 @@ export class RpcClient {
   // ========== Transaction Methods ==========
   
   async submitTransaction(txHex: string): Promise<string> {
-    return this.call<string>('transaction_submit', [txHex], RPC_SUBMIT_BLOCK_TIMEOUT_MS);
+    return this.call<string>(
+      'transaction_submit',
+      [jsonRpcNormalizeTransactionSubmitPayload(txHex)],
+      RPC_SUBMIT_BLOCK_TIMEOUT_MS,
+    );
   }
 
   async getTransactionStatus(txHash: string): Promise<TransactionStatus> {

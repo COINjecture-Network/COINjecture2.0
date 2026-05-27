@@ -137,6 +137,21 @@ function writeU128LE(view: DataView, value: bigint): void {
   view.setBigUint64(8, hi, true);
 }
 
+/** Rust `Balance` (`u128`) — serde_json accepts JSON integer tokens only, not quoted strings. */
+function balanceForTransferJson(atoms: bigint): number | string {
+  if (atoms <= 0n) return 0;
+  if (atoms <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(atoms);
+  return atoms.toString();
+}
+
+/** Unquote `"amount":"123"` / `"fee":"123"` when atoms exceed JS safe integers. */
+function stringifyTransferTxForRpc(transaction: object): string {
+  const body = JSON.stringify(transaction);
+  return body
+    .replace(/"amount":"(0|[1-9]\d*)"/, '"amount":$1')
+    .replace(/"fee":"(0|[1-9]\d*)"/, '"fee":$1');
+}
+
 /**
  * Create and sign a transfer transaction
  * Returns a JSON-serialized Transaction enum matching Rust format
@@ -195,19 +210,18 @@ export function createSignedTransferTransaction(
   const signatureHex = signMessage(signingMessage, privateKeyHex);
   const signatureBytes = Array.from(hexToBytes(signatureHex));
 
-  // Create final transaction in Rust enum format (amount/fee as strings for u128 JSON)
   const transaction = {
     Transfer: {
       from: fromBytes,
       to: toBytes,
-      amount: amount.toString(),
-      fee: fee.toString(),
+      amount: balanceForTransferJson(amount),
+      fee: balanceForTransferJson(fee),
       nonce,
       public_key: publicKeyBytes,
       signature: signatureBytes
     }
   };
 
-  return JSON.stringify(transaction);
+  return stringifyTransferTxForRpc(transaction);
 }
 

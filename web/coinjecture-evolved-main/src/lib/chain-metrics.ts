@@ -53,6 +53,24 @@ export function displayBeansToAtoms(displayBeans: bigint): bigint {
 }
 
 /**
+ * Parse display BEANS (optional fraction, up to 12 decimal places) → ledger atoms.
+ * Inverse of `formatBeans` for user-entered amounts (e.g. `0.5`, `0.001`).
+ */
+export function parseDisplayBeansToAtoms(input: string): bigint | null {
+  const raw = input.trim().replace(/,/g, "");
+  if (raw === "" || raw.startsWith("-")) return null;
+  const normalized = raw.startsWith("+") ? raw.slice(1) : raw;
+  if (!/^\d+(\.\d+)?$/.test(normalized)) return null;
+
+  const [wholePart, fracPart = ""] = normalized.split(".");
+  if (fracPart.length > 12) return null;
+
+  const whole = wholePart === "" ? 0n : BigInt(wholePart);
+  const fracAtoms = fracPart === "" ? 0n : BigInt(fracPart.padEnd(12, "0"));
+  return whole * REWARD_FIXED_POINT_SCALE + fracAtoms;
+}
+
+/**
  * Work units summed into chain cumulative W (`node/src/chain.rs`):
  * `(header.work_score.max(0.0) as u64) as u128` — uses the **stored** header field only
  * (not the PoUW recompute used for display bits).

@@ -285,6 +285,26 @@ impl PeerConsensus {
         peers.get(peer_id).map(|p| p.best_height)
     }
 
+    /// Advertised tip for a peer (height, hash, cumulative work).
+    pub async fn get_peer_tip(&self, peer_id: &str) -> Option<(u64, [u8; 32], u128)> {
+        let peers = self.peers.read().await;
+        peers.get(peer_id).map(|p| {
+            (
+                p.best_height,
+                p.best_hash,
+                p.cumulative_work,
+            )
+        })
+    }
+
+    /// Active peer with the greatest advertised cumulative work (hash-anchored sync source).
+    pub async fn best_active_peer_by_cumulative_work(&self) -> Option<(String, PeerState)> {
+        self.active_peers()
+            .await
+            .into_iter()
+            .max_by(|a, b| a.1.cumulative_work.cmp(&b.1.cumulative_work))
+    }
+
     /// Get the median height across all active peers
     /// More robust than max (resistant to outliers/attackers)
     pub async fn median_peer_height(&self) -> u64 {

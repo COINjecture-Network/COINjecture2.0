@@ -18,8 +18,8 @@ import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check, ChevronDo
 import { useState, type ReactNode } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import {
-  displayBeansToAtoms,
   formatBeans,
+  parseDisplayBeansToAtoms,
   MIN_BOUNTY_SUBMISSION_FEE_ATOMS,
 } from "@/lib/chain-metrics";
 import { toast } from "sonner";
@@ -951,9 +951,10 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
     mutationFn: async () => {
       if (!accountInfo) throw new Error("Account info not loaded");
 
-      const amountDisplay = BigInt(amount.trim());
-      if (amountDisplay <= 0n) throw new Error("Invalid amount");
-      const amountAtoms = displayBeansToAtoms(amountDisplay);
+      const amountAtoms = parseDisplayBeansToAtoms(amount);
+      if (amountAtoms === null || amountAtoms <= 0n) {
+        throw new Error("Enter a positive amount in BEANS (fractions allowed, e.g. 0.5)");
+      }
       const { address: from, privateKey, publicKey } = keyPair;
       const { nonce } = accountInfo;
 
@@ -1003,18 +1004,11 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
       toast.error("Invalid recipient address (must be 64-character hex)");
       return;
     }
-    let amountDisplay: bigint;
-    try {
-      amountDisplay = BigInt(amount.trim());
-    } catch {
-      toast.error("Invalid amount");
+    const amountAtoms = parseDisplayBeansToAtoms(amount);
+    if (amountAtoms === null || amountAtoms <= 0n) {
+      toast.error("Enter a positive amount in BEANS (fractions allowed, e.g. 0.5)");
       return;
     }
-    if (!amount || amountDisplay <= 0n) {
-      toast.error("Invalid amount");
-      return;
-    }
-    const amountAtoms = displayBeansToAtoms(amountDisplay);
     if (accountInfo.balance < amountAtoms) {
       toast.error("Insufficient balance for this amount");
       return;
@@ -1058,14 +1052,18 @@ function SendTransactionModal({ accountName, keyPair, onClose }: SendTransaction
             />
           </div>
           <div>
-            <Label htmlFor="amount">Amount</Label>
+            <Label htmlFor="amount">Amount (BEANS)</Label>
             <Input
               id="amount"
-              type="number"
+              type="text"
+              inputMode="decimal"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              min="1"
+              placeholder="e.g. 0.5 or 1.25"
             />
+            <p className="text-xs text-muted-foreground mt-1">
+              Fractions up to 12 decimal places (smallest unit: 0.000000000001 BEANS).
+            </p>
           </div>
           <div className="flex items-center justify-between gap-3 rounded-md border p-3">
             <div className="space-y-0.5">

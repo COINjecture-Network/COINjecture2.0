@@ -50,6 +50,20 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time;
 use tracing::{debug, error, info, warn};
 
+/// Prefer the active peer advertising the most cumulative work for hash-anchored sync.
+async fn select_sync_peer_by_cumulative_work(
+    peer_consensus: &Arc<PeerConsensus>,
+    fallback: CppPeerId,
+) -> CppPeerId {
+    let Some((id, _)) = peer_consensus.best_active_peer_by_cumulative_work().await else {
+        return fallback;
+    };
+    hex::decode(&id)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .unwrap_or(fallback)
+}
+
 /// Get the debug log path from DATA_DIR environment variable
 pub fn get_debug_log_path() -> std::path::PathBuf {
     let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string());
@@ -1224,6 +1238,50 @@ impl CoinjectNode {
                             if block.header.height == expected_height
                                 && block.header.prev_hash == best_hash
                             {
+                                let peer_key = hex::encode(peer_id);
+                                let (peer_tip_h, peer_tip_hash_bytes, peer_tip_w) =
+                                    peer_consensus_clone
+                                        .get_peer_tip(&peer_key)
+                                        .await
+                                        .unwrap_or((0, [0u8; 32], 0));
+                                let peer_tip_hash =
+                                    coinject_core::Hash::from_bytes(peer_tip_hash_bytes);
+                                let candidate_hash = block.header.hash();
+                                match crate::sync_canonical::should_apply_sync_extension(
+                                    &chain_clone,
+                                    &candidate_hash,
+                                    block.header.height,
+                                    peer_tip_h,
+                                    peer_tip_hash,
+                                    peer_tip_w,
+                                )
+                                .await
+                                {
+                                    Ok(false) => {
+                                        warn!(
+                                            block_height = block.header.height,
+                                            peer_id = %peer_key,
+                                            peer_tip_height = peer_tip_h,
+                                            peer_cumulative_work = peer_tip_w,
+                                            "sync extension not on peer heavy chain; buffering for reorg"
+                                        );
+                                        let mut buffer = block_buffer_clone.write().await;
+                                        buffer.insert(block.header.height, block);
+                                        continue;
+                                    }
+                                    Ok(true) => {}
+                                    Err(e) => {
+                                        warn!(
+                                            error = %e,
+                                            block_height = block.header.height,
+                                            "sync extension check failed; buffering"
+                                        );
+                                        let mut buffer = block_buffer_clone.write().await;
+                                        buffer.insert(block.header.height, block);
+                                        continue;
+                                    }
+                                }
+
                                 // Validate and store (skip age check for sync blocks)
                                 let emission_w = if block.header.height == 0 {
                                     None
@@ -1498,7 +1556,11 @@ impl CoinjectNode {
                                 let delayed_to = effective_peer_tip.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
                                 if delayed_from <= delayed_to {
                                     let cpp_tx = cpp_network_cmd_tx_for_events.clone();
-                                    let peer_id_delayed = peer_id;
+                                    let peer_id_delayed = select_sync_peer_by_cumulative_work(
+                                        &peer_consensus_clone,
+                                        peer_id,
+                                    )
+                                    .await;
                                     tokio::spawn(async move {
                                         tokio::time::sleep(Duration::from_secs(5)).await;
                                         let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
@@ -1519,15 +1581,20 @@ impl CoinjectNode {
                                 // bootnode's rate limiter before fork recovery has a chance to act.
                                 let from_height = current_height + 1;
                                 let to_height = peer_height.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
+                                let sync_peer = select_sync_peer_by_cumulative_work(
+                                    &peer_consensus_clone,
+                                    peer_id,
+                                )
+                                .await;
                                 debug!(
                                     from_height,
                                     to_height,
-                                    peer_id = %hex::encode(peer_id),
-                                    "requesting continuation blocks"
+                                    peer_id = %hex::encode(sync_peer),
+                                    "requesting continuation blocks (hash-anchored peer selection)"
                                 );
                                 let _ = cpp_network_cmd_tx_for_events.send(
                                     CppNetworkCommand::RequestBlocks {
-                                        peer_id,
+                                        peer_id: sync_peer,
                                         from_height,
                                         to_height,
                                         request_id: rand::random(),
@@ -1704,16 +1771,23 @@ impl CoinjectNode {
                             let from_height = current_height + 1;
                             // Request up to 100 blocks at a time, capped by MAX_BLOCKS_PER_RESPONSE (16)
                             let to_height = best_height.min(current_height + 100);
+                            let sync_peer = select_sync_peer_by_cumulative_work(
+                                &peer_consensus_clone,
+                                peer_id,
+                            )
+                            .await;
                             debug!(
                                 peer_height = best_height,
+                                peer_cumulative_work = cumulative_work,
                                 current_height,
                                 from_height,
                                 to_height,
-                                "peer ahead, requesting sync blocks"
+                                peer_id = %hex::encode(sync_peer),
+                                "peer ahead, requesting sync blocks (prefer heaviest peer tip)"
                             );
                             let _ = cpp_network_cmd_tx_for_events.send(
                                 CppNetworkCommand::RequestBlocks {
-                                    peer_id,
+                                    peer_id: sync_peer,
                                     from_height,
                                     to_height,
                                     request_id: rand::random(),

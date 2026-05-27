@@ -53,6 +53,17 @@ During sync, blocks for the **competing** branch often live only in the **sync b
    - **Normal reorg** — unwind from ancestor through old tip, apply new segment; or  
    - **“Complete fork” path** — `find_common_ancestor` returns `None` **even with buffer help**: candidate chain does not connect to our DB/buffer view back to a shared block. Then **`validate_chain_from_genesis`** may run (expensive) and, if successful, **`reorganize_chain_from_genesis`** (`node/src/service/fork.rs`).
 
+## Initial P2P sync (hash-anchored)
+
+Height-range `GetBlocks` alone is not sufficient when a peer’s database still maps an old fork at some heights:
+
+1. **`get_block_by_height`** (and `BlockProvider::get_blocks_range`) walk the **current best tip** backward, not a stale `height_index` entry left by a side chain.
+2. **`height_index`** is updated only when a block extends the best chain (or after **`rebuild_height_index_from_canonical_tip`** following a reorg).
+3. Before applying a sequential sync block, the node checks that the block hash lies on the **peer’s advertised tip chain** when the peer reports higher **`cumulative_work`** (`node/src/sync_canonical.rs`, `BlocksReceived` in `node/src/service/mod.rs`).
+4. Sync continuation requests prefer the active peer with the greatest advertised **`cumulative_work`**.
+
+If a wiped node still cannot catch up, verify bootnodes point at the canonical miner only (never another lagging follower) or clone a canonical datadir as a last resort.
+
 ## Sync vs fork (`is_syncing`)
 
 `chain_getInfo.is_syncing` is exposed over JSON-RPC. It is now driven by **peer-relative lag** (same periodic task that triggers fork checks):
