@@ -21,6 +21,6 @@ pub mod sync_optimizer;
 pub mod chain;
 #[cfg(feature = "adzdb")]
 pub mod chain_adzdb;
-pub mod sync_canonical;
 pub mod genesis;
+pub mod sync_canonical;
 pub mod validator;

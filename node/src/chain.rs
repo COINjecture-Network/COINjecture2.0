@@ -378,10 +378,7 @@ impl ChainState {
     }
 
     /// Walk the canonical tip backward to the block at `height`.
-    pub fn get_canonical_block_by_height(
-        &self,
-        height: u64,
-    ) -> Result<Option<Block>, ChainError> {
+    pub fn get_canonical_block_by_height(&self, height: u64) -> Result<Option<Block>, ChainError> {
         let (best_height, best_hash) = Self::read_best_tip_from_db(&self.db)?;
         if height > best_height {
             return Ok(None);
@@ -410,11 +407,7 @@ impl ChainState {
 
     /// Test / repair hook: set a single height index entry.
     #[cfg(test)]
-    pub(crate) fn set_height_index_entry(
-        &self,
-        height: u64,
-        hash: Hash,
-    ) -> Result<(), ChainError> {
+    pub(crate) fn set_height_index_entry(&self, height: u64, hash: Hash) -> Result<(), ChainError> {
         Self::set_height_index(&self.db, height, hash)
     }
 

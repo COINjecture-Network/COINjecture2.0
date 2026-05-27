@@ -1771,11 +1771,9 @@ impl CoinjectNode {
                             let from_height = current_height + 1;
                             // Request up to 100 blocks at a time, capped by MAX_BLOCKS_PER_RESPONSE (16)
                             let to_height = best_height.min(current_height + 100);
-                            let sync_peer = select_sync_peer_by_cumulative_work(
-                                &peer_consensus_clone,
-                                peer_id,
-                            )
-                            .await;
+                            let sync_peer =
+                                select_sync_peer_by_cumulative_work(&peer_consensus_clone, peer_id)
+                                    .await;
                             debug!(
                                 peer_height = best_height,
                                 peer_cumulative_work = cumulative_work,

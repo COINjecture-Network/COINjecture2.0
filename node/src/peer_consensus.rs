@@ -288,13 +288,9 @@ impl PeerConsensus {
     /// Advertised tip for a peer (height, hash, cumulative work).
     pub async fn get_peer_tip(&self, peer_id: &str) -> Option<(u64, [u8; 32], u128)> {
         let peers = self.peers.read().await;
-        peers.get(peer_id).map(|p| {
-            (
-                p.best_height,
-                p.best_hash,
-                p.cumulative_work,
-            )
-        })
+        peers
+            .get(peer_id)
+            .map(|p| (p.best_height, p.best_hash, p.cumulative_work))
     }
 
     /// Active peer with the greatest advertised cumulative work (hash-anchored sync source).

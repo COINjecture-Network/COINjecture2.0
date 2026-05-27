@@ -15,7 +15,6 @@
 mod chain;
 #[cfg(feature = "adzdb")]
 mod chain_adzdb;
-mod sync_canonical;
 mod config;
 mod faucet;
 mod genesis;
@@ -30,6 +29,7 @@ pub mod node_manager;
 pub mod node_types;
 mod peer_consensus;
 mod service;
+mod sync_canonical;
 mod sync_optimizer;
 mod validator;
 
