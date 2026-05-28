@@ -50,6 +50,13 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::time;
 use tracing::{debug, error, info, warn};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncHealthState {
+    Normal,
+    SuspectFork,
+    Recovery,
+}
+
 /// Prefer the active peer advertising the most cumulative work for hash-anchored sync.
 async fn select_sync_peer_by_cumulative_work(
     peer_consensus: &Arc<PeerConsensus>,
@@ -62,6 +69,54 @@ async fn select_sync_peer_by_cumulative_work(
         .ok()
         .and_then(|b| b.try_into().ok())
         .unwrap_or(fallback)
+}
+
+async fn run_startup_chain_sanity_checks(chain: &Arc<ChainState>) {
+    let best_height = chain.best_block_height().await;
+    let best_hash = chain.best_block_hash().await;
+    let best_work = chain.best_cumulative_work().await;
+    let genesis = chain.genesis_hash();
+
+    match chain.get_block_by_height(0) {
+        Ok(Some(genesis_block)) if genesis_block.header.hash() == genesis => {}
+        Ok(Some(genesis_block)) => {
+            error!(
+                expected = %genesis,
+                got = %genesis_block.header.hash(),
+                "startup sanity: genesis hash mismatch"
+            );
+        }
+        Ok(None) => error!("startup sanity: missing genesis block"),
+        Err(e) => error!(error = %e, "startup sanity: failed reading genesis block"),
+    }
+
+    match chain.get_block_by_height(best_height) {
+        Ok(Some(best_block)) if best_block.header.hash() == best_hash => {}
+        Ok(Some(best_block)) => warn!(
+            best_height,
+            expected_tip = %best_hash,
+            got_tip = %best_block.header.hash(),
+            "startup sanity: canonical height lookup differs from best hash"
+        ),
+        Ok(None) => warn!(best_height, "startup sanity: best height has no retrievable block"),
+        Err(e) => warn!(best_height, error = %e, "startup sanity: failed retrieving best height"),
+    }
+
+    if best_height > 0 && best_work == 0 {
+        warn!(best_height, "startup sanity: non-genesis tip reports zero cumulative work");
+    }
+}
+
+async fn set_sync_health_state(
+    state: &Arc<RwLock<SyncHealthState>>,
+    next: SyncHealthState,
+    reason: &'static str,
+) {
+    let mut guard = state.write().await;
+    if *guard != next {
+        info!(from = ?*guard, to = ?next, reason, "sync health state changed");
+        *guard = next;
+    }
 }
 
 /// Get the debug log path from DATA_DIR environment variable
@@ -550,6 +605,7 @@ impl CoinjectNode {
 
         // Multi-peer consensus tracker (XRPL-inspired, requires 5+ peers for 80% threshold)
         let peer_consensus = Arc::new(PeerConsensus::with_defaults());
+        run_startup_chain_sanity_checks(&self.chain).await;
 
         // Create block submission handler
         // This handler validates, stores, and broadcasts blocks submitted via RPC
@@ -845,6 +901,7 @@ impl CoinjectNode {
         // Updated by the periodic reorg/sync task: true when our tip is behind the peer median
         // (or best peer height) by more than `sync_threshold_blocks` — see `docs/FORKING_AND_REORG.md`.
         let is_syncing = Arc::new(tokio::sync::RwLock::new(false));
+        let sync_health_state = Arc::new(tokio::sync::RwLock::new(SyncHealthState::Normal));
 
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
@@ -1031,6 +1088,7 @@ impl CoinjectNode {
         let cpp_network_cmd_tx_for_events = cpp_network_cmd_tx.clone();
         let hf_sync_clone = self.hf_sync.clone();
         let block_buffer_clone = Arc::clone(&block_buffer);
+        let sync_health_state_clone = Arc::clone(&sync_health_state);
         // Clone config for version checking in event handler
         let config_clone = self.config.clone();
         let miner_clone = self.miner.clone();
@@ -1265,6 +1323,15 @@ impl CoinjectNode {
                                             peer_cumulative_work = peer_tip_w,
                                             "sync extension not on peer heavy chain; buffering for reorg"
                                         );
+                                        peer_consensus_clone
+                                            .note_incompatible_tip(&peer_key)
+                                            .await;
+                                        set_sync_health_state(
+                                            &sync_health_state_clone,
+                                            SyncHealthState::SuspectFork,
+                                            "incompatible sync extension from heavy peer",
+                                        )
+                                        .await;
                                         let mut buffer = block_buffer_clone.write().await;
                                         buffer.insert(block.header.height, block);
                                         continue;
@@ -1302,6 +1369,9 @@ impl CoinjectNode {
                                 ) {
                                     if let Ok(is_new_best) = chain_clone.store_block(&block).await {
                                         if is_new_best {
+                                            peer_consensus_clone
+                                                .clear_incompatible_tip_penalty(&peer_key)
+                                                .await;
                                             blocks_applied += 1;
                                             debug!(block_height = block.header.height, version = %version_info, "sync block applied");
 
@@ -1528,6 +1598,12 @@ impl CoinjectNode {
                                 highest_received,
                                 "sync batch stalled on alternate branch; triggering immediate reorg evaluation"
                             );
+                            set_sync_health_state(
+                                &sync_health_state_clone,
+                                SyncHealthState::Recovery,
+                                "sync batch stalled and reorg triggered",
+                            )
+                            .await;
                             Self::check_and_reorganize_chain(
                                 &chain_clone,
                                 &state_clone,
@@ -1576,6 +1652,12 @@ impl CoinjectNode {
 
                         if peer_height > current_height {
                             if blocks_applied > 0 {
+                                set_sync_health_state(
+                                    &sync_health_state_clone,
+                                    SyncHealthState::Normal,
+                                    "sync batch progressed",
+                                )
+                                .await;
                                 // Only continue immediately when the last batch advanced our tip.
                                 // Otherwise we can tight-loop the same request range and trip the
                                 // bootnode's rate limiter before fork recovery has a chance to act.
@@ -1608,6 +1690,14 @@ impl CoinjectNode {
                                     highest_received,
                                     "sync batch made no progress; skipping immediate continuation request"
                                 );
+                                if *sync_health_state_clone.read().await == SyncHealthState::Normal {
+                                    set_sync_health_state(
+                                        &sync_health_state_clone,
+                                        SyncHealthState::SuspectFork,
+                                        "sync continuation made no progress",
+                                    )
+                                    .await;
+                                }
                             }
                         }
                     }
@@ -2501,6 +2591,7 @@ impl CoinjectNode {
         let cpp_network_cmd_tx_periodic = cpp_network_cmd_tx.clone();
         let peer_consensus_periodic = Arc::clone(&peer_consensus);
         let is_syncing_periodic = Arc::clone(&is_syncing);
+        let sync_health_state_periodic = Arc::clone(&sync_health_state);
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(15));
@@ -2532,6 +2623,21 @@ impl CoinjectNode {
                 let behind_best_peer = cur.saturating_add(thresh) < best_ph;
                 let syncing = behind_median || behind_best_peer;
                 *is_syncing_periodic.write().await = syncing;
+                if syncing {
+                    set_sync_health_state(
+                        &sync_health_state_periodic,
+                        SyncHealthState::Recovery,
+                        "periodic detector found node behind peers",
+                    )
+                    .await;
+                } else if *sync_health_state_periodic.read().await != SyncHealthState::SuspectFork {
+                    set_sync_health_state(
+                        &sync_health_state_periodic,
+                        SyncHealthState::Normal,
+                        "periodic detector sees node aligned with peers",
+                    )
+                    .await;
+                }
             }
         });
 

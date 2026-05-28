@@ -20,6 +20,9 @@ use coinject_network::cpp::timeouts::{
     consensus_peer_timeout, consensus_stale_threshold, MAX_MISSED_ROUNDS_CONSENSUS,
 };
 
+const INCOMPATIBLE_TIP_QUARANTINE_AFTER: u32 = 3;
+const INCOMPATIBLE_TIP_QUARANTINE_SECS: u64 = 120;
+
 /// Peer reliability tracking for Negative UNL equivalent
 #[derive(Debug, Clone)]
 pub struct PeerState {
@@ -35,6 +38,10 @@ pub struct PeerState {
     pub missed_rounds: u32,
     /// Whether this peer is filtered (Negative UNL)
     pub is_filtered: bool,
+    /// Consecutive incompatible-tip reports for this peer.
+    pub incompatible_tip_reports: u32,
+    /// Temporary quarantine window for likely fork sources.
+    pub quarantine_until: Option<Instant>,
 }
 
 impl PeerState {
@@ -46,6 +53,8 @@ impl PeerState {
             last_seen: Instant::now(),
             missed_rounds: 0,
             is_filtered: false,
+            incompatible_tip_reports: 0,
+            quarantine_until: None,
         }
     }
 
@@ -55,6 +64,12 @@ impl PeerState {
     /// while maintaining dimensional consistency across the system
     pub fn is_stale(&self) -> bool {
         self.last_seen.elapsed() > consensus_stale_threshold()
+    }
+
+    pub fn is_quarantined(&self) -> bool {
+        self.quarantine_until
+            .map(|until| Instant::now() < until)
+            .unwrap_or(false)
     }
 }
 
@@ -221,7 +236,9 @@ impl PeerConsensus {
                 );
             }
         } else {
-            peers.insert(peer_id.clone(), PeerState::new(height, hash));
+            let mut state = PeerState::new(height, hash);
+            state.cumulative_work = cumulative_work;
+            peers.insert(peer_id.clone(), state);
             println!(
                 "📡 New peer tracked: {} at height {}",
                 &peer_id[..8.min(peer_id.len())],
@@ -258,9 +275,32 @@ impl PeerConsensus {
         let peers = self.peers.read().await;
         peers
             .iter()
-            .filter(|(_, state)| !state.is_filtered && !state.is_stale())
+            .filter(|(_, state)| !state.is_filtered && !state.is_stale() && !state.is_quarantined())
             .map(|(id, state)| (id.clone(), state.clone()))
             .collect()
+    }
+
+    /// Record an incompatible-tip event and quarantine repeat offenders temporarily.
+    pub async fn note_incompatible_tip(&self, peer_id: &str) {
+        let mut peers = self.peers.write().await;
+        let Some(state) = peers.get_mut(peer_id) else {
+            return;
+        };
+        state.incompatible_tip_reports = state.incompatible_tip_reports.saturating_add(1);
+        if state.incompatible_tip_reports >= INCOMPATIBLE_TIP_QUARANTINE_AFTER {
+            state.quarantine_until =
+                Some(Instant::now() + Duration::from_secs(INCOMPATIBLE_TIP_QUARANTINE_SECS));
+            state.incompatible_tip_reports = 0;
+            println!("⚠️  Quarantining peer {} after incompatible-tip reports", peer_id);
+        }
+    }
+
+    /// Clear incompatibility counters after successful canonical sync from this peer.
+    pub async fn clear_incompatible_tip_penalty(&self, peer_id: &str) {
+        let mut peers = self.peers.write().await;
+        if let Some(state) = peers.get_mut(peer_id) {
+            state.incompatible_tip_reports = 0;
+        }
     }
 
     /// Get the number of active peers (for Negative UNL-adjusted quorum)
@@ -637,6 +677,21 @@ mod tests {
         let (should, reason) = consensus.should_mine(250).await;
         assert!(!should);
         assert!(reason.contains("Ahead of peers"));
+    }
+
+    #[tokio::test]
+    async fn test_quarantine_after_repeated_incompatible_tips() {
+        let consensus = PeerConsensus::with_defaults();
+        consensus
+            .update_peer("peer1".to_string(), 100, [0; 32], 1_000)
+            .await;
+        assert_eq!(consensus.active_peer_count().await, 1);
+
+        consensus.note_incompatible_tip("peer1").await;
+        consensus.note_incompatible_tip("peer1").await;
+        assert_eq!(consensus.active_peer_count().await, 1);
+        consensus.note_incompatible_tip("peer1").await;
+        assert_eq!(consensus.active_peer_count().await, 0);
     }
 
     #[test]

@@ -396,6 +396,7 @@ impl ChainState {
     }
 
     /// True if `candidate` is an ancestor of `(tip_hash, tip_height)` on stored blocks.
+    #[cfg(not(feature = "adzdb"))]
     pub fn is_hash_on_canonical_chain_from_tip(
         &self,
         tip_hash: Hash,

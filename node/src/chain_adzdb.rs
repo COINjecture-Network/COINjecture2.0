@@ -220,18 +220,22 @@ impl AdzdbChainState {
 
     /// Get block by height
     pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, ChainError> {
-        // Note: This is sync because it's called from sync contexts
-        // In production, would use tokio::runtime::Handle
-        let db = futures::executor::block_on(self.db.read());
-
-        match db.get_by_height(height) {
-            Ok(bytes) => {
-                let block: Block = bincode::deserialize(&bytes)?;
-                Ok(Some(block))
-            }
-            Err(AdzError::NotFound) => Ok(None),
-            Err(e) => Err(ChainError::from(e)),
+        let best_height = futures::executor::block_on(self.best_block_height());
+        if height > best_height {
+            return Ok(None);
         }
+
+        // Canonical walk from tip avoids stale by-height entries after forks.
+        let mut hash = futures::executor::block_on(self.best_block_hash());
+        let mut h = best_height;
+        while h > height {
+            let Some(block) = self.get_block_by_hash(&hash)? else {
+                return Ok(None);
+            };
+            hash = block.header.prev_hash;
+            h -= 1;
+        }
+        self.get_block_by_hash(&hash)
     }
 
     /// Get block header by height

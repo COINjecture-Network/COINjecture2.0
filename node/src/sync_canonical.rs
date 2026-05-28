@@ -2,23 +2,34 @@
 //!
 //! See `docs/FORKING_AND_REORG.md` and `docs/github-issues/ISSUE-sync-by-tip-hash-and-cumulative-work.md`.
 
+#[cfg(not(feature = "adzdb"))]
 use crate::chain::ChainState;
-use coinject_core::Hash;
+#[cfg(feature = "adzdb")]
+use crate::chain_adzdb::AdzdbChainState as ChainState;
+use coinject_core::{Block, Hash};
 use std::sync::Arc;
 
+#[cfg(not(feature = "adzdb"))]
+type SyncChainError = crate::chain::ChainError;
+#[cfg(feature = "adzdb")]
+type SyncChainError = crate::chain_adzdb::ChainError;
+
 /// Walk from `(tip_hash, tip_height)` toward genesis; true if `candidate` is on that chain.
-pub fn is_hash_on_chain_from_tip(
-    chain: &ChainState,
+fn is_hash_on_chain_from_tip_impl<F>(
+    mut get_block_by_hash: F,
     tip_hash: Hash,
     mut tip_height: u64,
     candidate: &Hash,
-) -> Result<bool, crate::chain::ChainError> {
+) -> Result<bool, SyncChainError>
+where
+    F: FnMut(&Hash) -> Result<Option<Block>, SyncChainError>,
+{
     if *candidate == tip_hash {
         return Ok(true);
     }
     let mut hash = tip_hash;
     while tip_height > 0 {
-        let Some(block) = chain.get_block_by_hash(&hash)? else {
+        let Some(block) = get_block_by_hash(&hash)? else {
             return Ok(false);
         };
         hash = block.header.prev_hash;
@@ -28,6 +39,21 @@ pub fn is_hash_on_chain_from_tip(
         }
     }
     Ok(false)
+}
+
+/// Walk from `(tip_hash, tip_height)` toward genesis; true if `candidate` is on that chain.
+pub fn is_hash_on_chain_from_tip(
+    chain: &ChainState,
+    tip_hash: Hash,
+    tip_height: u64,
+    candidate: &Hash,
+) -> Result<bool, SyncChainError> {
+    is_hash_on_chain_from_tip_impl(
+        |hash| chain.get_block_by_hash(hash),
+        tip_hash,
+        tip_height,
+        candidate,
+    )
 }
 
 /// Whether to apply a sequential sync extension that matches our local tip parent.
@@ -41,7 +67,7 @@ pub async fn should_apply_sync_extension(
     peer_tip_height: u64,
     peer_tip_hash: Hash,
     peer_cumulative_work: u128,
-) -> Result<bool, crate::chain::ChainError> {
+) -> Result<bool, SyncChainError> {
     if peer_tip_height <= block_height || peer_cumulative_work == 0 {
         return Ok(true);
     }
@@ -57,7 +83,6 @@ pub async fn should_apply_sync_extension(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::ChainState;
     use crate::genesis::{create_genesis_block, GenesisConfig};
 
     #[tokio::test]
@@ -65,9 +90,37 @@ mod tests {
         let dir = std::env::temp_dir().join("coinject-sync-canonical-ancestor");
         let _ = std::fs::remove_dir_all(&dir);
         let genesis = create_genesis_block(GenesisConfig::default());
+        #[cfg(not(feature = "adzdb"))]
         let chain = ChainState::new(&dir, &genesis, 64).unwrap();
+        #[cfg(feature = "adzdb")]
+        let chain = ChainState::new(&dir, &genesis).unwrap();
         let tip = chain.best_block_hash().await;
         assert!(is_hash_on_chain_from_tip(&chain, tip, 0, &genesis.header.hash()).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn heavier_peer_requires_candidate_on_peer_branch() {
+        let dir = std::env::temp_dir().join("coinject-sync-canonical-heavy");
+        let _ = std::fs::remove_dir_all(&dir);
+        let genesis = create_genesis_block(GenesisConfig::default());
+        #[cfg(not(feature = "adzdb"))]
+        let chain = Arc::new(ChainState::new(&dir, &genesis, 64).unwrap());
+        #[cfg(feature = "adzdb")]
+        let chain = Arc::new(ChainState::new(&dir, &genesis).unwrap());
+
+        let block_hash = genesis.header.hash();
+        let decision = should_apply_sync_extension(
+            &chain,
+            &block_hash,
+            0,
+            10,
+            Hash::from_bytes([42u8; 32]),
+            10_000,
+        )
+        .await
+        .unwrap();
+        assert!(!decision, "off-branch candidate must be rejected for heavier peers");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

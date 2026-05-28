@@ -60,10 +60,28 @@ REMOTE
 run_follower() {
   local host="$1" path="$2"
   echo "=== Follower: $host $path ==="
+  if [[ "$FOLLOWER_COMPOSE_EXTRA" != *"follower-no-mine"* ]]; then
+    echo "Refusing follower deploy: FOLLOWER_COMPOSE_EXTRA must include follower-no-mine overlay"
+    exit 1
+  fi
   remote "$host" bash -s <<REMOTE
 set -euo pipefail
 cd "$path"
 export COINJECT_NODE_IMAGE="$COINJECT_NODE_IMAGE"
+if [[ -f .env ]]; then
+  bootnodes=\$(awk -F= '/^COINJECT_BOOTNODES=/{print \$2}' .env | tail -1 | tr -d '"'"'"' | tr -d ' ')
+  if [[ -z "\$bootnodes" ]]; then
+    echo "ERROR: follower .env missing COINJECT_BOOTNODES"
+    exit 1
+  fi
+  case ",\$bootnodes," in
+    *",193.203.164.13:707,"*) ;;
+    *)
+      echo "ERROR: follower COINJECT_BOOTNODES must include canonical 193.203.164.13:707 (got: \$bootnodes)"
+      exit 1
+      ;;
+  esac
+fi
 if [[ -n "$GHCR_TOKEN" ]]; then
   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 fi
