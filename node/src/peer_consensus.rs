@@ -291,7 +291,10 @@ impl PeerConsensus {
             state.quarantine_until =
                 Some(Instant::now() + Duration::from_secs(INCOMPATIBLE_TIP_QUARANTINE_SECS));
             state.incompatible_tip_reports = 0;
-            println!("⚠️  Quarantining peer {} after incompatible-tip reports", peer_id);
+            println!(
+                "⚠️  Quarantining peer {} after incompatible-tip reports",
+                peer_id
+            );
         }
     }
 

@@ -98,12 +98,18 @@ async fn run_startup_chain_sanity_checks(chain: &Arc<ChainState>) {
             got_tip = %best_block.header.hash(),
             "startup sanity: canonical height lookup differs from best hash"
         ),
-        Ok(None) => warn!(best_height, "startup sanity: best height has no retrievable block"),
+        Ok(None) => warn!(
+            best_height,
+            "startup sanity: best height has no retrievable block"
+        ),
         Err(e) => warn!(best_height, error = %e, "startup sanity: failed retrieving best height"),
     }
 
     if best_height > 0 && best_work == 0 {
-        warn!(best_height, "startup sanity: non-genesis tip reports zero cumulative work");
+        warn!(
+            best_height,
+            "startup sanity: non-genesis tip reports zero cumulative work"
+        );
     }
 }
 
@@ -1323,9 +1329,7 @@ impl CoinjectNode {
                                             peer_cumulative_work = peer_tip_w,
                                             "sync extension not on peer heavy chain; buffering for reorg"
                                         );
-                                        peer_consensus_clone
-                                            .note_incompatible_tip(&peer_key)
-                                            .await;
+                                        peer_consensus_clone.note_incompatible_tip(&peer_key).await;
                                         set_sync_health_state(
                                             &sync_health_state_clone,
                                             SyncHealthState::SuspectFork,
@@ -1690,7 +1694,8 @@ impl CoinjectNode {
                                     highest_received,
                                     "sync batch made no progress; skipping immediate continuation request"
                                 );
-                                if *sync_health_state_clone.read().await == SyncHealthState::Normal {
+                                if *sync_health_state_clone.read().await == SyncHealthState::Normal
+                                {
                                     set_sync_health_state(
                                         &sync_health_state_clone,
                                         SyncHealthState::SuspectFork,

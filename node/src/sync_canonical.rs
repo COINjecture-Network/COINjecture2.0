@@ -120,7 +120,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!decision, "off-branch candidate must be rejected for heavier peers");
+        assert!(
+            !decision,
+            "off-branch candidate must be rejected for heavier peers"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
