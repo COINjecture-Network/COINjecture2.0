@@ -1,0 +1,29 @@
+# Production mesh fleet overlay (all hosts that run multiple chain containers).
+#
+# Rules enforced by compose + autorepair (not by turning mining off):
+#   1. Only **bootnode** dials public mesh peers (.env COINJECT_BOOTNODES) — pair with local-ram.yml on multi-node hosts.
+#   2. node1–node3 dial bootnode:707 only and run `--mine`; actual block production is gated in the
+#      binary by peer sync + tip-hash consensus (docker-compose.sync-follower.yml).
+#   3. On-host mesh-node-autorepair clones bootnode-data → any local replica whose tip hash diverges.
+#
+# Canonical (full mining fleet):
+#   docker compose -f docker-compose.yml \
+#     -f docker-compose.sync-follower.yml \
+#     -f docker-compose.local-ram.yml \
+#     -f docker-compose.mesh-fleet.yml \
+#     -f docker-compose.bootnode-health-metrics-only.yml \
+#     up -d --no-build bootnode node1 node2 node3 api-server
+#
+# Follower (single bootnode until you scale — omit mesh-fleet, add mesh-bootnode-only instead):
+#   ... -f docker-compose.mesh-bootnode-only.yml ... up -d bootnode api-server
+
+services:
+  bootnode:
+    # Mesh-facing seed; mining still sync-gated when sync-follower overlay is active.
+    command: >
+      --mine
+      --data-dir /data
+      --chain-id coinject-network-b-v3
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933

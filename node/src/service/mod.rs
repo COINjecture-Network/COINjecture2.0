@@ -2597,6 +2597,7 @@ impl CoinjectNode {
         let peer_consensus_periodic = Arc::clone(&peer_consensus);
         let is_syncing_periodic = Arc::clone(&is_syncing);
         let sync_health_state_periodic = Arc::clone(&sync_health_state);
+        let mut suspect_fork_streak: u32 = 0;
 
         tokio::spawn(async move {
             let mut interval = time::interval(Duration::from_secs(15));
@@ -2621,6 +2622,8 @@ impl CoinjectNode {
                 .await;
 
                 let cur = chain_periodic.best_block_height().await;
+                let cur_hash = chain_periodic.best_block_hash().await;
+                let cur_hash_bytes: [u8; 32] = *cur_hash.as_bytes();
                 let median = peer_consensus_periodic.median_peer_height().await;
                 let best_ph = peer_consensus_periodic.best_peer_height().await;
                 let thresh = peer_consensus_periodic.sync_threshold_blocks();
@@ -2628,6 +2631,49 @@ impl CoinjectNode {
                 let behind_best_peer = cur.saturating_add(thresh) < best_ph;
                 let syncing = behind_median || behind_best_peer;
                 *is_syncing_periodic.write().await = syncing;
+
+                let health = *sync_health_state_periodic.read().await;
+                if health == SyncHealthState::SuspectFork {
+                    suspect_fork_streak = suspect_fork_streak.saturating_add(1);
+                } else {
+                    suspect_fork_streak = 0;
+                }
+
+                // After ~45s on SuspectFork, pull from the heaviest peer and re-run reorg.
+                if suspect_fork_streak >= 3 {
+                    if let Some((peer_id, peer_state)) = peer_consensus_periodic
+                        .heaviest_peer_when_local_forked(cur, cur_hash_bytes)
+                        .await
+                    {
+                        warn!(
+                            our_height = cur,
+                            peer_height = peer_state.best_height,
+                            peer_cumulative_work = peer_state.cumulative_work,
+                            peer_id = %peer_id,
+                            "auto fork recovery: requesting blocks from heaviest peer"
+                        );
+                        let from_height = cur + 1;
+                        let to_height = peer_state
+                            .best_height
+                            .min(cur.saturating_add(16));
+                        if from_height <= to_height {
+                            if let Ok(peer_id_bytes) = hex::decode(&peer_id) {
+                                if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
+                                    let _ = cpp_network_cmd_tx_periodic.send(
+                                        CppNetworkCommand::RequestBlocks {
+                                            peer_id: peer_arr,
+                                            from_height,
+                                            to_height,
+                                            request_id: rand::random(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    suspect_fork_streak = 0;
+                }
+
                 if syncing {
                     set_sync_health_state(
                         &sync_health_state_periodic,
@@ -2635,7 +2681,7 @@ impl CoinjectNode {
                         "periodic detector found node behind peers",
                     )
                     .await;
-                } else if *sync_health_state_periodic.read().await != SyncHealthState::SuspectFork {
+                } else if health != SyncHealthState::SuspectFork {
                     set_sync_health_state(
                         &sync_health_state_periodic,
                         SyncHealthState::Normal,

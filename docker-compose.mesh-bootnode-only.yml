@@ -1,0 +1,17 @@
+# Optional **bootstrap** overlay for mesh followers: run only bootnode + api (one chain DB).
+# Remove this file from the compose stack when scaling to a full mining fleet on the host.
+#
+# Scale up later (join-and-mine, sync-gated):
+#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml \
+#     -f docker-compose.bootnode-health-metrics-only.yml \
+#     up -d --no-build bootnode node1 node2 node3 api-server
+#
+# With only this overlay, node1–node3 are profile-gated off:
+
+services:
+  node1:
+    profiles: ["mesh-extra-nodes"]
+  node2:
+    profiles: ["mesh-extra-nodes"]
+  node3:
+    profiles: ["mesh-extra-nodes"]

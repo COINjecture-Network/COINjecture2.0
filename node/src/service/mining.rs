@@ -213,7 +213,10 @@ impl CoinjectNode {
             // Requires 5+ peers with 80% agreement before mining
             // SKIP in dev mode - allow solo mining
             if !dev_mode {
-                let (should_mine, reason) = peer_consensus.should_mine(best_height).await;
+                let best_hash_bytes: [u8; 32] = *best_hash.as_bytes();
+                let (should_mine, reason) = peer_consensus
+                    .should_mine(best_height, best_hash_bytes)
+                    .await;
                 if !should_mine {
                     mining_gate_log_counter = mining_gate_log_counter.wrapping_add(1);
                     // Default RUST_LOG=info hides `debug!`; surface gate reason periodically during forks.

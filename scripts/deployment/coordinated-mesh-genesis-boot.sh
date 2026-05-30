@@ -37,7 +37,7 @@ FOLLOWER1_PATH="${FOLLOWER1_PATH:-/opt/coinjecture-src}"
 FOLLOWER2_HOST="${FOLLOWER2_HOST:-root@198.199.81.81}"
 FOLLOWER2_PATH="${FOLLOWER2_PATH:-/opt/coinjecture}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
-FOLLOWER_COMPOSE_EXTRA="${FOLLOWER_COMPOSE_EXTRA:-docker-compose.follower-no-mine.yml}"
+FOLLOWER_COMPOSE_EXTRA="${FOLLOWER_COMPOSE_EXTRA:-docker-compose.sync-follower.yml,docker-compose.mesh-bootnode-only.yml,docker-compose.bootnode-health-metrics-only.yml}"
 
 COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:latest}"
 GHCR_USER="${GHCR_USER:-${GITHUB_ACTOR:-COINjecture-Network}}"
@@ -60,7 +60,14 @@ remote() {
 }
 
 follower_compose_flags() {
-  echo -f "$COMPOSE_FILE" -f "$FOLLOWER_COMPOSE_EXTRA"
+  local flags=(-f "$COMPOSE_FILE")
+  local IFS=,
+  local f
+  for f in $FOLLOWER_COMPOSE_EXTRA; do
+    f="${f// /}"
+    [[ -n "$f" ]] && flags+=(-f "$f")
+  done
+  printf '%s ' "${flags[@]}"
 }
 
 echo "=== Coordinated mesh genesis boot ==="

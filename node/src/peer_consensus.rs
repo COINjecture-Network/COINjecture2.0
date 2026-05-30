@@ -392,7 +392,7 @@ impl PeerConsensus {
 
     /// The main sync decision: Should we mine?
     /// Returns (should_mine, reason)
-    pub async fn should_mine(&self, our_height: u64) -> (bool, String) {
+    pub async fn should_mine(&self, our_height: u64, our_hash: [u8; 32]) -> (bool, String) {
         let active_count = self.active_peer_count().await;
 
         // DIAGNOSTIC: Log all peers and their states
@@ -481,6 +481,11 @@ impl PeerConsensus {
             );
         }
 
+        // Check 4: Tip hash must match the dominant peer branch (height-only consensus is insufficient).
+        if let Some(reason) = self.tip_hash_fork_reason(our_height, our_hash).await {
+            return (false, reason);
+        }
+
         // All checks passed!
         (
             true,
@@ -511,6 +516,77 @@ impl PeerConsensus {
                 }
             }
         }
+    }
+
+    /// When peers agree on height but disagree on tip hash, return a mining-gate reason.
+    /// Only evaluated when we are caught up with the peer median (avoids false positives while syncing).
+    pub async fn tip_hash_fork_reason(
+        &self,
+        our_height: u64,
+        our_hash: [u8; 32],
+    ) -> Option<String> {
+        let median_height = self.median_peer_height().await;
+        if median_height == 0
+            || our_height + self.config.sync_threshold_blocks < median_height
+        {
+            return None;
+        }
+
+        let active = self.active_peers().await;
+        if active.is_empty() {
+            return None;
+        }
+
+        let our_band = our_height.saturating_sub(1)..=our_height.saturating_add(1);
+        let mut hash_votes: HashMap<[u8; 32], usize> = HashMap::new();
+        for (_, state) in &active {
+            if !our_band.contains(&state.best_height) {
+                continue;
+            }
+            *hash_votes.entry(state.best_hash).or_insert(0) += 1;
+        }
+        if hash_votes.is_empty() {
+            return None;
+        }
+
+        let peer_count = active.len();
+        let (dominant_hash, dominant_votes) = hash_votes
+            .iter()
+            .max_by_key(|(_, votes)| *votes)
+            .map(|(hash, votes)| (*hash, *votes))
+            .unwrap();
+
+        let adaptive = self.config.get_adaptive_threshold(peer_count);
+        let required = (peer_count as f64 * adaptive.0).ceil() as usize;
+        if dominant_votes < required.max(1) {
+            return Some(format!(
+                "[{}] No tip-hash consensus among peers (best {} / {} votes)",
+                adaptive.1, dominant_votes, peer_count
+            ));
+        }
+
+        if our_hash != dominant_hash {
+            return Some(format!(
+                "Local tip hash diverges from peer mesh (height ~{}, {} peer votes on alternate branch)",
+                our_height, dominant_votes
+            ));
+        }
+
+        None
+    }
+
+    /// Best cumulative-work peer when local tip hash diverges from the mesh (for auto-recovery).
+    pub async fn heaviest_peer_when_local_forked(
+        &self,
+        our_height: u64,
+        our_hash: [u8; 32],
+    ) -> Option<(String, PeerState)> {
+        if self.tip_hash_fork_reason(our_height, our_hash).await.is_none() {
+            return None;
+        }
+        self.best_active_peer_by_cumulative_work()
+            .await
+            .filter(|(_, state)| state.best_hash != our_hash)
     }
 
     /// Get diagnostic information for logging
@@ -652,7 +728,7 @@ mod tests {
         let consensus = PeerConsensus::with_defaults();
 
         // No peers - should not mine
-        let (should, reason) = consensus.should_mine(100).await;
+        let (should, reason) = consensus.should_mine(100, [0; 32]).await;
         assert!(!should);
         assert!(reason.contains("Insufficient peers"));
 
@@ -668,16 +744,16 @@ mod tests {
             .await;
 
         // We're at 100, peers at 100 - should mine
-        let (should, _) = consensus.should_mine(100).await;
+        let (should, _) = consensus.should_mine(100, [0; 32]).await;
         assert!(should);
 
         // We're at 50, peers at 100 - should NOT mine (50 blocks behind)
-        let (should, reason) = consensus.should_mine(50).await;
+        let (should, reason) = consensus.should_mine(50, [0; 32]).await;
         assert!(!should);
         assert!(reason.contains("Behind peers"));
 
         // Peers at 100, we're far ahead on a local fork — should NOT mine
-        let (should, reason) = consensus.should_mine(250).await;
+        let (should, reason) = consensus.should_mine(250, [0; 32]).await;
         assert!(!should);
         assert!(reason.contains("Ahead of peers"));
     }
