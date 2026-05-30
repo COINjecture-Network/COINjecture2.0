@@ -526,9 +526,7 @@ impl PeerConsensus {
         our_hash: [u8; 32],
     ) -> Option<String> {
         let median_height = self.median_peer_height().await;
-        if median_height == 0
-            || our_height + self.config.sync_threshold_blocks < median_height
-        {
+        if median_height == 0 || our_height + self.config.sync_threshold_blocks < median_height {
             return None;
         }
 
@@ -581,7 +579,11 @@ impl PeerConsensus {
         our_height: u64,
         our_hash: [u8; 32],
     ) -> Option<(String, PeerState)> {
-        if self.tip_hash_fork_reason(our_height, our_hash).await.is_none() {
+        if self
+            .tip_hash_fork_reason(our_height, our_hash)
+            .await
+            .is_none()
+        {
             return None;
         }
         self.best_active_peer_by_cumulative_work()

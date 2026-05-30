@@ -2653,9 +2653,7 @@ impl CoinjectNode {
                             "auto fork recovery: requesting blocks from heaviest peer"
                         );
                         let from_height = cur + 1;
-                        let to_height = peer_state
-                            .best_height
-                            .min(cur.saturating_add(16));
+                        let to_height = peer_state.best_height.min(cur.saturating_add(16));
                         if from_height <= to_height {
                             if let Ok(peer_id_bytes) = hex::decode(&peer_id) {
                                 if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
