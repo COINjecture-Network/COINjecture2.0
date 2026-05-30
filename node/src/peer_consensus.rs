@@ -579,13 +579,7 @@ impl PeerConsensus {
         our_height: u64,
         our_hash: [u8; 32],
     ) -> Option<(String, PeerState)> {
-        if self
-            .tip_hash_fork_reason(our_height, our_hash)
-            .await
-            .is_none()
-        {
-            return None;
-        }
+        self.tip_hash_fork_reason(our_height, our_hash).await?;
         self.best_active_peer_by_cumulative_work()
             .await
             .filter(|(_, state)| state.best_hash != our_hash)
