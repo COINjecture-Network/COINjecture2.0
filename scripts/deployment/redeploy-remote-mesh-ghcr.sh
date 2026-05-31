@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:sha-de079ae}"
+COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:sha-0392372}"
 GHCR_USER="${GHCR_USER:-${GITHUB_ACTOR:-COINjecture-Network}}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
 
@@ -87,7 +87,7 @@ patch_canonical_node_rpc_url() {
   remote "$host" bash -s <<REMOTE
 set -euo pipefail
 cd "$path"
-rpc="http://bootnode:9933,http://node1:9933,http://node2:9933"
+rpc="http://bootnode:9933,http://node1:9933,http://node2:9933,http://node3:9933"
 if grep -q '^NODE_RPC_URL=' .env 2>/dev/null; then
   sed -i.bak "s|^NODE_RPC_URL=.*|NODE_RPC_URL=\$rpc|" .env
 else

@@ -106,7 +106,9 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   const [powTries, setPowTries] = useState<number | null>(null);
   const powUiThrottle = useRef(0);
   const [pullingChainInstance, setPullingChainInstance] = useState(false);
-  const [isLg, setIsLg] = useState(true);
+  const [isLg, setIsLg] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches
+  );
   const [mobilePanel, setMobilePanel] = useState<"code" | "visual" | "result" | "console">("code");
   const [successPopup, setSuccessPopup] = useState<{ height: number; hash: string } | null>(null);
   const [bountySuccessPopup, setBountySuccessPopup] = useState<{ problemId: string; bounty: number } | null>(null);
@@ -1047,7 +1049,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             </div>
           </div>
           ) : (
-            <div className="flex h-full flex-1 min-h-0 w-full flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 pb-[max(0.75rem,env(safe-area-inset-bottom))] touch-manipulation">
+            <div className="flex min-h-[min(62dvh,560px)] flex-1 flex-col w-full overflow-hidden rounded-lg border border-border/60 bg-background/50 pb-[max(0.75rem,env(safe-area-inset-bottom))] touch-manipulation lg:h-full lg:min-h-0">
               <div className="shrink-0 z-10 border-b border-border/60 bg-background/95 backdrop-blur-md px-3 pt-2 pb-2 space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Select
