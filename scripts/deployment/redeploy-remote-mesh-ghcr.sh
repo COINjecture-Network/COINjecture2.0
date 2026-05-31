@@ -121,7 +121,7 @@ if [[ -n "$GHCR_TOKEN" ]]; then
   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 fi
 docker compose $(compose_flags_full) pull $CANONICAL_PULL
-docker compose $(compose_flags_full) up -d --no-build --remove-orphans $CANONICAL_SERVICES
+docker compose $(compose_flags_full) up -d --no-build --force-recreate --remove-orphans $CANONICAL_SERVICES
 docker compose $(compose_flags_full) ps
 REMOTE
   install_autorepair "$host" "$path" canonical full
