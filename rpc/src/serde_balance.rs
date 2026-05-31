@@ -95,7 +95,8 @@ mod tests {
         struct RawBounty {
             bounty: Balance,
         }
-        let err = serde_json::from_str::<RawBounty>(r#"{"bounty":"50000000000000000"}"#).unwrap_err();
+        let err =
+            serde_json::from_str::<RawBounty>(r#"{"bounty":"50000000000000000"}"#).unwrap_err();
         assert!(err.to_string().contains("invalid"));
     }
 }
