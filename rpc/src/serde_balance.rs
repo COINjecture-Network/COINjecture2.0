@@ -87,4 +87,15 @@ mod tests {
         let p: Params = serde_json::from_str(r#"{"bounty":1000}"#).unwrap();
         assert_eq!(p.bounty, 1000);
     }
+
+    /// Without `deserialize_atoms_balance`, quoted bounty strings fail serde_json u128 parsing.
+    #[test]
+    fn raw_u128_rejects_quoted_bounty_string() {
+        #[derive(Debug, Deserialize)]
+        struct RawBounty {
+            bounty: Balance,
+        }
+        let err = serde_json::from_str::<RawBounty>(r#"{"bounty":"50000000000000000"}"#).unwrap_err();
+        assert!(err.to_string().contains("invalid"));
+    }
 }

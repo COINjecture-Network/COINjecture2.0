@@ -854,7 +854,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             </Card>
           ) : null}
           {isLg ? (
-          <div className="flex h-full min-h-[min(58dvh,480px)] w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 lg:min-h-0 lg:flex-row">
+          <div className="flex h-full min-h-[min(58dvh,480px)] w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 lg:min-h-[calc(100dvh-8rem)] lg:flex-row">
             {/* File explorer — full height; console does not span under this column */}
             <aside className="flex shrink-0 flex-col border-b border-border/60 bg-muted/15 lg:h-full lg:w-52 lg:self-stretch lg:border-b-0 lg:border-r">
               <div className="flex items-center gap-2 px-2 py-2 border-b border-border/50 text-xs font-medium text-muted-foreground">
@@ -917,7 +917,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:h-full lg:min-h-0">
             <ResizablePanelGroup
               direction="vertical"
-              className="h-full min-h-[360px] w-full flex-1"
+              className="h-full min-h-0 w-full flex-1"
             >
               <ResizablePanel defaultSize={72} minSize={38} className="min-h-0">
                 <ResizablePanelGroup

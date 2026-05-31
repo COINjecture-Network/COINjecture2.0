@@ -458,6 +458,41 @@ function jsonRpcBodyChainSubmitBlock(envelope: {
   return body.replace(/"reward":"(0|[1-9]\d*)"/, '"reward":$1');
 }
 
+/** Marketplace `bounty` is serialized as a decimal string in JS; unquote for Rust `Balance` (`u128`). */
+function jsonRpcBodyMarketplaceBounty(envelope: {
+  jsonrpc: string;
+  id: number;
+  method: string;
+  params: unknown[];
+}): string {
+  const body = JSON.stringify(envelope);
+  return body.replace(/"bounty":"(0|[1-9]\d*)"/g, '"bounty":$1');
+}
+
+const MARKETPLACE_BOUNTY_UNQUOTE_METHODS = new Set([
+  'marketplace_submitPublicProblem',
+  'marketplace_submitPrivateProblemWithWallet',
+  'marketplace_submitPublicSubsetSum',
+]);
+
+function jsonRpcRequestBody(
+  method: string,
+  envelope: {
+    jsonrpc: string;
+    id: number;
+    method: string;
+    params: unknown[];
+  },
+): string {
+  if (method === 'chain_submitBlock') {
+    return jsonRpcBodyChainSubmitBlock(envelope);
+  }
+  if (MARKETPLACE_BOUNTY_UNQUOTE_METHODS.has(method)) {
+    return jsonRpcBodyMarketplaceBounty(envelope);
+  }
+  return JSON.stringify(envelope);
+}
+
 /**
  * Web-wallet `transaction_submit` JSON: `Balance` (`u128`) must be JSON numbers, not quoted strings.
  */
@@ -926,8 +961,7 @@ export class RpcClient {
           method,
           params: rpcParams,
         };
-        const body =
-          method === 'chain_submitBlock' ? jsonRpcBodyChainSubmitBlock(envelope) : JSON.stringify(envelope);
+        const body = jsonRpcRequestBody(method, envelope);
 
         const response = await fetchWithTimeout(
           url,
