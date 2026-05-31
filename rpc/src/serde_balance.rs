@@ -92,6 +92,7 @@ mod tests {
     #[test]
     fn raw_u128_rejects_quoted_bounty_string() {
         #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
         struct RawBounty {
             bounty: Balance,
         }
