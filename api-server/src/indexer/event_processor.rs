@@ -2,6 +2,7 @@
 
 use crate::sse::EventBroadcaster;
 use crate::supabase::SupabaseClient;
+use crate::wallet_activity::normalize_optional_hex;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -30,7 +31,7 @@ impl EventProcessor {
             "hash": block_hash.clone(),
             "parent_hash": parent_hash.clone(),
             "block_timestamp": block_timestamp(block),
-            "miner": miner(block),
+            "miner": normalize_optional_hex(miner(block)),
             "tx_count": tx_count,
             "work_score": work_score(block),
             "raw_header": raw_header(block),
@@ -61,7 +62,7 @@ impl EventProcessor {
         for (tx_index, tx) in txs.iter().enumerate() {
             let tx_hash = tx_hash(tx, &block_hash, height, tx_index);
             let tx_type = tx_type(tx);
-            let signer = tx_signer(tx);
+            let signer = normalize_optional_hex(tx_signer(tx));
             tx_hashes.push(tx_hash.clone());
 
             tx_rows.push(json!({

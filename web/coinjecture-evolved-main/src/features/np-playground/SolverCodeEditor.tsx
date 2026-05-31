@@ -38,7 +38,7 @@ export function SolverCodeEditor({ path, value, onChange, dark, className, minHe
 
   if (fillParent) {
     return (
-      <div className={cn("flex h-full min-h-[200px] min-w-0 flex-1 flex-col border border-border/40 rounded-md overflow-hidden", className)}>
+      <div className={cn("flex h-full min-h-[280px] min-w-0 flex-1 flex-col border border-border/40 rounded-md overflow-hidden [&_.cm-editor]:h-full [&_.cm-scroller]:overflow-auto", className)}>
         {editor}
       </div>
     );

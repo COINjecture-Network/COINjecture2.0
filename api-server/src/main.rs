@@ -77,8 +77,15 @@ async fn main() {
 
     // ── Optional Node RPC client ───────────────────────────────────────────
     let node_rpc = config.node_rpc_url.as_deref().map(|url| {
-        tracing::info!("Node RPC configured: {url}");
-        Arc::new(NodeRpcClient::new(url))
+        if let Some(ref mining) = config.mining_rpc_url {
+            tracing::info!("Node RPC configured: {url} (mining work: {mining} first)");
+        } else {
+            tracing::info!("Node RPC configured: {url}");
+        }
+        Arc::new(NodeRpcClient::with_mining_url(
+            url,
+            config.mining_rpc_url.as_deref(),
+        ))
     });
     if node_rpc.is_none() {
         tracing::info!("Node RPC not configured — peer/chain endpoints will return 503");

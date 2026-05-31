@@ -6,11 +6,21 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { CheckCircle2, Circle, XCircle } from "lucide-react";
 import type { ProblemType } from "@/lib/rpc-client";
 import { rpcClient } from "@/lib/rpc-client";
+import {
+  BOUNTY_PROBLEM_KINDS,
+  applyTemplateToForm,
+  bountyKindMeta,
+  resolveBountyProblem,
+  splitLegacyDescription,
+  templatesForKind,
+  type BountyProblemKind,
+} from "@/lib/bounty";
 import {
   displayBeansToAtoms,
   formatBeans,
@@ -54,8 +64,9 @@ type StoredRevealKit = {
 
 const defaultFormData = {
   title: "",
-  problemType: "SubsetSum",
-  description: "",
+  problemType: "SubsetSum" as BountyProblemKind,
+  briefing: "",
+  instanceJson: "",
   bounty: "",
   minWorkScore: "100",
   submissionMode: "public",
@@ -69,155 +80,31 @@ const defaultFormData = {
 
 const PRIVATE_REVEAL_KITS_KEY = "coinjecturePrivateRevealKits";
 
-/** Every ``` / ```json fenced block (in order). Strict JSON only inside fences. */
-function extractAllFencedJsonBlocks(description: string): string[] {
-  const out: string[] = [];
-  const re = /```(?:json)?\s*([\s\S]*?)```/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(description)) !== null) {
-    const t = m[1].trim();
-    if (t) {
-      out.push(t);
-    }
-  }
-  return out;
-}
-
-function extractBraceJson(description: string): string | null {
-  const firstBrace = description.indexOf("{");
-  const lastBrace = description.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return description.slice(firstBrace, lastBrace + 1).trim();
-  }
-  return null;
-}
-
-function parseProblemFromDescription(
-  description: string,
-  problemType: string,
-): ProblemType {
-  const fencedBlocks = extractAllFencedJsonBlocks(description);
-  const braceJson = extractBraceJson(description);
-  const candidates = [...fencedBlocks, ...(braceJson ? [braceJson] : [])];
-
-  if (candidates.length === 0) {
-    throw new Error(`Paste a ${problemType} instance JSON block into the description before submitting.`);
-  }
-
-  let lastParseError: string | null = null;
-  for (const candidateJson of candidates) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidateJson);
-    } catch {
-      lastParseError = "JSON.parse failed (strict JSON only — no // comments or trailing commas in fenced blocks).";
-      continue;
-    }
-
-    try {
-      return problemRecordToProblemType(parsed as Record<string, unknown>, problemType);
-    } catch (e) {
-      lastParseError = e instanceof Error ? e.message : String(e);
-      continue;
-    }
-  }
-
-  if (lastParseError) {
-    throw new Error(
-      lastParseError.startsWith("JSON.parse")
-        ? `The problem description must include valid JSON for the live ${problemType} instance. ${lastParseError}`
-        : lastParseError,
-    );
-  }
-  throw new Error(`The problem description must include valid JSON for the live ${problemType} instance.`);
-}
-
-function problemRecordToProblemType(record: Record<string, unknown>, problemType: string): ProblemType {
-  if (problemType === "SubsetSum") {
-    if (!Array.isArray(record.numbers) || typeof record.target !== "number") {
-      throw new Error("Subset Sum submissions require JSON with `numbers` and `target` fields.");
-    }
-
-    const numbers = record.numbers.map((value) => {
-      if (typeof value !== "number" || !Number.isFinite(value)) {
-        throw new Error("Each Subset Sum number must be a valid integer.");
-      }
-      return Math.trunc(value);
-    });
-
-    if (numbers.length === 0) {
-      throw new Error("Subset Sum submissions require at least one input number.");
-    }
-
-    return {
-      SubsetSum: {
-        numbers,
-        target: Math.trunc(record.target),
-      },
-    };
-  }
-
-  if (problemType === "SAT") {
-    if (typeof record.variables !== "number" || !Array.isArray(record.clauses)) {
-      throw new Error("SAT submissions require JSON with `variables` and `clauses` fields.");
-    }
-
-    const clauses = record.clauses.map((clause) => {
-      const literals = Array.isArray(clause)
-        ? clause
-        : typeof clause === "object" && clause !== null && Array.isArray((clause as { literals?: unknown }).literals)
-          ? (clause as { literals: unknown[] }).literals
-          : null;
-
-      if (!literals) {
-        throw new Error("Each SAT clause must be an array of integers or an object with `literals`.");
-      }
-
-      return {
-        literals: literals.map((literal) => {
-          if (typeof literal !== "number" || !Number.isFinite(literal)) {
-            throw new Error("SAT literals must be valid integers.");
-          }
-          return Math.trunc(literal);
-        }),
-      };
-    });
-
-    return {
-      SAT: {
-        variables: Math.trunc(record.variables),
-        clauses,
-      },
-    };
-  }
-
-  if (problemType === "TSP") {
-    if (typeof record.cities !== "number" || !Array.isArray(record.distances)) {
-      throw new Error("TSP submissions require JSON with `cities` and `distances` fields.");
-    }
-
-    const distances = record.distances.map((row) => {
-      if (!Array.isArray(row)) {
-        throw new Error("Each TSP distance row must be an array of integers.");
-      }
-
-      return row.map((value) => {
-        if (typeof value !== "number" || !Number.isFinite(value)) {
-          throw new Error("TSP distances must be valid integers.");
-        }
-        return Math.max(0, Math.trunc(value));
-      });
-    });
-
-    return {
-      TSP: {
-        cities: Math.trunc(record.cities),
-        distances,
-      },
-    };
-  }
-
-  throw new Error(`Unsupported problem type: ${problemType}`);
+function ChecklistRow({
+  ok,
+  label,
+  detail,
+}: {
+  ok: boolean | null;
+  label: string;
+  detail?: string;
+}) {
+  const Icon = ok === null ? Circle : ok ? CheckCircle2 : XCircle;
+  const tone =
+    ok === null
+      ? "text-muted-foreground"
+      : ok
+        ? "text-emerald-600 dark:text-emerald-400"
+        : "text-destructive";
+  return (
+    <div className="flex gap-3 text-sm">
+      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${tone}`} />
+      <div>
+        <div className={ok ? "font-medium text-foreground" : "text-muted-foreground"}>{label}</div>
+        {detail ? <div className="text-xs text-muted-foreground mt-0.5">{detail}</div> : null}
+      </div>
+    </div>
+  );
 }
 
 function generateSaltHex(): string {
@@ -298,11 +185,21 @@ const BountySubmit = () => {
     queryFn: () => rpcClient.getOpenProblems(),
     refetchInterval: 30000,
   });
-  const problemTypeOptions = [
-    { value: "SubsetSum", label: "Subset Sum", note: "Good for exact search and matching problems." },
-    { value: "TSP", label: "TSP", note: "Best for routing and optimization style work." },
-    { value: "SAT", label: "SAT", note: "Best for satisfiability and constraint-heavy work." },
-  ];
+  const problemTypeOptions = BOUNTY_PROBLEM_KINDS;
+  const kindMeta = bountyKindMeta(formData.problemType);
+  const kindTemplates = templatesForKind(formData.problemType);
+  const instancePreview = useMemo(
+    () => resolveBountyProblem(formData.instanceJson, formData.briefing, formData.problemType),
+    [formData.instanceJson, formData.briefing, formData.problemType],
+  );
+  const hasWallet = Boolean(selectedKeyPair?.address);
+  const hasTitle = formData.title.trim().length > 0;
+  const bountyNum = Number.parseInt(formData.bounty, 10);
+  const hasValidBounty = Number.isFinite(bountyNum) && bountyNum >= 1;
+  const hasSufficientBalance =
+    walletBalance !== undefined && hasValidBounty && walletBalance >= totalEscrowAtoms;
+  const canSubmit =
+    hasWallet && hasTitle && instancePreview.ok && hasValidBounty && hasSufficientBalance && !isSubmitting;
   const rewardPresets = ["1", "2", "5", "10", "25"];
   const durationPresets = ["7", "14", "30", "90"];
   const complexityOptions = [
@@ -343,15 +240,20 @@ const BountySubmit = () => {
         problemType?: string;
         title?: string;
         description?: string;
+        briefing?: string;
+        instanceJson?: string;
         draftKind?: "problem" | "solver";
       };
       sessionStorage.removeItem(SOLVER_LAB_BOUNTY_KEY);
-      if (data.title && data.description) {
+      if (data.title && (data.description || data.briefing || data.instanceJson)) {
+        const legacy = data.description ?? "";
+        const split = splitLegacyDescription(legacy);
         setFormData((prev) => ({
           ...prev,
           title: data.title!,
-          description: data.description!,
-          problemType: data.problemType ?? prev.problemType,
+          problemType: (data.problemType as BountyProblemKind) ?? prev.problemType,
+          briefing: data.briefing ?? split.briefing ?? legacy,
+          instanceJson: data.instanceJson ?? split.instanceJson ?? prev.instanceJson,
         }));
         const isProblemOnly = data.draftKind === "problem";
         toast({
@@ -424,166 +326,22 @@ const BountySubmit = () => {
     }
   };
 
-  // Problem templates with example data
-  const problemTemplates = {
-    SubsetSum: {
-      title: "Large Dataset Subset Sum Challenge",
-      description: `**Problem:** Subset Sum (NP-Complete)
-
-**Input Format:**
-- Target sum: T (integer)
-- Array of integers: [a₁, a₂, ..., aₙ]
-- Array size: n elements
-
-**Example Input:**
-\`\`\`json
-{
-  "target": 15,
-  "numbers": [3, 34, 4, 12, 5, 2],
-  "size": 6
-}
-\`\`\`
-
-**Expected Output:**
-Return **0-based indices** into the \`numbers\` array (on-chain \`Solution::SubsetSum\`); e.g. indices \`[1,2,3]\` mean \`numbers[1]+numbers[2]+numbers[3]\`, not the literal values 1+2+3.
-
-**Example Output:**
-\`\`\`json
-{
-  "solution": [3, 12],
-  "sum": 15,
-  "indices": [0, 3]
-}
-\`\`\`
-
-**Constraints:**
-- 1 ≤ n ≤ 1000
-- -10⁶ ≤ aᵢ ≤ 10⁶
-- Solution must be exact (not approximate)
-
-**Verification:** Automated - sum of returned subset must equal target`,
-      bounty: "10",
-      minWorkScore: "150",
-      complexity: "medium"
-    },
-    TSP: {
-      title: "Traveling Salesman Route Optimization",
-      description: `**Problem:** Traveling Salesman Problem (NP-Complete)
-
-**Input Format:**
-- Number of cities: n
-- Distance matrix: n×n matrix where d[i][j] = distance from city i to city j
-- Starting city: city_id
-
-**Example Input:**
-\`\`\`json
-{
-  "cities": 5,
-  "distances": [
-    [0, 10, 15, 20, 25],
-    [10, 0, 35, 25, 30],
-    [15, 35, 0, 30, 20],
-    [20, 25, 30, 0, 15],
-    [25, 30, 20, 15, 0]
-  ],
-  "start_city": 0
-}
-\`\`\`
-
-**Expected Output:**
-Return the shortest tour visiting all cities exactly once and returning to start.
-
-**Example Output:**
-\`\`\`json
-{
-  "tour": [0, 1, 3, 4, 2, 0],
-  "total_distance": 95,
-  "visited_all": true
-}
-\`\`\`
-
-**Constraints:**
-- 3 ≤ n ≤ 100
-- All distances are positive integers
-- Triangle inequality may or may not hold
-- Must return to starting city
-
-**Verification:** Automated - validate tour completeness and distance calculation`,
-      bounty: "15",
-      minWorkScore: "200",
-      complexity: "hard"
-    },
-    SAT: {
-      title: "3-SAT Boolean Satisfiability Instance",
-      description: `**Problem:** Boolean Satisfiability (SAT/3-SAT) - NP-Complete
-
-**Input Format:**
-- Variables: set of boolean variables {x₁, x₂, ..., xₙ}
-- Clauses: CNF formula with clauses of up to 3 literals each
-- Number of clauses: m
-
-**Example Input (strict JSON — no \`//\` comments inside the block):**
-\`\`\`json
-{
-  "variables": 4,
-  "clauses": [
-    [1, -2, 3],
-    [-1, 2, -3],
-    [2, 3, 4],
-    [-2, -3, 4]
-  ]
-}
-\`\`\`
-Literal sign: positive integer = variable xₖ, negative = ¬xₖ (e.g. \`-2\` is ¬x₂).
-
-**Expected Output:**
-Return a satisfying assignment or proof of unsatisfiability.
-
-**Example Output:**
-\`\`\`json
-{
-  "satisfiable": true,
-  "assignment": {
-    "x1": true,
-    "x2": false,
-    "x3": true,
-    "x4": true
-  },
-  "verified_clauses": 4
-}
-\`\`\`
-
-**Constraints:**
-- 3 ≤ n ≤ 500 variables
-- Each clause has ≤ 3 literals
-- CNF (Conjunctive Normal Form) only
-- Must satisfy ALL clauses
-
-**Verification:** Automated - evaluate assignment against all clauses`,
-      bounty: "20",
-      minWorkScore: "180",
-      complexity: "expert"
-    }
-  };
-
-  const loadTemplate = (problemType: string) => {
-    const template = problemTemplates[problemType as keyof typeof problemTemplates];
-    if (template) {
-      setFormData({
-        ...formData,
-        title: template.title,
-        description: template.description,
-        bounty: template.bounty,
-        minWorkScore: template.minWorkScore,
-        complexity: template.complexity,
-        problemType: problemType
-      });
-      
-      toast({
-        title: "Template Loaded ✨",
-        description: `${problemType} example loaded. Customize as needed.`,
-      });
-    }
+  const loadTemplate = (templateId: string) => {
+    const template = kindTemplates.find((t) => t.id === templateId) ?? kindTemplates[0];
+    if (!template) return;
+    setFormData((prev) => ({
+      ...prev,
+      ...applyTemplateToForm(template),
+      submissionMode: prev.submissionMode,
+      priority: prev.priority,
+      verificationMethod: prev.verificationMethod,
+      aggregationMethod: prev.aggregationMethod,
+      notes: prev.notes,
+    }));
+    toast({
+      title: "Example loaded",
+      description: `${template.label} — edit the instance JSON or briefing, then set escrow.`,
+    });
   };
 
   const copyToClipboard = async (value: string, field: string) => {
@@ -645,15 +403,17 @@ Return a satisfying assignment or proof of unsatisfiability.
       return;
     }
 
-    let parsedProblem: ProblemType;
-    try {
-      parsedProblem = parseProblemFromDescription(formData.description, formData.problemType);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to parse the problem instance.";
-      setSubmitError(message);
-      toast({ title: "Invalid problem JSON", description: message, variant: "destructive" });
+    const parsed = resolveBountyProblem(
+      formData.instanceJson,
+      formData.briefing,
+      formData.problemType,
+    );
+    if (!parsed.ok) {
+      setSubmitError(parsed.error);
+      toast({ title: "Invalid instance JSON", description: parsed.error, variant: "destructive" });
       return;
     }
+    const parsedProblem = parsed.problem;
 
     setIsSubmitting(true);
 
@@ -889,16 +649,27 @@ Return a satisfying assignment or proof of unsatisfiability.
                       ))}
                     </div>
 
-                    <div className="flex flex-col gap-3 rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4 md:flex-row md:items-center md:justify-between">
+                    <div className="space-y-3 rounded-2xl border border-dashed border-border/70 bg-muted/20 p-4">
                       <div>
-                        <div className="font-medium">Need a starting point?</div>
-                        <div className="text-sm text-muted-foreground">
-                          Load a ready-made {selectedProblemType?.label ?? formData.problemType} example, then edit only what matters.
+                        <div className="font-medium">Start from an example</div>
+                        <div className="text-sm text-muted-foreground mt-1">
+                          Pick a real-world or starter template for {kindMeta?.label ?? formData.problemType}. Instance JSON and solver briefing load separately — no copy-paste hunting.
                         </div>
                       </div>
-                      <Button type="button" variant="outline" onClick={() => loadTemplate(formData.problemType)}>
-                        Load Example
-                      </Button>
+                      <div className="flex flex-wrap gap-2">
+                        {kindTemplates.map((template) => (
+                          <Button
+                            key={template.id}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => loadTemplate(template.id)}
+                          >
+                            {template.label}
+                            <span className="ml-1.5 text-muted-foreground">· {template.tagline}</span>
+                          </Button>
+                        ))}
+                      </div>
                     </div>
 
                     <div className="rounded-2xl border border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
@@ -909,9 +680,9 @@ Return a satisfying assignment or proof of unsatisfiability.
                   <section className="space-y-4">
                     <div>
                       <div className="signal-kicker">Step 2</div>
-                      <h2 className="text-2xl font-semibold">Describe the work clearly</h2>
+                      <h2 className="text-2xl font-semibold">Define the problem</h2>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Keep this operator-friendly. A sharp prompt gets better submissions than a long wall of text.
+                        Instance JSON is what the chain verifies. The briefing is optional context for solvers (human-readable).
                       </p>
                     </div>
 
@@ -921,23 +692,54 @@ Return a satisfying assignment or proof of unsatisfiability.
                         id="title"
                         value={formData.title}
                         onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                        placeholder="e.g., Optimize route coverage for 5,000 delivery nodes"
+                        placeholder="e.g., US cold-chain vaccine relay — 15 hubs"
                         required
                       />
                     </div>
 
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <Label htmlFor="description">Problem Description</Label>
-                        <span className="text-xs text-muted-foreground">Include input format, expected output, and verification rules.</span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Label htmlFor="instanceJson">On-chain instance JSON</Label>
+                        <span
+                          className={`text-xs font-medium ${
+                            instancePreview.ok
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : formData.instanceJson.trim()
+                                ? "text-destructive"
+                                : "text-muted-foreground"
+                          }`}
+                        >
+                          {instancePreview.ok
+                            ? `Valid · ${instancePreview.summary}`
+                            : formData.instanceJson.trim()
+                              ? instancePreview.error
+                              : "Required for submission"}
+                        </span>
                       </div>
                       <Textarea
-                        id="description"
-                        value={formData.description}
-                        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                        placeholder="Paste the instance JSON or describe the exact format solvers should target. Make acceptance criteria explicit."
-                        className="min-h-[220px] font-mono text-sm"
-                        required
+                        id="instanceJson"
+                        value={formData.instanceJson}
+                        onChange={(e) => setFormData({ ...formData, instanceJson: e.target.value })}
+                        placeholder='{ "cities": 5, "distances": [[0,10,...], ...] }'
+                        className="min-h-[200px] font-mono text-xs"
+                        spellCheck={false}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {kindMeta?.instanceHint ?? "Flat JSON or wrapped `{ \"TSP\": { … } }` — this is what gets verified on-chain."}
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <Label htmlFor="briefing">Solver briefing (optional)</Label>
+                        <span className="text-xs text-muted-foreground">Context for humans — not stored on-chain today</span>
+                      </div>
+                      <Textarea
+                        id="briefing"
+                        value={formData.briefing}
+                        onChange={(e) => setFormData({ ...formData, briefing: e.target.value })}
+                        placeholder="Business context, acceptance criteria, output format notes for solvers…"
+                        className="min-h-[140px] text-sm"
                       />
                     </div>
                   </section>
@@ -1204,10 +1006,14 @@ Return a satisfying assignment or proof of unsatisfiability.
                     Escrow locks immediately on submission. Valid solutions pay out automatically, and unsolved work refunds after expiry.
                   </div>
 
-                  <Button type="submit" className="w-full" size="lg" disabled={isSubmitting}>
+                  <Button type="submit" className="w-full" size="lg" disabled={!canSubmit}>
                     {isSubmitting
                       ? "Submitting to chain..."
-                      : `Submit Bounty and Escrow ${formData.bounty || "0"} BEANS`}
+                      : !instancePreview.ok
+                        ? "Fix instance JSON to submit"
+                        : !hasSufficientBalance && hasWallet
+                          ? "Insufficient balance"
+                          : `Submit Bounty and Escrow ${formData.bounty || "0"} BEANS`}
                   </Button>
                 </form>
               </Card>
@@ -1216,6 +1022,40 @@ Return a satisfying assignment or proof of unsatisfiability.
                 <Card className="market-surface p-6">
                   <div className="signal-kicker">Submission summary</div>
                   <h3 className="mt-2 text-xl font-semibold">Ready to publish?</h3>
+                  <div className="mt-5 space-y-3 rounded-2xl border border-border/70 bg-muted/20 p-4">
+                    <ChecklistRow
+                      ok={hasWallet ? true : false}
+                      label="Wallet connected"
+                      detail={hasWallet ? selectedKeyPair!.address.slice(0, 10) + "…" : "Open Wallet and create or select an account"}
+                    />
+                    <ChecklistRow ok={hasTitle ? true : false} label="Title set" />
+                    <ChecklistRow
+                      ok={instancePreview.ok ? true : formData.instanceJson.trim() ? false : null}
+                      label="Instance JSON valid"
+                      detail={
+                        instancePreview.ok
+                          ? instancePreview.summary
+                          : formData.instanceJson.trim()
+                            ? instancePreview.error
+                            : "Load an example or paste JSON"
+                      }
+                    />
+                    <ChecklistRow
+                      ok={
+                        !hasWallet || !hasValidBounty
+                          ? null
+                          : walletBalance === undefined
+                            ? null
+                            : walletBalance >= totalEscrowAtoms
+                      }
+                      label="Escrow funded"
+                      detail={
+                        hasValidBounty
+                          ? `Need ${formatBeans(totalEscrowAtoms)} BEANS total`
+                          : "Set bounty amount"
+                      }
+                    />
+                  </div>
                   <div className="mt-5 space-y-4">
                     <div className="flex items-center justify-between gap-4 text-sm">
                       <span className="text-muted-foreground">Wallet</span>

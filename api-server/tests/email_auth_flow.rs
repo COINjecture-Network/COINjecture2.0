@@ -39,6 +39,7 @@ fn test_config() -> Config {
         rate_limit_rps: 1000,
         network: "testnet".into(),
         node_rpc_url: None,
+        mining_rpc_url: None,
         indexer_enabled: false,
         indexer_poll_interval_secs: 5,
         indexer_confirmations: 6,

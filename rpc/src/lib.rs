@@ -2,6 +2,7 @@
 // JSON-RPC API for clients
 
 pub mod middleware;
+pub mod serde_balance;
 pub mod server;
 pub mod tls;
 pub mod websocket;

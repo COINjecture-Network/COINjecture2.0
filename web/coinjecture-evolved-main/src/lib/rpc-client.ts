@@ -507,6 +507,51 @@ function formatJsonRpcError(err: RpcError): string {
 
 /**
  * Rust `ProblemType` is an externally tagged enum: extra `null` keys or float `u64` distances
+ * break serde on RPC params. Emit a single variant with integer fields only.
+ */
+function problemTypeForRpc(problem: ProblemType): Record<string, unknown> {
+  return problemTypeForChainSubmit(problem);
+}
+
+function marketplacePublicParamsForRpc(params: PublicProblemParams): Record<string, unknown> {
+  const bounty =
+    typeof params.bounty === 'string'
+      ? params.bounty.trim()
+      : String(Math.trunc(Number(params.bounty)));
+  if (!/^\d+$/.test(bounty) || bounty === '0') {
+    throw new Error('Bounty must be a positive integer atom amount (decimal string).');
+  }
+  return {
+    problem: problemTypeForRpc(params.problem),
+    bounty,
+    min_work_score: params.min_work_score,
+    expiration_days: Math.trunc(Number(params.expiration_days)),
+    submitter: params.submitter.trim(),
+  };
+}
+
+function marketplacePrivateWalletParamsForRpc(
+  params: PrivateProblemWalletParams,
+): Record<string, unknown> {
+  const bounty =
+    typeof params.bounty === 'string'
+      ? params.bounty.trim()
+      : String(Math.trunc(Number(params.bounty)));
+  if (!/^\d+$/.test(bounty) || bounty === '0') {
+    throw new Error('Bounty must be a positive integer atom amount (decimal string).');
+  }
+  return {
+    problem: problemTypeForRpc(params.problem),
+    salt: params.salt.trim(),
+    bounty,
+    min_work_score: params.min_work_score,
+    expiration_days: Math.trunc(Number(params.expiration_days)),
+    submitter: params.submitter.trim(),
+  };
+}
+
+/**
+ * Rust `ProblemType` is an externally tagged enum: extra `null` keys or float `u64` distances
  * break serde on `chain_submitBlock`. Emit a single variant with integer fields only.
  */
 function problemTypeForChainSubmit(problem: ProblemType): Record<string, unknown> {
@@ -1328,7 +1373,9 @@ export class RpcClient {
   }
 
   async submitPublicProblem(params: PublicProblemParams): Promise<string> {
-    return this.call<string>('marketplace_submitPublicProblem', [params]);
+    return this.call<string>('marketplace_submitPublicProblem', [
+      marketplacePublicParamsForRpc(params),
+    ]);
   }
 
   async submitPrivateProblem(params: PrivateProblemParams): Promise<string> {
@@ -1340,7 +1387,7 @@ export class RpcClient {
   ): Promise<PrivateProblemSubmissionResult> {
     return this.call<PrivateProblemSubmissionResult>(
       'marketplace_submitPrivateProblemWithWallet',
-      [params],
+      [marketplacePrivateWalletParamsForRpc(params)],
     );
   }
 

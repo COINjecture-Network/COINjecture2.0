@@ -5,6 +5,7 @@ use super::sync_state::SyncState;
 use crate::node_rpc::NodeRpcClient;
 use crate::sse::EventBroadcaster;
 use crate::supabase::SupabaseClient;
+use crate::wallet_activity;
 use chrono::Utc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -71,6 +72,17 @@ impl IndexerService {
             };
 
             let safe_height = chain_tip.saturating_sub(self.confirmations);
+            if sync.last_indexed_height > chain_tip.saturating_add(10) {
+                tracing::warn!(
+                    sync_height = sync.last_indexed_height,
+                    chain_tip,
+                    "Indexer sync ahead of chain tip — resetting to genesis"
+                );
+                sync = SyncState::default();
+                if let Err(e) = sync.save(&self.supabase).await {
+                    tracing::warn!(error = %e, "Failed to save reset sync state");
+                }
+            }
             if safe_height <= sync.last_indexed_height {
                 continue;
             }
@@ -81,13 +93,10 @@ impl IndexerService {
             for height in start..=end {
                 match self.node_rpc.get_block_by_height(height).await {
                     Ok(block) => {
-                        // Reorg detection
-                        let parent = block["parent_hash"]
-                            .as_str()
-                            .or_else(|| block["header"]["prev_hash"].as_str())
-                            .unwrap_or("");
+                        // Reorg detection (normalize byte-array hashes from RPC JSON)
+                        let parent = wallet_activity::parent_hash_from_json(&block);
                         if !sync.last_indexed_hash.is_empty() && parent != sync.last_indexed_hash {
-                            let fork_height = match self.processor.find_fork_height(parent).await {
+                            let fork_height = match self.processor.find_fork_height(&parent).await {
                                 Ok(height) => height,
                                 Err(e) => {
                                     tracing::error!(error = %e, "Fork lookup failed");
@@ -124,12 +133,7 @@ impl IndexerService {
                             Ok(_) => {
                                 sync.last_indexed_height = height;
                                 sync.last_finalized_height = height;
-                                sync.last_indexed_hash = block["hash"]
-                                    .as_str()
-                                    .or_else(|| block["block_hash"].as_str())
-                                    .or_else(|| block["header"]["hash"].as_str())
-                                    .unwrap_or("")
-                                    .to_string();
+                                sync.last_indexed_hash = wallet_activity::block_hash_from_json(&block);
                                 sync.last_sync_at = Utc::now();
                             }
                             Err(e) => {
@@ -139,7 +143,16 @@ impl IndexerService {
                         }
                     }
                     Err(e) => {
-                        tracing::debug!(height, error = %e, "Block fetch failed");
+                        tracing::warn!(height, error = %e, "Block fetch failed");
+                        if height > chain_tip || sync.last_indexed_height > chain_tip {
+                            tracing::warn!(
+                                chain_tip,
+                                sync_height = sync.last_indexed_height,
+                                "Resetting indexer after missing block / chain reset"
+                            );
+                            sync = SyncState::default();
+                            let _ = sync.save(&self.supabase).await;
+                        }
                         break;
                     }
                 }

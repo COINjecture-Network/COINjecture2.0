@@ -7,6 +7,11 @@ target/
 *.exe
 *.dll
 
+# Lean / ML / caches (not needed for api-server Rust build)
+lean4/
+.hf_cache/
+latest-upstream/
+
 # Data directories
 data/
 node*-data/

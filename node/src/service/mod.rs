@@ -909,6 +909,14 @@ impl CoinjectNode {
         let is_syncing = Arc::new(tokio::sync::RwLock::new(false));
         let sync_health_state = Arc::new(tokio::sync::RwLock::new(SyncHealthState::Normal));
 
+        let network_tx_for_rpc = network_cmd_tx.clone();
+        let transaction_broadcast: Option<coinject_rpc::TransactionBroadcastFn> =
+            Some(Arc::new(move |tx| {
+                if let Err(e) = network_tx_for_rpc.send(NetworkCommand::BroadcastTransaction(tx)) {
+                    warn!(error = %e, "failed to queue transaction broadcast from rpc");
+                }
+            }));
+
         let rpc_state = Arc::new(RpcServerState {
             account_state: Arc::clone(&self.state),
             timelock_state: Arc::clone(&self.timelock_state),
@@ -931,6 +939,7 @@ impl CoinjectNode {
             is_syncing: Arc::clone(&is_syncing),
             mining_work_provider,
             mining_difficulty_tip_provider,
+            transaction_broadcast,
         });
 
         let rpc_server = RpcServer::new(rpc_addr, rpc_state).await?;

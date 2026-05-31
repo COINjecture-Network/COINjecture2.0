@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use crate::middleware::{AuditLogLayer, SecurityConfig, SecurityGateLayer};
+use crate::serde_balance::deserialize_atoms_balance;
 use crate::tls::TlsConfig;
 use coinject_core::{
     Address, Balance, Block, BlockHeader, Hash, ProblemParameters, ProblemReveal, ProblemType,
@@ -163,6 +164,7 @@ pub struct PrivateProblemParams {
     pub problem_type: String,
     pub size: usize,
     pub complexity_estimate: f64,
+    #[serde(deserialize_with = "deserialize_atoms_balance")]
     pub bounty: Balance,
     pub min_work_score: f64,
     pub expiration_days: u64,
@@ -173,6 +175,7 @@ pub struct PrivateProblemParams {
 pub struct PrivateProblemWalletParams {
     pub problem: ProblemType,
     pub salt: String, // Hex-encoded 32-byte salt
+    #[serde(deserialize_with = "deserialize_atoms_balance")]
     pub bounty: Balance,
     pub min_work_score: f64,
     pub expiration_days: u64,
@@ -198,6 +201,7 @@ pub struct RevealParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicProblemParams {
     pub problem: ProblemType,
+    #[serde(deserialize_with = "deserialize_atoms_balance")]
     pub bounty: Balance,
     pub min_work_score: f64,
     pub expiration_days: u64,
@@ -212,6 +216,7 @@ pub struct PublicSubsetSumParams {
     /// Target sum to find
     pub target: i64,
     /// Bounty in tokens (must have sufficient balance)
+    #[serde(deserialize_with = "deserialize_atoms_balance")]
     pub bounty: Balance,
     /// Minimum work score required for solution
     pub min_work_score: f64,
@@ -467,6 +472,9 @@ pub type MiningDifficultyTipFuture =
     Pin<Box<dyn Future<Output = Result<MiningDifficultyTip, String>> + Send>>;
 pub type MiningDifficultyTipProvider = Arc<dyn Fn() -> MiningDifficultyTipFuture + Send + Sync>;
 
+/// After a tx is accepted into the local mempool, gossip it to CPP peers (miner replicas).
+pub type TransactionBroadcastFn = Arc<dyn Fn(Transaction) + Send + Sync>;
+
 /// RPC server state
 pub struct RpcServerState {
     pub account_state: Arc<AccountState>,
@@ -495,6 +503,8 @@ pub struct RpcServerState {
     pub mining_work_provider: Option<MiningWorkProvider>,
     /// When set, enriches [`ChainInfo`] with header PoW nibbles and NP problem size.
     pub mining_difficulty_tip_provider: Option<MiningDifficultyTipProvider>,
+    /// When set, [`submit_transaction`] gossips accepted txs to peers (needed when RPC and miner differ).
+    pub transaction_broadcast: Option<TransactionBroadcastFn>,
     /// Live CPP peer rows maintained by the node (`peer_id` hex key).
     pub peer_directory: Arc<RwLock<HashMap<String, NetworkPeerInfo>>>,
 }
@@ -893,6 +903,9 @@ impl CoinjectRpcServer for RpcServerImpl {
             Ok(hash) => {
                 let pool_size = pool.len();
                 drop(pool);
+                if let Some(ref broadcast) = self.state.transaction_broadcast {
+                    broadcast(tx.clone());
+                }
                 println!(
                     "✅ Transaction added to pool! Hash: {}, Pool size: {}",
                     hex::encode(hash.as_bytes()),
@@ -1832,6 +1845,7 @@ mod tests {
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
             mining_difficulty_tip_provider: None,
+            transaction_broadcast: None,
             peer_directory: Arc::new(RwLock::new(HashMap::new())),
         });
 
@@ -1877,6 +1891,7 @@ mod tests {
             is_syncing: Arc::new(RwLock::new(false)),
             mining_work_provider: None,
             mining_difficulty_tip_provider: None,
+            transaction_broadcast: None,
             peer_directory: Arc::new(RwLock::new(HashMap::new())),
         });
 

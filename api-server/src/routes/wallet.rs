@@ -68,5 +68,31 @@ pub async fn get_transactions(
 
     let merged =
         wallet_activity::merge_wallet_activity(&addr, limit, signed, incoming, mined, marketplace);
+
+    if merged.as_array().is_some_and(|rows| rows.is_empty()) {
+        if let Some(node_rpc) = &state.node_rpc {
+            let scan_blocks = std::env::var("WALLET_CHAIN_SCAN_BLOCKS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(600);
+            match wallet_activity::scan_wallet_activity_from_chain(
+                node_rpc,
+                &addr,
+                limit,
+                scan_blocks,
+            )
+            .await
+            {
+                Ok(fallback) if fallback.as_array().is_some_and(|rows| !rows.is_empty()) => {
+                    return Ok(Json(fallback));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(error = %e, address = %addr, "wallet chain scan fallback failed");
+                }
+            }
+        }
+    }
+
     Ok(Json(merged))
 }

@@ -705,6 +705,7 @@ async fn test_7_rpc_integration() {
         is_syncing: Arc::new(RwLock::new(false)),
         mining_work_provider: None,
         mining_difficulty_tip_provider: None,
+        transaction_broadcast: None,
     });
 
     let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();

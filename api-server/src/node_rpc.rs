@@ -41,8 +41,18 @@ fn jsonrpc_method_from_request_body(body: &[u8]) -> Option<String> {
     v.get("method")?.as_str().map(str::to_string)
 }
 
+/// Prefer the mining-enabled upstream for methods that mutate mempool / mine blocks.
+fn prefer_mining_upstream(method: Option<&str>) -> bool {
+    matches!(
+        method,
+        Some("chain_getMiningWork") | Some("transaction_submit") | Some("chain_submitBlock")
+    )
+}
+
 pub struct NodeRpcClient {
     urls: Vec<String>,
+    /// Tried before `urls` for miner-facing RPC (deduped).
+    mining_urls: Vec<String>,
     /// Small JSON-RPC (`chain_getInfo`, `network_getInfo`) — must not sit near the heavy read timeout.
     http_light: Client,
     /// Large JSON-RPC (`chain_getBlock`, `chain_getLatestBlock`).
@@ -78,15 +88,36 @@ impl NodeRpcClient {
     /// Per-upstream cap for `chain_getMiningWork` so wedged miners fail over before the browser gives up.
     const MINING_WORK_PROXY_TIMEOUT_SECS: u64 = 35;
 
-    pub fn new(url: &str) -> Self {
-        let urls = url
-            .split(',')
+    fn parse_url_list(raw: &str) -> Vec<String> {
+        raw.split(',')
             .map(str::trim)
             .filter(|u| !u.is_empty())
             .map(|u| u.trim_end_matches('/').to_string())
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    fn merge_mining_urls(mining_urls: &[String], urls: &[String]) -> Vec<String> {
+        let mut merged = mining_urls.to_vec();
+        for u in urls {
+            if !merged.iter().any(|m| m == u) {
+                merged.push(u.clone());
+            }
+        }
+        merged
+    }
+
+    pub fn new(url: &str) -> Self {
+        Self::with_mining_url(url, None)
+    }
+
+    pub fn with_mining_url(url: &str, mining_url: Option<&str>) -> Self {
+        let urls = Self::parse_url_list(url);
+        let mining_urls = mining_url
+            .map(Self::parse_url_list)
+            .unwrap_or_default();
         Self {
             urls,
+            mining_urls,
             http_light: Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 .timeout(Duration::from_secs(Self::LIGHT_RPC_TIMEOUT_SECS))
@@ -128,10 +159,15 @@ impl NodeRpcClient {
         let mut errors = Vec::new();
         let request_method = jsonrpc_method_from_request_body(&body);
 
-        let mining_work = request_method.as_deref() == Some("chain_getMiningWork");
+        let prefer_miner = prefer_mining_upstream(request_method.as_deref());
+        let upstreams = if prefer_miner {
+            Self::merge_mining_urls(&self.mining_urls, &self.urls)
+        } else {
+            self.urls.clone()
+        };
 
-        for url in &self.urls {
-            let resp = match if mining_work {
+        for url in &upstreams {
+            let resp = match if prefer_miner {
                 self.send_proxy_once_with_timeout(
                     url,
                     body.clone(),
@@ -156,7 +192,7 @@ impl NodeRpcClient {
                 .await
                 .map_err(|e| NodeRpcError::RequestFailed(format!("{url}: {e}")))?;
 
-            if status == 200 && self.urls.len() > 1 {
+            if status == 200 && upstreams.len() > 1 {
                 if let Ok(val) = serde_json::from_slice::<Value>(&bytes) {
                     if val.get("error").is_some()
                         && try_next_upstream_after_jsonrpc_error(request_method.as_deref(), &val)
@@ -194,8 +230,13 @@ impl NodeRpcClient {
         }
 
         let mut errors = Vec::new();
+        let upstreams = if prefer_mining_upstream(Some(method)) {
+            Self::merge_mining_urls(&self.mining_urls, &self.urls)
+        } else {
+            self.urls.clone()
+        };
 
-        for url in &self.urls {
+        for url in &upstreams {
             let resp = match self
                 .send_json_with_retry(client, url, method, params.clone())
                 .await
@@ -238,9 +279,53 @@ impl NodeRpcClient {
     }
 
     /// Get chain info from the node.
+    ///
+    /// `peer_count` uses the **maximum** across all `NODE_RPC_URL` upstreams. In a star
+    /// topology (node1–node3 dial bootnode only), followers report 1 peer while the bootnode
+    /// reports the full fleet — the UI should reflect network size, not one miner's link count.
     pub async fn get_chain_info(&self) -> Result<Value, NodeRpcError> {
-        self.call_on(&self.http_light, "chain_getInfo", json!([]))
-            .await
+        let mut info = self
+            .call_on(&self.http_light, "chain_getInfo", json!([]))
+            .await?;
+        if let Some(max_peers) = self.max_peer_count_across_upstreams().await {
+            if let Some(obj) = info.as_object_mut() {
+                obj.insert("peer_count".to_string(), json!(max_peers));
+            }
+        }
+        Ok(info)
+    }
+
+    /// Best-effort max `peer_count` from every configured upstream (parallel, light timeout).
+    async fn max_peer_count_across_upstreams(&self) -> Option<u64> {
+        if self.urls.is_empty() {
+            return None;
+        }
+        let client = self.http_light.clone();
+        let mut tasks = tokio::task::JoinSet::new();
+        for url in self.urls.clone() {
+            let client = client.clone();
+            tasks.spawn(async move {
+                let body = json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "chain_getInfo",
+                    "params": [],
+                });
+                let resp = client.post(&url).json(&body).send().await.ok()?;
+                if !resp.status().is_success() {
+                    return None;
+                }
+                let data: Value = resp.json().await.ok()?;
+                data.pointer("/result/peer_count")?.as_u64()
+            });
+        }
+        let mut max_peers: Option<u64> = None;
+        while let Some(joined) = tasks.join_next().await {
+            if let Ok(Some(n)) = joined {
+                max_peers = Some(max_peers.map_or(n, |m| m.max(n)));
+            }
+        }
+        max_peers
     }
 
     /// Get the latest block from the node.

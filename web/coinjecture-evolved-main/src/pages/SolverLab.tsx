@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { Navigation } from "@/components/Navigation";
-import { Footer } from "@/components/Footer";
 import { NpPlayground } from "@/features/np-playground/NpPlayground";
 
 const SolverLab = () => {
@@ -9,21 +8,21 @@ const SolverLab = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="h-[100dvh] min-h-[100dvh] bg-background flex flex-col overflow-hidden">
       <Navigation />
-      <main className="flex-1 pt-32 flex flex-col min-h-0 pb-[max(5rem,env(safe-area-inset-bottom))]">
-        <div className="container mx-auto px-6 shrink-0">
-          <header className="mb-12">
-            <div className="market-surface-strong p-6 md:p-8">
+      <main className="flex-1 pt-28 flex flex-col min-h-0 overflow-hidden pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className="container mx-auto px-4 sm:px-6 shrink-0">
+          <header className="mb-3 sm:mb-4">
+            <div className="market-surface-strong p-4 md:p-5">
               <div className="max-w-5xl mx-auto">
                 <div className="signal-kicker text-center">Miner workbench</div>
-                <h1 className="text-4xl font-bold mb-4 tracking-tight text-center">
+                <h1 className="text-2xl sm:text-3xl font-bold mb-2 tracking-tight text-center">
                   Solver <span className="text-primary">Lab</span>
                 </h1>
-                <p className="text-muted-foreground text-center max-w-3xl mx-auto leading-relaxed">
+                <p className="text-muted-foreground text-center max-w-3xl mx-auto text-sm leading-relaxed hidden sm:block">
                   Write your own solver, sync the next live chain instance, test locally, then submit a block when your wallet is ready.
                 </p>
-                <div className="grid gap-3 md:grid-cols-4 mt-8">
+                <div className="grid gap-2 md:grid-cols-4 mt-3 sm:mt-4">
                   <div className="signal-card">
                     <div className="signal-kicker">1. Prepare</div>
                     <div className="mt-2 font-semibold">Create or connect a wallet.</div>
@@ -45,11 +44,10 @@ const SolverLab = () => {
             </div>
           </header>
         </div>
-        <div className="flex-1 min-h-0 flex flex-col w-full min-w-0 px-3 sm:px-4 lg:px-6">
-          <NpPlayground className="flex-1 min-h-0 flex flex-col" />
+        <div className="flex-1 min-h-0 flex flex-col w-full min-w-0 px-2 sm:px-4 lg:px-6 overflow-hidden">
+          <NpPlayground className="flex-1 min-h-0 flex flex-col h-full" />
         </div>
       </main>
-      <Footer />
     </div>
   );
 };

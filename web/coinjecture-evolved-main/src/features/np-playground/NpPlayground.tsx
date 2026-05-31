@@ -402,7 +402,8 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         JSON.stringify({
           problemType: kind,
           title,
-          description,
+          instanceJson: instanceText.trim(),
+          briefing: description,
           draftKind: "solver" as const,
         })
       );
@@ -734,7 +735,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
           <WebCliTerminal compact className="w-full max-w-none min-h-[min(42dvh,380px)] lg:min-h-0 flex-1" />
         </TabsContent>
 
-        <TabsContent value="solvers" className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden w-full min-w-0">
+        <TabsContent value="solvers" className="flex-1 flex flex-col min-h-0 h-full mt-0 data-[state=inactive]:hidden w-full min-w-0">
           <div className="mb-2 rounded-lg border border-border/50 bg-muted/25 px-3 py-2 text-[11px] sm:text-xs text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 shrink-0">
             <span className="font-medium text-foreground/90">Chain</span>
             {chainInfo ? (
@@ -851,7 +852,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             </Card>
           ) : null}
           {isLg ? (
-          <div className="flex h-[min(72dvh,720px)] w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 min-h-[min(68dvh,560px)] lg:h-[min(86dvh,calc(100dvh-13rem))] lg:min-h-[520px] lg:flex-row">
+          <div className="flex h-full min-h-[min(58dvh,480px)] w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 lg:min-h-0 lg:flex-row">
             {/* File explorer — full height; console does not span under this column */}
             <aside className="flex shrink-0 flex-col border-b border-border/60 bg-muted/15 lg:h-full lg:w-52 lg:self-stretch lg:border-b-0 lg:border-r">
               <div className="flex items-center gap-2 px-2 py-2 border-b border-border/50 text-xs font-medium text-muted-foreground">
@@ -1046,7 +1047,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             </div>
           </div>
           ) : (
-            <div className="flex flex-col flex-1 min-h-0 min-h-[min(70dvh,560px)] w-full rounded-lg border border-border/60 bg-background/50 overflow-hidden pb-[max(0.75rem,env(safe-area-inset-bottom))] touch-manipulation">
+            <div className="flex h-full flex-1 min-h-0 w-full flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 pb-[max(0.75rem,env(safe-area-inset-bottom))] touch-manipulation">
               <div className="shrink-0 z-10 border-b border-border/60 bg-background/95 backdrop-blur-md px-3 pt-2 pb-2 space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Select
@@ -1173,15 +1174,15 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     Log
                   </TabsTrigger>
                 </TabsList>
-                <TabsContent value="code" className="flex-1 min-h-0 mt-0 overflow-hidden p-2 data-[state=inactive]:hidden">
+                <TabsContent value="code" className="flex flex-1 min-h-0 flex-col mt-0 overflow-hidden p-2 data-[state=inactive]:hidden">
                   <Editor
                     key={activeFile}
                     path={activeFile}
                     value={files[activeFile]}
                     onChange={(v) => onEditorChange(v)}
                     dark={isDark}
-                    minHeight="min(52dvh, 420px)"
-                    className="min-h-[240px]"
+                    minHeight="100%"
+                    className="min-h-[280px] flex-1 h-full"
                   />
                 </TabsContent>
                 <TabsContent value="visual" className="flex-1 min-h-0 mt-0 overflow-y-auto p-3 data-[state=inactive]:hidden">

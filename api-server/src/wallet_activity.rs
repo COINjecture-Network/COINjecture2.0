@@ -1,7 +1,9 @@
 //! Build a unified wallet activity feed from Supabase chain index tables.
 
+use crate::node_rpc::NodeRpcClient;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 
 /// Percent-encode a query parameter value (ASCII-safe for JSON + `cs.` prefix).
 pub fn encode_uri_query_value(s: &str) -> String {
@@ -42,6 +44,228 @@ pub fn normalize_hex_address(addr: &str) -> Result<String, String> {
     let t = addr.trim().trim_start_matches("0x").to_ascii_lowercase();
     hex_to_32(&t)?;
     Ok(t)
+}
+
+/// Normalize optional hex stored in the index (lowercase 64-char pubkey hex).
+pub fn normalize_optional_hex(value: Option<String>) -> Option<String> {
+    value.and_then(|s| normalize_hex_address(&s).ok())
+}
+
+pub fn block_height_from_json(block: &Value) -> Option<u64> {
+    block["height"]
+        .as_u64()
+        .or_else(|| block["header"]["height"].as_u64())
+}
+
+pub fn block_hash_from_json(block: &Value) -> String {
+    json_string_field(block, &["hash", "block_hash"])
+        .or_else(|| json_string_field(&block["header"], &["hash"]))
+        .or_else(|| json_value_to_hex(&block["header"]["hash"]))
+        .unwrap_or_default()
+}
+
+pub fn parent_hash_from_json(block: &Value) -> String {
+    json_string_field(block, &["parent_hash", "prev_hash"])
+        .or_else(|| json_string_field(&block["header"], &["parent_hash", "prev_hash"]))
+        .or_else(|| json_value_to_hex(&block["header"]["prev_hash"]))
+        .unwrap_or_default()
+}
+
+pub fn miner_from_json(block: &Value) -> Option<String> {
+    normalize_optional_hex(
+        json_string_field(block, &["miner"])
+            .or_else(|| json_string_field(&block["header"], &["miner"]))
+            .or_else(|| json_value_to_hex(&block["header"]["miner"]))
+            .or_else(|| {
+                block
+                    .get("coinbase")
+                    .and_then(|cb| json_value_to_hex(&cb["to"]))
+            }),
+    )
+}
+
+/// Scan recent blocks via node RPC when Supabase index is empty or stale (e.g. after chain reset).
+pub async fn scan_wallet_activity_from_chain(
+    node_rpc: &Arc<NodeRpcClient>,
+    addr: &str,
+    limit: usize,
+    max_blocks: u64,
+) -> Result<Value, String> {
+    let chain_info = node_rpc
+        .get_chain_info()
+        .await
+        .map_err(|e| format!("chain info: {e}"))?;
+    let tip = chain_info["best_height"].as_u64().unwrap_or(0);
+    if tip == 0 {
+        return Ok(Value::Array(vec![]));
+    }
+
+    let scan = max_blocks.max(1).min(tip);
+    let start = tip.saturating_sub(scan - 1);
+
+    let mut signed_rows = Vec::new();
+    let mut incoming_rows = Vec::new();
+    let mut mined_rows = Vec::new();
+    let marketplace_rows = Value::Array(vec![]);
+
+    let mut heights: Vec<u64> = (start..=tip).collect();
+    heights.reverse();
+
+    for chunk in heights.chunks(12) {
+        let mut handles = Vec::with_capacity(chunk.len());
+        for &height in chunk {
+            let rpc = Arc::clone(node_rpc);
+            handles.push(tokio::spawn(async move {
+                (height, rpc.get_block_by_height(height).await)
+            }));
+        }
+        for handle in handles {
+            let (height, block) = match handle.await {
+                Ok((height, Ok(block))) => (height, block),
+                _ => continue,
+            };
+            collect_wallet_rows_from_block(
+                addr,
+                height,
+                &block,
+                &mut signed_rows,
+                &mut incoming_rows,
+                &mut mined_rows,
+            );
+        }
+    }
+
+    Ok(merge_wallet_activity(
+        addr,
+        limit,
+        Value::Array(signed_rows),
+        Value::Array(incoming_rows),
+        Value::Array(mined_rows),
+        marketplace_rows,
+    ))
+}
+
+fn collect_wallet_rows_from_block(
+    addr: &str,
+    height: u64,
+    block: &Value,
+    signed_rows: &mut Vec<Value>,
+    incoming_rows: &mut Vec<Value>,
+    mined_rows: &mut Vec<Value>,
+) {
+    if let Some(miner) = miner_from_json(block) {
+        if miner == addr {
+            mined_rows.push(json!({
+                "height": height,
+                "hash": block_hash_from_json(block),
+                "block_timestamp": block_timestamp_from_json(block),
+                "miner": miner,
+                "raw_block": block,
+            }));
+        }
+    }
+
+    let block_hash = block_hash_from_json(block);
+    let txs = block["transactions"].as_array();
+    let Some(txs) = txs else {
+        return;
+    };
+
+    for (tx_index, tx) in txs.iter().enumerate() {
+        let tx_type = tx_type_from_json(tx);
+        let tx_hash = tx_hash_from_json(tx, &block_hash, height, tx_index);
+        let signer = tx_signer_from_json(tx);
+
+        if signer.as_deref() == Some(addr) {
+            signed_rows.push(json!({
+                "block_height": height,
+                "tx_index": tx_index,
+                "tx_hash": tx_hash,
+                "tx_type": tx_type,
+                "signer": signer,
+                "payload": tx,
+            }));
+        }
+
+        if tx_type == "Transfer" {
+            let Some(inner) = transfer_inner(tx) else {
+                continue;
+            };
+            let Some(from) = inner.get("from").and_then(json_addr_to_hex) else {
+                continue;
+            };
+            let Some(to) = inner.get("to").and_then(json_addr_to_hex) else {
+                continue;
+            };
+            if to == addr && from != addr {
+                incoming_rows.push(json!({
+                    "block_height": height,
+                    "tx_index": tx_index,
+                    "tx_hash": tx_hash,
+                    "tx_type": tx_type,
+                    "signer": signer,
+                    "payload": tx,
+                }));
+            }
+        }
+    }
+}
+
+fn block_timestamp_from_json(block: &Value) -> Option<String> {
+    block["timestamp"]
+        .as_i64()
+        .or_else(|| block["header"]["timestamp"].as_i64())
+        .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0))
+        .map(|dt| dt.to_rfc3339())
+}
+
+fn tx_type_from_json(tx: &Value) -> String {
+    if let Some(kind) = json_string_field(tx, &["type", "tx_type"]) {
+        return kind;
+    }
+    tx.as_object()
+        .and_then(|obj| obj.keys().next().cloned())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn tx_hash_from_json(tx: &Value, block_hash: &str, height: u64, tx_index: usize) -> String {
+    json_string_field(tx, &["hash", "tx_hash"]).unwrap_or_else(|| {
+        if !block_hash.is_empty() {
+            format!("{block_hash}:{tx_index}")
+        } else {
+            format!("{height}:{tx_index}")
+        }
+    })
+}
+
+fn tx_signer_from_json(tx: &Value) -> Option<String> {
+    normalize_optional_hex(
+        json_string_field(tx, &["from", "signer", "wallet_address"]).or_else(|| {
+            tx.as_object()
+                .and_then(|obj| obj.values().next())
+                .and_then(|inner| json_string_field(inner, &["from", "signer"]))
+        }),
+    )
+}
+
+fn json_string_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key))
+        .and_then(json_value_to_hex)
+}
+
+fn json_value_to_hex(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => normalize_hex_address(text).ok().or_else(|| Some(text.to_ascii_lowercase())),
+        Value::Array(values) if values.iter().all(|item| item.as_u64().is_some()) => {
+            let bytes = values
+                .iter()
+                .map(|item| item.as_u64().unwrap_or_default() as u8)
+                .collect::<Vec<_>>();
+            Some(hex::encode(bytes))
+        }
+        _ => None,
+    }
 }
 
 fn json_addr_to_hex(v: &Value) -> Option<String> {
