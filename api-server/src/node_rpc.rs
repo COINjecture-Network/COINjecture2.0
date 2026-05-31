@@ -112,9 +112,7 @@ impl NodeRpcClient {
 
     pub fn with_mining_url(url: &str, mining_url: Option<&str>) -> Self {
         let urls = Self::parse_url_list(url);
-        let mining_urls = mining_url
-            .map(Self::parse_url_list)
-            .unwrap_or_default();
+        let mining_urls = mining_url.map(Self::parse_url_list).unwrap_or_default();
         Self {
             urls,
             mining_urls,

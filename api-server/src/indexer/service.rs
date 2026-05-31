@@ -133,7 +133,8 @@ impl IndexerService {
                             Ok(_) => {
                                 sync.last_indexed_height = height;
                                 sync.last_finalized_height = height;
-                                sync.last_indexed_hash = wallet_activity::block_hash_from_json(&block);
+                                sync.last_indexed_hash =
+                                    wallet_activity::block_hash_from_json(&block);
                                 sync.last_sync_at = Utc::now();
                             }
                             Err(e) => {

@@ -256,7 +256,9 @@ fn json_string_field(value: &Value, keys: &[&str]) -> Option<String> {
 
 fn json_value_to_hex(value: &Value) -> Option<String> {
     match value {
-        Value::String(text) => normalize_hex_address(text).ok().or_else(|| Some(text.to_ascii_lowercase())),
+        Value::String(text) => normalize_hex_address(text)
+            .ok()
+            .or_else(|| Some(text.to_ascii_lowercase())),
         Value::Array(values) if values.iter().all(|item| item.as_u64().is_some()) => {
             let bytes = values
                 .iter()
