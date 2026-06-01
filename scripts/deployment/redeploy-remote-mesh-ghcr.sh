@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:sha-0392372}"
+COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:sha-3a6d733}"
 GHCR_USER="${GHCR_USER:-${GITHUB_ACTOR:-COINjecture-Network}}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
 
