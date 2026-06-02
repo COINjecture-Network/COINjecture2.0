@@ -9,12 +9,12 @@
 # Does NOT wipe chain volumes on redeploy.
 #
 # Usage:
-#   export COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0:sha-3a6d733
+#   export COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0:sha-f5cf6f5
 #   ./scripts/deployment/redeploy-remote-mesh-ghcr.sh
 #
 set -euo pipefail
 
-COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:sha-3a6d733}"
+COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:sha-f5cf6f5}"
 GHCR_USER="${GHCR_USER:-${GITHUB_ACTOR:-COINjecture-Network}}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
 
