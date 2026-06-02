@@ -73,16 +73,36 @@ async fn select_sync_peer_by_cumulative_work(
 
 const MAX_BLOCKS_PER_RESPONSE: u64 = crate::sync_canonical::SYNC_BATCH_BLOCKS;
 
+/// Peer tip + fallback CPP peer for a hash-anchored GetBlocks request.
+#[derive(Debug, Clone, Copy)]
+struct HashAnchoredSyncRequest {
+    fallback_peer: CppPeerId,
+    peer_tip: crate::sync_canonical::PeerSyncTip,
+}
+
+fn hash_anchored_sync_req(
+    fallback_peer: CppPeerId,
+    height: u64,
+    hash: coinject_core::Hash,
+    cumulative_work: u128,
+) -> HashAnchoredSyncRequest {
+    HashAnchoredSyncRequest {
+        fallback_peer,
+        peer_tip: crate::sync_canonical::PeerSyncTip {
+            height,
+            hash,
+            cumulative_work,
+        },
+    }
+}
+
 /// Send GetBlocks using hash-anchored `[from, to]` planning (re-fetch fork height when needed).
 async fn request_hash_anchored_sync(
     chain: &Arc<ChainState>,
     peer_consensus: &Arc<PeerConsensus>,
     sync_health: &Arc<RwLock<SyncHealthState>>,
     cpp_tx: &mpsc::UnboundedSender<CppNetworkCommand>,
-    fallback_peer: CppPeerId,
-    peer_tip_height: u64,
-    peer_tip_hash: coinject_core::Hash,
-    peer_cumulative_work: u128,
+    req: HashAnchoredSyncRequest,
 ) {
     let local_height = chain.best_block_height().await;
     let local_hash = chain.best_block_hash().await;
@@ -95,9 +115,7 @@ async fn request_hash_anchored_sync(
         chain.as_ref(),
         local_height,
         local_hash,
-        peer_tip_height,
-        peer_tip_hash,
-        peer_cumulative_work,
+        req.peer_tip,
         suspect_fork,
         MAX_BLOCKS_PER_RESPONSE,
     )
@@ -114,12 +132,12 @@ async fn request_hash_anchored_sync(
         return;
     }
 
-    let sync_peer = select_sync_peer_by_cumulative_work(peer_consensus, fallback_peer).await;
+    let sync_peer = select_sync_peer_by_cumulative_work(peer_consensus, req.fallback_peer).await;
     debug!(
         from_height = plan.from_height,
         to_height = plan.to_height,
         peer_id = %hex::encode(sync_peer),
-        peer_tip_height,
+        peer_tip_height = req.peer_tip.height,
         suspect_fork,
         "requesting hash-anchored sync blocks"
     );
@@ -1719,10 +1737,12 @@ impl CoinjectNode {
                                         &peer_consensus_delayed,
                                         &sync_health_delayed,
                                         &cpp_tx,
-                                        peer_id,
-                                        peer_tip_h.max(effective_peer_tip),
-                                        peer_tip_hash,
-                                        peer_tip_w,
+                                        hash_anchored_sync_req(
+                                            peer_id,
+                                            peer_tip_h.max(effective_peer_tip),
+                                            peer_tip_hash,
+                                            peer_tip_w,
+                                        ),
                                     )
                                     .await;
                                 });
@@ -1748,10 +1768,12 @@ impl CoinjectNode {
                                     &peer_consensus_clone,
                                     &sync_health_state_clone,
                                     &cpp_network_cmd_tx_for_events,
-                                    peer_id,
-                                    peer_tip_h.max(peer_height),
-                                    coinject_core::Hash::from_bytes(peer_tip_hash_bytes),
-                                    peer_tip_w,
+                                    hash_anchored_sync_req(
+                                        peer_id,
+                                        peer_tip_h.max(peer_height),
+                                        coinject_core::Hash::from_bytes(peer_tip_hash_bytes),
+                                        peer_tip_w,
+                                    ),
                                 )
                                 .await;
                             } else {
@@ -1781,10 +1803,12 @@ impl CoinjectNode {
                                     &peer_consensus_clone,
                                     &sync_health_state_clone,
                                     &cpp_network_cmd_tx_for_events,
-                                    peer_id,
-                                    peer_tip_h.max(peer_height),
-                                    coinject_core::Hash::from_bytes(peer_tip_hash_bytes),
-                                    peer_tip_w,
+                                    hash_anchored_sync_req(
+                                        peer_id,
+                                        peer_tip_h.max(peer_height),
+                                        coinject_core::Hash::from_bytes(peer_tip_hash_bytes),
+                                        peer_tip_w,
+                                    ),
                                 )
                                 .await;
                             }
@@ -1853,10 +1877,12 @@ impl CoinjectNode {
                                 &peer_consensus_clone,
                                 &sync_health_state_clone,
                                 &cpp_network_cmd_tx_for_events,
-                                peer_id,
-                                best_height.max(median_height),
-                                best_hash,
-                                0,
+                                hash_anchored_sync_req(
+                                    peer_id,
+                                    best_height.max(median_height),
+                                    best_hash,
+                                    0,
+                                ),
                             )
                             .await;
                         } else if best_height > current_height {
@@ -1870,10 +1896,7 @@ impl CoinjectNode {
                                 &peer_consensus_clone,
                                 &sync_health_state_clone,
                                 &cpp_network_cmd_tx_for_events,
-                                peer_id,
-                                best_height,
-                                best_hash,
-                                0,
+                                hash_anchored_sync_req(peer_id, best_height, best_hash, 0),
                             )
                             .await;
                         }
@@ -1949,10 +1972,12 @@ impl CoinjectNode {
                                 &peer_consensus_clone,
                                 &sync_health_state_clone,
                                 &cpp_network_cmd_tx_for_events,
-                                peer_id,
-                                best_height,
-                                best_hash,
-                                cumulative_work,
+                                hash_anchored_sync_req(
+                                    peer_id,
+                                    best_height,
+                                    best_hash,
+                                    cumulative_work,
+                                ),
                             )
                             .await;
                         } else {
@@ -2728,10 +2753,12 @@ impl CoinjectNode {
                                     &peer_consensus_periodic,
                                     &sync_health_state_periodic,
                                     &cpp_network_cmd_tx_periodic,
-                                    peer_arr,
-                                    peer_state.best_height,
-                                    coinject_core::Hash::from_bytes(peer_state.best_hash),
-                                    peer_state.cumulative_work,
+                                    hash_anchored_sync_req(
+                                        peer_arr,
+                                        peer_state.best_height,
+                                        coinject_core::Hash::from_bytes(peer_state.best_hash),
+                                        peer_state.cumulative_work,
+                                    ),
                                 )
                                 .await;
                             }

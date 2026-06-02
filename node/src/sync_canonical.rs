@@ -66,6 +66,22 @@ pub struct SyncBatchPlan {
     pub to_height: u64,
 }
 
+/// Local canonical tip inputs for hash-anchored sync planning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalSyncTip {
+    pub height: u64,
+    pub hash: Hash,
+    pub cumulative_work: u128,
+}
+
+/// Peer-advertised tip inputs for hash-anchored sync planning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerSyncTip {
+    pub height: u64,
+    pub hash: Hash,
+    pub cumulative_work: u128,
+}
+
 /// First height to request when catching up to a peer tip.
 ///
 /// When our tip hash is not on the peer's advertised chain and the peer has greater cumulative
@@ -73,55 +89,44 @@ pub struct SyncBatchPlan {
 /// (production incident: stuck at orphan h=746 while canonical peer at h=2750).
 pub fn sync_from_height_for_heavier_peer(
     chain: &ChainState,
-    local_height: u64,
-    local_hash: Hash,
-    local_cumulative_work: u128,
-    peer_tip_height: u64,
-    peer_tip_hash: Hash,
-    peer_cumulative_work: u128,
+    local: LocalSyncTip,
+    peer: PeerSyncTip,
     suspect_fork: bool,
 ) -> Result<u64, SyncChainError> {
-    if peer_tip_height <= local_height && !suspect_fork {
-        return Ok(local_height.saturating_add(1));
+    if peer.height <= local.height && !suspect_fork {
+        return Ok(local.height.saturating_add(1));
     }
 
-    let peer_heavier = peer_cumulative_work > local_cumulative_work;
+    let peer_heavier = peer.cumulative_work > local.cumulative_work;
     if suspect_fork || peer_heavier {
-        let on_peer_branch =
-            is_hash_on_chain_from_tip(chain, peer_tip_hash, peer_tip_height, &local_hash)?;
+        let on_peer_branch = is_hash_on_chain_from_tip(chain, peer.hash, peer.height, &local.hash)?;
         if !on_peer_branch {
-            return Ok(local_height);
+            return Ok(local.height);
         }
     }
 
-    Ok(local_height.saturating_add(1))
+    Ok(local.height.saturating_add(1))
 }
 
-/// Plan an inclusive `[from, to]` sync window toward `peer_tip_height`.
+/// Plan an inclusive `[from, to]` sync window toward the peer tip.
 pub async fn plan_sync_batch(
     chain: &ChainState,
     local_height: u64,
     local_hash: Hash,
-    peer_tip_height: u64,
-    peer_tip_hash: Hash,
-    peer_cumulative_work: u128,
+    peer: PeerSyncTip,
     suspect_fork: bool,
     max_batch: u64,
 ) -> Result<SyncBatchPlan, SyncChainError> {
     let local_work = chain.best_cumulative_work().await;
-    let from = sync_from_height_for_heavier_peer(
-        chain,
-        local_height,
-        local_hash,
-        local_work,
-        peer_tip_height,
-        peer_tip_hash,
-        peer_cumulative_work,
-        suspect_fork,
-    )?;
+    let local = LocalSyncTip {
+        height: local_height,
+        hash: local_hash,
+        cumulative_work: local_work,
+    };
+    let from = sync_from_height_for_heavier_peer(chain, local, peer, suspect_fork)?;
     let batch = max_batch.max(1);
-    let to = if peer_tip_height >= from {
-        peer_tip_height.min(from.saturating_add(batch - 1))
+    let to = if peer.height >= from {
+        peer.height.min(from.saturating_add(batch - 1))
     } else {
         from
     };
@@ -187,7 +192,18 @@ mod tests {
         let local_hash = genesis.header.hash();
         let peer_tip = Hash::from_bytes([7u8; 32]);
         let from = sync_from_height_for_heavier_peer(
-            &chain, 746, local_hash, 100, 2750, peer_tip, 10_000, false,
+            &chain,
+            LocalSyncTip {
+                height: 746,
+                hash: local_hash,
+                cumulative_work: 100,
+            },
+            PeerSyncTip {
+                height: 2750,
+                hash: peer_tip,
+                cumulative_work: 10_000,
+            },
+            false,
         )
         .unwrap();
         assert_eq!(from, 746, "must re-fetch fork height when off peer branch");
@@ -206,7 +222,18 @@ mod tests {
 
         let local_hash = genesis.header.hash();
         let from = sync_from_height_for_heavier_peer(
-            &chain, 0, local_hash, 0, 100, local_hash, 10_000, false,
+            &chain,
+            LocalSyncTip {
+                height: 0,
+                hash: local_hash,
+                cumulative_work: 0,
+            },
+            PeerSyncTip {
+                height: 100,
+                hash: local_hash,
+                cumulative_work: 10_000,
+            },
+            false,
         )
         .unwrap();
         assert_eq!(from, 1);
