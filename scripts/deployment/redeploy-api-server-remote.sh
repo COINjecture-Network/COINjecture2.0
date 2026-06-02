@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 HOST="${HOST:-root@193.203.164.13}"
 PATH_ON_HOST="${PATH_ON_HOST:-/opt/coinjecture}"
 
-COMPOSE="-f docker-compose.yml -f docker-compose.sync-follower.yml -f docker-compose.mesh-fleet.yml -f docker-compose.local-ram.yml -f docker-compose.bootnode-health-metrics-only.yml"
+COMPOSE="-f docker-compose.yml -f docker-compose.sync-follower.yml -f docker-compose.mesh-bootnode-only.yml -f docker-compose.bootnode-health-metrics-only.yml"
 
 echo "=== Syncing workspace (excluding .env, target, .git, lean4) to $HOST:$PATH_ON_HOST ==="
 rsync -az \

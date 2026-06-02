@@ -56,6 +56,81 @@ pub fn is_hash_on_chain_from_tip(
     )
 }
 
+/// Default batch size for hash-anchored sync (matches CPP `MAX_BLOCKS_PER_RESPONSE`).
+pub const SYNC_BATCH_BLOCKS: u64 = 16;
+
+/// Planned inclusive height range for a single GetBlocks request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncBatchPlan {
+    pub from_height: u64,
+    pub to_height: u64,
+}
+
+/// First height to request when catching up to a peer tip.
+///
+/// When our tip hash is not on the peer's advertised chain and the peer has greater cumulative
+/// work, include the current tip height so we can replace a divergent block at the fork point
+/// (production incident: stuck at orphan h=746 while canonical peer at h=2750).
+pub fn sync_from_height_for_heavier_peer(
+    chain: &ChainState,
+    local_height: u64,
+    local_hash: Hash,
+    local_cumulative_work: u128,
+    peer_tip_height: u64,
+    peer_tip_hash: Hash,
+    peer_cumulative_work: u128,
+    suspect_fork: bool,
+) -> Result<u64, SyncChainError> {
+    if peer_tip_height <= local_height && !suspect_fork {
+        return Ok(local_height.saturating_add(1));
+    }
+
+    let peer_heavier = peer_cumulative_work > local_cumulative_work;
+    if suspect_fork || peer_heavier {
+        let on_peer_branch =
+            is_hash_on_chain_from_tip(chain, peer_tip_hash, peer_tip_height, &local_hash)?;
+        if !on_peer_branch {
+            return Ok(local_height);
+        }
+    }
+
+    Ok(local_height.saturating_add(1))
+}
+
+/// Plan an inclusive `[from, to]` sync window toward `peer_tip_height`.
+pub async fn plan_sync_batch(
+    chain: &ChainState,
+    local_height: u64,
+    local_hash: Hash,
+    peer_tip_height: u64,
+    peer_tip_hash: Hash,
+    peer_cumulative_work: u128,
+    suspect_fork: bool,
+    max_batch: u64,
+) -> Result<SyncBatchPlan, SyncChainError> {
+    let local_work = chain.best_cumulative_work().await;
+    let from = sync_from_height_for_heavier_peer(
+        chain,
+        local_height,
+        local_hash,
+        local_work,
+        peer_tip_height,
+        peer_tip_hash,
+        peer_cumulative_work,
+        suspect_fork,
+    )?;
+    let batch = max_batch.max(1);
+    let to = if peer_tip_height >= from {
+        peer_tip_height.min(from.saturating_add(batch - 1))
+    } else {
+        from
+    };
+    Ok(SyncBatchPlan {
+        from_height: from,
+        to_height: to.max(from),
+    })
+}
+
 /// Whether to apply a sequential sync extension that matches our local tip parent.
 ///
 /// When the peer advertises a heavier tip ahead of this block, require the new block's hash to
@@ -96,6 +171,45 @@ mod tests {
         let chain = ChainState::new(&dir, &genesis).unwrap();
         let tip = chain.best_block_hash().await;
         assert!(is_hash_on_chain_from_tip(&chain, tip, 0, &genesis.header.hash()).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn heavier_peer_restarts_sync_at_local_tip_when_off_branch() {
+        let dir = std::env::temp_dir().join("coinject-sync-canonical-fork-from");
+        let _ = std::fs::remove_dir_all(&dir);
+        let genesis = create_genesis_block(GenesisConfig::default());
+        #[cfg(not(feature = "adzdb"))]
+        let chain = ChainState::new(&dir, &genesis, 64).unwrap();
+        #[cfg(feature = "adzdb")]
+        let chain = ChainState::new(&dir, &genesis).unwrap();
+
+        let local_hash = genesis.header.hash();
+        let peer_tip = Hash::from_bytes([7u8; 32]);
+        let from = sync_from_height_for_heavier_peer(
+            &chain, 746, local_hash, 100, 2750, peer_tip, 10_000, false,
+        )
+        .unwrap();
+        assert_eq!(from, 746, "must re-fetch fork height when off peer branch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn on_branch_sync_starts_after_local_tip() {
+        let dir = std::env::temp_dir().join("coinject-sync-canonical-fork-after");
+        let _ = std::fs::remove_dir_all(&dir);
+        let genesis = create_genesis_block(GenesisConfig::default());
+        #[cfg(not(feature = "adzdb"))]
+        let chain = ChainState::new(&dir, &genesis, 64).unwrap();
+        #[cfg(feature = "adzdb")]
+        let chain = ChainState::new(&dir, &genesis).unwrap();
+
+        let local_hash = genesis.header.hash();
+        let from = sync_from_height_for_heavier_peer(
+            &chain, 0, local_hash, 0, 100, local_hash, 10_000, false,
+        )
+        .unwrap();
+        assert_eq!(from, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,0 +1,16 @@
+# Three-host mesh: one public CPP face (:707) + one chain DB per VPS.
+#
+# Each host runs bootnode (+ api-server on the canonical host only). node1–node3 stay
+# profile-gated off via mesh-bootnode-only.yml. Mining is sync-gated (sync-follower overlay).
+#
+# Stack (same on 193, 76, 198):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.sync-follower.yml \
+#     -f docker-compose.mesh-bootnode-only.yml \
+#     -f docker-compose.bootnode-health-metrics-only.yml \
+#     up -d --no-build bootnode api-server
+#
+# Set COINJECT_BOOTNODES in .env to the other mesh members' public IP:707 (see redeploy script).
+
+services: {}

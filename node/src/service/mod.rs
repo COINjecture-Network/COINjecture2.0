@@ -71,6 +71,66 @@ async fn select_sync_peer_by_cumulative_work(
         .unwrap_or(fallback)
 }
 
+const MAX_BLOCKS_PER_RESPONSE: u64 = crate::sync_canonical::SYNC_BATCH_BLOCKS;
+
+/// Send GetBlocks using hash-anchored `[from, to]` planning (re-fetch fork height when needed).
+async fn request_hash_anchored_sync(
+    chain: &Arc<ChainState>,
+    peer_consensus: &Arc<PeerConsensus>,
+    sync_health: &Arc<RwLock<SyncHealthState>>,
+    cpp_tx: &mpsc::UnboundedSender<CppNetworkCommand>,
+    fallback_peer: CppPeerId,
+    peer_tip_height: u64,
+    peer_tip_hash: coinject_core::Hash,
+    peer_cumulative_work: u128,
+) {
+    let local_height = chain.best_block_height().await;
+    let local_hash = chain.best_block_hash().await;
+    let suspect_fork = matches!(
+        *sync_health.read().await,
+        SyncHealthState::SuspectFork | SyncHealthState::Recovery
+    );
+
+    let plan = match crate::sync_canonical::plan_sync_batch(
+        chain.as_ref(),
+        local_height,
+        local_hash,
+        peer_tip_height,
+        peer_tip_hash,
+        peer_cumulative_work,
+        suspect_fork,
+        MAX_BLOCKS_PER_RESPONSE,
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(error = %e, "hash-anchored sync plan failed");
+            return;
+        }
+    };
+
+    if plan.from_height > plan.to_height {
+        return;
+    }
+
+    let sync_peer = select_sync_peer_by_cumulative_work(peer_consensus, fallback_peer).await;
+    debug!(
+        from_height = plan.from_height,
+        to_height = plan.to_height,
+        peer_id = %hex::encode(sync_peer),
+        peer_tip_height,
+        suspect_fork,
+        "requesting hash-anchored sync blocks"
+    );
+    let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+        peer_id: sync_peer,
+        from_height: plan.from_height,
+        to_height: plan.to_height,
+        request_id: rand::random(),
+    });
+}
+
 async fn run_startup_chain_sanity_checks(chain: &Arc<ChainState>) {
     let best_height = chain.best_block_height().await;
     let best_hash = chain.best_block_hash().await;
@@ -1641,25 +1701,31 @@ impl CoinjectNode {
                             // and avoids tight-looping the bootnode rate limiter.
                             let effective_peer_tip = peer_height.max(highest_received);
                             if effective_peer_tip > current_height {
-                                let delayed_from = current_height + 1;
-                                let delayed_to = effective_peer_tip.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
-                                if delayed_from <= delayed_to {
-                                    let cpp_tx = cpp_network_cmd_tx_for_events.clone();
-                                    let peer_id_delayed = select_sync_peer_by_cumulative_work(
-                                        &peer_consensus_clone,
+                                let chain_delayed = Arc::clone(&chain_clone);
+                                let peer_consensus_delayed = Arc::clone(&peer_consensus_clone);
+                                let sync_health_delayed = Arc::clone(&sync_health_state_clone);
+                                let cpp_tx = cpp_network_cmd_tx_for_events.clone();
+                                let (peer_tip_h, peer_tip_hash_bytes, peer_tip_w) =
+                                    peer_consensus_delayed
+                                        .get_peer_tip(&hex::encode(peer_id))
+                                        .await
+                                        .unwrap_or((effective_peer_tip, [0u8; 32], 0));
+                                let peer_tip_hash =
+                                    coinject_core::Hash::from_bytes(peer_tip_hash_bytes);
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(Duration::from_secs(5)).await;
+                                    request_hash_anchored_sync(
+                                        &chain_delayed,
+                                        &peer_consensus_delayed,
+                                        &sync_health_delayed,
+                                        &cpp_tx,
                                         peer_id,
+                                        peer_tip_h.max(effective_peer_tip),
+                                        peer_tip_hash,
+                                        peer_tip_w,
                                     )
                                     .await;
-                                    tokio::spawn(async move {
-                                        tokio::time::sleep(Duration::from_secs(5)).await;
-                                        let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
-                                            peer_id: peer_id_delayed,
-                                            from_height: delayed_from,
-                                            to_height: delayed_to,
-                                            request_id: rand::random(),
-                                        });
-                                    });
-                                }
+                                });
                             }
                         }
 
@@ -1672,36 +1738,29 @@ impl CoinjectNode {
                                 )
                                 .await;
                                 // Only continue immediately when the last batch advanced our tip.
-                                // Otherwise we can tight-loop the same request range and trip the
-                                // bootnode's rate limiter before fork recovery has a chance to act.
-                                let from_height = current_height + 1;
-                                let to_height = peer_height.min(current_height + 16); // MAX_BLOCKS_PER_RESPONSE
-                                let sync_peer = select_sync_peer_by_cumulative_work(
+                                let (peer_tip_h, peer_tip_hash_bytes, peer_tip_w) =
+                                    peer_consensus_clone
+                                        .get_peer_tip(&hex::encode(peer_id))
+                                        .await
+                                        .unwrap_or((peer_height, [0u8; 32], 0));
+                                request_hash_anchored_sync(
+                                    &chain_clone,
                                     &peer_consensus_clone,
+                                    &sync_health_state_clone,
+                                    &cpp_network_cmd_tx_for_events,
                                     peer_id,
+                                    peer_tip_h.max(peer_height),
+                                    coinject_core::Hash::from_bytes(peer_tip_hash_bytes),
+                                    peer_tip_w,
                                 )
                                 .await;
-                                debug!(
-                                    from_height,
-                                    to_height,
-                                    peer_id = %hex::encode(sync_peer),
-                                    "requesting continuation blocks (hash-anchored peer selection)"
-                                );
-                                let _ = cpp_network_cmd_tx_for_events.send(
-                                    CppNetworkCommand::RequestBlocks {
-                                        peer_id: sync_peer,
-                                        from_height,
-                                        to_height,
-                                        request_id: rand::random(),
-                                    },
-                                );
                             } else {
                                 warn!(
                                     peer_id = %hex::encode(peer_id),
                                     current_height,
                                     peer_height,
                                     highest_received,
-                                    "sync batch made no progress; skipping immediate continuation request"
+                                    "sync batch made no progress; requesting hash-anchored fork recovery"
                                 );
                                 if *sync_health_state_clone.read().await == SyncHealthState::Normal
                                 {
@@ -1712,6 +1771,22 @@ impl CoinjectNode {
                                     )
                                     .await;
                                 }
+                                let (peer_tip_h, peer_tip_hash_bytes, peer_tip_w) =
+                                    peer_consensus_clone
+                                        .get_peer_tip(&hex::encode(peer_id))
+                                        .await
+                                        .unwrap_or((peer_height, [0u8; 32], 0));
+                                request_hash_anchored_sync(
+                                    &chain_clone,
+                                    &peer_consensus_clone,
+                                    &sync_health_state_clone,
+                                    &cpp_network_cmd_tx_for_events,
+                                    peer_id,
+                                    peer_tip_h.max(peer_height),
+                                    coinject_core::Hash::from_bytes(peer_tip_hash_bytes),
+                                    peer_tip_w,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1766,44 +1841,41 @@ impl CoinjectNode {
                         // This is more robust than checking individual peer heights
                         if current_height + sync_threshold < median_height {
                             let blocks_behind = median_height - current_height;
-                            let from_height = current_height + 1;
-                            let to_height = median_height.min(current_height + 100); // Request up to 100 blocks at a time
                             info!(
                                 blocks_behind,
                                 current_height,
                                 median_height,
                                 sync_threshold,
-                                from_height,
-                                to_height,
-                                "behind median peer height, requesting sync blocks"
+                                "behind median peer height, requesting hash-anchored sync blocks"
                             );
-                            let _ = cpp_network_cmd_tx_for_events.send(
-                                CppNetworkCommand::RequestBlocks {
-                                    peer_id,
-                                    from_height,
-                                    to_height,
-                                    request_id: rand::random(),
-                                },
-                            );
+                            request_hash_anchored_sync(
+                                &chain_clone,
+                                &peer_consensus_clone,
+                                &sync_health_state_clone,
+                                &cpp_network_cmd_tx_for_events,
+                                peer_id,
+                                best_height.max(median_height),
+                                best_hash,
+                                0,
+                            )
+                            .await;
                         } else if best_height > current_height {
-                            // Fallback: if this specific peer is ahead (but median check didn't trigger)
-                            let from_height = current_height + 1;
-                            let to_height = best_height.min(current_height + 100);
                             debug!(
                                 peer_height = best_height,
                                 current_height,
-                                from_height,
-                                to_height,
-                                "peer is ahead, requesting sync blocks"
+                                "peer is ahead, requesting hash-anchored sync blocks"
                             );
-                            let _ = cpp_network_cmd_tx_for_events.send(
-                                CppNetworkCommand::RequestBlocks {
-                                    peer_id,
-                                    from_height,
-                                    to_height,
-                                    request_id: rand::random(),
-                                },
-                            );
+                            request_hash_anchored_sync(
+                                &chain_clone,
+                                &peer_consensus_clone,
+                                &sync_health_state_clone,
+                                &cpp_network_cmd_tx_for_events,
+                                peer_id,
+                                best_height,
+                                best_hash,
+                                0,
+                            )
+                            .await;
                         }
                     }
                     CppNetworkEvent::PeerDisconnected { peer_id, reason: _ } => {
@@ -1872,29 +1944,17 @@ impl CoinjectNode {
                         // Trigger sync on StatusUpdate if peer is ahead
                         let current_height = chain_clone.best_block_height().await;
                         if best_height > current_height {
-                            let from_height = current_height + 1;
-                            // Request up to 100 blocks at a time, capped by MAX_BLOCKS_PER_RESPONSE (16)
-                            let to_height = best_height.min(current_height + 100);
-                            let sync_peer =
-                                select_sync_peer_by_cumulative_work(&peer_consensus_clone, peer_id)
-                                    .await;
-                            debug!(
-                                peer_height = best_height,
-                                peer_cumulative_work = cumulative_work,
-                                current_height,
-                                from_height,
-                                to_height,
-                                peer_id = %hex::encode(sync_peer),
-                                "peer ahead, requesting sync blocks (prefer heaviest peer tip)"
-                            );
-                            let _ = cpp_network_cmd_tx_for_events.send(
-                                CppNetworkCommand::RequestBlocks {
-                                    peer_id: sync_peer,
-                                    from_height,
-                                    to_height,
-                                    request_id: rand::random(),
-                                },
-                            );
+                            request_hash_anchored_sync(
+                                &chain_clone,
+                                &peer_consensus_clone,
+                                &sync_health_state_clone,
+                                &cpp_network_cmd_tx_for_events,
+                                peer_id,
+                                best_height,
+                                best_hash,
+                                cumulative_work,
+                            )
+                            .await;
                         } else {
                             debug!(
                                 peer_height = best_height,
@@ -2659,22 +2719,21 @@ impl CoinjectNode {
                             peer_height = peer_state.best_height,
                             peer_cumulative_work = peer_state.cumulative_work,
                             peer_id = %peer_id,
-                            "auto fork recovery: requesting blocks from heaviest peer"
+                            "auto fork recovery: requesting hash-anchored blocks from heaviest peer"
                         );
-                        let from_height = cur + 1;
-                        let to_height = peer_state.best_height.min(cur.saturating_add(16));
-                        if from_height <= to_height {
-                            if let Ok(peer_id_bytes) = hex::decode(&peer_id) {
-                                if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
-                                    let _ = cpp_network_cmd_tx_periodic.send(
-                                        CppNetworkCommand::RequestBlocks {
-                                            peer_id: peer_arr,
-                                            from_height,
-                                            to_height,
-                                            request_id: rand::random(),
-                                        },
-                                    );
-                                }
+                        if let Ok(peer_id_bytes) = hex::decode(&peer_id) {
+                            if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
+                                request_hash_anchored_sync(
+                                    &chain_periodic,
+                                    &peer_consensus_periodic,
+                                    &sync_health_state_periodic,
+                                    &cpp_network_cmd_tx_periodic,
+                                    peer_arr,
+                                    peer_state.best_height,
+                                    coinject_core::Hash::from_bytes(peer_state.best_hash),
+                                    peer_state.cumulative_work,
+                                )
+                                .await;
                             }
                         }
                     }
