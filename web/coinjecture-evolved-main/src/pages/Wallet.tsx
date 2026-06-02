@@ -19,6 +19,7 @@ import { useState, type ReactNode } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import {
   formatBeans,
+  parseBalance,
   parseDisplayBeansToAtoms,
   MIN_BOUNTY_SUBMISSION_FEE_ATOMS,
 } from "@/lib/chain-metrics";
@@ -546,7 +547,7 @@ function BountyListColumn({
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>
-              <span className="text-foreground/80 font-medium">{p.bounty.toLocaleString()}</span>{" "}
+              <span className="text-foreground/80 font-medium">{formatBeans(parseBalance(p.bounty) ?? 0n)}</span>{" "}
               BEANS
             </span>
             {p.is_private && <span>{p.is_revealed ? "Revealed" : "Hidden until reveal"}</span>}

@@ -58,7 +58,7 @@ import {
   getClientHeaderHashDebug,
   type Solution as MiningSolution,
 } from "@/lib/mining";
-import { parseU128DecimalString } from "@/lib/chain-metrics";
+import { parseU128DecimalString, formatBeans, parseBalance } from "@/lib/chain-metrics";
 
 /** Alias for `<Editor />` — must stay after all imports (ES modules forbid statements between imports). */
 const Editor = SolverCodeEditor;
@@ -111,7 +111,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   );
   const [mobilePanel, setMobilePanel] = useState<"code" | "visual" | "result" | "console">("code");
   const [successPopup, setSuccessPopup] = useState<{ height: number; hash: string } | null>(null);
-  const [bountySuccessPopup, setBountySuccessPopup] = useState<{ problemId: string; bounty: number } | null>(null);
+  const [bountySuccessPopup, setBountySuccessPopup] = useState<{ problemId: string; bounty: string | number } | null>(null);
   const [loadedBountyProblemId, setLoadedBountyProblemId] = useState<string | null>(null);
   const routeState = location.state as { selectedBounty?: ProblemInfo } | null;
   const bountyProblemId = searchParams.get("problemId");
@@ -362,7 +362,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     setConsoleLines((prev) => [
       ...prev,
       `[bounty] Loaded listing ${formatShortProblemId(selectedBounty.problem_id)} into instance.json`,
-      `[bounty] Payout: ${selectedBounty.bounty.toLocaleString()} BEANS`,
+      `[bounty] Payout: ${formatBeans(parseBalance(selectedBounty.bounty) ?? 0n)} BEANS`,
       "",
     ]);
     toast.success("Bounty loaded into Solver Lab");
@@ -476,7 +476,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       setConsoleLines((prev) => [
         ...prev,
         `[bounty] Submitted solution for ${formatShortProblemId(selectedBounty.problem_id)}`,
-        `[bounty] Solver ${selectedKeyPair.address.slice(0, 12)}… claimed ${selectedBounty.bounty.toLocaleString()} BEANS`,
+        `[bounty] Solver ${selectedKeyPair.address.slice(0, 12)}… claimed ${formatBeans(parseBalance(selectedBounty.bounty) ?? 0n)} BEANS`,
         "",
       ]);
       await queryClient.invalidateQueries({ queryKey: ["marketplace-problems"] });
@@ -826,7 +826,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                   <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Bounty mode</div>
                   <div className="text-sm font-semibold text-foreground">
                     {selectedBounty
-                      ? `Solve ${selectedBounty.problem_type ?? "selected listing"} for ${selectedBounty.bounty.toLocaleString()} BEANS`
+                      ? `Solve ${selectedBounty.problem_type ?? "selected listing"} for ${formatBeans(parseBalance(selectedBounty.bounty) ?? 0n)} BEANS`
                       : "Loading selected bounty"}
                   </div>
                   <div className="text-xs text-muted-foreground">
@@ -1286,7 +1286,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                 </div>
                 <div className="signal-card">
                   <div className="signal-kicker">Reward</div>
-                  <div className="mt-2 text-xl font-semibold">{bountySuccessPopup.bounty.toLocaleString()} BEANS</div>
+                  <div className="mt-2 text-xl font-semibold">{formatBeans(parseBalance(bountySuccessPopup.bounty) ?? 0n)} BEANS</div>
                 </div>
               </div>
               <div className="signal-card-strong">

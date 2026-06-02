@@ -216,7 +216,7 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
           </div>
           <div className="rounded-xl border border-primary/20 bg-primary/10 px-3 py-2 text-left xl:min-w-[144px] xl:text-right">
             <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">Payout</div>
-            <div className="text-lg font-semibold text-primary">{problem.bounty.toLocaleString()} BEANS</div>
+            <div className="text-lg font-semibold text-primary">{formatBeans(parseBalance(problem.bounty) ?? 0n)} BEANS</div>
             <div className="text-[11px] text-muted-foreground mt-1">Available now</div>
           </div>
         </div>
@@ -476,7 +476,7 @@ export const MarketplaceSection = () => {
               <FeatureSpotlight
                 eyebrow="Featured opportunity"
                 title={featuredProblem ? getProblemTypeLabel(featuredProblem.problem_type || "Unknown") : "Live bounty feed"}
-                value={featuredProblem ? `${featuredProblem.bounty.toLocaleString()} BEANS` : "Loading"}
+                value={featuredProblem ? `${formatBeans(parseBalance(featuredProblem.bounty) ?? 0n)} BEANS` : "Loading"}
                 description={
                   featuredProblem
                     ? `${isMarketplaceListingOpen(featuredProblem.status) ? "Open now" : featuredProblem.status} • closes ${formatDistanceToNow(new Date(featuredProblem.expires_at * 1000), { addSuffix: true })}`

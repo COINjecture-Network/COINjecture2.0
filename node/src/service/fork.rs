@@ -413,18 +413,94 @@ impl CoinjectNode {
         }
 
         // Check for forks at same height - if we have a block at current height with different hash
-        // and it's part of a longer chain, we should reorganize
+        // and the peer branch is heavier, attempt reorganization (requires fork-point re-download).
         {
-            let buffer = block_buffer.read().await;
-            if let Some(fork_block) = buffer.get(&current_best_height) {
-                if fork_block.header.hash() != current_best_hash {
-                    // Fork detected - we'd need to request the full chain from the peer
-                    // to see if it's longer. This is handled by status update handler.
-                    warn!(
-                        block_height = current_best_height,
-                        "fork block at current height detected in buffer, waiting for full chain"
-                    );
+            let (candidate_tip_height, candidate_tip_hash) = {
+                let buffer = block_buffer.read().await;
+                match buffer.get(&current_best_height) {
+                    None => (0, coinject_core::Hash::ZERO),
+                    Some(fork_block) if fork_block.header.hash() == current_best_hash => {
+                        (0, coinject_core::Hash::ZERO)
+                    }
+                    Some(fork_block) => {
+                        let mut walk_h = current_best_height;
+                        let mut walk_hash = fork_block.header.hash();
+                        loop {
+                            let next = walk_h + 1;
+                            let Some(next_block) = buffer.get(&next) else {
+                                break;
+                            };
+                            if next_block.header.prev_hash != walk_hash {
+                                break;
+                            }
+                            walk_h = next;
+                            walk_hash = next_block.header.hash();
+                        }
+                        (walk_h, walk_hash)
+                    }
                 }
+            };
+
+            if candidate_tip_height > 0 && candidate_tip_hash != coinject_core::Hash::ZERO {
+                warn!(
+                    block_height = current_best_height,
+                    candidate_tip_height,
+                    candidate_tip_hash = ?candidate_tip_hash,
+                    "same-height fork block in buffer; attempting reorganization"
+                );
+
+                if let Some(cpp_tx) = cpp_network_cmd_tx {
+                    if let Some((peer_id_str, peer_state)) =
+                        peer_consensus.best_active_peer_by_cumulative_work().await
+                    {
+                        if peer_state.cumulative_work > chain.best_cumulative_work().await {
+                            if let Ok(peer_id_bytes) = hex::decode(&peer_id_str) {
+                                if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
+                                    let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+                                        peer_id: peer_arr,
+                                        from_height: current_best_height,
+                                        to_height: current_best_height.saturating_add(
+                                            crate::sync_canonical::SYNC_BATCH_BLOCKS - 1,
+                                        ),
+                                        request_id: rand::random(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let chain_clone = Arc::clone(chain);
+                let state_clone = Arc::clone(state);
+                let timelock_clone = Arc::clone(timelock_state);
+                let escrow_clone = Arc::clone(escrow_state);
+                let channel_clone = Arc::clone(channel_state);
+                let trustline_clone = Arc::clone(trustline_state);
+                let dimensional_clone = Arc::clone(dimensional_pool_state);
+                let marketplace_clone = Arc::clone(marketplace_state);
+                let validator_clone = Arc::clone(validator);
+                let block_buffer_clone = Arc::clone(block_buffer);
+
+                tokio::spawn(async move {
+                    if let Err(e) = Self::attempt_reorganization_if_longer_chain(
+                        candidate_tip_hash,
+                        candidate_tip_height,
+                        &chain_clone,
+                        &state_clone,
+                        &timelock_clone,
+                        &escrow_clone,
+                        &channel_clone,
+                        &trustline_clone,
+                        &dimensional_clone,
+                        &marketplace_clone,
+                        &validator_clone,
+                        Some(&block_buffer_clone),
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "same-height fork reorganization attempt failed");
+                    }
+                });
             }
         }
 
@@ -688,6 +764,19 @@ impl CoinjectNode {
         }
     }
 
+    /// Resolve a block hash from committed storage or the sync buffer snapshot.
+    fn block_from_chain_or_alt(
+        chain: &Arc<ChainState>,
+        alt_chain: &[coinject_core::Block],
+        hash: &coinject_core::Hash,
+    ) -> Result<Option<coinject_core::Block>, String> {
+        match chain.get_block_by_hash(hash) {
+            Ok(Some(block)) => Ok(Some(block)),
+            Ok(None) => Ok(alt_chain.iter().find(|b| b.header.hash() == *hash).cloned()),
+            Err(e) => Err(format!("Error loading block {:?}: {}", hash, e)),
+        }
+    }
+
     /// Attempt chain reorganization when we have a longer valid chain available
     /// This is called when we've received blocks that form a longer chain than our current best
     #[allow(clippy::too_many_arguments)]
@@ -708,15 +797,19 @@ impl CoinjectNode {
         let current_best_height = chain.best_block_height().await;
         let current_best_hash = chain.best_block_hash().await;
 
-        // Only reorganize if new chain is actually longer
-        if new_chain_end_height <= current_best_height {
+        // Reorganize when the candidate tip extends our chain or replaces our tip hash at the
+        // same height (fork-point recovery after hash-anchored sync).
+        if new_chain_end_height < current_best_height {
             warn!(
                 new_tip_height = new_chain_end_height,
                 current_best_height,
                 current_best_hash = ?current_best_hash,
                 new_tip_hash = ?new_chain_end_hash,
-                "skipping reorganization attempt: candidate tip not above current best height"
+                "skipping reorganization attempt: candidate tip below current best height"
             );
+            return Ok(false);
+        }
+        if new_chain_end_height == current_best_height && new_chain_end_hash == current_best_hash {
             return Ok(false);
         }
 
@@ -921,7 +1014,7 @@ impl CoinjectNode {
 
         // Walk back from new best to common ancestor, collecting blocks
         while current_height > common_height {
-            match chain.get_block_by_hash(&current_hash) {
+            match Self::block_from_chain_or_alt(chain, &alt_chain, &current_hash) {
                 Ok(Some(block)) => {
                     new_chain_blocks.push(block.clone());
                     current_hash = block.header.prev_hash;
@@ -933,12 +1026,7 @@ impl CoinjectNode {
                         current_height
                     ))
                 }
-                Err(e) => {
-                    return Err(format!(
-                        "Error getting new chain block at height {}: {}",
-                        current_height, e
-                    ))
-                }
+                Err(e) => return Err(e),
             }
         }
 
