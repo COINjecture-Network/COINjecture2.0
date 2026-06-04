@@ -1079,7 +1079,13 @@ impl coinject_rpc::BlockchainReader for ChainState {
         if let Ok(Some(cum)) = Self::read_cumulative_work_meta(&self.db) {
             return Ok(cum.min(u64::MAX as u128) as u64);
         }
-        coinject_rpc::BlockchainReader::calculate_chain_work(self, up_to_height)
+        let mut total: u64 = 0;
+        for h in 0..=up_to_height {
+            if let Ok(Some(header)) = self.get_header_by_height(h) {
+                total = total.saturating_add(header.work_score as u64);
+            }
+        }
+        Ok(total)
     }
 
     fn best_cumulative_work_decimal(&self) -> Option<String> {
