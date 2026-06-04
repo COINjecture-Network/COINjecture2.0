@@ -74,12 +74,7 @@ pub async fn chain_info(State(state): State<AppState>) -> Json<ChainInfoResponse
         let info = if let Some(cached) = state.broadcaster.get_cached_chain_info().await {
             cached
         } else {
-            match tokio::time::timeout(
-                Duration::from_secs(8),
-                rpc.get_chain_info(),
-            )
-            .await
-            {
+            match tokio::time::timeout(Duration::from_secs(8), rpc.get_chain_info()).await {
                 Ok(Ok(fresh)) => {
                     state.broadcaster.set_cached_chain_info(fresh.clone()).await;
                     fresh

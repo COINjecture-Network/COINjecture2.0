@@ -283,7 +283,6 @@ impl OutboundConnectCtx {
     }
 }
 
-
 impl CppNetwork {
     /// Create new CPP network service
     pub fn new(
@@ -1335,14 +1334,20 @@ impl CppNetwork {
         let ctx = OutboundConnectCtx::from_network(self);
         tokio::spawn(async move {
             if let Err(e) = ctx.connect_bootnode(addr).await {
-                tracing::warn!("[CPP][BOOTNODE] outbound connect failed for {}: {}", addr, e);
+                tracing::warn!(
+                    "[CPP][BOOTNODE] outbound connect failed for {}: {}",
+                    addr,
+                    e
+                );
             }
         });
     }
 
     /// Connect to bootnode (awaitable; prefer [`Self::schedule_connect_bootnode`] on the event loop).
     async fn connect_bootnode(&self, addr: SocketAddr) -> Result<(), NetworkError> {
-        OutboundConnectCtx::from_network(self).connect_bootnode(addr).await
+        OutboundConnectCtx::from_network(self)
+            .connect_bootnode(addr)
+            .await
     }
 
     /// Add peer to peer list (internal helper - now handled inline)
@@ -1541,17 +1546,16 @@ impl CppNetwork {
         let from = get_blocks.from_height;
         let to = clamped_to;
         let block_provider = Arc::clone(&block_provider);
-        let blocks = match tokio::task::spawn_blocking(move || {
-            block_provider.get_blocks_range(from, to)
-        })
-        .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!("[CPP][SYNC] spawn_blocking get_blocks_range failed: {}", e);
-                Vec::new()
-            }
-        };
+        let blocks =
+            match tokio::task::spawn_blocking(move || block_provider.get_blocks_range(from, to))
+                .await
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("[CPP][SYNC] spawn_blocking get_blocks_range failed: {}", e);
+                    Vec::new()
+                }
+            };
         tracing::info!(
             "[CPP][SYNC] Serving {} blocks (heights {}-{}) to peer {}",
             blocks.len(),
@@ -2371,7 +2375,6 @@ impl CppNetwork {
     }
 }
 
-
 impl OutboundConnectCtx {
     async fn connect_bootnode(&self, addr: SocketAddr) -> Result<(), NetworkError> {
         // Check if peer already connected BEFORE attempting connection
@@ -2644,7 +2647,6 @@ impl OutboundConnectCtx {
         Ok(())
     }
 }
-
 
 // =============================================================================
 // Error Types

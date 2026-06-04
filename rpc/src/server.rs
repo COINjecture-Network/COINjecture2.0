@@ -1009,7 +1009,9 @@ impl CoinjectRpcServer for RpcServerImpl {
                         (None, None)
                     }
                     Err(_) => {
-                        tracing::warn!("mining difficulty tip provider timed out; omitting from chain_getInfo");
+                        tracing::warn!(
+                            "mining difficulty tip provider timed out; omitting from chain_getInfo"
+                        );
                         (None, None)
                     }
                 }
