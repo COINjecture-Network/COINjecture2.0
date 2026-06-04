@@ -187,4 +187,13 @@ impl EventBroadcaster {
             fetched_at: Instant::now(),
         });
     }
+
+    /// Last chain info regardless of TTL — used when live RPC is slow or wedged.
+    pub async fn get_stale_chain_info(&self) -> Option<Value> {
+        self.cached_chain_info
+            .read()
+            .await
+            .as_ref()
+            .map(|c| c.value.clone())
+    }
 }

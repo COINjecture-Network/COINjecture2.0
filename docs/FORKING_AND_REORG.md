@@ -85,6 +85,26 @@ This is a **heuristic** (“we appear behind the mesh”), not a guarantee that 
 3. Prefer the chain with **higher cumulative work** among nodes you trust.
 4. If a single container is corrupt or stuck on a ghost branch (logs: “no common ancestor”, “sync batch made no progress”), **reset only that container’s volume** and resync — see `docker-compose.yml` volume names and `docker-compose.bootnode-health-metrics-only.yml` for bootnode health under load.
 
+## Mesh resilience: RPC must stay live under P2P load
+
+Production incidents where **`/chain/info` timed out** while the node was “healthy” were caused by **blocking the shared Tokio runtime**, not by a bad chain tip alone.
+
+### Root causes (fixed in v4.8.5+)
+
+| Issue | Symptom | Fix |
+|-------|---------|-----|
+| **Outbound bootnode dials inside the CPP `select!` loop** | `accept()` stalled 30–60s; followers could not complete Hello/HelloAck; JSON-RPC queued for minutes | `OutboundConnectCtx` + `schedule_connect_bootnode()` — TCP + handshake run in a **spawned task** |
+| **`chain_getInfo` scanned every header** | O(height) DB reads on the RPC worker; tip ≈ 2750 → multi-second stalls | O(1) `calculate_chain_work` via chain metadata (`node/src/chain.rs`) + `spawn_blocking` in `rpc/src/server.rs` |
+| **`BlockProvider::get_best_height` used `block_on`** | Sync serving wedged async workers under concurrent GetBlocks | Lock-free `AtomicU64` tip mirror on `ChainState` |
+| **Eclipse slots not released on stale peers** | `[SECURITY][ECLIPSE] subnet full (8/8)` while peers were dead | Release eclipse + connection limiter on timeout / `remove_peer` |
+| **Heavy GetBlocks serve on RPC thread** | CPU starvation on single-core VPS | `spawn_blocking` for `get_blocks_range` in `handle_get_blocks` |
+
+### Operator notes
+
+- **Canonical host (193):** keep JSON-RPC responsive; optional `docker-compose.bootnode-no-mine.yml` or `docker-compose.node1-only-mine.yml` separates mining from the API-facing bootnode.
+- **Health checks:** use `docker-compose.bootnode-health-metrics-only.yml` on busy bootnodes — do not curl `chain_getInfo` from Docker healthcheck while serving large sync batches.
+- **API:** `GET /chain/info` uses an 8s upstream timeout and falls back to the last cached tip if the node is momentarily busy (`api-server/src/routes/chain.rs`).
+
 ## Primary source files
 
 | Area | File |

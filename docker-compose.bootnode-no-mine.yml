@@ -1,0 +1,15 @@
+# Canonical / API-facing bootnode: P2P + JSON-RPC only (no `--mine`).
+# Keeps chain_getInfo responsive under load; use a separate miner replica if needed.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml \
+#     -f docker-compose.mesh-bootnode-only.yml \
+#     -f docker-compose.bootnode-health-metrics-only.yml \
+#     -f docker-compose.bootnode-no-mine.yml up -d bootnode api-server
+
+services:
+  bootnode:
+    command: >
+      --data-dir /data
+      --cpp-p2p-addr 0.0.0.0:707
+      --metrics-addr 0.0.0.0:9090
+      --rpc-addr 0.0.0.0:9933

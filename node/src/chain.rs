@@ -9,6 +9,7 @@ use lru::LruCache;
 use redb::{Database, TableDefinition};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -63,6 +64,8 @@ pub struct ChainState {
     db_path: PathBuf,
     /// Best block height
     best_height: Arc<RwLock<u64>>,
+    /// Lock-free mirror of `best_height` for sync P2P block serving (see `BlockProvider`).
+    best_height_atomic: Arc<AtomicU64>,
     /// Best block hash
     best_hash: Arc<RwLock<Hash>>,
     /// Genesis hash for network verification
@@ -204,6 +207,7 @@ impl ChainState {
             db,
             db_path,
             best_height: Arc::new(RwLock::new(best_height)),
+            best_height_atomic: Arc::new(AtomicU64::new(best_height)),
             best_hash: Arc::new(RwLock::new(best_hash)),
             genesis_hash,
             block_cache: Arc::new(Mutex::new(LruCache::new(cache_cap))),
@@ -464,6 +468,8 @@ impl ChainState {
 
             // New best block
             *self.best_height.write().await = block_height;
+            self.best_height_atomic
+                .store(block_height, Ordering::Release);
             *self.best_hash.write().await = block_hash;
 
             let prev_cum = Self::read_cumulative_work_meta(&self.db)?.unwrap_or(0);
@@ -564,6 +570,11 @@ impl ChainState {
     /// Get shared reference to best height
     pub fn best_height_ref(&self) -> Arc<RwLock<u64>> {
         Arc::clone(&self.best_height)
+    }
+
+    /// Lock-free best height for sync block serving (`BlockProvider`).
+    pub fn best_height_atomic_ref(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.best_height_atomic)
     }
 
     /// Get shared reference to best hash
@@ -869,6 +880,8 @@ impl ChainState {
         new_best_height: u64,
     ) -> Result<(), ChainError> {
         *self.best_height.write().await = new_best_height;
+        self.best_height_atomic
+            .store(new_best_height, Ordering::Release);
         *self.best_hash.write().await = new_best_hash;
 
         let new_cum = Self::compute_cumulative_work_tip_db(&self.db, new_best_hash)?;
@@ -1061,6 +1074,14 @@ impl coinject_rpc::BlockchainReader for ChainState {
         self.get_header_by_height(height).map_err(|e| e.to_string())
     }
 
+    /// O(1) read from chain metadata — default scans every header and blocks RPC under load.
+    fn calculate_chain_work(&self, up_to_height: u64) -> Result<u64, String> {
+        if let Ok(Some(cum)) = Self::read_cumulative_work_meta(&self.db) {
+            return Ok(cum.min(u64::MAX as u128) as u64);
+        }
+        coinject_rpc::BlockchainReader::calculate_chain_work(self, up_to_height)
+    }
+
     fn best_cumulative_work_decimal(&self) -> Option<String> {
         Some(
             Self::read_cumulative_work_meta(&self.db)
@@ -1094,15 +1115,18 @@ use coinject_network::cpp::BlockProvider;
 /// ensuring only best-chain blocks are served.
 pub struct ChainBlockProvider {
     chain: std::sync::Arc<ChainState>,
-    /// Cached best height (updated on block storage)
-    best_height: std::sync::Arc<tokio::sync::RwLock<u64>>,
+    /// Lock-free tip height for hot-path sync serving.
+    best_height_atomic: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ChainBlockProvider {
     /// Create new block provider wrapping a ChainState
     pub fn new(chain: std::sync::Arc<ChainState>) -> Self {
-        let best_height = chain.best_height_ref();
-        ChainBlockProvider { chain, best_height }
+        let best_height_atomic = chain.best_height_atomic_ref();
+        ChainBlockProvider {
+            chain,
+            best_height_atomic,
+        }
     }
 }
 
@@ -1121,11 +1145,7 @@ impl BlockProvider for ChainBlockProvider {
     }
 
     fn get_best_height(&self) -> u64 {
-        // Use blocking read since BlockProvider is sync
-        // In production, consider caching this value
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async { *self.best_height.read().await })
-        })
+        self.best_height_atomic.load(Ordering::Acquire)
     }
 }
 

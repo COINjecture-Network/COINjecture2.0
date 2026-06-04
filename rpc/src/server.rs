@@ -976,32 +976,46 @@ impl CoinjectRpcServer for RpcServerImpl {
         let best_height = *self.state.best_height.read().await;
         let best_hash = *self.state.best_hash.read().await;
         let peer_count = *self.state.peer_count.read().await;
-
-        // Calculate cumulative work from chain (sum of work scores)
-        let total_work = self
-            .state
-            .blockchain
-            .calculate_chain_work(best_height)
-            .unwrap_or(0);
-
-        // Check if syncing (simplified: syncing if we have peers but recent blocks are slow)
         let is_syncing = *self.state.is_syncing.read().await;
+
+        let blockchain = Arc::clone(&self.state.blockchain);
+        let height_for_work = best_height;
+        let (total_work, best_cumulative_work, total_minted_rewards) =
+            match tokio::task::spawn_blocking(move || {
+                let total_work = blockchain
+                    .calculate_chain_work(height_for_work)
+                    .unwrap_or(0);
+                (
+                    total_work,
+                    blockchain.best_cumulative_work_decimal(),
+                    blockchain.total_minted_rewards_decimal(),
+                )
+            })
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "chain_getInfo spawn_blocking failed");
+                    (0, None, None)
+                }
+            };
 
         let (header_pow_difficulty, np_problem_size) =
             if let Some(provider) = &self.state.mining_difficulty_tip_provider {
-                match provider().await {
-                    Ok(tip) => (Some(tip.header_pow_difficulty), Some(tip.np_problem_size)),
-                    Err(e) => {
+                match tokio::time::timeout(Duration::from_secs(3), provider()).await {
+                    Ok(Ok(tip)) => (Some(tip.header_pow_difficulty), Some(tip.np_problem_size)),
+                    Ok(Err(e)) => {
                         tracing::warn!(error = %e, "mining difficulty tip provider failed");
+                        (None, None)
+                    }
+                    Err(_) => {
+                        tracing::warn!("mining difficulty tip provider timed out; omitting from chain_getInfo");
                         (None, None)
                     }
                 }
             } else {
                 (None, None)
             };
-
-        let best_cumulative_work = self.state.blockchain.best_cumulative_work_decimal();
-        let total_minted_rewards = self.state.blockchain.total_minted_rewards_decimal();
 
         Ok(ChainInfo {
             chain_id: self.state.chain_id.clone(),

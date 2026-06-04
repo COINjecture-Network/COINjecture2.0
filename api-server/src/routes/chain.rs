@@ -2,6 +2,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::time::Duration;
 
 use crate::errors::ApiError;
 use crate::AppState;
@@ -73,27 +74,36 @@ pub async fn chain_info(State(state): State<AppState>) -> Json<ChainInfoResponse
         let info = if let Some(cached) = state.broadcaster.get_cached_chain_info().await {
             cached
         } else {
-            match rpc.get_chain_info().await {
-                Ok(fresh) => {
+            match tokio::time::timeout(
+                Duration::from_secs(8),
+                rpc.get_chain_info(),
+            )
+            .await
+            {
+                Ok(Ok(fresh)) => {
                     state.broadcaster.set_cached_chain_info(fresh.clone()).await;
                     fresh
                 }
-                Err(_) => {
-                    return Json(ChainInfoResponse {
-                        network: state.config.network.clone(),
-                        height: None,
-                        syncing: false,
-                        peer_count: None,
-                        version: env!("CARGO_PKG_VERSION").to_string(),
-                        chain_id: None,
-                        best_hash: None,
-                        genesis_hash: None,
-                        total_work: None,
-                        header_pow_difficulty: None,
-                        np_problem_size: None,
-                        best_cumulative_work: None,
-                        total_minted_rewards: None,
-                    });
+                Ok(Err(_)) | Err(_) => {
+                    if let Some(stale) = state.broadcaster.get_stale_chain_info().await {
+                        stale
+                    } else {
+                        return Json(ChainInfoResponse {
+                            network: state.config.network.clone(),
+                            height: None,
+                            syncing: false,
+                            peer_count: None,
+                            version: env!("CARGO_PKG_VERSION").to_string(),
+                            chain_id: None,
+                            best_hash: None,
+                            genesis_hash: None,
+                            total_work: None,
+                            header_pow_difficulty: None,
+                            np_problem_size: None,
+                            best_cumulative_work: None,
+                            total_minted_rewards: None,
+                        });
+                    }
                 }
             }
         };

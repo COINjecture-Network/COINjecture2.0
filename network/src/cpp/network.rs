@@ -236,6 +236,54 @@ pub struct CppNetwork {
     security_metrics: Arc<RwLock<NetworkSecurityMetrics>>,
 }
 
+/// Shared handles for outbound bootnode dials. Spawned off the CPP `select!` loop so
+/// TCP + Hello/HelloAck never blocks `accept()` or JSON-RPC on the same runtime.
+#[derive(Clone)]
+struct OutboundConnectCtx {
+    local_peer_id: PeerId,
+    config: CppConfig,
+    peers: Arc<RwLock<HashMap<PeerId, Peer>>>,
+    router: Arc<RwLock<EquilibriumRouter>>,
+    chain_state: Arc<RwLock<ChainState>>,
+    event_tx: mpsc::UnboundedSender<NetworkEvent>,
+    block_provider: Arc<dyn BlockProvider>,
+    signing_key: Option<Arc<SigningKey>>,
+    eclipse_guard: Arc<RwLock<EclipseGuard>>,
+    rate_limiters: Arc<RwLock<HashMap<PeerId, TokenBucket>>>,
+    pending_requests: Arc<RwLock<HashMap<u64, Instant>>>,
+    seen_messages: SeenMessages,
+    flock_state: Arc<RwLock<FlockState>>,
+    ban_list: Arc<RwLock<BanList>>,
+    malformed_strikes: Arc<RwLock<HashMap<PeerId, u32>>>,
+    security_metrics: Arc<RwLock<NetworkSecurityMetrics>>,
+    connection_limiter: Arc<RwLock<ConnectionLimiter>>,
+}
+
+impl OutboundConnectCtx {
+    fn from_network(net: &CppNetwork) -> Self {
+        Self {
+            local_peer_id: net.local_peer_id,
+            config: net.config.clone(),
+            peers: Arc::clone(&net.peers),
+            router: Arc::clone(&net.router),
+            chain_state: Arc::clone(&net.chain_state),
+            event_tx: net.event_tx.clone(),
+            block_provider: Arc::clone(&net.block_provider),
+            signing_key: net.signing_key.clone(),
+            eclipse_guard: Arc::clone(&net.eclipse_guard),
+            rate_limiters: Arc::clone(&net.rate_limiters),
+            pending_requests: Arc::clone(&net.pending_requests),
+            seen_messages: Arc::clone(&net.seen_messages),
+            flock_state: Arc::clone(&net.flock_state),
+            ban_list: Arc::clone(&net.ban_list),
+            malformed_strikes: Arc::clone(&net.malformed_strikes),
+            security_metrics: Arc::clone(&net.security_metrics),
+            connection_limiter: Arc::clone(&net.connection_limiter),
+        }
+    }
+}
+
+
 impl CppNetwork {
     /// Create new CPP network service
     pub fn new(
@@ -1282,276 +1330,19 @@ impl CppNetwork {
         Ok((hello.peer_id, node_type, hello.best_height, hello.best_hash))
     }
 
-    /// Connect to bootnode
-    async fn connect_bootnode(&mut self, addr: SocketAddr) -> Result<(), NetworkError> {
-        // Check if peer already connected BEFORE attempting connection
-        // This prevents duplicate connections when both nodes connect simultaneously
-        {
-            let peers = self.peers.read().await;
-            // Check if any peer has this address (in case peer_id isn't known yet)
-            for peer in peers.values() {
-                if peer.addr == addr {
-                    return Err(NetworkError::InvalidHandshake(
-                        "Peer already connected".to_string(),
-                    ));
-                }
-            }
-        }
-
-        // Connect TCP stream with timeout
-        tracing::info!("[CPP][BOOTNODE] Connecting TCP to {}...", addr);
-        let mut stream = match tokio::time::timeout(
-            crate::cpp::config::CONNECTION_TIMEOUT,
-            TcpStream::connect(addr),
-        )
-        .await
-        {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                tracing::warn!("[CPP][BOOTNODE] TCP connect failed to {}: {}", addr, e);
-                return Err(NetworkError::Io(e));
-            }
-            Err(_) => {
-                tracing::warn!("[CPP][BOOTNODE] TCP connect timeout to {}", addr);
-                return Err(NetworkError::Timeout);
-            }
-        };
-
-        tracing::info!(
-            "[CPP][BOOTNODE] TCP connection established to {}, starting handshake...",
-            addr
-        );
-
-        let state = self.chain_state.read().await;
-
-        // Generate connection nonce for deterministic tie-breaking of simultaneous connections
-        let our_connection_nonce = rand::random::<u64>();
-
-        // Send Hello message first (with timeout) — include auth signature if signing key available
-        let hello_timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let (hello_ed25519_pubkey, hello_auth_signature) = if let Some(ref sk) = self.signing_key {
-            sign_hello(
-                sk,
-                &state.genesis_hash,
-                hello_timestamp,
-                our_connection_nonce,
-                &self.local_peer_id,
-            )
-        } else {
-            ([0u8; 32], [0u8; 64])
-        };
-
-        let hello = HelloMessage {
-            version: crate::cpp::config::VERSION,
-            peer_id: self.local_peer_id,
-            best_height: state.best_height,
-            best_hash: state.best_hash,
-            genesis_hash: state.genesis_hash,
-            node_type: self.config.node_type.as_u8(),
-            timestamp: hello_timestamp,
-            connection_nonce: our_connection_nonce,
-            ed25519_pubkey: hello_ed25519_pubkey,
-            auth_signature: hello_auth_signature,
-        };
-
-        tracing::debug!("[CPP][BOOTNODE] Sending Hello message to {}...", addr);
-        match tokio::time::timeout(
-            crate::cpp::config::HANDSHAKE_TIMEOUT,
-            MessageCodec::send_hello(&mut stream, &hello),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                tracing::warn!("[CPP][BOOTNODE] Hello send failed to {}: {}", addr, e);
-                return Err(NetworkError::Protocol(e));
-            }
-            Err(_) => {
-                tracing::warn!("[CPP][BOOTNODE] Hello send timeout to {}", addr);
-                return Err(NetworkError::Timeout);
-            }
-        }
-
-        tracing::debug!("[CPP][BOOTNODE] Waiting for HelloAck from {}...", addr);
-        // Receive HelloAck (with timeout)
-        let envelope = match tokio::time::timeout(
-            crate::cpp::config::HANDSHAKE_TIMEOUT,
-            MessageCodec::receive(&mut stream),
-        )
-        .await
-        {
-            Ok(Ok(e)) => e,
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    "[CPP][BOOTNODE] HelloAck receive failed from {}: {}",
-                    addr,
-                    e
-                );
-                return Err(NetworkError::Protocol(e));
-            }
-            Err(_) => {
-                tracing::warn!("[CPP][BOOTNODE] HelloAck receive timeout from {}", addr);
-                return Err(NetworkError::Timeout);
-            }
-        };
-
-        tracing::debug!(
-            "[CPP][BOOTNODE] Received HelloAck from {}, validating...",
-            addr
-        );
-        let hello_ack: HelloAckMessage = envelope.deserialize().map_err(NetworkError::Protocol)?;
-
-        // Validate genesis hash
-        if hello_ack.genesis_hash != state.genesis_hash {
-            return Err(NetworkError::InvalidHandshake(
-                "Genesis hash mismatch".to_string(),
-            ));
-        }
-
-        // Convert node_type from u8
-        let node_type = NodeType::from_u8(hello_ack.node_type)
-            .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
-
-        drop(state);
-
-        // Check again if peer already connected (race condition check)
-        let peer_id = hello_ack.peer_id;
-        {
-            let peers = self.peers.read().await;
-            if peers.contains_key(&peer_id) {
-                return Err(NetworkError::InvalidHandshake(
-                    "Peer already connected".to_string(),
-                ));
-            }
-        }
-
-        // Create peer instance (returns peer and read half)
-        // For outbound connections: is_outbound = true, use our nonce for tie-breaking
-        let (peer, read_half) = Peer::new(
-            peer_id,
-            addr,
-            stream,
-            node_type,
-            hello_ack.best_height,
-            hello_ack.best_hash,
-            self.chain_state.read().await.genesis_hash,
-            our_connection_nonce,
-            true, // is_outbound = true for bootnode connections
-        );
-
-        // Add peer to peer list and set state to Connected
-        {
-            let mut peers = self.peers.write().await;
-            // Final check before inserting (double-check for race condition)
-            if peers.contains_key(&peer_id) {
-                return Err(NetworkError::InvalidHandshake(
-                    "Peer already connected".to_string(),
-                ));
-            }
-            peers.insert(peer_id, peer);
-            // Update peer state to Connected after successful handshake
-            if let Some(p) = peers.get_mut(&peer_id) {
-                p.state = PeerState::Connected;
-            }
-        }
-
-        // Add peer to router for equilibrium-based broadcast selection
-        {
-            let peers_guard = self.peers.read().await;
-            if let Some(peer) = peers_guard.get(&peer_id) {
-                let mut router = self.router.write().await;
-                router.add_peer(PeerInfo::from(peer));
-            }
-        }
-
-        // Send PeerConnected event
-        let _ = self.event_tx.send(NetworkEvent::PeerConnected {
-            peer_id,
-            addr,
-            node_type,
-            best_height: hello_ack.best_height,
-            best_hash: hello_ack.best_hash,
-        });
-
-        // Eclipse guard for outbound connections too
-        {
-            let mut eclipse = self.eclipse_guard.write().await;
-            if !eclipse.try_add(addr.ip()) {
-                tracing::warn!(
-                    "[SECURITY][ECLIPSE] Not adding outbound peer {} — subnet at capacity",
-                    addr
-                );
-                // Don't error out hard for outbound — just log. The connection was already made.
-            }
-        }
-
-        // Initialize per-peer rate limiter for outbound peer
-        {
-            let cap = self.config.rate_bucket_capacity;
-            let refill = self.config.rate_msgs_per_sec;
-            let mut limiters = self.rate_limiters.write().await;
-            limiters
-                .entry(peer_id)
-                .or_insert_with(|| TokenBucket::new(cap, refill));
-        }
-
-        // Start message loop for this peer
-        let peers_clone = self.peers.clone();
-        let router_clone = self.router.clone();
-        let flock_clone = self.flock_state.clone();
-        let pending_clone = self.pending_requests.clone();
-        let seen_clone = self.seen_messages.clone();
-        let chain_state_clone = self.chain_state.clone();
-        let block_provider_clone = self.block_provider.clone();
-        let event_tx_clone = self.event_tx.clone();
-        let peer_id_clone = peer_id;
-        let ban_clone = self.ban_list.clone();
-        let rl_clone = self.rate_limiters.clone();
-        let ms_clone = self.malformed_strikes.clone();
-        let sm_clone = self.security_metrics.clone();
-        let cl_clone = self.connection_limiter.clone();
-        let eg_clone = self.eclipse_guard.clone();
-        let outbound_ip = addr.ip();
-
+    /// Schedule outbound bootnode dial without blocking the CPP event loop.
+    fn schedule_connect_bootnode(&self, addr: SocketAddr) {
+        let ctx = OutboundConnectCtx::from_network(self);
         tokio::spawn(async move {
-            if let Err(e) = Self::peer_message_loop(
-                peer_id_clone,
-                read_half,
-                peers_clone,
-                router_clone,
-                flock_clone,
-                pending_clone,
-                seen_clone,
-                chain_state_clone,
-                event_tx_clone,
-                block_provider_clone,
-                ban_clone,
-                rl_clone,
-                ms_clone,
-                sm_clone,
-            )
-            .await
-            {
-                tracing::error!(
-                    "Peer {} message loop error: {}",
-                    peer_id_clone
-                        .iter()
-                        .take(4)
-                        .map(|b| format!("{:02x}", b))
-                        .collect::<String>(),
-                    e
-                );
+            if let Err(e) = ctx.connect_bootnode(addr).await {
+                tracing::warn!("[CPP][BOOTNODE] outbound connect failed for {}: {}", addr, e);
             }
-            // Release eclipse slot for outbound peer
-            eg_clone.write().await.remove(outbound_ip);
-            let _ = cl_clone; // outbound not tracked in connection_limiter (inbound only)
         });
+    }
 
-        Ok(())
+    /// Connect to bootnode (awaitable; prefer [`Self::schedule_connect_bootnode`] on the event loop).
+    async fn connect_bootnode(&self, addr: SocketAddr) -> Result<(), NetworkError> {
+        OutboundConnectCtx::from_network(self).connect_bootnode(addr).await
     }
 
     /// Add peer to peer list (internal helper - now handled inline)
@@ -1569,21 +1360,25 @@ impl CppNetwork {
 
     /// Remove peer from peer list
     async fn remove_peer(&self, peer_id: &PeerId, reason: &str) {
-        let mut peers = self.peers.write().await;
-        if let Some(mut peer) = peers.remove(peer_id) {
-            // Signal write task to stop (prevents task leak)
+        let peer_ip = {
+            let mut peers = self.peers.write().await;
+            let Some(mut peer) = peers.remove(peer_id) else {
+                return;
+            };
+            let ip = peer.addr.ip();
             peer.shutdown();
-
-            // Remove from router
             let mut router = self.router.write().await;
             router.remove_peer(peer_id);
+            ip
+        };
 
-            // Send disconnect event
-            let _ = self.event_tx.send(NetworkEvent::PeerDisconnected {
-                peer_id: *peer_id,
-                reason: reason.to_string(),
-            });
-        }
+        self.eclipse_guard.write().await.remove(peer_ip);
+        self.connection_limiter.write().await.release(peer_ip);
+
+        let _ = self.event_tx.send(NetworkEvent::PeerDisconnected {
+            peer_id: *peer_id,
+            reason: reason.to_string(),
+        });
     }
 
     // =========================================================================
@@ -1594,7 +1389,7 @@ impl CppNetwork {
     async fn handle_command(&mut self, command: NetworkCommand) -> Result<(), NetworkError> {
         match command {
             NetworkCommand::ConnectBootnode { addr } => {
-                self.connect_bootnode(addr).await?;
+                self.schedule_connect_bootnode(addr);
             }
 
             NetworkCommand::BroadcastBlock { block } => {
@@ -1742,8 +1537,21 @@ impl CppNetwork {
             get_blocks.to_height
         };
 
-        // Get blocks from the canonical chain via block provider
-        let blocks = block_provider.get_blocks_range(get_blocks.from_height, clamped_to);
+        // Get blocks from the canonical chain via block provider (off async worker — can be heavy).
+        let from = get_blocks.from_height;
+        let to = clamped_to;
+        let block_provider = Arc::clone(&block_provider);
+        let blocks = match tokio::task::spawn_blocking(move || {
+            block_provider.get_blocks_range(from, to)
+        })
+        .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("[CPP][SYNC] spawn_blocking get_blocks_range failed: {}", e);
+                Vec::new()
+            }
+        };
         tracing::info!(
             "[CPP][SYNC] Serving {} blocks (heights {}-{}) to peer {}",
             blocks.len(),
@@ -2222,16 +2030,18 @@ impl CppNetwork {
         let mut to_remove = vec![];
         for (peer_id, peer) in peers.iter() {
             if now.duration_since(peer.last_seen) > PEER_TIMEOUT {
-                to_remove.push(*peer_id);
+                to_remove.push((*peer_id, peer.addr.ip()));
             }
         }
 
         if !to_remove.is_empty() {
             let mut router = self.router.write().await;
-            for peer_id in &to_remove {
+            for (peer_id, ip) in &to_remove {
                 if let Some(mut peer) = peers.remove(peer_id) {
-                    peer.shutdown(); // Signal write task to stop
+                    peer.shutdown();
                     router.remove_peer(peer_id);
+                    self.eclipse_guard.write().await.remove(*ip);
+                    self.connection_limiter.write().await.release(*ip);
                     let _ = self.event_tx.send(NetworkEvent::PeerDisconnected {
                         peer_id: *peer_id,
                         reason: "Timeout".to_string(),
@@ -2247,7 +2057,7 @@ impl CppNetwork {
             {
                 let mut limiters = self.rate_limiters.write().await;
                 let mut strikes = self.malformed_strikes.write().await;
-                for peer_id in &to_remove {
+                for (peer_id, _ip) in &to_remove {
                     limiters.remove(peer_id);
                     strikes.remove(peer_id);
                 }
@@ -2505,22 +2315,18 @@ impl CppNetwork {
                 last_attempt.insert(addr, now);
             }
 
-            // Try to connect
-            match self.connect_bootnode(addr).await {
-                Ok(()) => {
-                    tracing::info!("[CPP][BOOTNODE] Successfully reconnected to {}", addr);
-                    // Reset backoff on success
-                    {
-                        let mut backoff = self.bootnode_backoff.write().await;
-                        backoff.insert(addr, initial_backoff);
+            // Non-blocking dial — backoff updated when the spawned task completes.
+            let ctx = OutboundConnectCtx::from_network(self);
+            let bootnode_backoff = Arc::clone(&self.bootnode_backoff);
+            tokio::spawn(async move {
+                match ctx.connect_bootnode(addr).await {
+                    Ok(()) => {
+                        tracing::info!("[CPP][BOOTNODE] Successfully reconnected to {}", addr);
+                        bootnode_backoff.write().await.insert(addr, initial_backoff);
                     }
-                    break; // One successful connection is enough to start
-                }
-                Err(e) => {
-                    tracing::warn!("[CPP][BOOTNODE] Failed to reconnect to {}: {}", addr, e);
-                    // Increase backoff exponentially (double it, up to max)
-                    {
-                        let mut backoff = self.bootnode_backoff.write().await;
+                    Err(e) => {
+                        tracing::warn!("[CPP][BOOTNODE] Failed to reconnect to {}: {}", addr, e);
+                        let mut backoff = bootnode_backoff.write().await;
                         let current = backoff.get(&addr).copied().unwrap_or(initial_backoff);
                         let new_backoff = (current * 2).min(max_backoff);
                         backoff.insert(addr, new_backoff);
@@ -2531,7 +2337,8 @@ impl CppNetwork {
                         );
                     }
                 }
-            }
+            });
+            break;
         }
     }
     /// Update node metrics from peer observations
@@ -2563,6 +2370,281 @@ impl CppNetwork {
         metrics.avg_response_time = avg_rtt.as_secs_f64();
     }
 }
+
+
+impl OutboundConnectCtx {
+    async fn connect_bootnode(&self, addr: SocketAddr) -> Result<(), NetworkError> {
+        // Check if peer already connected BEFORE attempting connection
+        // This prevents duplicate connections when both nodes connect simultaneously
+        {
+            let peers = self.peers.read().await;
+            // Check if any peer has this address (in case peer_id isn't known yet)
+            for peer in peers.values() {
+                if peer.addr == addr {
+                    return Err(NetworkError::InvalidHandshake(
+                        "Peer already connected".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Connect TCP stream with timeout
+        tracing::info!("[CPP][BOOTNODE] Connecting TCP to {}...", addr);
+        let mut stream = match tokio::time::timeout(
+            crate::cpp::config::CONNECTION_TIMEOUT,
+            TcpStream::connect(addr),
+        )
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                tracing::warn!("[CPP][BOOTNODE] TCP connect failed to {}: {}", addr, e);
+                return Err(NetworkError::Io(e));
+            }
+            Err(_) => {
+                tracing::warn!("[CPP][BOOTNODE] TCP connect timeout to {}", addr);
+                return Err(NetworkError::Timeout);
+            }
+        };
+
+        tracing::info!(
+            "[CPP][BOOTNODE] TCP connection established to {}, starting handshake...",
+            addr
+        );
+
+        let state = self.chain_state.read().await;
+
+        // Generate connection nonce for deterministic tie-breaking of simultaneous connections
+        let our_connection_nonce = rand::random::<u64>();
+
+        // Send Hello message first (with timeout) — include auth signature if signing key available
+        let hello_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let (hello_ed25519_pubkey, hello_auth_signature) = if let Some(ref sk) = self.signing_key {
+            sign_hello(
+                sk,
+                &state.genesis_hash,
+                hello_timestamp,
+                our_connection_nonce,
+                &self.local_peer_id,
+            )
+        } else {
+            ([0u8; 32], [0u8; 64])
+        };
+
+        let hello = HelloMessage {
+            version: crate::cpp::config::VERSION,
+            peer_id: self.local_peer_id,
+            best_height: state.best_height,
+            best_hash: state.best_hash,
+            genesis_hash: state.genesis_hash,
+            node_type: self.config.node_type.as_u8(),
+            timestamp: hello_timestamp,
+            connection_nonce: our_connection_nonce,
+            ed25519_pubkey: hello_ed25519_pubkey,
+            auth_signature: hello_auth_signature,
+        };
+
+        tracing::debug!("[CPP][BOOTNODE] Sending Hello message to {}...", addr);
+        match tokio::time::timeout(
+            crate::cpp::config::HANDSHAKE_TIMEOUT,
+            MessageCodec::send_hello(&mut stream, &hello),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("[CPP][BOOTNODE] Hello send failed to {}: {}", addr, e);
+                return Err(NetworkError::Protocol(e));
+            }
+            Err(_) => {
+                tracing::warn!("[CPP][BOOTNODE] Hello send timeout to {}", addr);
+                return Err(NetworkError::Timeout);
+            }
+        }
+
+        tracing::debug!("[CPP][BOOTNODE] Waiting for HelloAck from {}...", addr);
+        // Receive HelloAck (with timeout)
+        let envelope = match tokio::time::timeout(
+            crate::cpp::config::HANDSHAKE_TIMEOUT,
+            MessageCodec::receive(&mut stream),
+        )
+        .await
+        {
+            Ok(Ok(e)) => e,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    "[CPP][BOOTNODE] HelloAck receive failed from {}: {}",
+                    addr,
+                    e
+                );
+                return Err(NetworkError::Protocol(e));
+            }
+            Err(_) => {
+                tracing::warn!("[CPP][BOOTNODE] HelloAck receive timeout from {}", addr);
+                return Err(NetworkError::Timeout);
+            }
+        };
+
+        tracing::debug!(
+            "[CPP][BOOTNODE] Received HelloAck from {}, validating...",
+            addr
+        );
+        let hello_ack: HelloAckMessage = envelope.deserialize().map_err(NetworkError::Protocol)?;
+
+        // Validate genesis hash
+        if hello_ack.genesis_hash != state.genesis_hash {
+            return Err(NetworkError::InvalidHandshake(
+                "Genesis hash mismatch".to_string(),
+            ));
+        }
+
+        // Convert node_type from u8
+        let node_type = NodeType::from_u8(hello_ack.node_type)
+            .map_err(|e| NetworkError::InvalidHandshake(format!("Invalid node type: {}", e)))?;
+
+        drop(state);
+
+        // Check again if peer already connected (race condition check)
+        let peer_id = hello_ack.peer_id;
+        {
+            let peers = self.peers.read().await;
+            if peers.contains_key(&peer_id) {
+                return Err(NetworkError::InvalidHandshake(
+                    "Peer already connected".to_string(),
+                ));
+            }
+        }
+
+        // Create peer instance (returns peer and read half)
+        // For outbound connections: is_outbound = true, use our nonce for tie-breaking
+        let (peer, read_half) = Peer::new(
+            peer_id,
+            addr,
+            stream,
+            node_type,
+            hello_ack.best_height,
+            hello_ack.best_hash,
+            self.chain_state.read().await.genesis_hash,
+            our_connection_nonce,
+            true, // is_outbound = true for bootnode connections
+        );
+
+        // Add peer to peer list and set state to Connected
+        {
+            let mut peers = self.peers.write().await;
+            // Final check before inserting (double-check for race condition)
+            if peers.contains_key(&peer_id) {
+                return Err(NetworkError::InvalidHandshake(
+                    "Peer already connected".to_string(),
+                ));
+            }
+            peers.insert(peer_id, peer);
+            // Update peer state to Connected after successful handshake
+            if let Some(p) = peers.get_mut(&peer_id) {
+                p.state = PeerState::Connected;
+            }
+        }
+
+        // Add peer to router for equilibrium-based broadcast selection
+        {
+            let peers_guard = self.peers.read().await;
+            if let Some(peer) = peers_guard.get(&peer_id) {
+                let mut router = self.router.write().await;
+                router.add_peer(PeerInfo::from(peer));
+            }
+        }
+
+        // Send PeerConnected event
+        let _ = self.event_tx.send(NetworkEvent::PeerConnected {
+            peer_id,
+            addr,
+            node_type,
+            best_height: hello_ack.best_height,
+            best_hash: hello_ack.best_hash,
+        });
+
+        // Eclipse guard for outbound connections too
+        {
+            let mut eclipse = self.eclipse_guard.write().await;
+            if !eclipse.try_add(addr.ip()) {
+                tracing::warn!(
+                    "[SECURITY][ECLIPSE] Not adding outbound peer {} — subnet at capacity",
+                    addr
+                );
+                // Don't error out hard for outbound — just log. The connection was already made.
+            }
+        }
+
+        // Initialize per-peer rate limiter for outbound peer
+        {
+            let cap = self.config.rate_bucket_capacity;
+            let refill = self.config.rate_msgs_per_sec;
+            let mut limiters = self.rate_limiters.write().await;
+            limiters
+                .entry(peer_id)
+                .or_insert_with(|| TokenBucket::new(cap, refill));
+        }
+
+        // Start message loop for this peer
+        let peers_clone = self.peers.clone();
+        let router_clone = self.router.clone();
+        let flock_clone = self.flock_state.clone();
+        let pending_clone = self.pending_requests.clone();
+        let seen_clone = self.seen_messages.clone();
+        let chain_state_clone = self.chain_state.clone();
+        let block_provider_clone = self.block_provider.clone();
+        let event_tx_clone = self.event_tx.clone();
+        let peer_id_clone = peer_id;
+        let ban_clone = self.ban_list.clone();
+        let rl_clone = self.rate_limiters.clone();
+        let ms_clone = self.malformed_strikes.clone();
+        let sm_clone = self.security_metrics.clone();
+        let cl_clone = self.connection_limiter.clone();
+        let eg_clone = self.eclipse_guard.clone();
+        let outbound_ip = addr.ip();
+
+        tokio::spawn(async move {
+            if let Err(e) = CppNetwork::peer_message_loop(
+                peer_id_clone,
+                read_half,
+                peers_clone,
+                router_clone,
+                flock_clone,
+                pending_clone,
+                seen_clone,
+                chain_state_clone,
+                event_tx_clone,
+                block_provider_clone,
+                ban_clone,
+                rl_clone,
+                ms_clone,
+                sm_clone,
+            )
+            .await
+            {
+                tracing::error!(
+                    "Peer {} message loop error: {}",
+                    peer_id_clone
+                        .iter()
+                        .take(4)
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<String>(),
+                    e
+                );
+            }
+            // Release eclipse slot for outbound peer
+            eg_clone.write().await.remove(outbound_ip);
+            let _ = cl_clone; // outbound not tracked in connection_limiter (inbound only)
+        });
+
+        Ok(())
+    }
+}
+
 
 // =============================================================================
 // Error Types
