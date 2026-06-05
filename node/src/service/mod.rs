@@ -147,6 +147,17 @@ async fn request_hash_anchored_sync(
         to_height: plan.to_height,
         request_id: rand::random(),
     });
+
+    // Re-fetch the fork-height header explicitly — batched sync may deliver h+1..h+N without
+    // the winning block at our tip when the local DB already maps that height to an orphan.
+    if suspect_fork && plan.from_height == local_height {
+        let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+            peer_id: sync_peer,
+            from_height: local_height,
+            to_height: local_height,
+            request_id: rand::random(),
+        });
+    }
 }
 
 /// Hash-anchored catch-up from the mesh peer with the greatest work (or height when work is 0).
@@ -184,6 +195,40 @@ async fn request_recovery_sync_from_heaviest_peer(
         ),
     )
     .await;
+}
+
+/// Fetch the competing header at the current tip height on the peer's winning branch.
+async fn request_fork_point_block_from_heaviest_peer(
+    chain: &Arc<ChainState>,
+    peer_consensus: &Arc<PeerConsensus>,
+    cpp_tx: &mpsc::UnboundedSender<CppNetworkCommand>,
+    fork_height: u64,
+) {
+    let local_work = chain.best_cumulative_work().await;
+    let our_hash = *chain.best_block_hash().await.as_bytes();
+    let Some((peer_id, _)) = peer_consensus
+        .best_peer_for_fork_recovery(local_work, fork_height, our_hash)
+        .await
+    else {
+        return;
+    };
+    let Ok(peer_id_bytes) = hex::decode(&peer_id) else {
+        return;
+    };
+    let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) else {
+        return;
+    };
+    debug!(
+        fork_height,
+        peer_id = %peer_id,
+        "requesting explicit fork-point block from heaviest peer"
+    );
+    let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+        peer_id: peer_arr,
+        from_height: fork_height,
+        to_height: fork_height,
+        request_id: rand::random(),
+    });
 }
 
 async fn run_startup_chain_sanity_checks(chain: &Arc<ChainState>) {
@@ -1423,6 +1468,27 @@ impl CoinjectNode {
                                 highest_received = block.header.height;
                             }
 
+                            // Same-height fork point from a heavier peer: always buffer (replace orphan).
+                            if block.header.height == best_height
+                                && block.header.hash() != best_hash
+                            {
+                                warn!(
+                                    block_height = block.header.height,
+                                    local_tip_hash = ?best_hash,
+                                    incoming_hash = ?block.header.hash(),
+                                    "fork-point block at tip height; buffering for reorg"
+                                );
+                                set_sync_health_state(
+                                    &sync_health_state_clone,
+                                    SyncHealthState::SuspectFork,
+                                    "fork-point block received",
+                                )
+                                .await;
+                                let mut buffer = block_buffer_clone.write().await;
+                                buffer.insert(block.header.height, block);
+                                continue;
+                            }
+
                             if block.header.height == expected_height
                                 && block.header.prev_hash == best_hash
                             {
@@ -1590,7 +1656,10 @@ impl CoinjectNode {
                                     }
                                 };
 
-                                if conflicting_historical_block {
+                                if conflicting_historical_block
+                                    || (block.header.height == best_height
+                                        && block.header.hash() != best_hash)
+                                {
                                     warn!(
                                         block_height = block.header.height,
                                         best_height,
@@ -1718,6 +1787,32 @@ impl CoinjectNode {
                         );
 
                         let expected_height = current_height + 1;
+                        let current_hash = chain_clone.best_block_hash().await;
+                        let needs_fork_point = {
+                            let buffer = block_buffer_clone.read().await;
+                            crate::sync_canonical::missing_fork_point_parent_hash(
+                                current_height,
+                                current_hash,
+                                buffer.get(&expected_height),
+                                buffer.get(&current_height),
+                            )
+                            .is_some()
+                        };
+                        if needs_fork_point {
+                            warn!(
+                                fork_height = current_height,
+                                expected_height,
+                                "buffered extension parents off missing fork-point block; requesting tip height from heaviest peer"
+                            );
+                            request_fork_point_block_from_heaviest_peer(
+                                &chain_clone,
+                                &peer_consensus_clone,
+                                &cpp_network_cmd_tx_for_events,
+                                current_height,
+                            )
+                            .await;
+                        }
+
                         if blocks_applied == 0 && highest_received >= expected_height {
                             warn!(
                                 peer_id = %hex::encode(peer_id),

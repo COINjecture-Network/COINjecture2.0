@@ -160,6 +160,27 @@ pub async fn should_apply_sync_extension(
     is_hash_on_chain_from_tip(chain.as_ref(), peer_tip_hash, peer_tip_height, block_hash)
 }
 
+/// When the next buffered block parents off a hash that is not our tip, return that parent hash.
+///
+/// The winning fork-point header at `tip_height` must be fetched and buffered before reorg can
+/// walk the alternate branch (production: orphan tip h=746 while buffered h=747+ parent canonical h=746).
+pub fn missing_fork_point_parent_hash(
+    _tip_height: u64,
+    tip_hash: Hash,
+    next_buffered: Option<&Block>,
+    fork_point_buffered: Option<&Block>,
+) -> Option<Hash> {
+    let next = next_buffered?;
+    let parent = next.header.prev_hash;
+    if parent == tip_hash {
+        return None;
+    }
+    if fork_point_buffered.is_some_and(|block| block.header.hash() == parent) {
+        return None;
+    }
+    Some(parent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +287,27 @@ mod tests {
             "off-branch candidate must be rejected for heavier peers"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_fork_point_detects_canonical_parent_gap() {
+        use crate::genesis::{create_genesis_block, GenesisConfig};
+
+        let genesis = create_genesis_block(GenesisConfig::default());
+        let tip_hash = Hash::from_bytes([1u8; 32]);
+        let parent_hash = Hash::from_bytes([2u8; 32]);
+        let mut header = genesis.header.clone();
+        header.height = 747;
+        header.prev_hash = parent_hash;
+        let next = Block {
+            header,
+            coinbase: genesis.coinbase.clone(),
+            transactions: vec![],
+            solution_reveal: genesis.solution_reveal.clone(),
+        };
+        assert_eq!(
+            missing_fork_point_parent_hash(746, tip_hash, Some(&next), None),
+            Some(parent_hash)
+        );
     }
 }
