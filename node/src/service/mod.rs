@@ -1463,9 +1463,31 @@ impl CoinjectNode {
                             let best_height = chain_clone.best_block_height().await;
                             let best_hash = chain_clone.best_block_hash().await;
                             let expected_height = best_height + 1;
+                            let needed_fork_parent = {
+                                let buffer = block_buffer_clone.read().await;
+                                crate::sync_canonical::missing_fork_point_parent_hash(
+                                    best_height,
+                                    best_hash,
+                                    buffer.get(&expected_height),
+                                    buffer.get(&best_height),
+                                )
+                            };
 
                             if block.header.height > highest_received {
                                 highest_received = block.header.height;
+                            }
+
+                            if needed_fork_parent
+                                .is_some_and(|parent| block.header.hash() == parent)
+                            {
+                                warn!(
+                                    block_height = block.header.height,
+                                    parent_hash = ?needed_fork_parent,
+                                    "buffering fork-point block matching buffered parent hash"
+                                );
+                                let mut buffer = block_buffer_clone.write().await;
+                                buffer.insert(block.header.height, block);
+                                continue;
                             }
 
                             // Same-height fork point from a heavier peer: always buffer (replace orphan).
@@ -1855,26 +1877,13 @@ impl CoinjectNode {
                                 let peer_consensus_delayed = Arc::clone(&peer_consensus_clone);
                                 let sync_health_delayed = Arc::clone(&sync_health_state_clone);
                                 let cpp_tx = cpp_network_cmd_tx_for_events.clone();
-                                let (peer_tip_h, peer_tip_hash_bytes, peer_tip_w) =
-                                    peer_consensus_delayed
-                                        .get_peer_tip(&hex::encode(peer_id))
-                                        .await
-                                        .unwrap_or((effective_peer_tip, [0u8; 32], 0));
-                                let peer_tip_hash =
-                                    coinject_core::Hash::from_bytes(peer_tip_hash_bytes);
                                 tokio::spawn(async move {
                                     tokio::time::sleep(Duration::from_secs(5)).await;
-                                    request_hash_anchored_sync(
+                                    request_recovery_sync_from_heaviest_peer(
                                         &chain_delayed,
                                         &peer_consensus_delayed,
                                         &sync_health_delayed,
                                         &cpp_tx,
-                                        hash_anchored_sync_req(
-                                            peer_id,
-                                            peer_tip_h.max(effective_peer_tip),
-                                            peer_tip_hash,
-                                            peer_tip_w,
-                                        ),
                                     )
                                     .await;
                                 });

@@ -97,8 +97,9 @@ pub fn sync_from_height_for_heavier_peer(
         return Ok(local.height.saturating_add(1));
     }
 
-    let peer_heavier = peer.cumulative_work > local.cumulative_work;
-    if suspect_fork || peer_heavier {
+    // Always verify branch membership when behind a taller peer — do not require
+    // cumulative_work > 0 (Status can arrive before work is advertised).
+    if peer.height > local.height {
         let on_peer_branch = is_hash_on_chain_from_tip(chain, peer.hash, peer.height, &local.hash)?;
         if !on_peer_branch {
             return Ok(local.height);
@@ -197,6 +198,40 @@ mod tests {
         let chain = ChainState::new(&dir, &genesis).unwrap();
         let tip = chain.best_block_hash().await;
         assert!(is_hash_on_chain_from_tip(&chain, tip, 0, &genesis.header.hash()).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn taller_peer_off_branch_syncs_from_local_tip_without_cumulative_work() {
+        let dir = std::env::temp_dir().join("coinject-sync-canonical-fork-no-work");
+        let _ = std::fs::remove_dir_all(&dir);
+        let genesis = create_genesis_block(GenesisConfig::default());
+        #[cfg(not(feature = "adzdb"))]
+        let chain = ChainState::new(&dir, &genesis, 64).unwrap();
+        #[cfg(feature = "adzdb")]
+        let chain = ChainState::new(&dir, &genesis).unwrap();
+
+        let local_hash = genesis.header.hash();
+        let peer_tip = Hash::from_bytes([7u8; 32]);
+        let from = sync_from_height_for_heavier_peer(
+            &chain,
+            LocalSyncTip {
+                height: 746,
+                hash: local_hash,
+                cumulative_work: 100,
+            },
+            PeerSyncTip {
+                height: 2750,
+                hash: peer_tip,
+                cumulative_work: 0,
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            from, 746,
+            "must re-fetch fork height when off branch even if peer work is 0"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
