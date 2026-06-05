@@ -448,98 +448,68 @@ impl CoinjectNode {
                     .best_peer_for_fork_recovery(local_work, current_best_height, our_hash)
                     .await;
 
-                // Buffered fork segment is far shorter than the mesh winner — keep downloading
-                // from the heaviest peer instead of attempting a doomed partial reorg.
-                let defer_reorg = heaviest_peer.as_ref().is_some_and(|(_, s)| {
-                    s.best_height > candidate_tip_height + crate::sync_canonical::SYNC_BATCH_BLOCKS
-                        && (s.cumulative_work > local_work || s.best_hash != our_hash)
-                });
+                // Same-height fork: blocks at h+1 parent off the winning hash at h. Deferring
+                // reorg while the heaviest peer is far ahead leaves the node stuck at h with
+                // blocks_applied=0 even when h..h+N are already buffered.
+                warn!(
+                    block_height = current_best_height,
+                    candidate_tip_height,
+                    candidate_tip_hash = ?candidate_tip_hash,
+                    "same-height fork block in buffer; attempting reorganization"
+                );
 
-                if defer_reorg {
-                    if let (Some(cpp_tx), Some((peer_id_str, peer_state))) =
-                        (cpp_network_cmd_tx, heaviest_peer)
-                    {
-                        debug!(
-                            block_height = current_best_height,
-                            candidate_tip_height,
-                            peer_height = peer_state.best_height,
-                            peer_id = %peer_id_str,
-                            "deferring same-height reorg: buffered fork shorter than heaviest peer"
-                        );
-                        if let Ok(peer_id_bytes) = hex::decode(&peer_id_str) {
-                            if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
-                                let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
-                                    peer_id: peer_arr,
-                                    from_height: current_best_height,
-                                    to_height: current_best_height.saturating_add(
-                                        crate::sync_canonical::SYNC_BATCH_BLOCKS - 1,
-                                    ),
-                                    request_id: rand::random(),
-                                });
-                            }
-                        }
-                    }
-                } else {
-                    warn!(
-                        block_height = current_best_height,
-                        candidate_tip_height,
-                        candidate_tip_hash = ?candidate_tip_hash,
-                        "same-height fork block in buffer; attempting reorganization"
-                    );
-
-                    if let Some(cpp_tx) = cpp_network_cmd_tx {
-                        if let Some((peer_id_str, peer_state)) = heaviest_peer {
-                            if peer_state.cumulative_work > local_work
-                                || peer_state.best_hash != our_hash
-                            {
-                                if let Ok(peer_id_bytes) = hex::decode(&peer_id_str) {
-                                    if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
-                                        let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
-                                            peer_id: peer_arr,
-                                            from_height: current_best_height,
-                                            to_height: current_best_height.saturating_add(
-                                                crate::sync_canonical::SYNC_BATCH_BLOCKS - 1,
-                                            ),
-                                            request_id: rand::random(),
-                                        });
-                                    }
+                if let Some(cpp_tx) = cpp_network_cmd_tx {
+                    if let Some((peer_id_str, peer_state)) = heaviest_peer {
+                        if peer_state.cumulative_work > local_work
+                            || peer_state.best_hash != our_hash
+                        {
+                            if let Ok(peer_id_bytes) = hex::decode(&peer_id_str) {
+                                if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
+                                    let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+                                        peer_id: peer_arr,
+                                        from_height: current_best_height,
+                                        to_height: current_best_height.saturating_add(
+                                            crate::sync_canonical::SYNC_BATCH_BLOCKS - 1,
+                                        ),
+                                        request_id: rand::random(),
+                                    });
                                 }
                             }
                         }
                     }
-
-                    let chain_clone = Arc::clone(chain);
-                    let state_clone = Arc::clone(state);
-                    let timelock_clone = Arc::clone(timelock_state);
-                    let escrow_clone = Arc::clone(escrow_state);
-                    let channel_clone = Arc::clone(channel_state);
-                    let trustline_clone = Arc::clone(trustline_state);
-                    let dimensional_clone = Arc::clone(dimensional_pool_state);
-                    let marketplace_clone = Arc::clone(marketplace_state);
-                    let validator_clone = Arc::clone(validator);
-                    let block_buffer_clone = Arc::clone(block_buffer);
-
-                    tokio::spawn(async move {
-                        if let Err(e) = Self::attempt_reorganization_if_longer_chain(
-                            candidate_tip_hash,
-                            candidate_tip_height,
-                            &chain_clone,
-                            &state_clone,
-                            &timelock_clone,
-                            &escrow_clone,
-                            &channel_clone,
-                            &trustline_clone,
-                            &dimensional_clone,
-                            &marketplace_clone,
-                            &validator_clone,
-                            Some(&block_buffer_clone),
-                        )
-                        .await
-                        {
-                            warn!(error = %e, "same-height fork reorganization attempt failed");
-                        }
-                    });
                 }
+
+                let chain_clone = Arc::clone(chain);
+                let state_clone = Arc::clone(state);
+                let timelock_clone = Arc::clone(timelock_state);
+                let escrow_clone = Arc::clone(escrow_state);
+                let channel_clone = Arc::clone(channel_state);
+                let trustline_clone = Arc::clone(trustline_state);
+                let dimensional_clone = Arc::clone(dimensional_pool_state);
+                let marketplace_clone = Arc::clone(marketplace_state);
+                let validator_clone = Arc::clone(validator);
+                let block_buffer_clone = Arc::clone(block_buffer);
+
+                tokio::spawn(async move {
+                    if let Err(e) = Self::attempt_reorganization_if_longer_chain(
+                        candidate_tip_hash,
+                        candidate_tip_height,
+                        &chain_clone,
+                        &state_clone,
+                        &timelock_clone,
+                        &escrow_clone,
+                        &channel_clone,
+                        &trustline_clone,
+                        &dimensional_clone,
+                        &marketplace_clone,
+                        &validator_clone,
+                        Some(&block_buffer_clone),
+                    )
+                    .await
+                    {
+                        warn!(error = %e, "same-height fork reorganization attempt failed");
+                    }
+                });
             }
         }
 
