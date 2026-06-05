@@ -442,6 +442,45 @@ impl CoinjectNode {
             };
 
             if candidate_tip_height > 0 && candidate_tip_hash != coinject_core::Hash::ZERO {
+                let local_work = chain.best_cumulative_work().await;
+                let our_hash = *current_best_hash.as_bytes();
+                let heaviest_peer = peer_consensus
+                    .best_peer_for_fork_recovery(local_work, current_best_height, our_hash)
+                    .await;
+
+                // Buffered fork segment is far shorter than the mesh winner — keep downloading
+                // from the heaviest peer instead of attempting a doomed partial reorg.
+                let defer_reorg = heaviest_peer.as_ref().is_some_and(|(_, s)| {
+                    s.best_height > candidate_tip_height + crate::sync_canonical::SYNC_BATCH_BLOCKS
+                        && (s.cumulative_work > local_work
+                            || s.best_hash != our_hash)
+                });
+
+                if defer_reorg {
+                    if let (Some(cpp_tx), Some((peer_id_str, peer_state))) =
+                        (cpp_network_cmd_tx, heaviest_peer)
+                    {
+                        debug!(
+                            block_height = current_best_height,
+                            candidate_tip_height,
+                            peer_height = peer_state.best_height,
+                            peer_id = %peer_id_str,
+                            "deferring same-height reorg: buffered fork shorter than heaviest peer"
+                        );
+                        if let Ok(peer_id_bytes) = hex::decode(&peer_id_str) {
+                            if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
+                                let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
+                                    peer_id: peer_arr,
+                                    from_height: current_best_height,
+                                    to_height: current_best_height.saturating_add(
+                                        crate::sync_canonical::SYNC_BATCH_BLOCKS - 1,
+                                    ),
+                                    request_id: rand::random(),
+                                });
+                            }
+                        }
+                    }
+                } else {
                 warn!(
                     block_height = current_best_height,
                     candidate_tip_height,
@@ -450,10 +489,10 @@ impl CoinjectNode {
                 );
 
                 if let Some(cpp_tx) = cpp_network_cmd_tx {
-                    if let Some((peer_id_str, peer_state)) =
-                        peer_consensus.best_active_peer_by_cumulative_work().await
-                    {
-                        if peer_state.cumulative_work > chain.best_cumulative_work().await {
+                    if let Some((peer_id_str, peer_state)) = heaviest_peer {
+                        if peer_state.cumulative_work > local_work
+                            || peer_state.best_hash != our_hash
+                        {
                             if let Ok(peer_id_bytes) = hex::decode(&peer_id_str) {
                                 if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
                                     let _ = cpp_tx.send(CppNetworkCommand::RequestBlocks {
@@ -501,6 +540,7 @@ impl CoinjectNode {
                         warn!(error = %e, "same-height fork reorganization attempt failed");
                     }
                 });
+                }
             }
         }
 
@@ -1148,22 +1188,18 @@ impl CoinjectNode {
         }
 
         // Step 2: Validate new chain
-        let mut prev_hash = if let Some(first_block) = new_chain_blocks.first() {
-            first_block.header.prev_hash
-        } else {
+        let Some(first_block) = new_chain_blocks.first() else {
             return Err("New chain is empty".to_string());
         };
 
-        for (idx, block) in new_chain_blocks.iter().enumerate() {
-            let _expected_height = if idx == 0 {
-                // First block height should be common_ancestor_height + 1
-                // We'd need to pass this in, but for now we validate relative to prev_hash
-                0 // Will be set properly
-            } else {
-                new_chain_blocks[idx - 1].header.height + 1
-            };
+        // Parent cumulative work: common ancestor is on disk; each subsequent parent is the
+        // prior block in `new_chain_blocks` (not yet stored — DB lookup would fail at fork height).
+        let mut prev_hash = first_block.header.prev_hash;
+        let mut parent_cumulative_work = chain
+            .cumulative_work_at_tip_hash(prev_hash)
+            .map_err(|e| format!("Common ancestor cumulative work: {}", e))?;
 
-            // Validate block connects to previous
+        for block in &new_chain_blocks {
             if block.header.prev_hash != prev_hash {
                 return Err(format!(
                     "New chain block {} doesn't connect to previous (prev_hash mismatch)",
@@ -1174,18 +1210,9 @@ impl CoinjectNode {
             let emission_w = if block.header.height == 0 {
                 None
             } else {
-                match chain.cumulative_work_at_tip_hash(block.header.prev_hash) {
-                    Ok(w) => Some(w),
-                    Err(e) => {
-                        return Err(format!(
-                            "Emission parent work at height {}: {}",
-                            block.header.height, e
-                        ));
-                    }
-                }
+                Some(parent_cumulative_work)
             };
 
-            // Validate block (skip timestamp age check during chain reorganization/sync)
             match validator.validate_block_with_options(
                 block,
                 &prev_hash,
@@ -1195,6 +1222,9 @@ impl CoinjectNode {
             ) {
                 Ok(()) => {
                     prev_hash = block.header.hash();
+                    parent_cumulative_work = parent_cumulative_work.saturating_add(
+                        (block.header.work_score.max(0.0) as u64) as u128,
+                    );
                 }
                 Err(e) => {
                     return Err(format!(

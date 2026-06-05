@@ -63,6 +63,9 @@ Height-range `GetBlocks` alone is not sufficient when a peer’s database still 
 4. Sync continuation requests prefer the active peer with the greatest advertised **`cumulative_work`**.
 5. **Fork-height re-download:** when the local tip hash is **not** on the peer’s advertised tip chain and the peer has greater cumulative work, sync requests start at **`local_height`** (not `local_height + 1`) so the fork-point block on the winning branch is fetched and buffered for reorg (`sync_canonical::plan_sync_batch`, `request_hash_anchored_sync` in `node/src/service/mod.rs`).
 6. **Same-height reorg:** if the buffer holds a competing block at the current tip height, `attempt_reorganization_if_longer_chain` may replace the tip hash without requiring a higher block number (`node/src/service/fork.rs`).
+7. **Reorg emission work:** during `reorganize_chain`, parent cumulative work is walked in-memory along `new_chain_blocks` (common ancestor from disk, then each buffered successor). A DB-only lookup at the fork height fails with `Emission parent work … Block not found` when the winning branch block is not yet stored.
+8. **Heaviest-peer recovery (no median gate):** when sync stalls (`SuspectFork`) or a same-height buffered fork is shorter than the mesh winner, the node requests hash-anchored blocks from `PeerConsensus::best_peer_for_fork_recovery` — cumulative work first, height tie-break — even when the local tip is far below median peer height (e.g. h=746 vs canonical h=2750). Stall recovery no longer re-requests from the peer that sent the incompatible batch.
+9. **Deferred partial reorg:** same-height reorg is skipped when the buffered fork segment ends well below the heaviest peer; the node keeps downloading from the canonical peer instead of attempting a doomed 16-block reorg.
 
 If a wiped node still cannot catch up, verify bootnodes point at the canonical miner only (never another lagging follower) or clone a canonical datadir as a last resort.
 

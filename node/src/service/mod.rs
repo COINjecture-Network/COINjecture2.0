@@ -149,6 +149,43 @@ async fn request_hash_anchored_sync(
     });
 }
 
+/// Hash-anchored catch-up from the mesh peer with the greatest work (or height when work is 0).
+async fn request_recovery_sync_from_heaviest_peer(
+    chain: &Arc<ChainState>,
+    peer_consensus: &Arc<PeerConsensus>,
+    sync_health: &Arc<RwLock<SyncHealthState>>,
+    cpp_tx: &mpsc::UnboundedSender<CppNetworkCommand>,
+) {
+    let local_work = chain.best_cumulative_work().await;
+    let our_height = chain.best_block_height().await;
+    let our_hash = *chain.best_block_hash().await.as_bytes();
+    let Some((peer_id, peer_state)) = peer_consensus
+        .best_peer_for_fork_recovery(local_work, our_height, our_hash)
+        .await
+    else {
+        return;
+    };
+    let Ok(peer_id_bytes) = hex::decode(&peer_id) else {
+        return;
+    };
+    let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) else {
+        return;
+    };
+    request_hash_anchored_sync(
+        chain,
+        peer_consensus,
+        sync_health,
+        cpp_tx,
+        hash_anchored_sync_req(
+            peer_arr,
+            peer_state.best_height,
+            coinject_core::Hash::from_bytes(peer_state.best_hash),
+            peer_state.cumulative_work,
+        ),
+    )
+    .await;
+}
+
 async fn run_startup_chain_sanity_checks(chain: &Arc<ChainState>) {
     let best_height = chain.best_block_height().await;
     let best_hash = chain.best_block_hash().await;
@@ -1793,22 +1830,11 @@ impl CoinjectNode {
                                     )
                                     .await;
                                 }
-                                let (peer_tip_h, peer_tip_hash_bytes, peer_tip_w) =
-                                    peer_consensus_clone
-                                        .get_peer_tip(&hex::encode(peer_id))
-                                        .await
-                                        .unwrap_or((peer_height, [0u8; 32], 0));
-                                request_hash_anchored_sync(
+                                request_recovery_sync_from_heaviest_peer(
                                     &chain_clone,
                                     &peer_consensus_clone,
                                     &sync_health_state_clone,
                                     &cpp_network_cmd_tx_for_events,
-                                    hash_anchored_sync_req(
-                                        peer_id,
-                                        peer_tip_h.max(peer_height),
-                                        coinject_core::Hash::from_bytes(peer_tip_hash_bytes),
-                                        peer_tip_w,
-                                    ),
                                 )
                                 .await;
                             }
@@ -2716,8 +2742,6 @@ impl CoinjectNode {
                 .await;
 
                 let cur = chain_periodic.best_block_height().await;
-                let cur_hash = chain_periodic.best_block_hash().await;
-                let cur_hash_bytes: [u8; 32] = *cur_hash.as_bytes();
                 let median = peer_consensus_periodic.median_peer_height().await;
                 let best_ph = peer_consensus_periodic.best_peer_height().await;
                 let thresh = peer_consensus_periodic.sync_threshold_blocks();
@@ -2735,35 +2759,17 @@ impl CoinjectNode {
 
                 // After ~45s on SuspectFork, pull from the heaviest peer and re-run reorg.
                 if suspect_fork_streak >= 3 {
-                    if let Some((peer_id, peer_state)) = peer_consensus_periodic
-                        .heaviest_peer_when_local_forked(cur, cur_hash_bytes)
-                        .await
-                    {
-                        warn!(
-                            our_height = cur,
-                            peer_height = peer_state.best_height,
-                            peer_cumulative_work = peer_state.cumulative_work,
-                            peer_id = %peer_id,
-                            "auto fork recovery: requesting hash-anchored blocks from heaviest peer"
-                        );
-                        if let Ok(peer_id_bytes) = hex::decode(&peer_id) {
-                            if let Ok(peer_arr) = <[u8; 32]>::try_from(peer_id_bytes) {
-                                request_hash_anchored_sync(
-                                    &chain_periodic,
-                                    &peer_consensus_periodic,
-                                    &sync_health_state_periodic,
-                                    &cpp_network_cmd_tx_periodic,
-                                    hash_anchored_sync_req(
-                                        peer_arr,
-                                        peer_state.best_height,
-                                        coinject_core::Hash::from_bytes(peer_state.best_hash),
-                                        peer_state.cumulative_work,
-                                    ),
-                                )
-                                .await;
-                            }
-                        }
-                    }
+                    warn!(
+                        our_height = cur,
+                        "auto fork recovery: requesting hash-anchored blocks from heaviest peer"
+                    );
+                    request_recovery_sync_from_heaviest_peer(
+                        &chain_periodic,
+                        &peer_consensus_periodic,
+                        &sync_health_state_periodic,
+                        &cpp_network_cmd_tx_periodic,
+                    )
+                    .await;
                     suspect_fork_streak = 0;
                 }
 

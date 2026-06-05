@@ -336,12 +336,40 @@ impl PeerConsensus {
             .map(|p| (p.best_height, p.best_hash, p.cumulative_work))
     }
 
+    /// Compare peers for sync source selection: cumulative work first, then height.
+    fn compare_peers_by_heavy_chain(a: &PeerState, b: &PeerState) -> std::cmp::Ordering {
+        a.cumulative_work
+            .cmp(&b.cumulative_work)
+            .then_with(|| a.best_height.cmp(&b.best_height))
+    }
+
     /// Active peer with the greatest advertised cumulative work (hash-anchored sync source).
     pub async fn best_active_peer_by_cumulative_work(&self) -> Option<(String, PeerState)> {
         self.active_peers()
             .await
             .into_iter()
-            .max_by(|a, b| a.1.cumulative_work.cmp(&b.1.cumulative_work))
+            .max_by(|a, b| Self::compare_peers_by_heavy_chain(&a.1, &b.1))
+    }
+
+    /// Best peer to pull canonical blocks from when local chain diverges or lags.
+    ///
+    /// Unlike [`Self::heaviest_peer_when_local_forked`], this does **not** require the node to be
+    /// caught up with median peer height — followers stuck on orphan forks at h=746 must still
+    /// target the heaviest peer at h=2750.
+    pub async fn best_peer_for_fork_recovery(
+        &self,
+        local_work: u128,
+        our_height: u64,
+        our_hash: [u8; 32],
+    ) -> Option<(String, PeerState)> {
+        self.active_peers()
+            .await
+            .into_iter()
+            .filter(|(_, s)| {
+                s.cumulative_work > local_work
+                    || (s.best_hash != our_hash && s.best_height > our_height)
+            })
+            .max_by(|a, b| Self::compare_peers_by_heavy_chain(&a.1, &b.1))
     }
 
     /// Get the median height across all active peers
@@ -752,6 +780,41 @@ mod tests {
         let (should, reason) = consensus.should_mine(250, [0; 32]).await;
         assert!(!should);
         assert!(reason.contains("Ahead of peers"));
+    }
+
+    #[tokio::test]
+    async fn test_best_peer_for_fork_recovery_while_behind_median() {
+        let consensus = PeerConsensus::with_defaults();
+        consensus
+            .update_peer("canonical".to_string(), 2750, [1; 32], 28_764)
+            .await;
+        consensus
+            .update_peer("follower".to_string(), 1511, [2; 32], 12_950)
+            .await;
+
+        let pick = consensus
+            .best_peer_for_fork_recovery(4_764, 746, [9; 32])
+            .await
+            .expect("must pick a recovery peer while behind median");
+        assert_eq!(pick.0, "canonical");
+        assert_eq!(pick.1.best_height, 2750);
+    }
+
+    #[tokio::test]
+    async fn test_best_peer_for_fork_recovery_tiebreaks_by_height() {
+        let consensus = PeerConsensus::with_defaults();
+        consensus
+            .update_peer("low".to_string(), 746, [1; 32], 0)
+            .await;
+        consensus
+            .update_peer("high".to_string(), 2750, [2; 32], 0)
+            .await;
+
+        let pick = consensus
+            .best_peer_for_fork_recovery(0, 746, [9; 32])
+            .await
+            .expect("height tie-break when cumulative work not advertised yet");
+        assert_eq!(pick.0, "high");
     }
 
     #[tokio::test]
