@@ -983,6 +983,10 @@ pub enum MarketplaceOperation {
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        briefing: Option<String>,
     },
     /// Submit a solution to an open problem
     SubmitSolution {
@@ -1004,6 +1008,8 @@ impl MarketplaceTransaction {
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
+        title: Option<String>,
+        briefing: Option<String>,
         fee: Balance,
         nonce: u64,
         keypair: &crate::crypto::KeyPair,
@@ -1014,6 +1020,8 @@ impl MarketplaceTransaction {
             bounty,
             min_work_score,
             expiration_days,
+            title,
+            briefing,
         };
 
         let mut tx = MarketplaceTransaction {
@@ -1112,6 +1120,8 @@ impl MarketplaceTransaction {
                 min_work_score,
                 expiration_days,
                 problem,
+                title,
+                briefing,
             } => {
                 // Bounty must be non-zero and within bounds
                 if crate::validation::validate_amount(*bounty).is_err() {
@@ -1132,6 +1142,18 @@ impl MarketplaceTransaction {
                 // Problem data payload size limit
                 if let crate::ProblemType::Custom { data, .. } = problem {
                     if validate_data_payload(data).is_err() {
+                        return false;
+                    }
+                }
+                if let Some(t) = title {
+                    if t.trim().is_empty() || crate::validation::validate_bounty_title(t).is_err() {
+                        return false;
+                    }
+                }
+                if let Some(b) = briefing {
+                    if b.trim().is_empty()
+                        || crate::validation::validate_bounty_briefing(b).is_err()
+                    {
                         return false;
                     }
                 }

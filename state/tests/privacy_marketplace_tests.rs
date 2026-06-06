@@ -64,7 +64,15 @@ fn test_private_bounty_full_lifecycle() {
 
     // 2. Submit private bounty
     let problem_id = marketplace
-        .submit_problem(submission_mode, submitter, bounty, min_work_score, 7)
+        .submit_problem(
+            submission_mode,
+            submitter,
+            bounty,
+            min_work_score,
+            7,
+            None,
+            None,
+        )
         .expect("Failed to submit private problem");
 
     // 3. Verify problem is stored with private status
@@ -150,11 +158,19 @@ fn test_private_bounty_duplicate_rejection() {
     };
 
     // Submit first time - should succeed
-    let result1 = marketplace.submit_problem(submission_mode.clone(), submitter, 1000, 10.0, 7);
+    let result1 = marketplace.submit_problem(
+        submission_mode.clone(),
+        submitter,
+        1000,
+        10.0,
+        7,
+        None,
+        None,
+    );
     assert!(result1.is_ok());
 
     // Submit again with same commitment - should fail
-    let result2 = marketplace.submit_problem(submission_mode, submitter, 1000, 10.0, 7);
+    let result2 = marketplace.submit_problem(submission_mode, submitter, 1000, 10.0, 7, None, None);
     assert!(result2.is_err());
 }
 
@@ -179,7 +195,7 @@ fn test_private_bounty_invalid_reveal() {
     };
 
     let problem_id = marketplace
-        .submit_problem(submission_mode, submitter, 1000, 10.0, 7)
+        .submit_problem(submission_mode, submitter, 1000, 10.0, 7, None, None)
         .expect("Failed to submit problem");
 
     // Try to reveal with wrong problem (different target)
@@ -207,7 +223,7 @@ fn test_public_vs_private_modes() {
     };
 
     let public_id = marketplace
-        .submit_public_problem(public_problem.clone(), submitter, 1000, 10.0, 7)
+        .submit_public_problem(public_problem.clone(), submitter, 1000, 10.0, 7, None, None)
         .expect("Failed to submit public problem");
 
     // Create private problem
@@ -226,7 +242,7 @@ fn test_public_vs_private_modes() {
     };
 
     let private_id = marketplace
-        .submit_problem(private_mode, submitter, 2000, 15.0, 7)
+        .submit_problem(private_mode, submitter, 2000, 15.0, 7, None, None)
         .expect("Failed to submit private problem");
 
     // Verify public problem is immediately solvable
@@ -260,7 +276,7 @@ fn test_reveal_public_problem_fails() {
     };
 
     let problem_id = marketplace
-        .submit_public_problem(problem.clone(), submitter, 1000, 10.0, 7)
+        .submit_public_problem(problem.clone(), submitter, 1000, 10.0, 7, None, None)
         .expect("Failed to submit public problem");
 
     // Try to reveal a public problem (should fail)
@@ -284,7 +300,7 @@ fn test_marketplace_stats_with_privacy() {
     };
 
     marketplace
-        .submit_public_problem(public_problem, submitter, 1000, 10.0, 7)
+        .submit_public_problem(public_problem, submitter, 1000, 10.0, 7, None, None)
         .expect("Failed to submit public problem");
 
     // Submit private problem
@@ -303,7 +319,7 @@ fn test_marketplace_stats_with_privacy() {
     };
 
     marketplace
-        .submit_problem(private_mode, submitter, 2000, 15.0, 7)
+        .submit_problem(private_mode, submitter, 2000, 15.0, 7, None, None)
         .expect("Failed to submit private problem");
 
     // Check stats
@@ -403,6 +419,8 @@ fn test_public_subset_sum_mvp_flow() {
             bounty,
             min_work_score,
             expiration_days,
+            None,
+            None,
         )
         .expect("Failed to submit SubsetSum problem");
 
@@ -474,7 +492,7 @@ fn test_invalid_solution_rejected() {
     };
 
     let problem_id = marketplace
-        .submit_public_problem(problem.clone(), submitter, 1000, 1.0, 7)
+        .submit_public_problem(problem.clone(), submitter, 1000, 1.0, 7, None, None)
         .expect("Failed to submit problem");
 
     // Invalid solution: indices [0, 1] -> 10+20=30 != 50
@@ -513,7 +531,7 @@ fn test_multiple_subset_sum_problems() {
     for (numbers, target, bounty) in problems {
         let problem = ProblemType::SubsetSum { numbers, target };
         let id = marketplace
-            .submit_public_problem(problem, submitter, bounty, 1.0, 7)
+            .submit_public_problem(problem, submitter, bounty, 1.0, 7, None, None)
             .expect("Failed to submit problem");
         problem_ids.push(id);
     }

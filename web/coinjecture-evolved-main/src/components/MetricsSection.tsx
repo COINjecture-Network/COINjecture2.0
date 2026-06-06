@@ -7,6 +7,7 @@ import { chainInfoU128DecimalString, rpcClient } from "@/lib/rpc-client";
 import { hashHexOrEmpty } from "@/lib/mining";
 import { Link } from "react-router-dom";
 import { formatBeans, parseBalance } from "@/lib/chain-metrics";
+import { hfDatasetPageUrl } from "@/lib/hf-dataset";
 
 function hashSnippet(value: unknown): string {
   const h = hashHexOrEmpty(value);
@@ -269,6 +270,16 @@ export const MetricsSection = () => {
         {/* Live Solution Feed */}
         <div className="mt-12">
           <LiveSolutionFeed />
+          <p className="text-center mt-6">
+            <a
+              href={hfDatasetPageUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-primary hover:underline"
+            >
+              Open NP-Solutions on Hugging Face (chain-backed JSONL) →
+            </a>
+          </p>
         </div>
       </div>
     </section>

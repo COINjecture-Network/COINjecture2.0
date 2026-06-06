@@ -1,5 +1,6 @@
 // COINjecture Transaction Pool
 // Pending transaction management and problem marketplace
+#![allow(clippy::too_many_arguments)]
 
 pub mod data_pricing;
 pub mod fee_market;

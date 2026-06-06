@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -65,6 +65,15 @@ const Editor = SolverCodeEditor;
 
 const STORAGE_KEY = "solverLabBountyPayload";
 
+export type SolverLabBountyDraft = {
+  problemType?: string;
+  title?: string;
+  description?: string;
+  briefing?: string;
+  instanceJson?: string;
+  draftKind?: "problem" | "solver";
+};
+
 const FILE_META: Record<WorkspaceFilePath, { label: string; icon: typeof FileCode2 }> = {
   "solvers/subset-sum.js": { label: "subset-sum.js", icon: FileCode2 },
   "solvers/sat.js": { label: "sat.js", icon: FileCode2 },
@@ -90,7 +99,7 @@ type NpPlaygroundProps = {
 export function NpPlayground({ className }: NpPlaygroundProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const { selectedAccount, accounts } = useWallet();
@@ -114,7 +123,9 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   const [bountySuccessPopup, setBountySuccessPopup] = useState<{ problemId: string; bounty: string | number } | null>(null);
   const [loadedBountyProblemId, setLoadedBountyProblemId] = useState<string | null>(null);
   const routeState = location.state as { selectedBounty?: ProblemInfo } | null;
-  const bountyProblemId = searchParams.get("problemId");
+  const bountyProblemIdFromUrl = searchParams.get("problemId");
+  const bountyProblemIdFromState = routeState?.selectedBounty?.problem_id ?? null;
+  const bountyProblemId = bountyProblemIdFromUrl ?? bountyProblemIdFromState;
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)");
@@ -127,6 +138,17 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   useEffect(() => {
     saveWorkspaceToStorage(files);
   }, [files]);
+
+  useEffect(() => {
+    if (bountyProblemIdFromUrl || !bountyProblemIdFromState) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("problemId", bountyProblemIdFromState);
+    setSearchParams(next, { replace: true, state: location.state });
+  }, [bountyProblemIdFromUrl, bountyProblemIdFromState, searchParams, setSearchParams, location.state]);
+
+  useEffect(() => {
+    setLoadedBountyProblemId(null);
+  }, [bountyProblemId]);
 
   const { data: chainInfo } = useQuery({
     queryKey: ["chain-info"],
@@ -143,6 +165,13 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     refetchInterval: false,
   });
 
+  const { data: openBounties } = useQuery({
+    queryKey: ["marketplace-problems"],
+    queryFn: () => rpcClient.getOpenProblems(),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  });
+
   const { data: selectedBounty, isLoading: selectedBountyLoading } = useQuery({
     queryKey: ["solverLab", "selectedBounty", bountyProblemId],
     queryFn: () => rpcClient.getProblem(bountyProblemId as string),
@@ -153,6 +182,16 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
         : undefined,
     staleTime: 15_000,
   });
+
+  const selectOpenBounty = useCallback(
+    (problem: ProblemInfo) => {
+      setLoadedBountyProblemId(null);
+      const next = new URLSearchParams(searchParams);
+      next.set("problemId", problem.problem_id);
+      setSearchParams(next, { replace: false, state: { selectedBounty: problem } });
+    },
+    [searchParams, setSearchParams],
+  );
 
   const instanceText = files["instance.json"];
 
@@ -179,6 +218,19 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     if (!selectedBountyProblem || !parsedPreview.ok) return false;
     return problemTypesEqual(selectedBountyProblem, parsedPreview.value);
   }, [parsedPreview, selectedBountyProblem]);
+
+  const loadableOpenBounties = useMemo(
+    () =>
+      (openBounties ?? [])
+        .filter(
+          (p) =>
+            isMarketplaceListingOpen(p.status) &&
+            p.problem &&
+            (!p.is_private || p.is_revealed),
+        )
+        .slice(0, 6),
+    [openBounties],
+  );
 
   /** Run label reflects the open file; execution always uses all solver files + instance.json. */
   const runButtonLabel = useMemo(() => {
@@ -371,7 +423,9 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
   const submitToBounty = () => {
     const parsed = parseNetworkProblem(instanceText);
     if (!parsed.ok) {
-      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before submitting: ${parsed.error}`]);
+      const parseErr = parsed.error;
+      setConsoleLines((prev) => [...prev, `[error] Fix instance.json before drafting: ${parseErr}`, ""]);
+      toast.error("Fix instance.json first", { description: parseErr });
       return;
     }
     const kind: NetworkProblemKind = parsed.value.SubsetSum
@@ -398,22 +452,24 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
       "_Draft from Solver Lab (Remix-style workspace). Algorithms above are yours to license._",
     ].join("\n");
 
+    const draftPayload: SolverLabBountyDraft = {
+      problemType: kind,
+      title,
+      instanceJson: instanceText.trim(),
+      briefing: description,
+      draftKind: "solver",
+    };
+
     try {
-      sessionStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          problemType: kind,
-          title,
-          instanceJson: instanceText.trim(),
-          briefing: description,
-          draftKind: "solver" as const,
-        })
-      );
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(draftPayload));
     } catch {
-      setConsoleLines((prev) => [...prev, "[error] Could not store draft"]);
+      setConsoleLines((prev) => [...prev, "[error] Could not store draft in sessionStorage", ""]);
+      toast.error("Could not store draft", {
+        description: "Try again or copy instance.json into Bounty Submit manually.",
+      });
       return;
     }
-    navigate("/bounty-submit");
+    navigate("/bounty-submit", { state: { solverLabDraft: draftPayload } });
   };
 
   const submitSelectedBountySolution = async () => {
@@ -911,6 +967,45 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     </Button>
                   ))}
                 </div>
+              </div>
+              <div className="p-2 border-t border-border/50 space-y-2">
+                <p className="text-[10px] text-muted-foreground px-1">Marketplace</p>
+                <div className="flex flex-wrap gap-1">
+                  <Button asChild variant="outline" size="sm" className="h-7 text-[10px] px-2">
+                    <Link to="/marketplace">Browse listings</Link>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-[10px] px-2"
+                    onClick={submitToBounty}
+                  >
+                    Post bounty
+                  </Button>
+                </div>
+                {loadableOpenBounties.length > 0 ? (
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {loadableOpenBounties.map((p) => (
+                      <button
+                        key={p.problem_id}
+                        type="button"
+                        onClick={() => selectOpenBounty(p)}
+                        className={cn(
+                          "w-full rounded-md px-2 py-1.5 text-left text-[10px] transition-colors",
+                          bountyProblemId === p.problem_id
+                            ? "bg-primary/15 text-foreground"
+                            : "hover:bg-muted/60 text-muted-foreground",
+                        )}
+                      >
+                        <div className="font-mono truncate">{formatShortProblemId(p.problem_id)}</div>
+                        <div>{formatBeans(parseBalance(p.bounty) ?? 0n)} BEANS</div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground px-1">No open listings from chain.</p>
+                )}
               </div>
             </aside>
 

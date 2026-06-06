@@ -1300,6 +1300,8 @@ impl CoinjectNode {
                         bounty,
                         min_work_score,
                         expiration_days,
+                        title,
+                        briefing,
                     } => {
                         // Need fee + bounty for escrow
                         let total_needed = marketplace_tx.fee + bounty;
@@ -1325,6 +1327,8 @@ impl CoinjectNode {
                                 *bounty,
                                 *min_work_score,
                                 *expiration_days,
+                                title.clone(),
+                                briefing.clone(),
                             )
                             .map_err(|e| format!("Failed to submit problem: {}", e))?;
 

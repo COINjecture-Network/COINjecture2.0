@@ -301,6 +301,8 @@ mod tests {
                 bounty,
                 10.0,
                 7,
+                None,
+                None,
             )
             .unwrap();
 
@@ -343,6 +345,8 @@ mod tests {
                 1000,
                 10.0,
                 7,
+                None,
+                None,
             )
             .unwrap();
         marketplace
@@ -352,6 +356,8 @@ mod tests {
                 5000,
                 10.0,
                 7,
+                None,
+                None,
             )
             .unwrap();
 
@@ -384,6 +390,8 @@ mod tests {
                 bounty,
                 1.0,
                 7,
+                None,
+                None,
             )
             .unwrap();
 
@@ -415,6 +423,8 @@ mod tests {
                 1000,
                 10.0,
                 7,
+                None,
+                None,
             )
             .unwrap();
 

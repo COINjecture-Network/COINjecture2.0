@@ -62,10 +62,7 @@
   {\normalsize \href{https://COINjecture.com}{COINjecture.com}}
 
   \vspace{1.5cm}
-  {\normalsize Whitepaper\\Version 2.6, May 30, 2026}
-
-  \vspace{0.8cm}
-  {\normalsize Authors: Sarah Marin (Founder), Al Zalewski}
+  {\normalsize Whitepaper\\Version 2.6, June 5, 2026}
 
   \vspace{2cm}
 
@@ -289,8 +286,9 @@ formula:
 where $w_{\mathrm{trunc}}$ is the truncated work score of the current block, $K$ is the emission
 multiplier (consensus constant $K=50$), $S$ is the fixed-point scale ($10^{12}$ atoms per display BEANS),
 and $W_{\mathrm{parent}}$ is the sum of truncated work scores through the parent block (integer
-$\lfloor\sqrt{W_{\mathrm{parent}}}\rfloor$ in the denominator on-chain). This mint issuance is separate from fork-choice weight (cumulative $w_{\mathrm{trunc}}$)
-as reward does not affect security weight.
+$\lfloor\sqrt{W_{\mathrm{parent}}}\rfloor$ in the denominator on-chain). The emission multiplier, $K$, was 
+selected to keep the average reward rate stable at 1~coins per block. This mint issuance is separate 
+from fork-choice weight (cumulative $w_{\mathrm{trunc}}$) as reward does not affect security weight.
 
 Each block's reward depends only on its own work and the parent's cumulative work score, with no future
 dependence. The monotonicity created by proportional rewards based on work (more work yields more
@@ -312,7 +310,7 @@ The emission formula creates nonzero asymptotic growth---as $W$ grows, per-block
 hard caps or limits, only the pressure of consensus reward decay. As the network matures, fee incentives
 will shift from consensus problems as the primary driver to user-submitted bounties; however, rewards
 for consensus transactions will always be compensated. As each block's mint is proportional to
-$w_{\mathrm{trunc}} / W_{\mathrm{parent}}$, even a successfully inflated work score would yield
+$w_{\mathrm{trunc}} / \sqrt{W_{\mathrm{parent}}}$, even a successfully inflated work score would yield
 diminishing marginal reward and an attacker optimising for score inflation gains an ever-smaller share of
 a growing total.
 

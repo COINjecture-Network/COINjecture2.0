@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { rpcClient } from "@/lib/rpc-client";
 import { cn } from "@/lib/utils";
 import { formatBeans, parseBalance } from "@/lib/chain-metrics";
+import { hfDatasetPageUrl } from "@/lib/hf-dataset";
 
 const useHeroVideo = () => {
   const [showVideo, setShowVideo] = useState(
@@ -261,9 +262,11 @@ export const Hero = () => {
                 <div>
                   <h3 className="text-2xl font-bold mb-3 text-primary">How $BEANS Works</h3>
                   <p className="text-muted-foreground leading-relaxed">
-                    $BEANS tokens are awarded based on the computational work performed. The solve/verify time
-                    asymmetry and solution quality determine the reward amount. This creates incentives for
-                    optimization and effective problem-solving.
+                    Block rewards follow the whitepaper emission law{" "}
+                    <code className="text-xs">⌊w·S·K / isqrt(W)⌋</code> atoms (display BEANS = atoms ÷ 10¹²).
+                    Solve/verify asymmetry sets <code className="text-xs">w_trunc</code>; parent cumulative work{" "}
+                    <code className="text-xs">W</code> scales issuance with a <code className="text-xs">1/√W</code> tail.
+                    More work at a given chain depth yields weakly more mint; racing still punishes inflated solve times.
                   </p>
                 </div>
               </div>
@@ -341,10 +344,7 @@ export const Hero = () => {
                       All solutions and metrics are publicly available on HuggingFace
                     </p>
                     <a 
-                      href={
-                        (import.meta.env.VITE_HF_DATASET_URL as string | undefined)?.trim() ||
-                        "https://huggingface.co/datasets/COINjecture/NP-Solutions"
-                      }
+                      href={hfDatasetPageUrl()}
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="text-sm text-primary hover:underline inline-flex items-center gap-1"

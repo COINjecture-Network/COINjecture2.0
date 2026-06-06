@@ -8,8 +8,11 @@
 /** Must match `coinject_tokenomics::REWARD_FIXED_POINT_SCALE` (10^12). */
 export const REWARD_FIXED_POINT_SCALE = 1_000_000_000_000n;
 
-/** Must match `coinject_core::validation::MIN_FEE_BOUNTY_SUBMISSION` (0.001 display BEANS in atoms). */
-export const MIN_BOUNTY_SUBMISSION_FEE_ATOMS = REWARD_FIXED_POINT_SCALE / 1000n;
+/** Must match `coinject_core::validation::MIN_FEE_BOUNTY_SUBMISSION` (1 display BEANS in atoms). */
+export const MIN_BOUNTY_SUBMISSION_FEE_ATOMS = REWARD_FIXED_POINT_SCALE;
+
+/** Optional wallet transfer priority tip — 0.1 display BEANS (not the bounty submission fee). */
+export const TRANSFER_PRIORITY_TIP_ATOMS = REWARD_FIXED_POINT_SCALE / 10n;
 
 /** Must match `coinject_tokenomics::REWARD_EMISSION_MULTIPLIER`. */
 export const REWARD_EMISSION_MULTIPLIER = 50n;
@@ -158,4 +161,93 @@ export function formatBeans(atoms: bigint): string {
 export function formatWorkScoreBits(bits: number): string {
   if (!Number.isFinite(bits)) return "—";
   return bits.toFixed(3);
+}
+
+/** Parse on-chain `coinbase.reward` from a block JSON object. */
+export function coinbaseRewardFromBlock(raw: unknown): bigint | null {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const cb = (raw as Record<string, unknown>).coinbase;
+  if (cb == null || typeof cb !== "object" || Array.isArray(cb)) return null;
+  return parseBalance((cb as Record<string, unknown>).reward);
+}
+
+/** Integer mean of non-empty atom values (floor division). */
+export function averageAtoms(values: readonly bigint[]): bigint | null {
+  if (values.length === 0) return null;
+  let sum = 0n;
+  for (const v of values) sum += v;
+  return sum / BigInt(values.length);
+}
+
+const DEFAULT_BOUNTY_PRESETS = ["1", "2", "5", "10", "25"] as const;
+
+/** Round display BEANS to a human-friendly preset amount (≥ 1). */
+export function roundToNiceDisplayBeans(atoms: bigint): string {
+  const scale = Number(REWARD_FIXED_POINT_SCALE);
+  const beans = Number(atoms) / scale;
+  if (!Number.isFinite(beans) || beans <= 0) return "1";
+  const magnitude = Math.pow(10, Math.floor(Math.log10(beans)));
+  const normalized = beans / magnitude;
+  let nice: number;
+  if (normalized <= 1.5) nice = 1;
+  else if (normalized <= 3.5) nice = 2;
+  else if (normalized <= 7.5) nice = 5;
+  else nice = 10;
+  const rounded = Math.max(1, Math.round(nice * magnitude));
+  return String(rounded);
+}
+
+/** Bounty quick-picks scaled from recent avg block reward (falls back when chain data missing). */
+export function bountyPresetsFromRecentAvg(recentAvgAtoms: bigint | null): string[] {
+  if (recentAvgAtoms == null || recentAvgAtoms <= 0n) {
+    return [...DEFAULT_BOUNTY_PRESETS];
+  }
+  const multipliers = [1, 2, 5, 10, 25] as const;
+  const presets = multipliers.map((m) =>
+    roundToNiceDisplayBeans(recentAvgAtoms * BigInt(m)),
+  );
+  return [...new Set(presets)];
+}
+
+export type EmissionHintMetrics = {
+  recentAvgAtoms: bigint | null;
+  latestRewardAtoms: bigint | null;
+  lifetimeAvgAtoms: bigint | null;
+  sampleCount: number;
+  height: number | null;
+};
+
+/** Copy for live emission guidance on wallet / bounty pages. */
+export function buildEmissionHintCopy(metrics: EmissionHintMetrics): {
+  primary: string | null;
+  secondary: string | null;
+} {
+  const { recentAvgAtoms, latestRewardAtoms, lifetimeAvgAtoms, sampleCount, height } = metrics;
+  if (recentAvgAtoms == null || sampleCount <= 0) {
+    return {
+      primary: null,
+      secondary:
+        height != null && height > 0
+          ? "Loading recent block rewards from the chain…"
+          : "Connect to the live chain to see current block rewards.",
+    };
+  }
+
+  const recentLabel = formatBeans(recentAvgAtoms);
+  const blockWord = sampleCount === 1 ? "block" : "blocks";
+  const primary = `Recent avg block reward: ${recentLabel} BEANS (last ${sampleCount} ${blockWord})`;
+
+  const parts: string[] = [];
+  if (latestRewardAtoms != null && latestRewardAtoms !== recentAvgAtoms) {
+    parts.push(`Latest block minted ${formatBeans(latestRewardAtoms)} BEANS`);
+  }
+  if (lifetimeAvgAtoms != null && lifetimeAvgAtoms > 0n) {
+    parts.push(`chain lifetime avg ${formatBeans(lifetimeAvgAtoms)} BEANS`);
+  }
+  parts.push("Emission follows ⌊w·K / √W⌋ and decays as cumulative work grows");
+
+  const standout = roundToNiceDisplayBeans(recentAvgAtoms * 2n);
+  const secondary = `${parts.join(" · ")}. For bounties, presets below scale from live mining — consider ≥ ${standout} BEANS to compete with a block.`;
+
+  return { primary, secondary };
 }

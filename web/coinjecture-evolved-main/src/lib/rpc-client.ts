@@ -562,6 +562,8 @@ function marketplacePublicParamsForRpc(params: PublicProblemParams): Record<stri
     min_work_score: params.min_work_score,
     expiration_days: Math.trunc(Number(params.expiration_days)),
     submitter: params.submitter.trim(),
+    ...(params.title?.trim() ? { title: params.title.trim() } : {}),
+    ...(params.briefing?.trim() ? { briefing: params.briefing.trim() } : {}),
   };
 }
 
@@ -582,6 +584,8 @@ function marketplacePrivateWalletParamsForRpc(
     min_work_score: params.min_work_score,
     expiration_days: Math.trunc(Number(params.expiration_days)),
     submitter: params.submitter.trim(),
+    ...(params.title?.trim() ? { title: params.title.trim() } : {}),
+    ...(params.briefing?.trim() ? { briefing: params.briefing.trim() } : {}),
   };
 }
 
@@ -685,6 +689,10 @@ export interface ProblemInfo {
   solver?: string | null;
   /** Winning solution attached on-chain when solved */
   solution?: SolutionType | null;
+  /** Human-readable listing title (optional; set at submission). */
+  title?: string | null;
+  /** Solver-facing briefing / acceptance criteria (optional). */
+  briefing?: string | null;
 }
 
 // Marketplace statistics - matches MarketplaceStats in state/src/marketplace.rs
@@ -873,6 +881,8 @@ export interface PrivateProblemWalletParams {
   min_work_score: number;
   expiration_days: number;
   submitter: string;
+  title?: string | null;
+  briefing?: string | null;
 }
 
 export interface PrivateProblemSubmissionResult {
@@ -888,6 +898,8 @@ export interface PublicProblemParams {
   min_work_score: number;
   expiration_days: number;
   submitter: string;
+  title?: string | null;
+  briefing?: string | null;
 }
 
 // Problem reveal parameters - matches RevealParams in rpc/src/server.rs

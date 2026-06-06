@@ -38,12 +38,16 @@ FOLLOWER2_HOST="${FOLLOWER2_HOST:-root@198.199.81.81}"
 FOLLOWER2_PATH="${FOLLOWER2_PATH:-/opt/coinjecture}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 FOLLOWER_COMPOSE_EXTRA="${FOLLOWER_COMPOSE_EXTRA:-docker-compose.sync-follower.yml,docker-compose.mesh-bootnode-only.yml,docker-compose.bootnode-health-metrics-only.yml}"
+CANONICAL_COMPOSE_EXTRA="${CANONICAL_COMPOSE_EXTRA:-$FOLLOWER_COMPOSE_EXTRA}"
 
 COINJECT_NODE_IMAGE="${COINJECT_NODE_IMAGE:-ghcr.io/coinjecture-network/coinjecture2.0:latest}"
 GHCR_USER="${GHCR_USER:-${GITHUB_ACTOR:-COINjecture-Network}}"
 GHCR_TOKEN="${GHCR_TOKEN:-}"
-NODE_SERVICES="${NODE_SERVICES:-bootnode node1 node2 node3}"
-STACK_SERVICES="${STACK_SERVICES:-bootnode node1 node2 node3 api-server}"
+MESH_NODE_PULL="${MESH_NODE_PULL:-bootnode}"
+MESH_STACK_SERVICES="${MESH_STACK_SERVICES:-bootnode api-server}"
+# Legacy names (full fleet); mesh genesis uses MESH_* only.
+NODE_SERVICES="${NODE_SERVICES:-$MESH_NODE_PULL}"
+STACK_SERVICES="${STACK_SERVICES:-$MESH_STACK_SERVICES}"
 
 STABLE_IDLE_SECS="${STABLE_IDLE_SECS:-45}"
 STABLE_MIN_HEIGHT="${STABLE_MIN_HEIGHT:-1}"
@@ -64,6 +68,17 @@ follower_compose_flags() {
   local IFS=,
   local f
   for f in $FOLLOWER_COMPOSE_EXTRA; do
+    f="${f// /}"
+    [[ -n "$f" ]] && flags+=(-f "$f")
+  done
+  printf '%s ' "${flags[@]}"
+}
+
+canonical_compose_flags() {
+  local flags=(-f "$COMPOSE_FILE")
+  local IFS=,
+  local f
+  for f in $CANONICAL_COMPOSE_EXTRA; do
     f="${f// /}"
     [[ -n "$f" ]] && flags+=(-f "$f")
   done
@@ -97,7 +112,7 @@ for spec in "$FOLLOWER1_HOST|$FOLLOWER1_PATH|follower" "$FOLLOWER2_HOST|$FOLLOWE
   fi
 done
 
-echo ">>> 4) Pull node image + start ONLY canonical stack ($STACK_SERVICES)"
+echo ">>> 4) Pull node image + start canonical mesh stack ($MESH_STACK_SERVICES)"
 remote "$CANONICAL_HOST" bash -s <<REMOTE
 set -euo pipefail
 cd "$CANONICAL_PATH"
@@ -105,8 +120,8 @@ export COINJECT_NODE_IMAGE="$COINJECT_NODE_IMAGE"
 if [[ -n "$GHCR_TOKEN" ]]; then
   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 fi
-docker compose -f "$COMPOSE_FILE" pull $NODE_SERVICES
-docker compose -f "$COMPOSE_FILE" up -d --no-build $STACK_SERVICES
+docker compose $(canonical_compose_flags) pull $MESH_NODE_PULL
+docker compose $(canonical_compose_flags) up -d --no-build $MESH_STACK_SERVICES
 REMOTE
 
 echo ">>> 5) Wait for canonical JSON-RPC (chain_getInfo; max ${CANONICAL_RPC_WAIT_MAX_SECS}s)"
@@ -133,8 +148,8 @@ export COINJECT_NODE_IMAGE="$COINJECT_NODE_IMAGE"
 if [[ -n "$GHCR_TOKEN" ]]; then
   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 fi
-docker compose $(follower_compose_flags) pull $NODE_SERVICES
-docker compose $(follower_compose_flags) up -d --no-build $STACK_SERVICES
+docker compose $(follower_compose_flags) pull $MESH_NODE_PULL
+docker compose $(follower_compose_flags) up -d --no-build $MESH_STACK_SERVICES
 REMOTE
 remote "$FOLLOWER2_HOST" bash -s <<REMOTE
 set -euo pipefail
@@ -143,8 +158,8 @@ export COINJECT_NODE_IMAGE="$COINJECT_NODE_IMAGE"
 if [[ -n "$GHCR_TOKEN" ]]; then
   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 fi
-docker compose $(follower_compose_flags) pull $NODE_SERVICES
-docker compose $(follower_compose_flags) up -d --no-build $STACK_SERVICES
+docker compose $(follower_compose_flags) pull $MESH_NODE_PULL
+docker compose $(follower_compose_flags) up -d --no-build $MESH_STACK_SERVICES
 REMOTE
 
 echo ">>> 7) Wait for stable tip on canonical (best_height >= $STABLE_MIN_HEIGHT, unchanged for ~${STABLE_IDLE_SECS}s; max ${CANONICAL_WAIT_MAX_SECS}s)"

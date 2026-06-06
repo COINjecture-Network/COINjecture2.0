@@ -52,7 +52,7 @@ pub async fn send_tokens(
     // Get current nonce
     let nonce = client.get_nonce(&sender.address).await?;
 
-    // Default paid-network fee: `DEFAULT_PAID_TX_FEE_ATOMS` (0.001 display BEANS; matches mempool min).
+    // Default paid-network fee: `DEFAULT_PAID_TX_FEE_ATOMS` (1 display BEANS; matches mempool min).
     let fee = DEFAULT_PAID_TX_FEE_ATOMS;
 
     println!();

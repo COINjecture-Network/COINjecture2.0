@@ -43,6 +43,12 @@ pub struct ProblemSubmission {
     pub status: ProblemStatus,
     pub solution: Option<Solution>,
     pub solver: Option<Address>,
+    /// Human-readable listing title (optional; set at submission).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Solver-facing briefing / acceptance criteria (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub briefing: Option<String>,
 }
 
 /// Marketplace state with database persistence
@@ -74,9 +80,19 @@ impl MarketplaceState {
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
+        title: Option<String>,
+        briefing: Option<String>,
     ) -> Result<Hash, MarketplaceError> {
         let mode = SubmissionMode::Public { problem };
-        self.submit_problem(mode, submitter, bounty, min_work_score, expiration_days)
+        self.submit_problem(
+            mode,
+            submitter,
+            bounty,
+            min_work_score,
+            expiration_days,
+            title,
+            briefing,
+        )
     }
 
     /// Submit a new problem with bounty (escrow funds)
@@ -88,6 +104,8 @@ impl MarketplaceState {
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
+        title: Option<String>,
+        briefing: Option<String>,
     ) -> Result<Hash, MarketplaceError> {
         // Validate mode-specific requirements
         match &mode {
@@ -144,6 +162,8 @@ impl MarketplaceState {
             status: ProblemStatus::Open,
             solution: None,
             solver: None,
+            title,
+            briefing,
         };
 
         // Serialize and store

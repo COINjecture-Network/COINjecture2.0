@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Copy, Check, Loader2 } from "lucide-react";
 import { useWallet } from "@/contexts/WalletContext";
@@ -32,6 +33,7 @@ export type WebCliTerminalProps = {
 };
 
 export function WebCliTerminal({ compact = false, className }: WebCliTerminalProps) {
+  const navigate = useNavigate();
   const { selectedAccount, accounts } = useWallet();
   const selectedKeyPair = selectedAccount ? accounts[selectedAccount] : null;
   const [input, setInput] = useState("");
@@ -367,8 +369,8 @@ Your block is being processed by the network.`,
         case "bounty submit":
           response = "Opening bounty submission…";
           setTimeout(() => {
-            window.location.href = "/bounty-submit";
-          }, 1500);
+            navigate("/bounty-submit");
+          }, 300);
           break;
         case "clear":
           setOutput([]);
