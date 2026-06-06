@@ -42,7 +42,7 @@ fn lean_fixture_apply_quality_half() {
 #[test]
 fn lean_fixture_mint_atoms_16_over_521() {
     let c = RewardCalculator::new();
-    let expected = (16 * REWARD_FIXED_POINT_SCALE * REWARD_EMISSION_MULTIPLIER) / 521;
+    let expected = (16 * REWARD_FIXED_POINT_SCALE * REWARD_EMISSION_MULTIPLIER) / 22;
     assert_eq!(c.calculate_block_reward(16.0, 521), expected);
 }
 

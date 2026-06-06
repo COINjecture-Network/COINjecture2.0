@@ -21,7 +21,7 @@ operation as history accumulates.
 |-----------|---------------|-----------|---------------------|
 | Block time | 10 seconds | Engineering choice (see below) | Fixed protocol parameter |
 | Difficulty window | 20 blocks | ~200s of history | Fixed protocol parameter |
-| Starting problem size | 60 | Canonical SubsetSum size unit (`BOOTSTRAP_CURRENT_SIZE`) | Adjusted after first window |
+| Starting problem size | 110 | Canonical SubsetSum size unit (`BOOTSTRAP_CURRENT_SIZE`, v4) | Adjusted after first window |
 | Optimal solve time | 10 seconds | Matches `DEFAULT_TARGET_US` / median block time | Refined from observed data |
 | Canonical size cap | 150 | `CANONICAL_MAX_SIZE` sync ceiling | Overridden per-type by `ProblemDescriptor` |
 

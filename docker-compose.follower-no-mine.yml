@@ -12,7 +12,7 @@ services:
   bootnode:
     command: >
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -20,7 +20,7 @@ services:
   node1:
     command: >
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -28,7 +28,7 @@ services:
   node2:
     command: >
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -36,7 +36,7 @@ services:
   node3:
     command: >
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933

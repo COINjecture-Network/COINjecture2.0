@@ -19,7 +19,7 @@ def workScoreTenOneUs : Nat := 3_250_000
 
 /-- `mintAtoms 16 521` atoms (tokenomics regression). -/
 def mintAtoms16Over521 : Nat :=
-  (16 * rewardFixedPointScale * rewardEmissionMultiplier) / 521
+  (16 * rewardFixedPointScale * rewardEmissionMultiplier) / 22
 
 /-- `log2_ratio(4, 1) = 2 · fpScale`. -/
 def log2FourToOne : Nat := 2 * fpScale

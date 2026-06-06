@@ -1,11 +1,11 @@
 /-!
 On-chain block rewards — mirrors [`tokenomics/src/rewards.rs`](../tokenomics/src/rewards.rs).
 
-**Whitepaper shape:** allocation proportional to `w_trunc / W_parent` with fixed-point scale `S`
+**Whitepaper shape:** allocation proportional to `w_trunc / √W_parent` with fixed-point scale `S`
 and emission multiplier `K`.
 
 ```text
-mint_atoms = ⌊ w_trunc · S · K / W_parent ⌋
+mint_atoms = ⌊ w_trunc · S · K / isqrt(W_parent) ⌋
 ```
 
 Tier A: integer spec and proved lemmas (no `sorry`).
@@ -16,7 +16,7 @@ namespace Coinjecture
 /-- Atoms per one display BEANS (`10^12`). -/
 def rewardFixedPointScale : Nat := 10 ^ 12
 
-/-- Consensus emission multiplier `K` in `mint = ⌊w·S·K/W⌋`. -/
+/-- Consensus emission multiplier `K` in `mint = ⌊w·S·K / isqrt(W)⌋`. -/
 def rewardEmissionMultiplier : Nat := 50
 
 /-- Truncated header work score (non-negative integer part of bits). -/
@@ -33,7 +33,8 @@ def mintAtoms (wTrunc : WorkTrunc) (wParent : CumulativeWork) : Nat :=
   if wParent = 0 then
     0
   else
-    (wTrunc * rewardFixedPointScale * rewardEmissionMultiplier) / wParent
+    let denom := Nat.max (Nat.sqrt wParent) 1
+    (wTrunc * rewardFixedPointScale * rewardEmissionMultiplier) / denom
 
 /-- Display BEANS from atoms (exact when divisible by `S`). -/
 def beansFromAtoms (atoms : Nat) : Nat :=
@@ -50,18 +51,16 @@ theorem mintAtoms_zero_when_work_zero (wParent : CumulativeWork) (h : wParent �
     mintAtoms 0 wParent = 0 := by
   simp [mintAtoms, h]
 
-/-- **First harvest:** when `W_parent = w_trunc ≥ 1`, mint is exactly `S·K` atoms (= `K` display BEANS). -/
+/-- **First harvest:** when `W_parent = 1` and `w_trunc ≥ 1`, mint is exactly `S·K` atoms (= `K` display BEANS). -/
 theorem first_harvest (w : WorkTrunc) (hw : 1 ≤ w) :
-    mintAtoms w w = rewardFixedPointScale * rewardEmissionMultiplier := by
+    mintAtoms w 1 = rewardFixedPointScale * rewardEmissionMultiplier := by
   unfold mintAtoms
-  have hwpos : 0 < w := Nat.lt_of_lt_of_le (by decide : 0 < 1) hw
-  have hw0 : w ≠ 0 := Nat.ne_of_gt hwpos
-  simp only [if_neg hw0]
+  simp only [if_neg (by decide : (1 : Nat) ≠ 0), Nat.sqrt_one, Nat.max_def]
   rw [Nat.mul_assoc]
-  exact Nat.mul_div_cancel_left (rewardFixedPointScale * rewardEmissionMultiplier) hwpos
+  exact Nat.mul_div_cancel_left (rewardFixedPointScale * rewardEmissionMultiplier) (by decide : 0 < 1)
 
 theorem first_harvest_beans (w : WorkTrunc) (hw : 1 ≤ w) :
-    mintBeans w w = rewardEmissionMultiplier := by
+    mintBeans w 1 = rewardEmissionMultiplier := by
   unfold mintBeans beansFromAtoms
   rw [first_harvest w hw, Nat.mul_div_cancel_left rewardEmissionMultiplier (by decide : 0 < rewardFixedPointScale)]
 
@@ -104,7 +103,7 @@ theorem totalMinted_nil : totalMinted [] = 0 := rfl
 /-- Rust regression: `w=16, W=521` mint matches integer formula. -/
 theorem mintAtoms_sixteen_over_521 :
     mintAtoms 16 521 =
-      (16 * rewardFixedPointScale * rewardEmissionMultiplier) / 521 := by
+      (16 * rewardFixedPointScale * rewardEmissionMultiplier) / 22 := by
   native_decide
 
 end Coinjecture

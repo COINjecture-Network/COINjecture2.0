@@ -49,7 +49,7 @@ impl Default for GenesisConfig {
     }
 }
 
-/// Create the genesis block for Network B
+/// Create the genesis block for Network B (v4: w/√W emission, chain_id coinject-network-b-v4)
 pub fn create_genesis_block(config: GenesisConfig) -> Block {
     // Genesis problem: Simple SubsetSum that's trivially solvable
     let problem = ProblemType::SubsetSum {
@@ -76,7 +76,7 @@ pub fn create_genesis_block(config: GenesisConfig) -> Block {
         transactions_root: Hash::ZERO,
         solutions_root: Hash::new(&bincode::serialize(&solution).unwrap_or_default()),
         commitment: commitment.clone(),
-        // Minimal header work (feeds cumulative W); mined rewards use `⌊w_trunc·S·K/W_parent⌋` in tokenomics.
+        // Minimal header work (feeds cumulative W); mined rewards use `⌊w_trunc·S·K/isqrt(W_parent)⌋` in tokenomics.
         work_score: 1.0,
         miner: config.genesis_address,
         nonce: 0,

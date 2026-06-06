@@ -63,7 +63,7 @@ services:
     command: >
       --mine
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -116,7 +116,7 @@ services:
     command: >
       --mine
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -167,7 +167,7 @@ services:
     command: >
       --mine
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
@@ -218,7 +218,7 @@ services:
     command: >
       --mine
       --data-dir /data
-      --chain-id coinject-network-b-v3
+      --chain-id coinject-network-b-v4
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933

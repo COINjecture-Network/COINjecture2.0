@@ -52,7 +52,7 @@ pub const MIN_OPERATIONAL_SIZE: usize = 45;
 const DEFAULT_TARGET_US: u64 = 10_000_000;
 
 /// Bootstrap canonical size (SubsetSum item count unit at genesis).
-pub const BOOTSTRAP_CURRENT_SIZE: usize = 90;
+pub const BOOTSTRAP_CURRENT_SIZE: usize = 110;
 
 /// Maximum canonical `current_size` for sync retarget and SubsetSum without registry.
 pub const CANONICAL_MAX_SIZE: usize = 220;

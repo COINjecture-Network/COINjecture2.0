@@ -1,7 +1,7 @@
 /**
  * Display helpers aligned with consensus + tokenomics (Rust):
  * - Work score: consensus/src/work_score.rs — bits = log₂(solve/verify) × quality
- * - Block reward: `tokenomics/src/rewards.rs` — minted **atoms** = `⌊w_trunc·S·K / W_parent⌋`
+ * - Block reward: `tokenomics/src/rewards.rs` — minted **atoms** = `⌊w_trunc·S·K / isqrt(W_parent)⌋`
  *   with `S = REWARD_FIXED_POINT_SCALE`, `K = REWARD_EMISSION_MULTIPLIER`; one **display BEANS** = S atoms.
  */
 
@@ -35,16 +35,30 @@ export function workScoreBitsFromPouw(
   return Math.log2(ratio) * q;
 }
 
+/** Integer floor square root (matches `coinject_core::fixed_point::isqrt`). */
+export function isqrtU128(n: bigint): bigint {
+  if (n <= 0n) return 0n;
+  let x = n;
+  let y = (x + 1n) / 2n;
+  while (y < x) {
+    x = y;
+    y = (x + n / x) / 2n;
+  }
+  return x;
+}
+
 /**
  * Same as Rust `RewardCalculator::calculate_block_reward`:
- * `⌊w_trunc·S·K / W_parent⌋` minted **atoms**.
+ * `⌊w_trunc·S·K / isqrt(W_parent)⌋` minted **atoms**.
  */
 export function blockRewardFromTruncWorkAndParentW(
   blockWorkTrunc: bigint,
   parentCumulativeWork: bigint
 ): bigint {
   if (parentCumulativeWork <= 0n) return 0n;
-  return (blockWorkTrunc * REWARD_FIXED_POINT_SCALE * REWARD_EMISSION_MULTIPLIER) / parentCumulativeWork;
+  const denom = isqrtU128(parentCumulativeWork);
+  const safeDenom = denom > 0n ? denom : 1n;
+  return (blockWorkTrunc * REWARD_FIXED_POINT_SCALE * REWARD_EMISSION_MULTIPLIER) / safeDenom;
 }
 
 /** Convert whole display BEANS to ledger atoms. */

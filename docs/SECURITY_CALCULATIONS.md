@@ -208,7 +208,7 @@ solvers or stricter verification are deployed.
 Minting uses parent cumulative work `W_parent`:
 
 ```text
-mint_atoms = ⌊ w_trunc · S · K / W_parent ⌋
+mint_atoms = ⌊ w_trunc · S · K / isqrt(W_parent) ⌋
 ```
 
 **Tier A.**

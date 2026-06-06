@@ -158,13 +158,13 @@ pub struct NodeConfig {
     #[arg(long)]
     pub bootnodes: Vec<String>,
 
-    /// Chain ID (v2 = fresh network after 2025-11-30 reset)
-    #[arg(long, default_value = "coinject-network-b-v3")]
+    /// Chain ID (v4 = fresh network with w/√W emission, difficulty 5, NP bootstrap 110)
+    #[arg(long, default_value = "coinject-network-b-v4")]
     pub chain_id: String,
 
     /// Minimum header PoW: count of **leading hex zero characters** in `hex(block_header_hash)`.
     /// Not Bitcoin `nBits`; each +1 is one more leading `0` in the hex string (max 64).
-    #[arg(long, default_value = "4")]
+    #[arg(long, default_value = "5")]
     pub difficulty: u32,
 
     /// Target block time in seconds

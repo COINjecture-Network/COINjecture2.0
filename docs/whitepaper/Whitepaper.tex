@@ -26,7 +26,6 @@
   citecolor=black,
   urlcolor=linkblue,
   pdftitle={COINjecture -- A Mathematics-Backed Peer-to-Peer Network},
-  pdfauthor={Sarah Marin, Al Zalewski}
 }
 
 % ---------- section formatting ----------
@@ -285,12 +284,12 @@ actual performance of the chain and includes problem solution quality, solution 
 takes to verify correctness. This quantifies ``good work'' and rewards it proportionally using the emission
 formula:
 \[
-  \mathit{mint} = \left\lfloor \frac{w_{\mathrm{trunc}} \cdot S \cdot K}{W_{\mathrm{parent}}} \right\rfloor,
+  \mathit{mint} = \left\lfloor \frac{w_{\mathrm{trunc}} \cdot S \cdot K}{\sqrt{W_{\mathrm{parent}}}} \right\rfloor,
 \]
 where $w_{\mathrm{trunc}}$ is the truncated work score of the current block, $K$ is the emission
-multiplier (set at $K=50$ and chosen to produce approximately 50~coins on the first block after genesis),
-$S$ is the fixed-point scaling factor ($10^{12}$~atoms/coin), and $W_{\mathrm{parent}}$ is the parent
-cumulative work. This mint issuance is separate from fork-choice weight (cumulative $w_{\mathrm{trunc}}$)
+multiplier (consensus constant $K=50$), $S$ is the fixed-point scale ($10^{12}$ atoms per display BEANS),
+and $W_{\mathrm{parent}}$ is the sum of truncated work scores through the parent block (integer
+$\lfloor\sqrt{W_{\mathrm{parent}}}\rfloor$ in the denominator on-chain). This mint issuance is separate from fork-choice weight (cumulative $w_{\mathrm{trunc}}$)
 as reward does not affect security weight.
 
 Each block's reward depends only on its own work and the parent's cumulative work score, with no future

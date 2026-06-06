@@ -132,31 +132,31 @@ not an inflated self-report.
 
 ## 4. Block reward (tokenomic allocation)
 
-Rewards follow the whitepaper's dimensionless w/W shape. Let w_trunc be this block's
+Rewards follow the whitepaper's dimensionless **w/√W** shape. Let w_trunc be this block's
 integer work bits and W_parent the sum through the parent block.
 
 **Mint formula:**
 
 ```text
-mint_atoms = ⌊ w_trunc · S · K / W_parent ⌋
+mint_atoms = ⌊ w_trunc · S · K / isqrt(W_parent) ⌋
 ```
 
 where S = 10¹² atoms per display BEANS and K = 50 is the emission multiplier.
 
-**First harvest.** When W_parent = w_trunc ≥ 1:
+**First harvest.** When W_parent = 1 and w_trunc ≥ 1:
 
 ```text
-mint_atoms = ⌊ S · K · w / w ⌋ = S · K
+mint_atoms = ⌊ S · K · w / 1 ⌋ = S · K
 ```
 
 → exactly K display BEANS worth of atoms on the first block with w_trunc ≥ 1.
 
 **Safety.** W_parent = 0 ⇒ mint = 0.
 
-**Example (Tier C fixture).** w_trunc = 16, W_parent = 521:
+**Example (Tier C fixture).** w_trunc = 16, W_parent = 521 (isqrt = 22):
 
 ```text
-mint_atoms = ⌊ 16 × 10¹² × 50 / 521 ⌋
+mint_atoms = ⌊ 16 × 10¹² × 50 / 22 ⌋
 ```
 
 **Interpretation.** Like Bitcoin's subsidy schedule, absolute issuance is bounded by
