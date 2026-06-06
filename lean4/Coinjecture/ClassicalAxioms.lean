@@ -41,4 +41,21 @@ axiom workScoreBitsIdeal_double_solve : True
 /-- Cumulative chain security is the sum of per-block bit scores (ideal path). -/
 axiom chainSecurityBitsIdeal_spec : True
 
+/-!
+### Emission economics (w/√W — v4)
+
+The on-chain law **`mint = ⌊w·S·K / isqrt(W)⌋`** is **Tier A** in `Coinjecture/Rewards.lean`.
+These axioms record interpretive claims used in [`docs/SECURITY_CALCULATIONS.md`](../docs/SECURITY_CALCULATIONS.md)
+that are not reproved from first principles here.
+-/
+
+/-- Minted emission does not enter cumulative fork-choice work `W`. -/
+axiom emission_separate_from_fork_choice : True
+
+/-- Per-block mint falls as parent cumulative work grows (1/√W tail; spot-checked in Lean). -/
+axiom emission_decays_with_parent_work : True
+
+/-- An alternate chain's coinbase only affects honest balances if it becomes the heaviest valid tip. -/
+axiom losing_fork_emission_inert : True
+
 end Coinjecture

@@ -23,8 +23,8 @@
 //!
 //! Display: **`BEANS = mint_atoms / S`** (real ratio in ℝ is approximated with sub-BEANS resolution).
 //!
-//! **Genesis / first harvest.** When **`W_parent = 1`** and **`w_trunc ≥ 1`**, **`isqrt(W_parent) = 1`**
-//! so **`mint_atoms = S·K`** → **`K` display BEANS** worth of atoms.
+//! **Genesis / first harvest (Tier C).** When **`W_parent = 1`** and **`w_trunc = 1`**
+//! (`work_score = 1.0`), **`isqrt(W_parent) = 1`** so **`mint_atoms = S·K`** → **`K` display BEANS**.
 //!
 //! **`W_parent == 0`** ⇒ **`0`** (pathological / safety only).
 

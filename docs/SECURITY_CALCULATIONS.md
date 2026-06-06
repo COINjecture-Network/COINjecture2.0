@@ -203,23 +203,39 @@ solvers or stricter verification are deployed.
 
 ---
 
-## 8. Economic attacks (rewards)
+## 8. Economic attacks (rewards — w/√W, v4)
 
-Minting uses parent cumulative work `W_parent`:
+Minting uses parent cumulative work `W_parent` and integer **`isqrt(W_parent)`**:
 
 ```text
 mint_atoms = ⌊ w_trunc · S · K / isqrt(W_parent) ⌋
 ```
 
-**Tier A.**
+**Tier A (proved in Lean — `Coinjecture/Rewards.lean`, `SecurityModel.lean`).**
 
-```text
-W_parent = 0  ⇒  mint_atoms = 0
-```
+| Property | Statement |
+|----------|-----------|
+| Parent work required | `W_parent = 0 ⇒ mint = 0` |
+| Block work required | `w_trunc = 0 ⇒ mint = 0` |
+| Monotonic in work | `w₁ ≤ w₂ ⇒ mint(w₁) ≤ mint(w₂)` at fixed `W` |
+| Floor bound | `mint · isqrt(W) ≤ w · S · K` |
+| First harvest (Tier C) | `w=1`, `W=1` ⇒ `K` display BEANS (`50` with `K=50`) |
 
-**Interpretation.** An attacker cannot extract emission on a private chain unless that
-chain becomes the **heaviest valid tip** (Section 4–5). Inflation on a losing fork does
-not affect honest balances.
+**Compared to v3 (`w/W`).** Tail decay is **`O(1/√W)`** per block rather than **`O(1/W)`** —
+higher long-run issuance at the same `K`, by design on v4 (target ~1 BEANS/block average to
+height 100,000). Per-block mint still **decreases** as `W` grows (denominator `isqrt(W)` increases).
+
+**Interpretation (Tier B axioms in `ClassicalAxioms.lean`).**
+
+- **Emission ≠ fork choice** — minted atoms are not summed into cumulative `W`.
+- **Private-chain inflation** — an attacker cannot move honest balances by minting on a losing fork;
+  alternate coinbase only matters if that chain becomes the **heaviest valid tip** (Sections 4–5).
+- **Solve-time gaming** — more work still yields weakly more mint at fixed `W` (Lean monotonicity);
+  racing still punishes inflated solve times on competitive blocks.
+
+**v4 parameters (`coinject-network-b-v4`).** `K = 50`, `S = 10¹²`, header difficulty **5**,
+NP bootstrap size **110**. Block-2 first harvest with genesis `w=10`, `W_parent=10`:
+`⌊10·S·K / isqrt(10)⌋ ≈ 167` display BEANS.
 
 ---
 
@@ -234,6 +250,8 @@ not affect honest balances.
 | A5 | Heaviest tip | A / code | `heavierChain`, fork-choice in node |
 | A6 | Catch-up probability ≪ 1 at depth `z` | A (algebra) + B (Poisson) | Section 5–6, `SecurityCalculations.lean` |
 | A7 | Production ZK for privacy market | **Not yet** | Placeholder axioms only — testnet |
+| A8 | w/√W emission (`isqrt(W)` denominator) | A | `Rewards.mintAtoms`, `SecurityModel.mint_floor_bound` |
+| A9 | Emission decoupled from fork-choice `W` | B | `ClassicalAxioms.emission_separate_from_fork_choice` |
 
 ---
 

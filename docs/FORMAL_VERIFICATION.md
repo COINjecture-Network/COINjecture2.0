@@ -44,7 +44,7 @@ confirmation-depth bounds (Bitcoin §11 style), see
 | | P2 ~8-block oscillation | `prediction2_eight_cycle_period` | difficulty adjuster history |
 | | P3 log symmetry | `prediction3_log_symmetry` | work-score distribution |
 | | \|η_measured − η\| < 5% | `etaWithinTolerance` | `DimensionalPoolState::test_conjecture` |
-| **Economics** | mint = ⌊w·S·K/W⌋ | `Rewards.lean` (`mintAtoms`) | `tokenomics/src/rewards.rs` |
+| **Economics** | mint = ⌊w·S·K/isqrt(W)⌋ | `Rewards.lean` (`mintAtoms`, `isqrtDenom`) | `tokenomics/src/rewards.rs` |
 | | work = log₂(t_s/t_v)·q | `WorkScore.lean` | `consensus/src/work_score.rs` |
 
 ## Tier C (Rust ↔ Lean fixtures)
@@ -62,8 +62,8 @@ Runs `lake build` and `cargo test -p coinject-consensus lean_fixture`. Vectors l
 | log₂(10/1) × 10⁶ | `log2TenToOne` | `LOG2_TEN_TO_ONE = 3_250_000` |
 | log₂(4/1) × 10⁶ | `log2FourToOne` | `2 × SCALE` |
 | work score (10 µs, 1 µs) | `workScoreTenOneUs` | deterministic path test |
-| mint(16, 521) | `mintAtoms16Over521` | reward regression |
-| first harvest | `first_harvest` | w = W ⇒ K BEANS |
+| mint(16, 521) | `mintAtoms16Over521` | reward regression (`isqrt(521)=22`) |
+| first harvest | `first_harvest` | `w=1`, `W=1` ⇒ `K` BEANS |
 
 ## Security model (`Coinjecture/SecurityModel.lean`)
 
@@ -76,14 +76,14 @@ Satoshi-style derivations and confirmation tables:
 | **Adversary** | `AdversaryCapabilities` — invalid broadcast allowed; forge-verify disallowed (checker soundness) |
 | **PoUW (Tier A)** | Zero work without asymmetry; `chainWork` append; `applyQuality` monotone |
 | **Fork choice** | `heavierChain` / `prefersTip` on cumulative truncated work `W` |
-| **Rewards (Tier A)** | `mint_requires_parent_work`, links to `mintAtoms` lemmas |
-| **Tier B** | NP checkers, ideal `log₂` bits, placeholder ZK axioms (testnet MAC in `privacy.rs`) |
+| **Rewards (Tier A)** | `mint_requires_parent_work`, `mint_floor_bound`, `mint_mono_in_work` — w/√W lemmas |
+| **Tier B** | NP checkers, ideal `log₂` bits, emission/fork decoupling axioms, placeholder ZK (testnet MAC in `privacy.rs`) |
 
 ## Tier B (axiomatized)
 
 | Axiom block | Reference |
 |-------------|-----------|
-| `Coinjecture/ClassicalAxioms.lean` | SUBSET-SUM, 3-SAT NP-completeness; decision-TSP NP-hard; ideal `log₂` work-score interpretation |
+| `Coinjecture/ClassicalAxioms.lean` | SUBSET-SUM, 3-SAT NP-completeness; decision-TSP NP-hard; ideal `log₂` work-score interpretation; w/√W emission economics (fork decoupling, losing-fork inertness) |
 
 ## Known gaps
 

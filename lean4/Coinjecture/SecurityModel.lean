@@ -89,7 +89,11 @@ def prefersTip (wCandidate wLocal : Nat) : Bool :=
   heavierChain wCandidate wLocal
 
 /-!
-## 4. Reward proportionality (Tier A)
+## 4. Reward proportionality (Tier A — w/√W emission)
+
+On-chain mint uses **`⌊w·S·K / isqrt(W_parent)⌋`** (see `Coinjecture.Rewards`).
+Emission is **separate from fork choice**: cumulative `W` for heaviest-chain rule uses raw
+`w_trunc` sums, not minted atoms.
 -/
 
 /-- Mint is zero when the parent chain has no recorded work yet. -/
@@ -97,6 +101,26 @@ theorem mint_requires_parent_work (w : Nat) :
     mintAtoms w 0 = 0 :=
   mintAtoms_zero_when_parent_zero w
 
+/-- Mint is zero when this block contributes no truncated work. -/
+theorem mint_requires_block_work (wParent : Nat) (h : wParent ≠ 0) :
+    mintAtoms 0 wParent = 0 :=
+  mintAtoms_zero_when_work_zero wParent h
+
+/-- More block work ⇒ weakly more mint at fixed parent `W` (incentive alignment). -/
+theorem mint_mono_in_work {w₁ w₂ wParent : Nat} (hle : w₁ ≤ w₂) (hW : wParent ≠ 0) :
+    mintAtoms w₁ wParent ≤ mintAtoms w₂ wParent :=
+  mintAtoms_mono_work hle hW
+
+/-- Floor: mint never exceeds the w/√W numerator before flooring. -/
+theorem mint_floor_bound (w wParent : Nat) (h : wParent ≠ 0) :
+    mintAtoms w wParent * isqrtDenom wParent ≤
+      w * rewardFixedPointScale * rewardEmissionMultiplier :=
+  mintAtoms_le_numerator w wParent h
+
+/-- Tier C first-harvest vector: `w=1`, `W=1` ⇒ `K` display BEANS. -/
+theorem mint_first_harvest_tier_c :
+    mintAtoms 1 1 = rewardFixedPointScale * rewardEmissionMultiplier :=
+  first_harvest 1 rfl
 
 /-!
 ## 5. Ideal analysis (Tier B — see `ClassicalAxioms.lean`)
