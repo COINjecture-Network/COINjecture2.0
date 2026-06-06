@@ -64,7 +64,15 @@ fn test_private_bounty_full_lifecycle() {
 
     // 2. Submit private bounty
     let problem_id = marketplace
-        .submit_problem(submission_mode, submitter, bounty, min_work_score, 7, None, None)
+        .submit_problem(
+            submission_mode,
+            submitter,
+            bounty,
+            min_work_score,
+            7,
+            None,
+            None,
+        )
         .expect("Failed to submit private problem");
 
     // 3. Verify problem is stored with private status
@@ -150,7 +158,15 @@ fn test_private_bounty_duplicate_rejection() {
     };
 
     // Submit first time - should succeed
-    let result1 = marketplace.submit_problem(submission_mode.clone(), submitter, 1000, 10.0, 7, None, None);
+    let result1 = marketplace.submit_problem(
+        submission_mode.clone(),
+        submitter,
+        1000,
+        10.0,
+        7,
+        None,
+        None,
+    );
     assert!(result1.is_ok());
 
     // Submit again with same commitment - should fail

@@ -1146,9 +1146,7 @@ impl MarketplaceTransaction {
                     }
                 }
                 if let Some(t) = title {
-                    if t.trim().is_empty()
-                        || crate::validation::validate_bounty_title(t).is_err()
-                    {
+                    if t.trim().is_empty() || crate::validation::validate_bounty_title(t).is_err() {
                         return false;
                     }
                 }

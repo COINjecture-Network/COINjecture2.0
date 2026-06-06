@@ -525,7 +525,8 @@ mod tests {
         let submitter = Address::from_bytes([1u8; 32]);
         let bounty = 1000;
 
-        let result = marketplace.submit_public_problem(problem, submitter, bounty, 10.0, 7, None, None);
+        let result =
+            marketplace.submit_public_problem(problem, submitter, bounty, 10.0, 7, None, None);
         assert!(result.is_ok());
 
         let problem_id = result.unwrap();

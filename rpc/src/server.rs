@@ -1252,8 +1252,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_problem(&params.problem)?;
 
         let submitter = self.parse_address(&params.submitter)?;
-        let (title, briefing) =
-            Self::normalize_bounty_metadata(params.title, params.briefing)?;
+        let (title, briefing) = Self::normalize_bounty_metadata(params.title, params.briefing)?;
         let balance = self.state.account_state.get_balance(&submitter);
         let total_cost = params
             .bounty
@@ -1405,8 +1404,7 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_problem(&params.problem)?;
 
         let submitter = self.parse_address(&params.submitter)?;
-        let (title, briefing) =
-            Self::normalize_bounty_metadata(params.title, params.briefing)?;
+        let (title, briefing) = Self::normalize_bounty_metadata(params.title, params.briefing)?;
         let balance = self.state.account_state.get_balance(&submitter);
         let total_cost = params
             .bounty
