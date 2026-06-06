@@ -133,8 +133,8 @@ export COINJECT_NODE_IMAGE="$COINJECT_NODE_IMAGE"
 if [[ -n "$GHCR_TOKEN" ]]; then
   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 fi
-docker compose -f "$COMPOSE_FILE" -f "$FOLLOWER_COMPOSE_EXTRA" pull $NODE_SERVICES
-docker compose -f "$COMPOSE_FILE" -f "$FOLLOWER_COMPOSE_EXTRA" up -d --no-build $STACK_SERVICES
+docker compose $(follower_compose_flags) pull $NODE_SERVICES
+docker compose $(follower_compose_flags) up -d --no-build $STACK_SERVICES
 REMOTE
 remote "$FOLLOWER2_HOST" bash -s <<REMOTE
 set -euo pipefail
@@ -143,8 +143,8 @@ export COINJECT_NODE_IMAGE="$COINJECT_NODE_IMAGE"
 if [[ -n "$GHCR_TOKEN" ]]; then
   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 fi
-docker compose -f "$COMPOSE_FILE" -f "$FOLLOWER_COMPOSE_EXTRA" pull $NODE_SERVICES
-docker compose -f "$COMPOSE_FILE" -f "$FOLLOWER_COMPOSE_EXTRA" up -d --no-build $STACK_SERVICES
+docker compose $(follower_compose_flags) pull $NODE_SERVICES
+docker compose $(follower_compose_flags) up -d --no-build $STACK_SERVICES
 REMOTE
 
 echo ">>> 7) Wait for stable tip on canonical (best_height >= $STABLE_MIN_HEIGHT, unchanged for ~${STABLE_IDLE_SECS}s; max ${CANONICAL_WAIT_MAX_SECS}s)"
