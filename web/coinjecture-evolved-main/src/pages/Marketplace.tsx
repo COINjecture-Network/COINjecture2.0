@@ -45,6 +45,12 @@ function shortId(id: string) {
   return `${id.slice(0, 10)}…${id.slice(-6)}`;
 }
 
+function getListingTitle(problem: ProblemInfo) {
+  const title = problem.title?.trim();
+  if (title) return title;
+  return problem.problem_type ?? (problem.is_private ? "Private listing" : "Open listing");
+}
+
 export default function Marketplace() {
   const queryClient = useQueryClient();
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -206,7 +212,8 @@ function LiveMarketplaceDashboard({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Problem</TableHead>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Briefing</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Bounty</TableHead>
                   <TableHead>Min work</TableHead>
@@ -217,7 +224,13 @@ function LiveMarketplaceDashboard({
               <TableBody>
                 {problems.map((p) => (
                   <TableRow key={p.problem_id}>
-                    <TableCell className="max-w-[12rem] font-mono text-xs">{shortId(p.problem_id)}</TableCell>
+                    <TableCell className="min-w-[12rem] max-w-md align-top">
+                      <div className="font-medium leading-snug break-words">{getListingTitle(p)}</div>
+                      <div className="mt-1 font-mono text-[11px] text-muted-foreground">{shortId(p.problem_id)}</div>
+                    </TableCell>
+                    <TableCell className="min-w-[14rem] max-w-lg align-top text-sm text-muted-foreground whitespace-pre-wrap break-words">
+                      {p.briefing?.trim() || "—"}
+                    </TableCell>
                     <TableCell className="text-sm">{p.problem_type ?? "—"}</TableCell>
                     <TableCell className="tabular-nums">{formatBeans(parseBalance(p.bounty) ?? 0n)}</TableCell>
                     <TableCell className="tabular-nums">{p.min_work_score}</TableCell>
@@ -226,7 +239,10 @@ function LiveMarketplaceDashboard({
                     </TableCell>
                     <TableCell className="text-right">
                       <Button variant="outline" size="sm" asChild>
-                        <Link to="/solver-lab" state={{ selectedBounty: p }}>
+                        <Link
+                          to={`/solver-lab?problemId=${encodeURIComponent(p.problem_id)}`}
+                          state={{ selectedBounty: p }}
+                        >
                           Open
                         </Link>
                       </Button>

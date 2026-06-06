@@ -36,6 +36,12 @@ pub struct ProblemSubmission {
     pub solution: Option<Solution>,
     /// Solver's address (if solved)
     pub solver: Option<Address>,
+    /// Human-readable listing title (optional; set at submission).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Solver-facing briefing / acceptance criteria (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub briefing: Option<String>,
 }
 
 /// Problem status in marketplace
@@ -98,9 +104,19 @@ impl ProblemMarketplace {
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
+        title: Option<String>,
+        briefing: Option<String>,
     ) -> Result<Hash, MarketplaceError> {
         let mode = SubmissionMode::Public { problem };
-        self.submit_problem(mode, submitter, bounty, min_work_score, expiration_days)
+        self.submit_problem(
+            mode,
+            submitter,
+            bounty,
+            min_work_score,
+            expiration_days,
+            title,
+            briefing,
+        )
     }
 
     /// Submit a new problem with bounty
@@ -112,6 +128,8 @@ impl ProblemMarketplace {
         bounty: Balance,
         min_work_score: f64,
         expiration_days: u64,
+        title: Option<String>,
+        briefing: Option<String>,
     ) -> Result<Hash, MarketplaceError> {
         // Validate bounty
         if bounty == 0 {
@@ -178,6 +196,8 @@ impl ProblemMarketplace {
             status: ProblemStatus::Open,
             solution: None,
             solver: None,
+            title,
+            briefing,
         };
 
         // Escrow the bounty
@@ -505,7 +525,7 @@ mod tests {
         let submitter = Address::from_bytes([1u8; 32]);
         let bounty = 1000;
 
-        let result = marketplace.submit_public_problem(problem, submitter, bounty, 10.0, 7);
+        let result = marketplace.submit_public_problem(problem, submitter, bounty, 10.0, 7, None, None);
         assert!(result.is_ok());
 
         let problem_id = result.unwrap();
@@ -525,7 +545,7 @@ mod tests {
 
         let submitter = Address::from_bytes([1u8; 32]);
         let problem_id = marketplace
-            .submit_public_problem(problem, submitter, 1000, 1.0, 7)
+            .submit_public_problem(problem, submitter, 1000, 1.0, 7, None, None)
             .unwrap();
 
         let solver = Address::from_bytes([2u8; 32]);
@@ -550,7 +570,7 @@ mod tests {
 
         let submitter = Address::from_bytes([1u8; 32]);
         let problem_id = marketplace
-            .submit_public_problem(problem, submitter, 1000, 1.0, 7)
+            .submit_public_problem(problem, submitter, 1000, 1.0, 7, None, None)
             .unwrap();
 
         let solver = Address::from_bytes([2u8; 32]);
@@ -576,7 +596,7 @@ mod tests {
 
         let submitter = Address::from_bytes([1u8; 32]);
         let problem_id = marketplace
-            .submit_public_problem(problem, submitter, 1000, 10.0, 7)
+            .submit_public_problem(problem, submitter, 1000, 10.0, 7, None, None)
             .unwrap();
 
         let bounty = marketplace.cancel_problem(problem_id, submitter).unwrap();
@@ -602,10 +622,10 @@ mod tests {
 
         let submitter = Address::from_bytes([1u8; 32]);
         marketplace
-            .submit_public_problem(problem1, submitter, 1000, 10.0, 7)
+            .submit_public_problem(problem1, submitter, 1000, 10.0, 7, None, None)
             .unwrap();
         marketplace
-            .submit_public_problem(problem2, submitter, 2000, 10.0, 7)
+            .submit_public_problem(problem2, submitter, 2000, 10.0, 7, None, None)
             .unwrap();
 
         let stats = marketplace.get_stats();

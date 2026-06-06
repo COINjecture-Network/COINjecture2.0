@@ -161,6 +161,12 @@ const getReadableProblemLabel = (type: string | null, isPrivate: boolean) => {
   return type;
 };
 
+const getListingTitle = (problem: ProblemInfo) => {
+  const title = problem.title?.trim();
+  if (title) return title;
+  return getReadableProblemLabel(problem.problem_type, problem.is_private);
+};
+
 function getComplexityLabel(problem: ProblemInfo) {
   const size = typeof problem.problem_size === "number" ? problem.problem_size : null;
 
@@ -191,6 +197,8 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
   const minWorkLabel = typeof problem.min_work_score === "number" ? problem.min_work_score.toString() : "Open";
   const urgencyLabel = isExpiringSoon ? "Closing soon" : "Plenty of runway";
   const readableProblemLabel = getReadableProblemLabel(problem.problem_type, problem.is_private);
+  const listingTitle = getListingTitle(problem);
+  const listingBriefing = problem.briefing?.trim() || null;
   const canSolveInLab = Boolean(problem.problem) && (!problem.is_private || problem.is_revealed);
 
   return (
@@ -209,8 +217,14 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
                 <Badge variant="outline">{problem.is_revealed ? "Revealed" : "Private"}</Badge>
               )}
             </div>
-            <h3 className="text-lg font-semibold leading-snug break-words">{readableProblemLabel}</h3>
+            <h3 className="text-lg font-semibold leading-snug break-words">{listingTitle}</h3>
             <p className="text-sm text-muted-foreground">
+              {readableProblemLabel !== listingTitle ? (
+                <>
+                  {readableProblemLabel}
+                  <span className="mx-1">·</span>
+                </>
+              ) : null}
               Problem ID <code className="text-xs">{problem.problem_id.slice(0, 16)}...</code>
             </p>
           </div>
@@ -233,10 +247,14 @@ const ProblemCard = ({ problem }: { problem: ProblemInfo }) => {
         </div>
 
         <div className="rounded-xl border border-border/60 bg-muted/20 p-4 text-sm">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground mb-2">Buyer brief</div>
-          <p className="text-foreground leading-relaxed">
-            This listing is live on-chain right now. Inspect the structure, estimate the effort, and jump into Solver Lab when the reward looks worth taking.
-          </p>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground mb-2">Solver briefing</div>
+          {listingBriefing ? (
+            <p className="text-foreground leading-relaxed whitespace-pre-wrap break-words">{listingBriefing}</p>
+          ) : (
+            <p className="text-muted-foreground leading-relaxed">
+              No briefing was attached to this listing. Inspect the problem structure in Solver Lab before estimating effort.
+            </p>
+          )}
           <div className="mt-3 text-muted-foreground">
             Closes {formatDistanceToNow(expirationDate, { addSuffix: true })}
           </div>

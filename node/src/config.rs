@@ -337,6 +337,9 @@ impl NodeConfig {
                 }
             }
         }
+        if config.hf_dataset_name.is_none() {
+            config.hf_dataset_name = Some("COINjecture/NP-Solutions".to_string());
+        }
         config
     }
 

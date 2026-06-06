@@ -1,5 +1,6 @@
 import { Github, Twitter, MessageCircle } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
+import { hfDatasetPageUrl } from "@/lib/hf-dataset";
 
 export const Footer = () => {
   return (
@@ -28,6 +29,16 @@ export const Footer = () => {
             <ul className="space-y-2 text-sm text-muted-foreground">
               <li><a href="/roadmap" className="hover:text-foreground transition-colors">Roadmap</a></li>
               <li><a href="/whitepaper" className="hover:text-foreground transition-colors">Whitepaper</a></li>
+              <li>
+                <a
+                  href={hfDatasetPageUrl()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground transition-colors"
+                >
+                  NP-Solutions Dataset
+                </a>
+              </li>
               <li><a href="https://github.com/COINjecture-Network/COINjecture2.0" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a></li>
               <li><a href="#" className="hover:text-foreground transition-colors">Support</a></li>
             </ul>
@@ -42,7 +53,7 @@ export const Footer = () => {
               <a href="https://x.com/COINjecture" target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Twitter">
                 <Twitter className="h-5 w-5" />
               </a>
-              <a href="#" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Discord">
+              <a href="mailto:admin@coinjecture.com" className="p-2 rounded-lg hover:bg-muted transition-colors" aria-label="Email support">
                 <MessageCircle className="h-5 w-5" />
               </a>
             </div>

@@ -9,11 +9,13 @@ import {
   blockRewardFromTruncWorkAndParentW,
   formatBeans,
   formatWorkScoreBits,
+  isqrtU128,
   parseBalance,
   parseU128DecimalString,
   truncatedHeaderWorkScoreU128,
   workScoreBitsFromPouw,
 } from "@/lib/chain-metrics";
+import { hfDatasetPageUrl } from "@/lib/hf-dataset";
 
 /** RPC may send `problem` as object or (rarely) JSON string. */
 function unwrapJsonObject(value: unknown): Record<string, unknown> | null {
@@ -130,7 +132,7 @@ function applyTokenomicsRewardsToSolutions(
     const parentW = wTip - wSelf - tail;
     if (parentW < 0n) continue;
     s.parent_w_emission = parentW;
-    // Integer ⌊w/W⌋ is often 0 once W ≫ w_trunc — do not replace on-chain coinbase in `reward_beans`.
+    // Integer ⌊w·S·K/isqrt(W)⌋ — tail decays as 1/√W; do not replace on-chain coinbase in `reward_beans`.
     s.formula_reward_beans = blockRewardFromTruncWorkAndParentW(wSelf, parentW);
   }
 }
@@ -152,7 +154,7 @@ interface Solution {
   solver: string;
   /** Parsed on-chain coinbase `reward` (authoritative mint for this block). */
   reward_beans: bigint;
-  /** Model mint atoms `⌊w_trunc·S·K/W_parent⌋` when W_parent is derivable (S=10¹², K=emission multiplier); informational vs coinbase. */
+  /** Model mint atoms `⌊w_trunc·S·K/isqrt(W_parent)⌋` when W_parent is derivable (S=10¹², K=50); informational vs coinbase. */
   formula_reward_beans: bigint | null;
   /**
    * Integer truncated from on-chain `header.work_score` — this is what the node sums into cumulative W
@@ -681,13 +683,14 @@ export const LiveSolutionFeed = () => {
                   {solution.parent_w_emission != null && solution.formula_reward_beans != null ? (
                     <span
                       className="text-[10px] text-muted-foreground leading-tight"
-                      title="Mint = ⌊w_trunc·S·K / W_parent⌋ ledger atoms (S=10¹², K matches node). Display BEANS = mint / S. w_trunc is integer header work, not fractional PoUW bits."
+                      title="Mint = ⌊w_trunc·S·K / isqrt(W_parent)⌋ ledger atoms (S=10¹², K=50). Display BEANS = mint / S. w_trunc is integer header work, not fractional PoUW bits."
                     >
                       Model mint: {formatBeans(solution.formula_reward_beans)} BEANS
                       <span className="opacity-80">
                         {" "}
                         ({solution.formula_reward_beans.toLocaleString()} atoms, w_trunc=
-                        {solution.w_contrib_chain.toString()}, W_parent={solution.parent_w_emission.toString()})
+                        {solution.w_contrib_chain.toString()}, W_parent={solution.parent_w_emission.toString()}
+                        , isqrt(W)={isqrtU128(solution.parent_w_emission).toString()})
                       </span>
                     </span>
                   ) : solution.block_height > 0 ? (
@@ -699,7 +702,8 @@ export const LiveSolutionFeed = () => {
                   solution.formula_reward_beans != null &&
                   solution.coinbase_beans !== solution.formula_reward_beans ? (
                     <span className="text-[10px] text-amber-600/90 dark:text-amber-400/90 leading-tight">
-                      Differs from model ⌊w·S·K÷W⌋ (legacy blocks or RPC mismatch).
+                      Coinbase differs from model ⌊w·S·K÷isqrt(W)⌋ — check W_parent derivation or v3 legacy
+                      blocks.
                     </span>
                   ) : null}
                 </div>
@@ -760,6 +764,17 @@ export const LiveSolutionFeed = () => {
             </div>
           </Card>
         ))}
+      </div>
+
+      <div className="mt-6 pt-4 border-t border-border/50 text-center">
+        <a
+          href={hfDatasetPageUrl()}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-primary hover:underline"
+        >
+          View full NP-Solutions dataset on Hugging Face →
+        </a>
       </div>
 
     </Card>

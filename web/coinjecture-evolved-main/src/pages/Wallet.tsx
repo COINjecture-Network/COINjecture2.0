@@ -21,13 +21,11 @@ import {
   formatBeans,
   parseBalance,
   parseDisplayBeansToAtoms,
-  MIN_BOUNTY_SUBMISSION_FEE_ATOMS,
+  TRANSFER_PRIORITY_TIP_ATOMS,
 } from "@/lib/chain-metrics";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
-
-/** Optional paid-path tip in ledger atoms (0.001 display BEANS — same scale as mempool / bounty min fee). */
-const TRANSFER_PRIORITY_TIP_ATOMS = MIN_BOUNTY_SUBMISSION_FEE_ATOMS;
+import { EmissionHint } from "@/components/EmissionHint";
 
 function isPoolFeeTooLowMessage(message: string): boolean {
   const m = message.toLowerCase();
@@ -137,6 +135,12 @@ export default function WalletPage() {
                   <div className="signal-kicker">Next best action</div>
                   <div className="mt-2 font-semibold">
                     {selectedKeyPair ? "Open Solver Lab and sync a live mining instance." : "Create or import an account to start earning."}
+                  </div>
+                </div>
+                <div className="signal-card sm:col-span-2">
+                  <div className="signal-kicker">Live emission</div>
+                  <div className="mt-2">
+                    <EmissionHint variant="compact" />
                   </div>
                 </div>
                 <div className="sm:col-span-2 flex flex-col sm:flex-row gap-3">

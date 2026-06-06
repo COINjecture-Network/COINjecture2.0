@@ -67,6 +67,7 @@ services:
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
+      --hf-dataset-name COINjecture/NP-Solutions
     networks:
       - coinject-internal
       - coinject-rpc
@@ -120,6 +121,7 @@ services:
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
+      --hf-dataset-name COINjecture/NP-Solutions
       --bootnodes bootnode:707
     networks:
       - coinject-internal
@@ -171,6 +173,7 @@ services:
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
+      --hf-dataset-name COINjecture/NP-Solutions
       --bootnodes bootnode:707
     networks:
       - coinject-internal
@@ -222,6 +225,7 @@ services:
       --cpp-p2p-addr 0.0.0.0:707
       --metrics-addr 0.0.0.0:9090
       --rpc-addr 0.0.0.0:9933
+      --hf-dataset-name COINjecture/NP-Solutions
       --bootnodes bootnode:707
     networks:
       - coinject-internal

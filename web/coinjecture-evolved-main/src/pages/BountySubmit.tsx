@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useState, useEffect, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle2, Circle, XCircle } from "lucide-react";
 import type { ProblemType } from "@/lib/rpc-client";
@@ -29,6 +29,9 @@ import {
 } from "@/lib/chain-metrics";
 import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { useWallet } from "@/contexts/WalletContext";
+import { EmissionHint } from "@/components/EmissionHint";
+import { useRecentBlockRewardMetrics } from "@/lib/hooks/useRecentBlockRewardMetrics";
+import type { SolverLabBountyDraft } from "@/features/np-playground/NpPlayground";
 
 /** Must match `STORAGE_KEY` in `NpPlayground.tsx` (Solver Lab → Bounty draft). */
 const SOLVER_LAB_BOUNTY_KEY = "solverLabBountyPayload";
@@ -149,6 +152,8 @@ function revealKitKey(submitter: string, problemId: string): string {
 
 const BountySubmit = () => {
   const { toast } = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { accounts, selectedAccount } = useWallet();
   const selectedKeyPair = selectedAccount ? accounts[selectedAccount] : null;
   const [formData, setFormData] = useState(defaultFormData);
@@ -200,7 +205,8 @@ const BountySubmit = () => {
     walletBalance !== undefined && hasValidBounty && walletBalance >= totalEscrowAtoms;
   const canSubmit =
     hasWallet && hasTitle && instancePreview.ok && hasValidBounty && hasSufficientBalance && !isSubmitting;
-  const rewardPresets = ["1", "2", "5", "10", "25"];
+  const { data: emissionMetrics } = useRecentBlockRewardMetrics();
+  const rewardPresets = emissionMetrics?.bountyPresets ?? ["1", "2", "5", "10", "25"];
   const durationPresets = ["7", "14", "30", "90"];
   const complexityOptions = [
     { value: "easy", label: "Easy" },
@@ -233,40 +239,45 @@ const BountySubmit = () => {
   }, []);
 
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(SOLVER_LAB_BOUNTY_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw) as {
-        problemType?: string;
-        title?: string;
-        description?: string;
-        briefing?: string;
-        instanceJson?: string;
-        draftKind?: "problem" | "solver";
-      };
-      sessionStorage.removeItem(SOLVER_LAB_BOUNTY_KEY);
-      if (data.title && (data.description || data.briefing || data.instanceJson)) {
-        const legacy = data.description ?? "";
-        const split = splitLegacyDescription(legacy);
-        setFormData((prev) => ({
-          ...prev,
-          title: data.title!,
-          problemType: (data.problemType as BountyProblemKind) ?? prev.problemType,
-          briefing: data.briefing ?? split.briefing ?? legacy,
-          instanceJson: data.instanceJson ?? split.instanceJson ?? prev.instanceJson,
-        }));
-        const isProblemOnly = data.draftKind === "problem";
-        toast({
-          title: isProblemOnly ? "Problem draft from Solver Lab" : "Draft loaded from Solver Lab",
-          description: isProblemOnly
-            ? "Instance JSON only — set bounty and escrow, then submit on-chain."
-            : "Review the instance JSON, set bounty and escrow, then submit.",
-        });
+    const fromState = (location.state as { solverLabDraft?: SolverLabBountyDraft } | null)?.solverLabDraft;
+    let data: SolverLabBountyDraft | null = fromState ?? null;
+
+    if (!data) {
+      try {
+        const raw = sessionStorage.getItem(SOLVER_LAB_BOUNTY_KEY);
+        if (raw) data = JSON.parse(raw) as SolverLabBountyDraft;
+      } catch {
+        sessionStorage.removeItem(SOLVER_LAB_BOUNTY_KEY);
+        return;
       }
-    } catch {
-      sessionStorage.removeItem(SOLVER_LAB_BOUNTY_KEY);
     }
-  }, [toast]);
+
+    if (!data) return;
+
+    sessionStorage.removeItem(SOLVER_LAB_BOUNTY_KEY);
+    if (!data.title || !(data.description || data.briefing || data.instanceJson)) {
+      if (fromState) navigate(".", { replace: true, state: null });
+      return;
+    }
+
+    const legacy = data.description ?? "";
+    const split = splitLegacyDescription(legacy);
+    setFormData((prev) => ({
+      ...prev,
+      title: data.title!,
+      problemType: (data.problemType as BountyProblemKind) ?? prev.problemType,
+      briefing: data.briefing ?? split.briefing ?? legacy,
+      instanceJson: data.instanceJson ?? split.instanceJson ?? prev.instanceJson,
+    }));
+    const isProblemOnly = data.draftKind === "problem";
+    toast({
+      title: isProblemOnly ? "Problem draft from Solver Lab" : "Draft loaded from Solver Lab",
+      description: isProblemOnly
+        ? "Instance JSON only — set bounty and escrow, then submit on-chain."
+        : "Review the instance JSON, set bounty and escrow, then submit.",
+    });
+    if (fromState) navigate(".", { replace: true, state: null });
+  }, [toast, location.state, navigate]);
 
   useEffect(() => {
     if (!confirmedSubmission || confirmedSubmission.mode !== "private") {
@@ -432,6 +443,8 @@ const BountySubmit = () => {
           min_work_score: minWorkScore,
           expiration_days: expirationDays,
           submitter: selectedKeyPair.address,
+          title: formData.title.trim() || undefined,
+          briefing: formData.briefing.trim() || undefined,
         });
         problemId = privateResult.problem_id;
         commitment = privateResult.commitment;
@@ -442,6 +455,8 @@ const BountySubmit = () => {
           min_work_score: minWorkScore,
           expiration_days: expirationDays,
           submitter: selectedKeyPair.address,
+          title: formData.title.trim() || undefined,
+          briefing: formData.briefing.trim() || undefined,
         });
       }
 
@@ -778,8 +793,10 @@ const BountySubmit = () => {
                             </Button>
                           ))}
                         </div>
+                        <EmissionHint variant="detailed" className="mt-1" />
                         <p className="text-xs text-muted-foreground">
-                          Minimum funding is 1 BEANS plus a small network fee ({formatBeans(MARKETPLACE_SUBMIT_FEE_ATOMS)} BEANS) when posting on-chain via paid paths.
+                          Minimum funding is 1 BEANS plus a {formatBeans(MARKETPLACE_SUBMIT_FEE_ATOMS)} BEANS network fee when posting on-chain.
+                          {emissionMetrics?.bountyPresets ? " Quick-picks above scale from live mining rewards." : ""}
                         </p>
                       </div>
 

@@ -59,7 +59,7 @@ impl Default for PoolConfig {
         PoolConfig {
             max_transactions: 10_000,
             max_size_bytes: 20 * 1024 * 1024, // 20 MB
-            // Same floor as `MIN_FEE_BOUNTY_SUBMISSION` (0.001 display BEANS in atoms).
+            // Same floor as `MIN_FEE_BOUNTY_SUBMISSION` (1 display BEANS in atoms).
             min_fee: MIN_FEE_BOUNTY_SUBMISSION,
         }
     }

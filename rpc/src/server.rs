@@ -8,6 +8,7 @@ use crate::middleware::{AuditLogLayer, SecurityConfig, SecurityGateLayer};
 use crate::serde_balance::deserialize_atoms_balance;
 use crate::tls::TlsConfig;
 use coinject_core::{
+    validation::{MAX_BOUNTY_BRIEFING_LEN, MAX_BOUNTY_TITLE_LEN, MIN_FEE_BOUNTY_SUBMISSION},
     Address, Balance, Block, BlockHeader, Hash, ProblemParameters, ProblemReveal, ProblemType,
     Solution, SubmissionMode, Transaction, WellformednessProof,
 };
@@ -152,6 +153,12 @@ pub struct ProblemInfo {
     /// Winning on-chain solution payload when status is solved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solution: Option<Solution>,
+    /// Human-readable listing title (optional; set at submission).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Solver-facing briefing / acceptance criteria (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub briefing: Option<String>,
 }
 
 /// Private problem submission parameters
@@ -180,6 +187,10 @@ pub struct PrivateProblemWalletParams {
     pub min_work_score: f64,
     pub expiration_days: u64,
     pub submitter: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub briefing: Option<String>,
 }
 
 /// Wallet-backed private submission result
@@ -206,6 +217,10 @@ pub struct PublicProblemParams {
     pub min_work_score: f64,
     pub expiration_days: u64,
     pub submitter: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub briefing: Option<String>,
 }
 
 /// Public SubsetSum problem submission (Phase 2 MVP - simple API)
@@ -535,6 +550,26 @@ impl RpcServerImpl {
         Ok(())
     }
 
+    /// Trim and validate optional marketplace title / briefing metadata.
+    fn normalize_bounty_metadata(
+        title: Option<String>,
+        briefing: Option<String>,
+    ) -> RpcResult<(Option<String>, Option<String>)> {
+        let title = title
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        let briefing = briefing
+            .map(|b| b.trim().to_string())
+            .filter(|b| !b.is_empty());
+        if let Some(ref t) = title {
+            Self::validate_str_len(t, MAX_BOUNTY_TITLE_LEN, "title")?;
+        }
+        if let Some(ref b) = briefing {
+            Self::validate_str_len(b, MAX_BOUNTY_BRIEFING_LEN, "briefing")?;
+        }
+        Ok((title, briefing))
+    }
+
     /// Sanitise an internal error: log the real message, return a generic one.
     /// Prevents file paths, panics, or database details from leaking over the wire.
     fn internal_error(detail: impl std::fmt::Display) -> ErrorObjectOwned {
@@ -818,6 +853,8 @@ impl RpcServerImpl {
             problem: revealed_problem,
             solver,
             solution,
+            title: problem.title.clone(),
+            briefing: problem.briefing.clone(),
         }
     }
 }
@@ -1175,6 +1212,8 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.bounty,
                 params.min_work_score,
                 params.expiration_days,
+                None,
+                None,
             )
             .map_err(Self::internal_error)?;
 
@@ -1213,13 +1252,25 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_problem(&params.problem)?;
 
         let submitter = self.parse_address(&params.submitter)?;
+        let (title, briefing) =
+            Self::normalize_bounty_metadata(params.title, params.briefing)?;
         let balance = self.state.account_state.get_balance(&submitter);
-        if balance < params.bounty {
+        let total_cost = params
+            .bounty
+            .checked_add(MIN_FEE_BOUNTY_SUBMISSION)
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    "Bounty plus submission fee would overflow",
+                    None::<()>,
+                )
+            })?;
+        if balance < total_cost {
             return Err(ErrorObjectOwned::owned(
                 INVALID_PARAMS,
                 format!(
-                    "Insufficient balance: have {}, need {}",
-                    balance, params.bounty
+                    "Insufficient balance: have {}, need {} (bounty + {} submission fee)",
+                    balance, total_cost, MIN_FEE_BOUNTY_SUBMISSION
                 ),
                 None::<()>,
             ));
@@ -1257,10 +1308,12 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.bounty,
                 params.min_work_score,
                 params.expiration_days,
+                title,
+                briefing,
             )
             .map_err(Self::internal_error)?;
 
-        let new_balance = balance - params.bounty;
+        let new_balance = balance - total_cost;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)
@@ -1352,13 +1405,25 @@ impl CoinjectRpcServer for RpcServerImpl {
         Self::validate_problem(&params.problem)?;
 
         let submitter = self.parse_address(&params.submitter)?;
+        let (title, briefing) =
+            Self::normalize_bounty_metadata(params.title, params.briefing)?;
         let balance = self.state.account_state.get_balance(&submitter);
-        if balance < params.bounty {
+        let total_cost = params
+            .bounty
+            .checked_add(MIN_FEE_BOUNTY_SUBMISSION)
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    "Bounty plus submission fee would overflow",
+                    None::<()>,
+                )
+            })?;
+        if balance < total_cost {
             return Err(ErrorObjectOwned::owned(
                 INVALID_PARAMS,
                 format!(
-                    "Insufficient balance: have {}, need {}",
-                    balance, params.bounty
+                    "Insufficient balance: have {}, need {} (bounty + {} submission fee)",
+                    balance, total_cost, MIN_FEE_BOUNTY_SUBMISSION
                 ),
                 None::<()>,
             ));
@@ -1373,10 +1438,12 @@ impl CoinjectRpcServer for RpcServerImpl {
                 params.bounty,
                 params.min_work_score,
                 params.expiration_days,
+                title,
+                briefing,
             )
             .map_err(Self::internal_error)?;
 
-        let new_balance = balance - params.bounty;
+        let new_balance = balance - total_cost;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)
@@ -1429,14 +1496,24 @@ impl CoinjectRpcServer for RpcServerImpl {
             ));
         }
 
-        // Check submitter has sufficient balance for bounty
+        // Check submitter has sufficient balance for bounty + submission fee
         let balance = self.state.account_state.get_balance(&submitter);
-        if balance < params.bounty {
+        let total_cost = params
+            .bounty
+            .checked_add(MIN_FEE_BOUNTY_SUBMISSION)
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    INVALID_PARAMS,
+                    "Bounty plus submission fee would overflow",
+                    None::<()>,
+                )
+            })?;
+        if balance < total_cost {
             return Err(ErrorObjectOwned::owned(
                 INVALID_PARAMS,
                 format!(
-                    "Insufficient balance: have {}, need {}",
-                    balance, params.bounty
+                    "Insufficient balance: have {}, need {} (bounty + {} submission fee)",
+                    balance, total_cost, MIN_FEE_BOUNTY_SUBMISSION
                 ),
                 None::<()>,
             ));
@@ -1461,11 +1538,13 @@ impl CoinjectRpcServer for RpcServerImpl {
                 bounty,
                 params.min_work_score,
                 params.expiration_days,
+                None,
+                None,
             )
             .map_err(Self::internal_error)?;
 
-        // Deduct bounty from submitter's balance (escrow)
-        let new_balance = balance - bounty;
+        // Deduct bounty + submission fee from submitter's balance
+        let new_balance = balance - total_cost;
         self.state
             .account_state
             .set_balance(&submitter, new_balance)

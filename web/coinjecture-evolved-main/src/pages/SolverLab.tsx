@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Link } from "react-router-dom";
 import { Navigation } from "@/components/Navigation";
 import { NpPlayground } from "@/features/np-playground/NpPlayground";
 
@@ -22,6 +23,21 @@ const SolverLab = () => {
                 <p className="text-muted-foreground text-center max-w-3xl mx-auto text-sm leading-relaxed hidden md:block lg:hidden">
                   Write your own solver, sync the next live chain instance, test locally, then submit a block when your wallet is ready.
                 </p>
+                <div className="hidden md:flex justify-center gap-2 mt-3 flex-wrap">
+                  <Link
+                    to="/marketplace"
+                    className="text-xs text-primary underline-offset-4 hover:underline"
+                  >
+                    Browse open bounties
+                  </Link>
+                  <span className="text-xs text-muted-foreground">·</span>
+                  <Link
+                    to="/bounty-submit"
+                    className="text-xs text-primary underline-offset-4 hover:underline"
+                  >
+                    Post a bounty
+                  </Link>
+                </div>
                 <div className="hidden md:grid lg:hidden gap-2 md:grid-cols-4 mt-3 sm:mt-4">
                   <div className="signal-card">
                     <div className="signal-kicker">1. Prepare</div>

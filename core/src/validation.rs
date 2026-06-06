@@ -31,9 +31,15 @@ pub const MIN_FEE: Balance = 1;
 pub const ATOMS_PER_DISPLAY_BEAN: Balance = 1_000_000_000_000;
 
 /// Minimum fee for posting a new marketplace bounty (`SubmitProblem`).
-/// **0.001 display BEANS** — small vs typical block rewards (~0.1 BEANS) but above dust.
+/// **1 display BEANS** — spam deterrence for user-submitted demand listings.
 /// Keep aligned with default `coinject_mempool::PoolConfig::min_fee` for paid tx paths.
-pub const MIN_FEE_BOUNTY_SUBMISSION: Balance = ATOMS_PER_DISPLAY_BEAN / 1000;
+pub const MIN_FEE_BOUNTY_SUBMISSION: Balance = ATOMS_PER_DISPLAY_BEAN;
+
+/// Max length for optional marketplace listing title (UTF-8 bytes).
+pub const MAX_BOUNTY_TITLE_LEN: usize = 256;
+
+/// Max length for optional solver briefing on a listing (UTF-8 bytes).
+pub const MAX_BOUNTY_BRIEFING_LEN: usize = 8192;
 
 /// Maximum transaction data payload (64 KB)
 pub const MAX_TX_DATA_SIZE: usize = 64 * 1024;
@@ -269,6 +275,22 @@ pub fn validate_data_payload(data: &[u8]) -> Result<(), ValidationError> {
 /// Validate a human-readable string field (reason, label, etc.).
 pub fn validate_string_field(s: &str) -> Result<(), ValidationError> {
     if s.len() > MAX_REASON_STRING_LEN {
+        return Err(ValidationError::StringTooLong(s.len()));
+    }
+    Ok(())
+}
+
+/// Validate optional marketplace listing title (UTF-8 byte length).
+pub fn validate_bounty_title(s: &str) -> Result<(), ValidationError> {
+    if s.len() > MAX_BOUNTY_TITLE_LEN {
+        return Err(ValidationError::StringTooLong(s.len()));
+    }
+    Ok(())
+}
+
+/// Validate optional solver briefing on a marketplace listing (UTF-8 byte length).
+pub fn validate_bounty_briefing(s: &str) -> Result<(), ValidationError> {
+    if s.len() > MAX_BOUNTY_BRIEFING_LEN {
         return Err(ValidationError::StringTooLong(s.len()));
     }
     Ok(())
