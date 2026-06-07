@@ -10,7 +10,7 @@ export const Footer = () => {
           <div>
             <div className="text-xl font-brand font-extrabold gradient-text tracking-tight mb-4">COINjecture</div>
             <p className="text-sm text-muted-foreground">
-              Utility-based computational work blockchain powered by $BEANS
+              Turn hard math into on-chain $BEANS — mine, solve bounties, or post demand.
             </p>
           </div>
           

@@ -39,16 +39,16 @@ export const MetricsSection = () => {
           <h2 className="text-4xl font-bold mb-4">
             Live <span className="text-primary">Network Metrics</span>
           </h2>
-          <p className="text-muted-foreground">Real-time blockchain and marketplace statistics that prove the market is live right now.</p>
+          <p className="text-muted-foreground">Live proof that math is moving on-chain — blocks mined, bounties open, payouts settling.</p>
         </div>
 
         <div className="market-surface-strong p-6 md:p-8 mb-10">
           <div className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
             <div>
               <div className="signal-kicker">Participation layer</div>
-              <h3 className="text-2xl md:text-3xl font-bold mt-2">Use the live tape to decide whether to mine, post demand, or inspect output.</h3>
+              <h3 className="text-2xl md:text-3xl font-bold mt-2">See where $BEANS is being earned before you solve or post.</h3>
               <p className="text-muted-foreground mt-3 max-w-2xl">
-                Metrics should do more than reassure visitors. They should help users decide where value is moving and what action to take next.
+                Open bounties, emission at the tip, and fresh solved output — the live tape for turning math into payouts.
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">

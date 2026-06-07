@@ -466,10 +466,10 @@ export const MarketplaceSection = () => {
                 </Badge>
               </div>
               <h2 className="text-4xl md:text-5xl font-bold tracking-tight mb-4 leading-tight">
-                The live market for <span className="text-primary">solver payouts, verified outputs, and premium chain data</span>
+                The live market where <span className="text-primary">math pays in $BEANS</span>
               </h2>
               <p className="text-muted-foreground dark:text-white/75 max-w-3xl leading-relaxed mb-6 text-lg">
-                High-signal bounties. Freshly verified solution inventory. Productized datasets with proof and provenance.
+                Open bounties for solvers. Verified outputs for buyers. Escrow unlocks when the math checks out.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
                 <SignalStat
