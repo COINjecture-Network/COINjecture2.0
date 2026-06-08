@@ -44,10 +44,10 @@ pub struct ProblemSubmission {
     pub solution: Option<Solution>,
     pub solver: Option<Address>,
     /// Human-readable listing title (optional; set at submission).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub title: Option<String>,
     /// Solver-facing briefing / acceptance criteria (optional).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub briefing: Option<String>,
 }
 

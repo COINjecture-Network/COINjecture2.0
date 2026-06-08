@@ -1,12 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { BrandLogo } from "@/components/BrandLogo";
-import { ArrowRight, Download, Code, Award, Target, TrendingUp, Database, Loader2 } from "lucide-react";
+import { ArrowRight, Download, Code, Award, Target, TrendingUp, Database, Loader2, Server, Coins, CheckCircle2, Calculator } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { rpcClient } from "@/lib/rpc-client";
-import { cn } from "@/lib/utils";
 import { formatBeans, parseBalance } from "@/lib/chain-metrics";
 import { hfDatasetPageUrl } from "@/lib/hf-dataset";
 
@@ -109,28 +109,46 @@ export const Hero = () => {
               </div>
               
               <h1 className="text-5xl md:text-7xl font-bold mb-6 tracking-tight">
-                <span className="hero-headline-wrap" data-text="Mathematics-Backed">
-                  <span className="hero-headline-inner">Mathematics-Backed</span>
+                <span className="hero-headline-wrap" data-text="Turn Math Into">
+                  <span className="hero-headline-inner">Turn Math Into</span>
                 </span>
                 <br />
-                <span className="hero-headline-wrap" data-text="Peer-to-Peer Network">
-                  <span className="hero-headline-inner">Peer-to-Peer Network</span>
+                <span className="hero-headline-wrap" data-text="$BEANS">
+                  <span className="hero-headline-inner text-primary">$BEANS</span>
                 </span>
               </h1>
               
               <p className="text-xl text-white max-w-3xl mx-auto mb-8 text-shadow-medium leading-relaxed">
-                COINjecture harnesses the solve-verify asymmetry of NP problems to replace traditional proof-of-work hashing, providing utility beyond network security.
+                COINjecture pays for hard math on-chain — mine blocks for emission, solve marketplace bounties for escrowed payouts, and turn verified NP work into real token value.
               </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-3xl mx-auto mb-10 text-left">
+                <Card className="signal-card border-white/10 bg-background/70 p-4">
+                  <Calculator className="h-5 w-5 text-primary mb-2" />
+                  <div className="font-semibold text-sm mb-1">Solve</div>
+                  <p className="text-xs text-muted-foreground">SubsetSum, SAT, TSP — hard problems, not hash grinding</p>
+                </Card>
+                <Card className="signal-card border-white/10 bg-background/70 p-4">
+                  <CheckCircle2 className="h-5 w-5 text-primary mb-2" />
+                  <div className="font-semibold text-sm mb-1">Verify</div>
+                  <p className="text-xs text-muted-foreground">Solutions checked on-chain in seconds</p>
+                </Card>
+                <Card className="signal-card border-white/10 bg-background/70 p-4">
+                  <Coins className="h-5 w-5 text-primary mb-2" />
+                  <div className="font-semibold text-sm mb-1">Earn</div>
+                  <p className="text-xs text-muted-foreground">Block rewards + bounty payouts in $BEANS</p>
+                </Card>
+              </div>
 
               <div className="flex flex-wrap gap-4 justify-center mb-12">
                 <Link to="/solver-lab">
                   <Button size="lg" className="glow-hover gentle-animation px-8">
-                    Solver Lab <ArrowRight className="ml-2 h-4 w-4" />
+                    Start Earning <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
                 <Link to="/bounty-submit">
                   <Button size="lg" variant="outline" className="glass-effect border-white/20 gentle-animation px-8 hover:bg-card/50">
-                    Submit Bounty <Award className="ml-2 h-4 w-4" />
+                    Post a Bounty <Award className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
                 <a href="/COINjecture-Whitepaper.pdf" target="_blank" rel="noopener noreferrer">
@@ -231,42 +249,38 @@ export const Hero = () => {
           <div className="max-w-4xl mx-auto">
             <div className="text-center mb-12">
               <p className="text-sm font-semibold uppercase tracking-[0.2em] text-primary mb-3">
-                THE INNOVATION
+                MATH → MONEY
               </p>
               <h2 className="text-4xl md:text-5xl font-bold text-foreground">
-                How COINjecture Works
+                Two ways hard math pays
               </h2>
+              <p className="text-muted-foreground mt-4 max-w-2xl mx-auto">
+                Unlike chains that burn electricity on meaningless hashes, COINjecture ties security and payouts to verified NP work.
+              </p>
             </div>
 
             <Card className="glass-effect p-8 mb-8">
               <div className="space-y-6">
                 <div>
-                  <h3 className="text-2xl font-bold mb-3 text-primary">Traditional Mining Approach</h3>
+                  <h3 className="text-2xl font-bold mb-3 text-primary">Mine blocks → mint $BEANS</h3>
                   <p className="text-muted-foreground leading-relaxed">
-                    Traditional proof-of-work blockchains consume significant energy solving 
-                    arbitrary mathematical puzzles. This computational power provides network security but 
-                    produces no additional value.
+                    Every block requires a verifiable NP solution. Miners earn emission rewards scaled by work score — the harder the math relative to verification time, the more you can mint.
                   </p>
                 </div>
 
                 <div>
-                  <h3 className="text-2xl font-bold mb-3 text-primary">COINjecture Network Approach</h3>
+                  <h3 className="text-2xl font-bold mb-3 text-primary">Solve bounties → claim escrow</h3>
                   <p className="text-muted-foreground leading-relaxed">
-                    COINjecture Network is a Layer 1 blockchain protocol that directs computational power toward 
-                    solving practical NP-complete problems - SubsetSum, Boolean SAT, TSP, and custom problems. 
-                    Each verified solution contributes to algorithm research and practical computation through our 
-                    autonomous on-chain marketplace with instant bounty payouts.
+                    Anyone can post a problem with locked $BEANS. Submit the winning solution and the bounty settles on-chain — math problems become a live marketplace for payouts.
                   </p>
                 </div>
 
                 <div>
-                  <h3 className="text-2xl font-bold mb-3 text-primary">How $BEANS Works</h3>
+                  <h3 className="text-2xl font-bold mb-3 text-primary">Why $BEANS has value</h3>
                   <p className="text-muted-foreground leading-relaxed">
-                    Block rewards follow the whitepaper emission law{" "}
-                    <code className="text-xs">⌊w·S·K / isqrt(W)⌋</code> atoms (display BEANS = atoms ÷ 10¹²).
-                    Solve/verify asymmetry sets <code className="text-xs">w_trunc</code>; parent cumulative work{" "}
-                    <code className="text-xs">W</code> scales issuance with a <code className="text-xs">1/√W</code> tail.
-                    More work at a given chain depth yields weakly more mint; racing still punishes inflated solve times.
+                    Emission follows{" "}
+                    <code className="text-xs">⌊w·S·K / isqrt(W)⌋</code> atoms (1 BEANS = 10¹² atoms). Work score{" "}
+                    <code className="text-xs">w</code> comes from solve/verify asymmetry — you are paid for computation that is hard to find but cheap to check.
                   </p>
                 </div>
               </div>
@@ -275,16 +289,16 @@ export const Hero = () => {
             <div className="grid md:grid-cols-2 gap-4 max-w-3xl mx-auto">
               <Card className="p-6 glass-effect text-center">
                 <Target className="h-10 w-10 text-primary mx-auto mb-3" />
-                <h4 className="font-semibold mb-2">Useful Work</h4>
+                <h4 className="font-semibold mb-2">For solvers</h4>
                 <p className="text-sm text-muted-foreground">
-                  Every computation solves real problems with practical applications
+                  Turn algorithm skill into on-chain income — mine the chain or hunt open bounties
                 </p>
               </Card>
               <Card className="p-6 glass-effect text-center">
                 <Award className="h-10 w-10 text-primary mx-auto mb-3" />
-                <h4 className="font-semibold mb-2">Fair Rewards</h4>
+                <h4 className="font-semibold mb-2">For buyers</h4>
                 <p className="text-sm text-muted-foreground">
-                  Dynamic bounties based on problem complexity and solution quality
+                  Post a bounty, lock $BEANS in escrow, and pay only when a solution verifies
                 </p>
               </Card>
             </div>
@@ -298,38 +312,30 @@ export const Hero = () => {
           <div className="max-w-5xl mx-auto">
             <div className="grid md:grid-cols-2 gap-8">
               <Card className="glass-effect p-6">
-                <h3 className="text-xl font-semibold mb-3 text-primary">NP Problems Replace Hashing</h3>
+                <h3 className="text-xl font-semibold mb-3 text-primary">Hard to solve, cheap to verify</h3>
                 <p className="text-muted-foreground leading-relaxed">
-                  Instead of brute-forcing SHA-256 hashes, miners solve NP-complete, co-NP-complete, and
-                  NP-hard problems — tasks whose solutions can be verified quickly but are computationally
-                  hard to find.
+                  NP asymmetry secures the chain and sets your payout — the same property that makes math valuable makes it mineable.
                 </p>
               </Card>
 
               <Card className="glass-effect p-6">
                 <h3 className="text-xl font-semibold mb-3 text-primary">Proof of Useful Work</h3>
                 <p className="text-muted-foreground leading-relaxed">
-                  Block validation requires a verifiable solution via a salt-commit-mine-reveal protocol.
-                  Work scores are calculated from the solve-verify time asymmetry and solution quality, not
-                  arbitrary hash targets.
+                  Blocks commit to real problem instances. Reveal a valid solution, earn work score, mint $BEANS — no SHA-256 lottery.
                 </p>
               </Card>
 
               <Card className="glass-effect p-6">
-                <h3 className="text-xl font-semibold mb-3 text-primary">Same Security Guarantees</h3>
+                <h3 className="text-xl font-semibold mb-3 text-primary">Open marketplace</h3>
                 <p className="text-muted-foreground leading-relaxed">
-                  The solve-verify asymmetry of NP problems provides security equivalent to traditional
-                  mining. Cumulative mathematical work and solution correctness drive consensus — no
-                  centralized validators needed.
+                  Post problems with escrowed bounties or compete for block rewards. Supply meets demand on-chain.
                 </p>
               </Card>
 
               <Card className="glass-effect p-6">
-                <h3 className="text-xl font-semibold mb-3 text-primary">Computational Marketplace</h3>
+                <h3 className="text-xl font-semibold mb-3 text-primary">Public proof of output</h3>
                 <p className="text-muted-foreground leading-relaxed">
-                  The network maintains both consensus-generated problems for block rewards and a
-                  user-submitted problem pool with escrowed bounties — creating a marketplace for real
-                  computational work.
+                  Verified solutions stream to Hugging Face — auditable math that backed real payouts.
                 </p>
               </Card>
             </div>
@@ -360,27 +366,80 @@ export const Hero = () => {
       </section>
 
       {/* CTA Section */}
-      <section className="py-20 relative">
+      <section id="get-started" className="py-20 relative scroll-mt-24">
         <div className="container mx-auto px-6">
-          <div className="max-w-4xl mx-auto text-center">
+          <div className="max-w-3xl mx-auto text-center">
             <h2 className="text-4xl font-bold mb-4">Get Started</h2>
-            <p className="text-lg text-muted-foreground mb-8 leading-relaxed max-w-3xl mx-auto">
-              COINjecture is open-source and community-driven. Whether you&apos;re a developer, researcher, or
-              enthusiast — there&apos;s a place for you. Join solvers contributing to computational blockchain or
-              submit a bounty for problems you need solved.
+            <p className="text-lg text-muted-foreground mb-8 leading-relaxed">
+              Pick how you want math to pay — solve, explore, or run infrastructure.
             </p>
-            <div className="flex flex-wrap gap-4 justify-center">
-              <Link to="/solver-lab">
-                <Button size="lg" className="glow-hover gentle-animation px-8">
-                  Open Solver Lab <Code className="ml-2 h-4 w-4" />
-                </Button>
-              </Link>
-              <Link to="/explore">
-                <Button size="lg" variant="outline" className="gentle-animation px-8">
-                  Open Explorer <TrendingUp className="ml-2 h-4 w-4" />
-                </Button>
-              </Link>
-            </div>
+
+            <Tabs defaultValue="solve" className="text-left">
+              <TabsList className="grid w-full grid-cols-3 h-auto rounded-2xl border border-border/60 bg-muted/30 p-1.5">
+                <TabsTrigger
+                  value="solve"
+                  className="rounded-xl px-3 py-3 text-sm font-semibold data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  Solver Lab
+                </TabsTrigger>
+                <TabsTrigger
+                  value="explore"
+                  className="rounded-xl px-3 py-3 text-sm font-semibold data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  Explorer
+                </TabsTrigger>
+                <TabsTrigger
+                  value="node"
+                  className="rounded-xl px-3 py-3 text-sm font-semibold data-[state=active]:bg-background data-[state=active]:shadow-sm"
+                >
+                  Run a node
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="solve">
+                <Card className="glass-effect p-6 mt-4">
+                  <p className="text-muted-foreground mb-4">
+                    Mine blocks and claim bounties — turn NP solutions into $BEANS from the browser.
+                  </p>
+                  <Link to="/solver-lab">
+                    <Button size="lg" className="glow-hover gentle-animation w-full sm:w-auto">
+                      Open Solver Lab <Code className="ml-2 h-4 w-4" />
+                    </Button>
+                  </Link>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="explore">
+                <Card className="glass-effect p-6 mt-4">
+                  <p className="text-muted-foreground mb-4">
+                    Browse blocks, transactions, and marketplace activity on the live chain.
+                  </p>
+                  <Link to="/explore">
+                    <Button size="lg" variant="outline" className="gentle-animation w-full sm:w-auto">
+                      Open Explorer <TrendingUp className="ml-2 h-4 w-4" />
+                    </Button>
+                  </Link>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="node">
+                <Card className="glass-effect p-6 mt-4">
+                  <p className="text-muted-foreground mb-4">
+                    Join the mesh with a prebuilt GHCR image — no local Rust build required.
+                  </p>
+                  <pre className="bg-terminal-bg text-terminal-text p-4 rounded-lg overflow-x-auto text-xs terminal-font mb-4 whitespace-pre-wrap">
+{`docker pull ghcr.io/coinjecture-network/coinjecture2.0:latest
+docker compose pull bootnode api-server
+docker compose up -d --no-build bootnode api-server`}
+                  </pre>
+                  <Link to="/api#run-a-node">
+                    <Button size="lg" variant="outline" className="gentle-animation w-full sm:w-auto">
+                      Node setup docs <Server className="ml-2 h-4 w-4" />
+                    </Button>
+                  </Link>
+                </Card>
+              </TabsContent>
+            </Tabs>
           </div>
         </div>
       </section>
