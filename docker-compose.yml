@@ -260,6 +260,8 @@ services:
     image: coinject-api:latest
     container_name: coinject-api
     logging: *json-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3030:3030"
     depends_on:

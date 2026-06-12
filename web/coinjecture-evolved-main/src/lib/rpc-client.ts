@@ -64,6 +64,11 @@ async function fetchWithTimeout(
       const vague = !msg || /aborted without reason/i.test(msg);
       throw new Error(vague ? `HTTP request timed out after ${timeoutMs}ms` : msg);
     }
+    if (e instanceof TypeError && /failed to fetch/i.test(e.message)) {
+      throw new Error(
+        'Network error reaching API (upstream may be restarting — retry in a few seconds)',
+      );
+    }
     throw e;
   } finally {
     clearTimeout(timer);
@@ -1141,6 +1146,32 @@ export class RpcClient {
   }
 
   /**
+   * Mining template via `GET {VITE_API_URL}/chain/mining-work` (no CORS preflight).
+   * Prefer over `POST …/node-rpc` when nginx returns 502 without ACAO (browser: `Failed to fetch`).
+   */
+  async getMiningWorkFromApi(): Promise<MiningWork | null> {
+    if (isDevelopment) return null;
+    const base = apiBaseTrimmed();
+    if (!base) return null;
+    try {
+      const response = await fetchWithTimeout(
+        `${base}/chain/mining-work`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        RPC_GET_MINING_WORK_TIMEOUT_MS,
+      );
+      if (!response.ok) return null;
+      const data = (await response.json()) as unknown;
+      if (!data || typeof data !== 'object') return null;
+      const o = data as Record<string, unknown>;
+      if (typeof o.next_height !== 'number' || typeof o.prev_hash !== 'string') return null;
+      if (typeof o.difficulty !== 'number' || !o.problem) return null;
+      return data as MiningWork;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Latest full block via `GET {VITE_API_URL}/chain/latest-block` (same CORS as `/chain/info`).
    * Use when browser POST to `/node-rpc` fails or returns empty bodies.
    */
@@ -1311,6 +1342,8 @@ export class RpcClient {
    * waiting on every parallel host would still yield zero successes when only one URL is the API tunnel.
    */
   async getMiningWork(): Promise<MiningWork> {
+    const fromApi = await this.getMiningWorkFromApi();
+    if (fromApi) return fromApi;
     return this.call<MiningWork>('chain_getMiningWork', [], RPC_GET_MINING_WORK_TIMEOUT_MS);
   }
 

@@ -15,8 +15,9 @@ use coinjecture_api_server::{
     supabase::SupabaseClient,
     AppState,
 };
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -148,6 +149,7 @@ async fn main() {
         node_rpc,
         broadcaster,
         engine: Some(engine_handle),
+        wallet_scan_cache: Arc::new(Mutex::new(HashMap::new())),
     };
     let app = build_router(state);
 

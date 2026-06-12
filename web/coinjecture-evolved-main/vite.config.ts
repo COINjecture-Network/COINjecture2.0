@@ -52,7 +52,22 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'coinjecture-fb-app-id',
+      transformIndexHtml(html) {
+        const fbAppId = (env.VITE_FB_APP_ID || '').trim();
+        if (fbAppId && /^\d+$/.test(fbAppId)) {
+          return html.replace(
+            /(<meta property="fb:app_id" content=")[^"]+("\/>)/,
+            `$1${fbAppId}$2`,
+          );
+        }
+        return html;
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

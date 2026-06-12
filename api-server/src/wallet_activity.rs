@@ -84,11 +84,13 @@ pub fn miner_from_json(block: &Value) -> Option<String> {
     )
 }
 
-/// Scan recent blocks via node RPC when Supabase index is empty or stale (e.g. after chain reset).
+/// Scan blocks via node RPC when Supabase index is empty or unavailable.
+/// `max_blocks`: number of blocks to walk from tip; **0 = entire chain (genesis → tip)**.
 pub async fn scan_wallet_activity_from_chain(
     node_rpc: &Arc<NodeRpcClient>,
     addr: &str,
-    limit: usize,
+    page_limit: usize,
+    page_offset: usize,
     max_blocks: u64,
 ) -> Result<Value, String> {
     let chain_info = node_rpc
@@ -100,18 +102,23 @@ pub async fn scan_wallet_activity_from_chain(
         return Ok(Value::Array(vec![]));
     }
 
-    let scan = max_blocks.max(1).min(tip);
+    let scan = if max_blocks == 0 {
+        tip.saturating_add(1)
+    } else {
+        max_blocks.max(1).min(tip)
+    };
     let start = tip.saturating_sub(scan - 1);
 
     let mut signed_rows = Vec::new();
     let mut incoming_rows = Vec::new();
     let mut mined_rows = Vec::new();
-    let marketplace_rows = Value::Array(vec![]);
+    let mut marketplace_rows = Vec::new();
 
     let mut heights: Vec<u64> = (start..=tip).collect();
     heights.reverse();
 
-    for chunk in heights.chunks(12) {
+    const CHUNK: usize = 32;
+    for chunk in heights.chunks(CHUNK) {
         let mut handles = Vec::with_capacity(chunk.len());
         for &height in chunk {
             let rpc = Arc::clone(node_rpc);
@@ -131,17 +138,19 @@ pub async fn scan_wallet_activity_from_chain(
                 &mut signed_rows,
                 &mut incoming_rows,
                 &mut mined_rows,
+                &mut marketplace_rows,
             );
         }
     }
 
     Ok(merge_wallet_activity(
         addr,
-        limit,
+        page_limit,
+        page_offset,
         Value::Array(signed_rows),
         Value::Array(incoming_rows),
         Value::Array(mined_rows),
-        marketplace_rows,
+        Value::Array(marketplace_rows),
     ))
 }
 
@@ -152,6 +161,7 @@ fn collect_wallet_rows_from_block(
     signed_rows: &mut Vec<Value>,
     incoming_rows: &mut Vec<Value>,
     mined_rows: &mut Vec<Value>,
+    marketplace_rows: &mut Vec<Value>,
 ) {
     if let Some(miner) = miner_from_json(block) {
         if miner == addr {
@@ -185,6 +195,13 @@ fn collect_wallet_rows_from_block(
                 "signer": signer,
                 "payload": tx,
             }));
+            marketplace_rows.extend(extract_marketplace_rows_for_wallet(
+                height,
+                tx_index,
+                &tx_hash,
+                signer.as_deref(),
+                tx,
+            ));
         }
 
         if tx_type == "Transfer" {
@@ -308,7 +325,8 @@ fn parse_u128_field(v: Option<&Value>) -> Option<String> {
 /// Merge signed txs, incoming transfers, mined blocks, and marketplace events.
 pub fn merge_wallet_activity(
     addr: &str,
-    limit: usize,
+    page_limit: usize,
+    page_offset: usize,
     signed: Value,
     incoming: Value,
     mined: Value,
@@ -516,8 +534,99 @@ pub fn merge_wallet_activity(
         .collect();
     entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
 
-    let out: Vec<Value> = entries.into_iter().map(|(_, _, v)| v).take(limit).collect();
+    let take = if page_limit == 0 {
+        0
+    } else if page_limit == usize::MAX {
+        usize::MAX
+    } else {
+        page_limit
+    };
+    let out: Vec<Value> = entries
+        .into_iter()
+        .map(|(_, _, v)| v)
+        .skip(page_offset)
+        .take(take)
+        .collect();
     Value::Array(out)
+}
+
+fn extract_marketplace_rows_for_wallet(
+    block_height: u64,
+    tx_index: usize,
+    tx_hash: &str,
+    signer: Option<&str>,
+    tx: &Value,
+) -> Vec<Value> {
+    let Some(marketplace_tx) = marketplace_tx_body(tx) else {
+        return Vec::new();
+    };
+
+    let Some(operation) = marketplace_tx
+        .get("operation")
+        .or_else(|| marketplace_tx.get("MarketplaceOperation"))
+    else {
+        return vec![json!({
+            "block_height": block_height,
+            "tx_hash": tx_hash,
+            "tx_index": tx_index,
+            "event_index": 0,
+            "event_type": "marketplace_operation",
+            "actor_wallet": signer,
+            "event_payload": marketplace_tx,
+        })];
+    };
+
+    let (event_type, payload) = enum_variant_name(operation)
+        .unwrap_or_else(|| ("marketplace_operation".to_string(), operation.clone()));
+
+    vec![json!({
+        "block_height": block_height,
+        "tx_hash": tx_hash,
+        "tx_index": tx_index,
+        "event_index": 0,
+        "event_type": snake_case_event_type(&event_type),
+        "problem_id": json_string_field(&payload, &["problem_id"]),
+        "actor_wallet": signer,
+        "amount": marketplace_amount(&payload),
+        "event_payload": payload,
+    })]
+}
+
+fn marketplace_tx_body(tx: &Value) -> Option<&Value> {
+    if tx.get("Marketplace").is_some() {
+        return tx.get("Marketplace");
+    }
+    if tx["type"].as_str() == Some("Marketplace") {
+        return Some(tx);
+    }
+    None
+}
+
+fn enum_variant_name(value: &Value) -> Option<(String, Value)> {
+    let obj = value.as_object()?;
+    if obj.len() != 1 {
+        return None;
+    }
+    let (key, inner) = obj.iter().next()?;
+    Some((key.clone(), inner.clone()))
+}
+
+fn snake_case_event_type(name: &str) -> String {
+    name.chars()
+        .fold(String::new(), |mut acc, c| {
+            if c.is_uppercase() && !acc.is_empty() {
+                acc.push('_');
+            }
+            acc.push(c.to_ascii_lowercase());
+            acc
+        })
+}
+
+fn marketplace_amount(payload: &Value) -> Option<Value> {
+    payload
+        .get("bounty")
+        .or_else(|| payload.get("amount"))
+        .cloned()
 }
 
 fn truncate_hex(h: &str, keep: usize) -> Value {

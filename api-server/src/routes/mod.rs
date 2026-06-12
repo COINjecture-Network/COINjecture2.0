@@ -33,6 +33,7 @@ pub fn build_routes(state: AppState) -> Router {
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
         .route("/chain/latest-block", get(chain::latest_block))
+        .route("/chain/mining-work", get(chain::mining_work))
         .route("/chain/info", get(chain::chain_info))
         .route(
             "/node-rpc",

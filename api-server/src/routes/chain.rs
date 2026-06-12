@@ -37,6 +37,21 @@ pub struct ChainInfoResponse {
     total_minted_rewards: Option<String>,
 }
 
+/// `GET /chain/mining-work` — next-block template (same as `chain_getMiningWork`).
+///
+/// Simple GET avoids browser CORS preflight on `POST /node-rpc`; nginx 502s without ACAO
+/// otherwise surface as opaque `Failed to fetch` in Solver Lab.
+pub async fn mining_work(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let rpc = state.node_rpc.as_ref().ok_or_else(|| {
+        ApiError::ServiceUnavailable("Node RPC not configured".into())
+    })?;
+    let result = tokio::time::timeout(Duration::from_secs(90), rpc.get_mining_work())
+        .await
+        .map_err(|_| ApiError::ServiceUnavailable("Mining work request timed out".into()))?
+        .map_err(|e| ApiError::ServiceUnavailable(format!("Node unreachable: {e}")))?;
+    Ok(Json(result))
+}
+
 /// `GET /chain/latest-block` — returns cached latest block from the poller.
 pub async fn latest_block(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let cached = state.broadcaster.latest_block.read().await;
