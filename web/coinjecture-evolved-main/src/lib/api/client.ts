@@ -49,11 +49,22 @@ export interface WalletActivityItem {
   detail?: unknown;
 }
 
+export interface WalletTransactionsOptions {
+  limit?: number;
+  offset?: number;
+}
+
 export async function getWalletTransactions(
   address: string,
-  limit = 40,
+  options: WalletTransactionsOptions = {},
 ): Promise<WalletActivityItem[]> {
-  const q = new URLSearchParams({ address, limit: String(limit) });
+  const limit = options.limit ?? 100;
+  const offset = options.offset ?? 0;
+  const q = new URLSearchParams({
+    address,
+    limit: String(limit),
+    offset: String(offset),
+  });
   const res = await fetch(`${API_BASE}/wallet/transactions?${q.toString()}`, {
     headers: { Accept: 'application/json' },
   });
@@ -65,7 +76,16 @@ export async function getWalletTransactions(
     const error = await res
       .json()
       .catch(() => ({ error: { message: res.statusText } }));
-    throw new Error(error.error?.message || `API error: ${res.status}`);
+    const msg: string = error.error?.message || `API error: ${res.status}`;
+    if (
+      res.status === 503 &&
+      /supabase|indexer|db error|db_size_quota|exceed_db/i.test(msg)
+    ) {
+      throw new Error(
+        'Indexed history is temporarily unavailable (Supabase storage limit or indexer). Recent on-chain activity may still load after the API is updated.',
+      );
+    }
+    throw new Error(msg);
   }
   const raw: unknown = await res.json();
   if (!Array.isArray(raw)) {

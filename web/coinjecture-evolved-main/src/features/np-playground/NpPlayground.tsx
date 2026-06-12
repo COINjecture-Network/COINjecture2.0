@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import type { ImperativePanelHandle } from "react-resizable-panels";
 import { WebCliTerminal } from "@/components/WebCliTerminal";
 import {
   FileJson,
@@ -29,6 +30,8 @@ import {
   FolderOpen,
   Link2,
   Terminal,
+  PanelRight,
+  PanelBottom,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SolverRunResult } from "./types";
@@ -119,6 +122,10 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches
   );
   const [mobilePanel, setMobilePanel] = useState<"code" | "visual" | "result" | "console">("code");
+  const vizPanelRef = useRef<ImperativePanelHandle>(null);
+  const consolePanelRef = useRef<ImperativePanelHandle>(null);
+  const [vizPanelOpen, setVizPanelOpen] = useState(true);
+  const [consolePanelOpen, setConsolePanelOpen] = useState(true);
   const [successPopup, setSuccessPopup] = useState<{ height: number; hash: string } | null>(null);
   const [bountySuccessPopup, setBountySuccessPopup] = useState<{ problemId: string; bounty: string | number } | null>(null);
   const [loadedBountyProblemId, setLoadedBountyProblemId] = useState<string | null>(null);
@@ -756,6 +763,30 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
 
   const isDark = resolvedTheme === "dark";
 
+  const toggleVizPanel = useCallback(() => {
+    const panel = vizPanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) {
+      panel.expand();
+      setVizPanelOpen(true);
+    } else {
+      panel.collapse();
+      setVizPanelOpen(false);
+    }
+  }, []);
+
+  const toggleConsolePanel = useCallback(() => {
+    const panel = consolePanelRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) {
+      panel.expand();
+      setConsolePanelOpen(true);
+    } else {
+      panel.collapse();
+      setConsolePanelOpen(false);
+    }
+  }, []);
+
   const instanceMismatchAlert =
     instanceKindMismatch && activeSolverExpectedKind ? (
       <Alert className="mb-3 border-amber-500/40 bg-amber-500/5">
@@ -779,9 +810,9 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
     ) : null;
 
   return (
-    <div className={cn("flex flex-col gap-3 min-h-0 w-full min-w-0 flex-1", className)}>
-      <Tabs value={workspace} onValueChange={(v) => setWorkspace(v as "solvers" | "chain")} className="flex flex-col flex-1 min-h-0 gap-3 w-full min-w-0">
-        <TabsList className="w-full grid grid-cols-2 h-10 sm:h-11">
+    <div className={cn("flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-1 lg:gap-0", className)}>
+      <Tabs value={workspace} onValueChange={(v) => setWorkspace(v as "solvers" | "chain")} className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-1 overflow-hidden">
+        <TabsList className="grid h-9 w-full shrink-0 grid-cols-2 sm:h-10">
           <TabsTrigger value="solvers">Solver Lab</TabsTrigger>
           <TabsTrigger value="chain" className="gap-2">
             <Network className="h-4 w-4" />
@@ -789,12 +820,12 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="chain" className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden w-full min-w-0 flex flex-col">
-          <WebCliTerminal compact className="w-full max-w-none min-h-[min(42dvh,380px)] lg:min-h-0 flex-1" />
+        <TabsContent value="chain" className="mt-0 flex h-full min-h-0 flex-1 flex-col data-[state=inactive]:hidden w-full min-w-0">
+          <WebCliTerminal compact className="h-full min-h-0 w-full max-w-none flex-1" />
         </TabsContent>
 
-        <TabsContent value="solvers" className="flex-1 flex flex-col min-h-0 h-full mt-0 data-[state=inactive]:hidden w-full min-w-0">
-          <div className="mb-2 rounded-lg border border-border/50 bg-muted/25 px-3 py-2 text-[11px] sm:text-xs text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 shrink-0">
+        <TabsContent value="solvers" className="mt-0 flex h-0 min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden w-full min-w-0">
+          <div className="mb-1 shrink-0 rounded-lg border border-border/50 bg-muted/25 px-3 py-1.5 text-[11px] sm:text-xs text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 lg:hidden">
             <span className="font-medium text-foreground/90">Chain</span>
             {chainInfo ? (
               <>
@@ -876,7 +907,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             )}
           </div>
           {bountyProblemId ? (
-            <Card className="mb-3 border-primary/20 bg-primary/5">
+            <Card className="mb-1 shrink-0 border-primary/20 bg-primary/5 lg:hidden">
               <CardContent className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Bounty mode</div>
@@ -910,12 +941,27 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             </Card>
           ) : null}
           {isLg ? (
-          <div className="flex h-full min-h-[min(58dvh,480px)] w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 lg:min-h-[calc(100dvh-8rem)] lg:flex-row">
-            {/* File explorer — full height; console does not span under this column */}
-            <aside className="flex shrink-0 flex-col border-b border-border/60 bg-muted/15 lg:h-full lg:w-52 lg:self-stretch lg:border-b-0 lg:border-r">
-              <div className="flex items-center gap-2 px-2 py-2 border-b border-border/50 text-xs font-medium text-muted-foreground">
+          <div className="flex h-0 min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 lg:flex-row">
+            {/* File explorer */}
+            <aside className="flex shrink-0 flex-col border-b border-border/60 bg-muted/15 lg:h-full lg:w-48 lg:self-stretch lg:border-b-0 lg:border-r">
+              <div className="flex items-center gap-2 px-2 py-1.5 border-b border-border/50 text-xs font-medium text-muted-foreground">
                 <FolderOpen className="h-3.5 w-3.5" />
                 Workspace
+              </div>
+              <div className="hidden border-b border-border/40 px-2 py-1.5 text-[10px] text-muted-foreground lg:block">
+                {chainInfo ? (
+                  <span>
+                    Tip <span className="font-mono text-foreground">{chainInfo.best_height}</span>
+                    {miningWork ? (
+                      <>
+                        {" "}
+                        · next <span className="font-mono text-foreground">{miningWork.next_height}</span>
+                      </>
+                    ) : null}
+                  </span>
+                ) : (
+                  "Chain loading…"
+                )}
               </div>
               <ScrollArea className="flex-1 min-h-0 lg:flex-1 lg:min-h-0 max-h-[200px] lg:max-h-none">
                 <div className="p-1 space-y-0.5">
@@ -1009,28 +1055,54 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
               </div>
             </aside>
 
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:h-full lg:min-h-0">
+            <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <ResizablePanelGroup
               direction="vertical"
+              autoSaveId="solver-lab-v3-editor-console"
               className="h-full min-h-0 w-full flex-1"
             >
-              <ResizablePanel defaultSize={72} minSize={38} className="min-h-0">
+              <ResizablePanel defaultSize={82} minSize={45} className="flex min-h-0 flex-col overflow-hidden">
+                <div className="flex h-full min-h-0 flex-col overflow-hidden">
                 <ResizablePanelGroup
                   direction="horizontal"
-                  className="flex h-full min-h-[220px] w-full min-w-0"
+                  autoSaveId="solver-lab-v3-code-viz"
+                  className="flex h-full min-h-0 w-full min-w-0"
                 >
-                  <ResizablePanel defaultSize={52} minSize={30} className="min-w-0 flex flex-col min-h-0">
-                    <div className="flex flex-col border-b border-border/50 bg-muted/20 text-xs shrink-0">
-                    <div className="flex items-center justify-between gap-2 px-3 py-2">
-                      <span className="font-mono text-muted-foreground truncate">{activeFile}</span>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button type="button" variant="ghost" size="sm" className="h-8 gap-1" onClick={resetAll} title="Reset">
+                  <ResizablePanel defaultSize={vizPanelOpen ? 62 : 100} minSize={35} className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+                    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+                    <div className="flex shrink-0 flex-col border-b border-border/50 bg-muted/20 text-xs">
+                    <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+                      <span className="font-mono text-muted-foreground truncate text-[11px]">{activeFile}</span>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <Button
+                          type="button"
+                          variant={vizPanelOpen ? "secondary" : "ghost"}
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-[10px]"
+                          onClick={toggleVizPanel}
+                          title="Show or hide visualization panel"
+                        >
+                          <PanelRight className="h-3 w-3" />
+                          Viz
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={consolePanelOpen ? "secondary" : "ghost"}
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-[10px]"
+                          onClick={toggleConsolePanel}
+                          title="Show or hide console panel"
+                        >
+                          <PanelBottom className="h-3 w-3" />
+                          Console
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={resetAll} title="Reset">
                           <RotateCcw className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           type="button"
                           size="sm"
-                          className="h-8 gap-1 max-w-[min(100%,14rem)]"
+                          className="h-7 gap-1 max-w-[min(100%,12rem)] px-2 text-[10px]"
                           onClick={run}
                           disabled={running || submittingChain || pullingChainInstance}
                           title={runButtonTitle}
@@ -1042,7 +1114,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                           type="button"
                           variant="outline"
                           size="sm"
-                          className="h-8 gap-1 max-w-[min(100%,11rem)]"
+                          className="h-7 gap-1 max-w-[min(100%,10rem)] px-2 text-[10px]"
                           onClick={() =>
                             selectedBountyProblem ? void submitSelectedBountySolution() : void submitProblemToChain()
                           }
@@ -1058,19 +1130,19 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                             {submittingChain ? "…" : selectedBountyProblem ? "Submit bounty solution" : "Mine block"}
                           </span>
                         </Button>
-                        <Button type="button" variant="outline" size="sm" className="h-8 gap-1" onClick={submitToBounty}>
-                          <Send className="h-3.5 w-3.5" />
-                          Draft bounty
+                        <Button type="button" variant="outline" size="sm" className="h-7 gap-1 px-2 text-[10px]" onClick={submitToBounty}>
+                          <Send className="h-3 w-3" />
+                          Draft
                         </Button>
                       </div>
                     </div>
                     {powTries != null ? (
-                      <div className="px-3 pb-2 text-[10px] font-mono text-muted-foreground tabular-nums">
+                      <div className="px-2 pb-1 text-[10px] font-mono text-muted-foreground tabular-nums">
                         Header PoW: {powTries.toLocaleString()} nonces…
                       </div>
                     ) : null}
                     </div>
-                    <div className="flex-1 min-h-0 min-w-0 p-2 flex flex-col">
+                    <div className="flex h-0 min-h-0 flex-1 flex-col overflow-hidden p-1.5">
                       <Editor
                         key={activeFile}
                         path={activeFile}
@@ -1078,17 +1150,27 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                         onChange={(v) => onEditorChange(v)}
                         dark={isDark}
                         minHeight="100%"
-                        className="min-h-[200px] flex-1 h-full"
+                        className="min-h-0 flex-1"
                       />
+                    </div>
                     </div>
                   </ResizablePanel>
                   <ResizableHandle withHandle />
-                  <ResizablePanel defaultSize={48} minSize={28} className="min-w-0 min-h-0">
-                    <Card className="h-full border-0 rounded-none shadow-none flex flex-col min-h-0">
-                      <CardHeader className="py-3 px-4 border-b border-border/50">
-                        <CardTitle className="text-sm font-medium">Visualization & results</CardTitle>
+                  <ResizablePanel
+                    ref={vizPanelRef}
+                    collapsible
+                    collapsedSize={0}
+                    defaultSize={38}
+                    minSize={18}
+                    onCollapse={() => setVizPanelOpen(false)}
+                    onExpand={() => setVizPanelOpen(true)}
+                    className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+                  >
+                    <Card className="flex h-full min-h-0 flex-col overflow-hidden border-0 rounded-none shadow-none">
+                      <CardHeader className="shrink-0 border-b border-border/50 px-3 py-2">
+                        <CardTitle className="text-xs font-medium">Visualization & results</CardTitle>
                       </CardHeader>
-                      <CardContent className="flex-1 p-4 overflow-auto min-h-0">
+                      <CardContent className="min-h-0 flex-1 overflow-auto p-3">
                         {instanceMismatchAlert}
                         <Tabs defaultValue="viz" className="w-full">
                           <TabsList className="mb-3">
@@ -1118,25 +1200,33 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     </Card>
                   </ResizablePanel>
                 </ResizablePanelGroup>
+                </div>
               </ResizablePanel>
 
               <ResizableHandle withHandle />
 
-              <ResizablePanel defaultSize={28} minSize={16} className="min-h-[88px]">
-                <Card className="flex h-full min-h-0 flex-col border-0 border-t border-border/60 shadow-none lg:border-t-0">
-                  <CardHeader className="py-2 px-3 flex flex-row items-center justify-between gap-2 shrink-0">
-                    <CardTitle className="text-sm font-medium">Console</CardTitle>
+              <ResizablePanel
+                ref={consolePanelRef}
+                collapsible
+                collapsedSize={4}
+                defaultSize={18}
+                minSize={12}
+                onCollapse={() => setConsolePanelOpen(false)}
+                onExpand={() => setConsolePanelOpen(true)}
+                className="flex min-h-0 flex-col overflow-hidden"
+              >
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden border-0 border-t border-border/60 shadow-none">
+                  <CardHeader className="flex shrink-0 flex-row items-center justify-between gap-2 px-3 py-1.5">
+                    <CardTitle className="text-xs font-medium">Console</CardTitle>
                     <Button type="button" variant="ghost" size="sm" className="h-8 gap-1" onClick={clearConsole}>
                       <Trash2 className="h-3.5 w-3.5" />
                       Clear
                     </Button>
                   </CardHeader>
-                  <CardContent className="flex-1 p-0 min-h-0 flex flex-col overflow-hidden">
-                    <ScrollArea className="flex-1 min-h-[120px] h-full">
-                      <pre className="text-xs font-mono p-3 pr-6 whitespace-pre-wrap break-words text-muted-foreground">
-                        {consoleLines.length === 0 ? "Build output and errors appear here." : consoleLines.join("\n")}
-                      </pre>
-                    </ScrollArea>
+                  <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+                    <pre className="h-0 min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pr-4 text-xs font-mono whitespace-pre-wrap break-words text-muted-foreground">
+                      {consoleLines.length === 0 ? "Build output and errors appear here." : consoleLines.join("\n")}
+                    </pre>
                   </CardContent>
                 </Card>
               </ResizablePanel>
@@ -1144,7 +1234,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
             </div>
           </div>
           ) : (
-            <div className="flex min-h-[min(62dvh,560px)] flex-1 flex-col w-full overflow-hidden rounded-lg border border-border/60 bg-background/50 pb-[max(0.75rem,env(safe-area-inset-bottom))] touch-manipulation lg:h-full lg:min-h-0">
+            <div className="flex h-0 min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/50 pb-[max(0.75rem,env(safe-area-inset-bottom))] touch-manipulation">
               <div className="shrink-0 z-10 border-b border-border/60 bg-background/95 backdrop-blur-md px-3 pt-2 pb-2 space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                   <Select
@@ -1254,9 +1344,9 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
               <Tabs
                 value={mobilePanel}
                 onValueChange={(v) => setMobilePanel(v as "code" | "visual" | "result" | "console")}
-                className="flex flex-col flex-1 min-h-0"
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
               >
-                <TabsList className="grid w-full grid-cols-4 h-12 shrink-0 rounded-none border-b border-border/50 bg-muted/20 p-1">
+                <TabsList className="grid h-11 w-full shrink-0 grid-cols-4 rounded-none border-b border-border/50 bg-muted/20 p-1">
                   <TabsTrigger value="code" className="text-xs px-1">
                     Code
                   </TabsTrigger>
@@ -1271,7 +1361,7 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     Log
                   </TabsTrigger>
                 </TabsList>
-                <TabsContent value="code" className="flex flex-1 min-h-0 flex-col mt-0 overflow-hidden p-2 data-[state=inactive]:hidden">
+                <TabsContent value="code" className="mt-0 flex h-0 min-h-0 flex-1 flex-col overflow-hidden p-2 data-[state=inactive]:hidden">
                   <Editor
                     key={activeFile}
                     path={activeFile}
@@ -1279,14 +1369,14 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                     onChange={(v) => onEditorChange(v)}
                     dark={isDark}
                     minHeight="100%"
-                    className="min-h-[280px] flex-1 h-full"
+                    className="min-h-0 flex-1"
                   />
                 </TabsContent>
-                <TabsContent value="visual" className="flex-1 min-h-0 mt-0 overflow-y-auto p-3 data-[state=inactive]:hidden">
+                <TabsContent value="visual" className="mt-0 h-0 min-h-0 flex-1 overflow-y-auto p-3 data-[state=inactive]:hidden">
                   {instanceMismatchAlert}
                   {renderViz()}
                 </TabsContent>
-                <TabsContent value="result" className="flex-1 min-h-0 mt-0 overflow-y-auto p-3 data-[state=inactive]:hidden">
+                <TabsContent value="result" className="mt-0 h-0 min-h-0 flex-1 overflow-y-auto p-3 data-[state=inactive]:hidden">
                   <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-muted/30 rounded-md p-3 border border-border/50">
                     {runResult
                       ? JSON.stringify(
@@ -1301,19 +1391,17 @@ export function NpPlayground({ className }: NpPlaygroundProps) {
                       : "Run the solver to see structured output."}
                   </pre>
                 </TabsContent>
-                <TabsContent value="console" className="flex-1 min-h-0 mt-0 overflow-hidden p-0 data-[state=inactive]:hidden flex flex-col">
-                  <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/50 bg-muted/10">
+                <TabsContent value="console" className="mt-0 flex h-0 min-h-0 flex-1 flex-col overflow-hidden p-0 data-[state=inactive]:hidden">
+                  <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 bg-muted/10 px-3 py-2">
                     <span className="text-xs font-medium text-muted-foreground">Console</span>
                     <Button type="button" variant="ghost" size="sm" className="h-9 min-h-[44px]" onClick={clearConsole}>
                       <Trash2 className="h-4 w-4 mr-1" />
                       Clear
                     </Button>
                   </div>
-                  <ScrollArea className="flex-1 min-h-[min(40dvh,280px)]">
-                    <pre className="text-xs font-mono p-3 pr-6 whitespace-pre-wrap break-words text-muted-foreground">
-                      {consoleLines.length === 0 ? "Build output and errors appear here." : consoleLines.join("\n")}
-                    </pre>
-                  </ScrollArea>
+                  <pre className="h-0 min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 pr-4 text-xs font-mono whitespace-pre-wrap break-words text-muted-foreground">
+                    {consoleLines.length === 0 ? "Build output and errors appear here." : consoleLines.join("\n")}
+                  </pre>
                 </TabsContent>
               </Tabs>
             </div>

@@ -16,7 +16,10 @@ if [ ! -f .env.production ]; then
   echo "    Copy .env.production.example to .env.production and set your production API URL."
 fi
 
-# Build the frontend
+# Build the frontend (regenerate social preview from Hero copy + brand mark)
+echo "🖼️  Rendering link preview (og-preview.png)..."
+npm run og:preview
+
 echo "📦 Building frontend..."
 npm run build
 
@@ -39,6 +42,13 @@ aws s3 cp dist/index.html "s3://$S3_BUCKET/index.html" \
   --region "$REGION" \
   --content-type "text/html" \
   --cache-control "no-cache, no-store, must-revalidate"
+
+if [ -f dist/og-preview.png ]; then
+  aws s3 cp dist/og-preview.png "s3://$S3_BUCKET/og-preview.png" \
+    --region "$REGION" \
+    --content-type "image/png" \
+    --cache-control "public, max-age=86400"
+fi
 
 # Set proper content types for assets
 echo "📝 Setting content types..."

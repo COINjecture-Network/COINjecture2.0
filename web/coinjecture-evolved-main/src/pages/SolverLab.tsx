@@ -9,18 +9,20 @@ const SolverLab = () => {
   }, []);
 
   return (
-    <div className="min-h-[100dvh] bg-background flex flex-col lg:h-[100dvh] lg:max-h-[100dvh] lg:overflow-hidden">
+    <div className="min-h-[100dvh] bg-background">
       <Navigation />
-      <main className="flex flex-1 flex-col min-h-0 lg:h-full lg:overflow-hidden pt-20 sm:pt-24 lg:pt-24 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        <div className="container mx-auto shrink-0 px-3 sm:px-6 lg:px-4">
-          <header className="mb-2 sm:mb-3 lg:mb-2">
-            <div className="market-surface-strong p-3 sm:p-4 lg:p-3">
+      {/* Desktop: pin workbench to viewport below fixed nav (reliable IDE height). Mobile: stacked + scroll. */}
+      <main className="flex h-[100dvh] flex-col overflow-hidden pt-20 sm:pt-24 lg:fixed lg:inset-x-0 lg:bottom-0 lg:top-14 lg:z-0 lg:h-[calc(100dvh-3.5rem)] lg:pt-0">
+        {/* Marketing header — tablet/mobile only */}
+        <div className="container mx-auto shrink-0 px-3 sm:px-6 lg:hidden">
+          <header className="mb-2 sm:mb-3">
+            <div className="market-surface-strong p-3 sm:p-4">
               <div className="max-w-5xl mx-auto">
-                <div className="signal-kicker text-center hidden sm:block lg:hidden">Miner workbench</div>
-                <h1 className="text-xl sm:text-3xl lg:text-2xl font-bold mb-1 sm:mb-2 lg:mb-0 tracking-tight text-center">
+                <div className="signal-kicker text-center hidden sm:block">Miner workbench</div>
+                <h1 className="text-xl sm:text-3xl font-bold mb-1 sm:mb-2 tracking-tight text-center">
                   Solver <span className="text-primary">Lab</span>
                 </h1>
-                <p className="text-muted-foreground text-center max-w-3xl mx-auto text-sm leading-relaxed hidden md:block lg:hidden">
+                <p className="text-muted-foreground text-center max-w-3xl mx-auto text-sm leading-relaxed hidden md:block">
                   Write your own solver, sync the next live chain instance, test locally, then submit a block when your wallet is ready.
                 </p>
                 <div className="hidden md:flex justify-center gap-2 mt-3 flex-wrap">
@@ -38,7 +40,7 @@ const SolverLab = () => {
                     Post a bounty
                   </Link>
                 </div>
-                <div className="hidden md:grid lg:hidden gap-2 md:grid-cols-4 mt-3 sm:mt-4">
+                <div className="hidden md:grid gap-2 md:grid-cols-4 mt-3 sm:mt-4">
                   <div className="signal-card">
                     <div className="signal-kicker">1. Prepare</div>
                     <div className="mt-2 font-semibold">Create or connect a wallet.</div>
@@ -60,8 +62,8 @@ const SolverLab = () => {
             </div>
           </header>
         </div>
-        <div className="flex min-h-[min(72dvh,640px)] flex-1 flex-col w-full min-w-0 px-2 sm:px-4 lg:min-h-0 lg:flex-1 lg:overflow-hidden lg:px-4">
-          <NpPlayground className="flex h-full min-h-0 flex-1 flex-col lg:min-h-[calc(100dvh-7.5rem)]" />
+        <div className="flex h-0 min-w-0 flex-1 flex-col px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-4 lg:h-full lg:min-h-0 lg:overflow-hidden lg:px-3 lg:pb-2">
+          <NpPlayground className="flex h-full min-h-0 w-full flex-1 flex-col" />
         </div>
       </main>
     </div>

@@ -428,7 +428,7 @@ Type 'help' for available commands`;
   };
 
   return (
-    <Card className={cn("glass-effect p-0 overflow-hidden border-border/60", className)}>
+    <Card className={cn("glass-effect p-0 overflow-hidden border-border/60 flex flex-col", compact && "h-full min-h-0", className)}>
       <div className="bg-muted/40 border-b border-border px-4 py-2.5 flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <div className="flex gap-1.5 shrink-0">
@@ -477,7 +477,7 @@ Type 'help' for available commands`;
         ref={outputRef}
         className={cn(
           "bg-terminal-bg p-4 overflow-y-auto terminal-font text-sm text-terminal-text",
-          compact ? "min-h-[200px] max-h-[min(50vh,420px)]" : "min-h-[320px] h-[min(50vh,420px)]"
+          compact ? "flex-1 min-h-0" : "min-h-[320px] h-[min(50vh,420px)]"
         )}
         onClick={() => inputRef.current?.focus()}
       >

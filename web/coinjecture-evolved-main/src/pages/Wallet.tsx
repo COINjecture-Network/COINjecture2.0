@@ -10,12 +10,12 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useWallet } from "@/contexts/WalletContext";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { rpcClient, type ProblemInfo } from "@/lib/rpc-client";
 import { isMarketplaceListingOpen } from "@/lib/marketplace-status";
 import { getWalletTransactions, type WalletActivityItem } from "@/lib/api/client";
 import { Wallet, Plus, Upload, Send, Copy, Trash2, Eye, EyeOff, Check, ChevronDown } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { createSignedTransferTransaction } from "@/lib/wallet-crypto";
 import {
   formatBeans,
@@ -655,33 +655,63 @@ function activityKindStyles(kind: string): string {
   }
 }
 
+const WALLET_TX_PAGE = 100;
+
 function TransactionHistory({ address }: { address: string }) {
-  const { data: items, isLoading, isError } = useQuery({
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['walletTxs', address],
-    queryFn: () => getWalletTransactions(address),
-    refetchInterval: 15_000,
+    queryFn: ({ pageParam = 0 }) =>
+      getWalletTransactions(address, { limit: WALLET_TX_PAGE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      if (lastPage.length < WALLET_TX_PAGE) return undefined;
+      return allPages.reduce((n, page) => n + page.length, 0);
+    },
+    refetchInterval: 30_000,
     retry: 1,
   });
 
-  if (isLoading) {
-    return <div className="text-sm text-muted-foreground">Loading history...</div>;
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage && !isLoading) {
+      void fetchNextPage();
+    }
+  }, [hasNextPage, isFetchingNextPage, isLoading, fetchNextPage]);
+
+  const items = data?.pages.flat() ?? [];
+  const loadingAll = isLoading || (hasNextPage && isFetchingNextPage);
+
+  if (isLoading && !items.length) {
+    return <div className="text-sm text-muted-foreground">Loading history…</div>;
   }
   if (isError) {
     return (
-      <div className="text-sm text-muted-foreground">
-        Could not load activity (check API / Supabase indexer).
+      <div className="text-sm text-muted-foreground space-y-1">
+        <p>Could not load activity.</p>
+        <p className="text-xs">
+          {error instanceof Error ? error.message : 'Check API and Supabase indexer.'}
+        </p>
       </div>
     );
   }
-  if (!items?.length) {
+  if (!items.length) {
     return <div className="text-sm text-muted-foreground">No on-chain activity yet</div>;
   }
 
   return (
     <div className="space-y-2">
-      <Label className="text-muted-foreground">Recent activity</Label>
+      <Label className="text-muted-foreground">Activity</Label>
       <p className="text-xs text-muted-foreground">
-        Sends, receives, block rewards when you mine, and marketplace / bounty actions indexed from the chain.
+        {loadingAll
+          ? `Loading all transactions… (${items.length} so far)`
+          : `${items.length} transaction${items.length === 1 ? '' : 's'} — sends, receives, mining rewards, bounties`}
       </p>
       <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
         {items.map((row, index) => {

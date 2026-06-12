@@ -26,6 +26,8 @@ impl EventProcessor {
         let txs = transactions(block);
         let tx_count = txs.len();
 
+        // Store only coinbase (for wallet reward display), not the full block — full blocks
+        // duplicate tx payloads already in `block_transactions` and blow Supabase quotas.
         let block_row = json!({
             "height": height,
             "hash": block_hash.clone(),
@@ -35,7 +37,7 @@ impl EventProcessor {
             "tx_count": tx_count,
             "work_score": work_score(block),
             "raw_header": raw_header(block),
-            "raw_block": block,
+            "raw_block": json!({ "coinbase": block.get("coinbase").cloned().unwrap_or(Value::Null) }),
         });
 
         self.supabase

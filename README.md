@@ -1,15 +1,19 @@
-# COINjecture 2.0: WEB4 Dimensional Blockchain Protocol
+# COINjecture 2.0: Turn Verified Computational Work into Token Value
 
 <div align="center">
 
-**The First Blockchain Where Computational Work Actually Matters**
+**Proof-of-Useful-Work Layer 1 — useful NP-class solving plus header commitments, not vanity SHA grinding**
 
-[![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org/)
-[![Database](https://img.shields.io/badge/Database-redb%202.1-green)](https://crates.io/crates/redb)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Version](https://img.shields.io/badge/version-4.8.4-blue.svg)](https://github.com/COINjecture-Network/COINjecture2.0/blob/main/Cargo.toml)
+[![Rust](https://img.shields.io/badge/rust-1.94+-orange.svg)](https://www.rust-lang.org/)
+[![Lean 4](https://img.shields.io/badge/Lean%204-v4.28.0-purple.svg)](lean4/)
+[![Database](https://img.shields.io/badge/database-redb%202.1-green.svg)](https://crates.io/crates/redb)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/ci.yml)
+[![API CI](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/api-server-ci.yml/badge.svg?branch=main)](https://github.com/COINjecture-Network/COINjecture2.0/actions/workflows/api-server-ci.yml)
+![Testnet](https://img.shields.io/badge/testnet-pre--audit-yellow.svg)
 
-*Proof of Useful Work (PoUW) blockchain with autonomous NP problem marketplace*
+[Website](https://coinjecture.com) · [API](https://api.coinjecture.com) · [Solver Lab](https://coinjecture.com/solver-lab) · [Whitepaper](docs/whitepaper/Whitepaper.md)
 
 </div>
 
@@ -30,6 +34,7 @@
 - [Production deployment and chain health](#production-deployment-and-chain-health)
 - [For AI Research Labs](#for-ai-research-labs)
 - [Development Status](#development-status)
+- [Formal Verification (Lean 4)](#formal-verification-lean-4)
 - [License](#license)
 
 ---
@@ -38,7 +43,7 @@
 
 COINjecture 2.0 is a **testnet WEB4** Layer 1 blockchain protocol built in pure Rust, implementing:
 
-1. **Proof of Useful Work (PoUW)**: Mining solves real NP-complete problems, not wasteful hashing
+1. **Proof of Useful Work (PoUW)**: Miners solve **NP-complete, co-NP-complete, and NP-hard** instances, then seal the block with a **header hash** meeting a leading-hex-zero target — polynomial-time solution verification, not meaningless SHA loops alone
 2. **Autonomous Marketplace**: On-chain bounty system for computational work with instant payouts
 3. **Dimensional Tokenomics**: Multi-tier liquidity pools with exponential allocation ratios
 4. **Institutional Infrastructure**: ACID-compliant redb database, full state persistence
@@ -46,10 +51,9 @@ COINjecture 2.0 is a **testnet WEB4** Layer 1 blockchain protocol built in pure 
 **This is not WEB3. This is WEB4.**
 
 - **WEB3**: Wasteful hash grinding with no real-world value
-- **WEB4**: Every hash solves real computational problems. Every block advances science.
+- **WEB4**: Every block advances verifiable computation across **NP-complete**, **co-NP-complete**, and **NP-hard** problem classes
 
-**Current Status**: **v4.8.4** (Phases 1–18 complete); 4-node Docker testnet verified — nodes discover, mine blocks, and propagate across the network  
-**Live Features**: Autonomous bounty payouts, NP-complete problem solving, dimensional economics, CPP + mesh P2P with **Noise_XX** encrypted transport (`network/src/noise.rs`, `encrypted_connection.rs`)
+**Current Status**: **v4.8.4** — live testnet at [coinjecture.com](https://coinjecture.com) ([API](https://api.coinjecture.com), `chain_id`: `coinject-network-b-v4`); mesh CPP P2P with **Noise_XX**; PoUW marketplace, dimensional pools, Solver Lab
 
 ---
 
@@ -70,9 +74,9 @@ graph TB
         style VERIFY fill:#d0bfff,stroke:#7950f2,stroke-width:3px
         style PAYOUT fill:#b2f2bb,stroke:#2b8a3e,stroke-width:3px
 
-        SUBMIT["1 User Submits Problem<br/>━━━━━━━━━━━━━━━<br/>NP-hard problem SubsetSum SAT TSP<br/>Bounty escrowed on-chain<br/>Work score requirement<br/>Expiration deadline"]
+        SUBMIT["1 User Submits Problem<br/>━━━━━━━━━━━━━━━<br/>NP-complete · co-NP-complete · NP-hard<br/>SubsetSum · SAT · TSP · Custom<br/>Bounty escrowed on-chain<br/>Work score · Expiration"]
 
-        MINE["2 Miners Solve Problem<br/>━━━━━━━━━━━━━━━<br/>Download via RPC<br/>Run NP-hard algorithms<br/>Submit solution transaction"]
+        MINE["2 Miners Solve Problem<br/>━━━━━━━━━━━━━━━<br/>Download via RPC<br/>Run problem-specific solvers<br/>Submit solution transaction"]
 
         VERIFY["3 Blockchain Verifies<br/>━━━━━━━━━━━━━━━<br/>Polynomial-time verification<br/>Work score calculation<br/>Solution quality check"]
 
@@ -85,26 +89,55 @@ graph TB
     end
 ```
 
-### Supported NP-Complete Problems
+**Block production (consensus miner)** is two steps: (1) deterministically generate and **solve** a SubsetSum / SAT / TSP instance (seeded by `prev_hash` + height); (2) **search a header nonce** so `hex(block_hash)` meets `--difficulty` leading zero hex characters (default **5**). Work score uses solve/verify time asymmetry from step 1; step 2 binds the solution to the chain tip.
 
-| Problem Type | Verification Time | Difficulty | Use Cases |
-|--------------|-------------------|------------|-----------|
-| **SubsetSum** | O(n) | Dynamic programming | Cryptographic optimization, resource allocation |
-| **Boolean SAT** | O(n·m) | DPLL, backtracking | Circuit design, formal verification |
-| **TSP** | O(n²) | Greedy heuristics | Logistics, routing optimization |
-| **Custom** | User-defined | Pluggable | Research problems, novel NP-hard instances |
+### Supported Problem Classes & Types
+
+PoUW requires a **short, polynomial-time-checkable certificate** — the solve ≫ verify asymmetry that defines useful computational work. COINjecture registers every problem type under one of **three complexity classes** in `consensus/src/problem_registry.rs` (`ComplexityClass`):
+
+| Complexity class | What it covers | PoUW role | Examples in registry |
+|------------------|----------------|-----------|----------------------|
+| **NP-complete** | Hardest **decision** problems in **NP** | Yes/no certificate, poly-time verify | SubsetSum, SAT, Graph Coloring |
+| **co-NP-complete** | Hardest **decision** problems in **co-NP** | Verify “no” / dual certificates in poly time | Tautology checking (roadmap) |
+| **NP-hard** | At least as hard as any NP problem; includes **optimization** | Best solution + poly-time check (or quality gradient) | TSP, Factorization, SVP |
+
+**Broader landscape:** problems in **NP** (not necessarily complete) and **co-NP** can be bountied once a type has a registered `ProblemDescriptor` and a working verifier. **`ProblemType::Custom`** is reserved for forward-compatible payloads; on-chain verify for Custom is **not implemented yet** (see roadmap table below).
+
+#### Implemented
+| Problem | Class | On-chain today | Verification | Notes |
+|---------|-------|----------------|--------------|-------|
+| **SubsetSum** | NP-complete | ✅ block templates + marketplace | O(n) | Decision: subset sums to target |
+| **Boolean SAT** | NP-complete | ✅ block templates + marketplace | O(n·m) | Decision: satisfy all clauses |
+| **TSP** | NP-hard | ✅ block templates + marketplace | O(n) tour check | Optimization: valid Hamiltonian tour + quality gradient |
+
+Block templates pick **SubsetSum, SAT, or TSP** at random (deterministic RNG from `prev_hash` + height) — see `consensus/src/miner.rs::generate_problem`.
+
+#### In registry (difficulty / descriptors); not yet block templates
+| Problem | Class | Verification | Notes |
+|---------|-------|--------------|-------|
+| **Graph Coloring** | NP-complete | O(V+E) | Registered in `ProblemRegistry`; no `ProblemType` variant yet |
+| **Factorization** | NP-hard (verify in co-NP) | O(M(log N)) | Multiply factors to verify |
+| **SVP** | NP-hard | O(n²) | Shortest lattice vector |
+
+#### Roadmap
+| Problem | Class | Notes |
+|---------|-------|-------|
+| **Tautology / dual-SAT** | co-NP-complete | Example co-NP-complete class; not in registry yet |
+| **Custom** | User-declared | `ProblemType::Custom` exists; **`Solution::verify` does not validate Custom yet** — marketplace accepts payloads via `marketplace_submitPublicProblem`, but consensus verification today is SubsetSum / SAT / TSP only |
+
+**Mining block templates** (`core/src/problem.rs`): **SubsetSum, SAT, TSP** (+ `Custom` enum variant for forward compatibility). Descriptor metadata for six built-ins lives in `consensus/src/problem_registry.rs`. See [Whitepaper — Problem registry](docs/whitepaper/Whitepaper.md).
 
 ### Work Score Formula
 
-Implemented in `consensus/src/work_score.rs` (Phase 18 consensus rewrite):
+Implemented in `consensus/src/work_score.rs`:
 
 ```text
 work_score = log₂(solve_time / verify_time) × quality_score
 ```
 
 **Rationale (summary)**  
-- **Time asymmetry** `solve_time / verify_time` is the property all NP instances share: finding a solution is hard, verifying it is polynomial-time. `log₂` turns the ratio into **comparable security bits** across problem types.  
-- **`quality_score`** captures how good the submitted solution is (consensus-verifiable).  
+- **Time asymmetry** `solve_time / verify_time` applies across **NP-complete**, **co-NP-complete**, and **NP-hard** instances with poly-time certificates: finding a solution (or optimal value) is hard; checking it is fast. `log₂` turns the ratio into **comparable security bits** across types and classes.  
+- **`quality_score`** captures how good the submitted solution is (consensus-verifiable; gradient for optimization problems like TSP).  
 
 **Deliberately not in the formula** (see code comments): space asymmetry, “energy efficiency,” and problem-specific multipliers that would be **self-reported or gameable** by miners. The racing incentive caps inflated solve times: slower work loses the block to faster honest competitors.
 
@@ -203,22 +236,24 @@ let problem = ProblemType::SubsetSum {
     target: 53,
 };
 
-// Submit with 1000 token bounty, 30 day expiration
+// Submit with bounty in ledger atoms (Balance = u128), 30 day expiration
 let tx = Transaction::Marketplace(
     MarketplaceTransaction::new_problem_submission(
         problem,
         your_address,
-        1000,     // bounty amount
+        1000,     // bounty atoms
         10.0,     // minimum work score
         30,       // expiration in days
-        10,       // transaction fee
+        None,     // optional title
+        None,     // optional briefing
+        10,       // transaction fee atoms
         nonce,
         &keypair,
     )
 );
 
-// Submit via RPC - bounty is automatically escrowed
-rpc_client.submit_transaction(hex::encode(bincode::serialize(&tx)?)).await?;
+// Submit via JSON-RPC (hex-encoded signed tx)
+// rpc.call("transaction_submit", [hex::encode(bincode::serialize(&tx)?)]).await?;
 ```
 
 ### Example: Solving a Problem
@@ -233,7 +268,7 @@ let tx = Transaction::Marketplace(
         problem_id,
         solution,
         solver_address,
-        10,       // transaction fee
+        10,       // fee atoms
         nonce,
         &keypair,
     )
@@ -251,7 +286,7 @@ let tx = Transaction::Marketplace(
 
 ## Dimensional Pools
 
-The protocol implements a novel **dimensional pool system** where three economic dimensions (D1, D2, D3) operate with exponentially decaying scales derived from the **Satoshi constant** (eta = lambda = 1/sqrt2):
+The protocol implements a **dimensional pool system** where three economic dimensions (D1, D2, D3) use exponentially decaying scales **D_n = e^(−η τ_n)** with **η = λ = 1/√2** from the [design axioms](docs/whitepaper/Whitepaper.md#the-conjecture):
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'Arial'}}}%%
@@ -338,7 +373,7 @@ graph TB
 
         subgraph "Layer 3: Consensus Engine PoUW"
             CONSENSUS["Consensus Engine<br/>Proof of Useful Work"]
-            POW["NP-Problem Solving<br/>SubsetSum SAT TSP"]
+            POW["PoUW Problem Solving<br/>NP-complete · co-NP-complete · NP-hard<br/>SubsetSum · SAT · TSP"]
             WORKSCORE["Work Score<br/>log2 asymmetry x quality"]
             VALIDATOR["Block Validator<br/>Solution Verification"]
 
@@ -447,44 +482,46 @@ write_txn.commit()?;  // Atomic commit with durability
 
 ### Observability (Prometheus + Grafana)
 
-The `monitoring/` directory ships **Prometheus** scrape configs and **Grafana** dashboard provisioning for node and API metrics. After bringing up the stack (for example `docker compose up -d` where compose includes these services):
+The `monitoring/` directory ships scrape configs, alert rules, and Grafana dashboard JSON. Use the **production overlay** (Prometheus **9091**, Grafana **3001** on the host):
 
 ```bash
-# Grafana dashboards (default compose mapping; adjust if your ports differ)
-open http://localhost:3000
+docker compose -f docker-compose.production.yml up -d node api-server prometheus grafana
 
-# Prometheus UI / raw metrics
-open http://localhost:9090
+# Grafana (host 3001 → container 3000)
+open http://localhost:3001
+
+# Prometheus UI (host 9091 → container 9090)
+open http://localhost:9091
 ```
+
+Node metrics and `/health` also live on each node's **`--metrics-addr`** (default **9090** inside the container; mapped to **9090–9093** on the 4-node testnet compose).
 
 ---
 
 ## Mathematical Foundation
 
-### Unit Circle Constraint
+### Design axioms (η and the unit circle)
 
-The **Satoshi constant** eta = lambda = 1/sqrt(2) emerges from the **unit circle constraint**:
+From [The Conjecture](docs/whitepaper/Whitepaper.md#the-conjecture) in the whitepaper: symmetry **|x| = |y|** and unit normalisation **x² + y² = 1** force **|x| = |y| = 1/√2**. That value enters the protocol as the difficulty-target multiplier **η** (with **λ = η** in the dimensional model). Lean checks the numeric axioms in `lean4/Coinjecture/DesignAxioms.lean`; unique selection **μ = (−1 + i)/√2** is in `ComplexDecomposition.lean` (`mu_unique`).
 
 ```
-|mu|^2 = eta^2 + lambda^2 = 1
+|μ|² = η² + λ² = 1   (with η = λ = 1/√2)
 
 Where:
-- eta: Decay rate (damping coefficient)
-- lambda: Phase evolution rate
-- mu: Complex eigenvalue on unit circle
+- η: Difficulty-target multiplier (also used in pool / routing math)
+- λ: Coupling constant (dimensional tokenomics)
+- μ: Consensus eigenvalue on the unit circle (interpretive; does not change fork choice)
 ```
 
-**Critical Damping**: The choice eta = lambda = 1/sqrt(2) represents the **fastest possible convergence** to equilibrium without oscillation (critical complex pole).
-
-### Dimensional Scales
+### Dimensional scales
 
 ```
-D_n = e^(-eta * tau_n)
+D_n = e^(-η * τ_n)
 
 Where:
 - D_n: Dimensional scale factor
-- eta: Satoshi constant (0.7071...)
-- tau_n: Dimensionless time for dimension n
+- η: Design-axiom multiplier (1/√2 ≈ 0.7071…)
+- τ_n: Dimensionless time for dimension n
 ```
 
 | Dimension | tau | D_n = e^(-eta*tau) | Calculation |
@@ -499,8 +536,9 @@ Where:
 
 ### Prerequisites
 
-- Rust 1.88+ ([rustup.rs](https://rustup.rs/))
-- Docker (for containerized testnet)
+- Rust 1.94+ ([rustup.rs](https://rustup.rs/)) — matches `Dockerfile` / production builds
+- Docker + Compose v2 (for containerized testnet)
+- For the full stack (`api-server` in `docker-compose.yml`): copy [`.env.example`](.env.example) to `.env` and set **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, and **`SUPABASE_JWT_SECRET`** (see [`api-server/.env.example`](api-server/.env.example)). Chain nodes alone do not need Supabase.
 
 ### Docker Testnet (Recommended)
 
@@ -509,20 +547,31 @@ Where:
 git clone https://github.com/COINjecture-Network/COINjecture2.0.git
 cd COINjecture2.0
 
-# Build and start 4-node testnet
-docker-compose up -d --build
+cp .env.example .env
+# Edit .env: add Supabase vars if you want api-server (port 3030). Chain-only:
+#   docker compose up -d --build bootnode node1 node2 node3
 
-# Check health
+# Build and start 4-node testnet + api-server
+docker compose up -d --build
+
+# Check health (metrics ports mapped on host)
 curl http://localhost:9090/health   # bootnode
 curl http://localhost:9091/health   # node1
 curl http://localhost:9092/health   # node2
 curl http://localhost:9093/health   # node3
 
+# JSON-RPC on bootnode (host 9933 → container 9933)
+curl -sS -X POST http://localhost:9933/ -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"chain_getInfo","params":[],"id":1}'
+
+# API (if api-server started and Supabase configured)
+curl -sS http://localhost:3030/health
+
 # View logs
-docker-compose logs -f bootnode
+docker compose logs -f bootnode
 
 # Stop
-docker-compose down
+docker compose down
 ```
 
 ### Native Build
@@ -531,13 +580,15 @@ docker-compose down
 git clone https://github.com/COINjecture-Network/COINjecture2.0.git
 cd COINjecture2.0
 
-# Build release binaries
+# Build release binaries (coinject node + coinject-wallet CLI)
 cargo build --release
 
-# Run node with mining (replace with your actual miner address, 64 hex characters)
-./target/release/coinject --mine --miner-address 0000000000000000000000000000000000000000000000000000000000000001 --cpp-p2p-addr 0.0.0.0:707
+# Run node with mining (--miner-address optional: omit to use validator keystore in --data-dir)
+./target/release/coinject --mine --data-dir ./node_data \
+  --miner-address 0000000000000000000000000000000000000000000000000000000000000001 \
+  --cpp-p2p-addr 0.0.0.0:707 --rpc-addr 127.0.0.1:9933
 
-# Run node without mining
+# Run node without mining (JSON-RPC on 127.0.0.1:9933 by default)
 ./target/release/coinject --data-dir ./node_data --rpc-addr 127.0.0.1:9933
 ```
 
@@ -584,49 +635,112 @@ cargo test --all -- --nocapture
 
 ## Production deployment and chain health
 
-For Docker stacks on multiple hosts, confirm everyone is on the **same chain** before worrying about block height: `chain_getInfo` must report the same **`chain_id`** and **`genesis_hash`**. **`best_height`** then catches up as sync runs (often minutes to hours depending on peer count and history).
+### Live stack
 
-**Compare bootnodes** (default JSON-RPC is host port **9933**; adjust IPs for your fleet):
+| Surface | URL / port |
+|---------|------------|
+| Web + Solver Lab | [coinjecture.com](https://coinjecture.com) |
+| REST + JSON-RPC proxy | [api.coinjecture.com](https://api.coinjecture.com) — `GET /chain/info`, `GET /chain/mining-work`, `POST /node-rpc` |
+| Mesh CPP (P2P) | **707/tcp** per public host |
+| Node JSON-RPC | **9933** on each host (often firewalled; prefer the API proxy from browsers) |
+
+**Mesh hosts (v4 testnet):** `193.203.164.13` (canonical API + bootnode, path `/opt/coinjecture`), `76.13.101.67` and `198.199.81.81` (followers). Each runs **one bootnode** with its own chain DB; **`node1`–`node3` are not used** in production mesh (see `docker-compose.mesh-bootnode-only.yml`).
+
+**Canonical compose stack** (matches [`repair-canonical-api-rpc.sh`](scripts/deployment/repair-canonical-api-rpc.sh) and [`redeploy-remote-mesh-ghcr.sh`](scripts/deployment/redeploy-remote-mesh-ghcr.sh)):
 
 ```bash
-for ip in 193.203.164.13 76.13.101.67; do
+COMPOSE="-f docker-compose.yml \
+  -f docker-compose.sync-follower.yml \
+  -f docker-compose.mesh-bootnode-only.yml \
+  -f docker-compose.bootnode-health-metrics-only.yml"
+
+docker compose $COMPOSE up -d --no-build bootnode api-server
+```
+
+GHCR rollouts: set `COINJECT_NODE_IMAGE=ghcr.io/coinjecture-network/coinjecture2.0:<tag>` then run [`scripts/deployment/redeploy-remote-mesh-ghcr.sh`](scripts/deployment/redeploy-remote-mesh-ghcr.sh). API image rebuild: [`scripts/deployment/redeploy-api-server-remote.sh`](scripts/deployment/redeploy-api-server-remote.sh) or [`repair-canonical-api-rpc.sh`](scripts/deployment/repair-canonical-api-rpc.sh).
+
+### Same chain before block height
+
+On every host, `chain_getInfo` must agree on **`chain_id`** (`coinject-network-b-v4`) and **`genesis_hash`**. Only then compare **`best_height`** (sync can lag by minutes–hours).
+
+**Public API (from your laptop):**
+
+```bash
+curl -sS https://api.coinjecture.com/chain/info | python3 -m json.tool
+```
+
+**Direct JSON-RPC** (when host firewall allows **9933**):
+
+```bash
+for ip in 193.203.164.13 76.13.101.67 198.199.81.81; do
+  echo "=== $ip ==="
   curl -sS -m 15 -X POST "http://$ip:9933/" -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","method":"chain_getInfo","params":[],"id":1}'
   echo
 done
 ```
 
-If **`best_height`** on a host stops increasing while peers are far ahead, inspect sync on that machine (for example `docker logs coinject-bootnode`). Logs such as **`historical sync block conflicts with local chain`**, **`Block hash mismatch`**, or **`sync batch made no progress`** usually mean the node extended a **local fork** (often because it produced blocks while still far behind peers). Fix: wipe volumes, resync from canonical peers; the binary still gates mining with peer sync/consensus, but an empty or divergent DB may need a guarded resync (see destructive resync script).
+If **`best_height`** stalls while peers advance, check `docker logs coinject-bootnode` for **`historical sync block conflicts`**, **`Block hash mismatch`**, or **`sync batch made no progress`** — usually a **local fork**. Fix with a guarded resync (below), not by restarting alone.
 
-**Destructive wipe (guarded SSH script):** [`scripts/deployment/destructive-chain-resync-remote.sh`](scripts/deployment/destructive-chain-resync-remote.sh) — read the header for `DESTRUCTIVE_CHAIN_RESYNC_CONFIRM` and what is kept vs removed.
+Production gates block production until sync/consensus allow it).
 
-**New DigitalOcean mesh peer (wipe + clone + sync-follower):** [`scripts/deployment/bootstrap-digitalocean-mesh-node.sh`](scripts/deployment/bootstrap-digitalocean-mesh-node.sh) — set `HOST`, `WIPE_CONFIRM=I_WIPE_DROPLET_CHAIN_DATA`, `MESH_BOOTNODES` (CPP `host:707` list), and either `DEPLOY_BOOTNODE_ONLY=1` or Supabase vars for `api-server`. If SSH needs a specific key: `SSH_IDENTITY=$HOME/.ssh/id_ed25519`. Open inbound **707/tcp** on the droplet firewall.
+### New mesh peer (DigitalOcean)
 
-**Mesh / follower overlay (mining on):** [`docker-compose.sync-follower.yml`](docker-compose.sync-follower.yml) overrides node commands so followers dial **`bootnode:707`** while keeping **`--mine`** on every chain service. Before the tip is caught up, the node still waits for peers/sync and **`peer_consensus.should_mine()`** limits who actually produces a block — you do not need a second compose step to “turn mining on” after sync.
-
-**One public CPP IP per host (fleet on one VPS):** [`docker-compose.local-ram.yml`](docker-compose.local-ram.yml) clears env bootnodes for **node1–node3** so only **bootnode** dials the public mesh. **`.env` bootlists:** omit self — [`scripts/deployment/print-mesh-bootnodes.sh`](scripts/deployment/print-mesh-bootnodes.sh). Full checklist: [`docs/CPP_DEPLOYMENT.md`](docs/CPP_DEPLOYMENT.md) (section *Reliable multi-site mesh*).
-
-**Prove chain containers have `--mine`:** [`scripts/deployment/verify-node-mining-enabled.sh`](scripts/deployment/verify-node-mining-enabled.sh) — set `HOST=root@…` (SSH) or `VERIFY_LOCAL=1` on the server; optional `CONTAINERS="coinject-bootnode …"`. (`verify-follower-not-mining.sh` is a thin wrapper and deprecated.) **Peer diversity:** add stable bootnode peers in `.env` / compose so `chain_getInfo.peer_count` is not stuck at 1. **CPU:** a larger VPS raises validation throughput; sync batch size is protocol-capped (see network CPP config), not a compose knob.
-
-After a volume wipe, on the recovering host (example: three chain services + API):
+[`scripts/deployment/bootstrap-digitalocean-mesh-node.sh`](scripts/deployment/bootstrap-digitalocean-mesh-node.sh):
 
 ```bash
-cd /opt/coinjecture-src   # your clone path
-docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml up -d --build bootnode node1 node2 api-server
+export HOST=root@<droplet-ip>
+export WIPE_CONFIRM=I_WIPE_DROPLET_CHAIN_DATA
+export MESH_BOOTNODES=193.203.164.13:707,76.13.101.67:707,198.199.81.81:707   # omit self
+export DEPLOY_BOOTNODE_ONLY=1   # or set SUPABASE_* for api-server
+export SSH_IDENTITY="$HOME/.ssh/id_ed25519"   # if needed
+./scripts/deployment/bootstrap-digitalocean-mesh-node.sh
 ```
 
-If sync **repeatedly stalls** in the same height band with fork / “missing block” warnings in `docker logs coinject-bootnode`, try a **single chain database** on that host: bring up only **`bootnode`** and **`api-server`** (omit `node1` / `node2`) with the same overlay — one volume (`bootnode-data`), one P2P view — then widen the stack once caught up.
+Open inbound **707/tcp** (CPP). Add **9933** / **3030** only if you expose RPC/API on that droplet.
 
-Poll **`chain_getInfo`** until **`best_height`** is within ~10 blocks of your canonical bootnode. Optional watch loop from your laptop: [`scripts/deployment/watch-sync-gap.sh`](scripts/deployment/watch-sync-gap.sh) (set `CANONICAL_RPC` / `FOLLOWER_RPC` or pass two URLs; `ONE_SHOT=1` for a single sample; `EXIT_WHEN_CAUGHT_UP=1` to **exit as soon as** `gap <= SYNC_GAP_OK`). To **watch until caught up, then SSH and refresh the stack** in one go: set `HOST` and `REMOTE_PATH`, then run [`scripts/deployment/wait-for-sync-then-mining.sh`](scripts/deployment/wait-for-sync-then-mining.sh) (uses `SYNC_WATCH_INTERVAL`, default 60s). To find the first height where **`prev_hash`** differs between two RPC URLs, use [`scripts/compare-fork-blocks.sh`](scripts/compare-fork-blocks.sh).
+### Compose overlays (when to use which)
 
-If you prefer **base compose only** (no overlay file), after catch-up you can recreate with a single file — same volumes, never `down -v`:
+| Overlay | Purpose |
+|---------|---------|
+| [`docker-compose.sync-follower.yml`](docker-compose.sync-follower.yml) | Followers dial `bootnode:707`; **`--mine` on all chain services**; `peer_consensus.should_mine()` still gates production until caught up |
+| [`docker-compose.mesh-bootnode-only.yml`](docker-compose.mesh-bootnode-only.yml) | Disables **node1–node3** profiles — **one bootnode per VPS** |
+| [`docker-compose.local-ram.yml`](docker-compose.local-ram.yml) | On a multi-container host, only **bootnode** uses public mesh bootnodes from `.env` |
+| [`docker-compose.bootnode-health-metrics-only.yml`](docker-compose.bootnode-health-metrics-only.yml) | Bootnode health = metrics `/health` only (avoids false unhealthy under RPC load) |
+
+**`.env` bootlists:** list **other** mesh members as `IP:707` only — [`scripts/deployment/print-mesh-bootnodes.sh`](scripts/deployment/print-mesh-bootnodes.sh). Checklist: [`docs/CPP_DEPLOYMENT.md`](docs/CPP_DEPLOYMENT.md) (*Reliable multi-site mesh*).
+
+### Sync watch + mining switch
+
+Poll gap between canonical and follower:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml down
-docker compose -f docker-compose.yml up -d --build bootnode node1 node2 node3 api-server
+CANONICAL_RPC=http://193.203.164.13:9933/ FOLLOWER_RPC=http://76.13.101.67:9933/ \
+  EXIT_WHEN_CAUGHT_UP=1 ./scripts/deployment/watch-sync-gap.sh
 ```
 
-Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay): [`scripts/deployment/switch-to-mining-after-sync-remote.sh`](scripts/deployment/switch-to-mining-after-sync-remote.sh) (`MINING_SERVICES` overrides the service list if you omit `node3`).
+Or watch then SSH refresh: [`wait-for-sync-then-mining.sh`](scripts/deployment/wait-for-sync-then-mining.sh) (`HOST`, `REMOTE_PATH`). Fork diff: [`scripts/compare-fork-blocks.sh`](scripts/compare-fork-blocks.sh).
+
+After catch-up on a **follower** (example path `/opt/coinjecture-src`):
+
+```bash
+cd /opt/coinjecture-src
+docker compose -f docker-compose.yml -f docker-compose.sync-follower.yml \
+  -f docker-compose.mesh-bootnode-only.yml \
+  up -d --no-build bootnode api-server
+```
+
+If sync **stalls in one height band**, run **bootnode + api-server only** (one volume, one P2P view) with the overlays above — do not add `node1`/`node2` on production mesh hosts.
+
+[`switch-to-mining-after-sync-remote.sh`](scripts/deployment/switch-to-mining-after-sync-remote.sh) — gap check + `compose up` (`MINING_SERVICES` defaults include node1–node3; **override to `bootnode api-server`** on mesh peers).
+
+### Ops helpers
+
+- **Verify `--mine` on containers:** [`verify-node-mining-enabled.sh`](scripts/deployment/verify-node-mining-enabled.sh) (`HOST` or `VERIFY_LOCAL=1`)
+- **Repair public `/node-rpc`:** [`repair-canonical-api-rpc.sh`](scripts/deployment/repair-canonical-api-rpc.sh)
+- **Deprecated:** `verify-follower-not-mining.sh` (wrapper only)
+
+**Peer diversity:** `chain_getInfo.peer_count` stuck at **1** usually means bootlist or firewall issues — add stable mesh peers in `.env`, confirm **707/tcp** between sites.
 
 ---
 
@@ -647,7 +761,7 @@ Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay)
 | No mathematical guarantees | **Provably stable** (Lyapunov analysis) |
 | Unverifiable simulation data | **Cryptographically verified** (blockchain) |
 | Static, pre-programmed strategies | **Emergent strategies** from real coordination |
-| Wasteful computation | **Useful NP-complete problem solving** |
+| Wasteful computation | **Useful work across NP-complete, co-NP-complete, and NP-hard classes** |
 
 ### Dataset Properties
 
@@ -656,17 +770,17 @@ Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay)
 - Merkle proofs for state transitions
 - Immutable audit trail
 
-**Provable Stability** (Lyapunov Guarantees):
-- Unit circle constraint: |mu|^2 = eta^2 + lambda^2 = 1
-- Critical damping: eta = lambda = 1/sqrt(2)
-- Exponential convergence to equilibrium
+**Provable Stability** (design axioms + coherence model):
+- Unit circle constraint: |μ|² = η² + λ² = 1 with η = λ = 1/√2
+- Coherence at equilibrium: C(1) = 1 for C(r) = 2r/(1+r²)
+- Falsifiable on testnet: perturbation recovery vs. sech envelope (see whitepaper)
 
 **Multi-Timescale Structure**:
 - D1: Instant decisions (sub-second)
 - D2: Short-term strategy (days)
 - D3: Medium-term positioning (weeks)
 
-**HuggingFace dataset pipeline** (`huggingface/`): Solved PoUW problem sets can be **exported and uploaded** to HuggingFace as versioned datasets — cryptographically anchored to chain state — so labs can fine-tune or evaluate models on **verifiable NP instances and solutions**, not hand-waved synthetic logs.
+**HuggingFace dataset pipeline** (`huggingface/`): Solved PoUW problem sets can be **exported and uploaded** to HuggingFace as versioned datasets — cryptographically anchored to chain state — so labs can fine-tune or evaluate models on **verifiable NP-complete, co-NP-complete, and NP-hard instances and solutions**, not hand-waved synthetic logs.
 
 ---
 
@@ -678,7 +792,7 @@ Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay)
   - [x] Ed25519 cryptography (signatures, addresses)
   - [x] Blake3/SHA2/SHA3 hashing
   - [x] Merkle tree commitments
-  - [x] Transaction types (Transfer, Swap, TimeLock, Escrow, Channel, TrustLine, Marketplace)
+  - [x] Transaction types (Transfer, DimensionalPoolSwap, TimeLock, Escrow, Channel, TrustLine, Marketplace)
 
 - [x] **State Layer (redb)**
   - [x] ACID-compliant account state
@@ -688,7 +802,8 @@ Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay)
   - [x] Institutional-grade database migration
 
 - [x] **PoUW Marketplace (WEB4)**
-  - [x] NP-complete problem types (SubsetSum, SAT, TSP)
+  - [x] Block templates: SubsetSum, SAT, TSP (`core/src/problem.rs`)
+  - [x] Complexity-class registry: NP-complete, co-NP-complete, NP-hard (`consensus/src/problem_registry.rs`)
   - [x] Polynomial-time solution verification
   - [x] Work score calculation
   - [x] On-chain bounty escrow
@@ -711,7 +826,9 @@ Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay)
   - [x] EquilibriumRouter with sqrt(n)*eta fanout + FlockState murmuration
   - [x] Window-based flow control, blake3 message integrity
 
-- [x] **REST API (Axum)**
+- [x] **REST API (Axum)** — `api-server/`, default port **3030**
+  - [x] `GET /health`, `GET /chain/info`, `GET /chain/latest-block`, `GET /chain/mining-work`
+  - [x] `POST /node-rpc` JSON-RPC proxy (300s timeout; mining upstream failover)
   - [x] SIWB (Sign-In With BEANS) wallet authentication (CAIP-122)
   - [x] Email signup/signin with wallet binding bridge
   - [x] Marketplace endpoints (orders, trades, PoUW tasks)
@@ -723,11 +840,13 @@ Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay)
   - [x] Marketplace schema (orders, trades, trading pairs)
   - [x] PoUW task marketplace with assignments
   - [x] Event-sourced reputation, Row-Level Security, partitioned trades
+  - [x] **13** SQL migrations under `supabase/migrations/` (00001–00013)
 
-- [x] **Frontend (Vite + React)**
+- [x] **Frontend (Vite + React)** — `web/coinjecture-evolved-main/` (production: coinjecture.com)
   - [x] Unified auth provider (wallet + email + wallet binding)
   - [x] TanStack Query hooks with SSE cache invalidation
   - [x] Wallet adapter with ConnectButton + peer dashboard
+  - [x] Solver Lab (`/solver-lab`) — sync `instance.json` via `GET /chain/mining-work` or JSON-RPC
 
 - [x] **RPC Layer**
   - [x] JSON-RPC server (HTTP/WebSocket)
@@ -739,13 +858,12 @@ Guarded SSH helper (checks gap + `genesis_hash`, then `compose up` with overlay)
 
 ### Docker Testnet Verified (2026-03-25)
 
-4-node Docker testnet fully operational:
-- All 4 nodes healthy and connected (bootnode + 3 peers)
-- PoUW mining with `0000` hash prefix (difficulty 4); blocks produced as fast as miners solve problems
-- Target block time is configurable via `--block-time` (default: 60s) with adaptive difficulty adjustment
-- Block propagation working — bootnode mines, all nodes receive and apply
-- Chain convergence across all nodes
-- Zero errors, zero panics
+4-node Docker testnet (`docker-compose.yml`) operational with defaults from `node/src/config.rs`:
+
+- Bootnode + **node1–node3** healthy; CPP dial **`bootnode:707`**
+- PoUW: SubsetSum / SAT / TSP templates + header target **`--difficulty` 5** (five leading hex `0` chars on block hash)
+- Target block time **`--block-time` 10s** (adaptive difficulty adjuster retargets problem size)
+- Block propagation and chain convergence across peers
 
 ### Roadmap
 
@@ -766,7 +884,7 @@ COINjecture 2.0 (WEB4)
 ├── core/               # Cryptography, types, transactions
 │   ├── block.rs       # Block structure with Merkle roots
 │   ├── crypto.rs      # Ed25519, hashing functions
-│   ├── problem.rs     # NP-complete problem types
+│   ├── problem.rs     # On-chain problem types (SubsetSum, SAT, TSP, Custom)
 │   ├── transaction.rs # Transaction types (including Marketplace)
 │   └── types.rs       # Common types (Address, Balance, Hash)
 │
@@ -780,7 +898,8 @@ COINjecture 2.0 (WEB4)
 │   └── trustlines.rs  # XRPL-inspired credit
 │
 ├── consensus/          # Proof-of-Useful-Work consensus
-│   ├── miner.rs       # NP-problem solving & mining logic
+│   ├── miner.rs       # PoUW mining loop
+│   ├── problem_registry.rs  # NP-complete · co-NP-complete · NP-hard descriptors
 │   └── work_score.rs  # Work score calculation
 │
 ├── network/            # P2P: CPP (TCP/707) + mesh; Noise_XX encryption
@@ -810,7 +929,7 @@ COINjecture 2.0 (WEB4)
 │   └── node_poller.rs # Background node RPC polling
 │
 ├── supabase/           # Database migrations
-│   └── migrations/    # 7 migration files (auth, marketplace, tasks, reputation, RLS)
+│   └── migrations/    # 13 migration files (00001–00013)
 │
 ├── tokenomics/         # Economic logic
 │   ├── dimensions.rs  # Dimensional math (eta, lambda, D_n)
@@ -834,6 +953,7 @@ COINjecture 2.0 (WEB4)
 │   └── rpc_client.rs  # RPC communication
 │
 ├── web-wallet/         # Browser wallet (React; AES-256-GCM, PBKDF2, CSP-minded UI)
+├── web/coinjecture-evolved-main/  # Production web app (landing, Solver Lab, marketplace UI)
 ├── huggingface/        # HuggingFace dataset uploader for verified problem/solution sets
 └── monitoring/         # Prometheus scrape configs + Grafana dashboards + alerts
 ```
@@ -855,23 +975,32 @@ Contributions welcome! Please:
 
 ---
 
-## Formal Verification (Eigenverse)
+## Formal Verification (Lean 4)
 
-COINjecture's mathematical foundations are **machine-checked** via the [Eigenverse](https://github.com/beanapologist/Eigenverse) project — 450 theorems verified in Lean 4 with **zero `sorry`**.
+**COIN** is the incentive; **conjecture** is the claim that a network built from our design axioms converges toward a predicted equilibrium you can measure on-chain. That claim is **falsifiable**—run the testnet and compare block solve times, difficulty targets, and work-score distributions to the formulas in [The Conjecture](docs/whitepaper/Whitepaper.md#the-conjecture) and [Calculations](docs/whitepaper/Whitepaper.md#calculations).
 
-The Eigenverse proofs are included as a git submodule at `proofs/eigenverse/`. To clone with proofs:
+Algebraic constraints, PoUW certificate checks, reward monotonicity, and discrete security inequalities are **machine-checked in-repo** under [`lean4/`](lean4/) (Lean **4.28.0** + Mathlib **4.28.0**—see `lean4/lakefile.lean`).
+
+| Topic | Lean module | Tied to whitepaper |
+|-------|-------------|-------------------|
+| Design axioms (η = 1/√2, unit circle) | `DesignAxioms.lean` | [§ Design axioms](docs/whitepaper/Whitepaper.md#a-design-axioms) |
+| Unique μ = (−1+i)/√2 | `ComplexDecomposition.lean` | `mu_unique` |
+| Coherence C(r) = 2r/(1+r²), symmetry | `Coherence.lean` | [§ Falsifiability](docs/whitepaper/Whitepaper.md#b-falsifiability) |
+| SubsetSum / SAT / TSP verify | `Verify.lean`, `SubsetSum.lean`, `Sat3.lean`, `TspFeasibility.lean` | PoUW certificates |
+| Cumulative work & rewards | `Rewards.lean`, `WorkScore.lean` | Emission / work-score |
+| Attack catch-up q^z < p^z | `SecurityCalculations.lean` | [Security table](docs/whitepaper/Whitepaper.md#calculations) |
+| Dimensional pool scales | `DimensionalPools.lean` | Tokenomics |
+
+Lean proves the **integer inequalities and algebraic scaffolding** cited in the whitepaper. Empirical predictions (sech perturbation profile, difficulty oscillation period, symmetry about log r = 0) are **testnet measurements**, not finished proofs.
 
 ```bash
-git clone --recurse-submodules https://github.com/COINjecture-Network/COINjecture2.0.git
+git clone https://github.com/COINjecture-Network/COINjecture2.0.git
+cd COINjecture2.0/lean4
+lake exe cache get
+lake build
 ```
 
-Key verified results:
-- **mu^8 = 1**: The 8-fold closure of the critical eigenvalue (Theorem 3)
-- **C(r) <= 1**: Coherence function bounds (Theorem 8)
-- **eta^2 + |mu*eta|^2 = 1**: Canonical norm / unit circle constraint (Theorem 10)
-- **deltaS * (sqrt(2)-1) = 1**: Silver ratio reciprocal (Theorem 11)
-
-See [proofs/README.md](proofs/README.md) for the full theorem catalog and build instructions.
+Further detail: [docs/FORMAL_VERIFICATION.md](docs/FORMAL_VERIFICATION.md) · [Whitepaper — verify Lean](docs/whitepaper/Whitepaper.md#verify-lean-proofs-independently)
 
 ---
 
@@ -879,7 +1008,7 @@ See [proofs/README.md](proofs/README.md) for the full theorem catalog and build 
 
 MIT License - see [LICENSE](LICENSE) file for details
 
-**Copyright** (c) 2025-2026 COINjecture Contributors
+**Copyright** (c) 2025-2026 COINjecture Network Contributors
 
 ---
 
@@ -895,10 +1024,12 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## Links
 
+- **Website**: https://coinjecture.com
+- **API**: https://api.coinjecture.com
 - **GitHub**: https://github.com/COINjecture-Network/COINjecture2.0
 - **Getting started**: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
-- **Consensus calculations** (Satoshi-style): [docs/CONSENSUS_CALCULATIONS.md](docs/CONSENSUS_CALCULATIONS.md)
-- **Formal verification (Lean 4)**: [docs/FORMAL_VERIFICATION.md](docs/FORMAL_VERIFICATION.md)
+- **Consensus calculations**: [docs/CONSENSUS_CALCULATIONS.md](docs/CONSENSUS_CALCULATIONS.md)
+- **Formal verification (Lean 4)**: [docs/FORMAL_VERIFICATION.md](docs/FORMAL_VERIFICATION.md) · [`lean4/`](lean4/)
 - **Supabase migration**: [docs/SUPABASE_MIGRATION.md](docs/SUPABASE_MIGRATION.md)
 - **Troubleshooting**: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 - **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)

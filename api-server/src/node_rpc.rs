@@ -85,8 +85,8 @@ impl NodeRpcClient {
     const RETRY_DELAY_MS: u64 = 400;
     const LIGHT_RPC_TIMEOUT_SECS: u64 = 22;
     const HEAVY_RPC_TIMEOUT_SECS: u64 = 90;
-    /// Per-upstream cap for `chain_getMiningWork` so wedged miners fail over before the browser gives up.
-    const MINING_WORK_PROXY_TIMEOUT_SECS: u64 = 35;
+    /// Per-upstream cap for `chain_getMiningWork` — template build can exceed 35s during sync/HF load.
+    const MINING_WORK_PROXY_TIMEOUT_SECS: u64 = 90;
 
     fn parse_url_list(raw: &str) -> Vec<String> {
         raw.split(',')
@@ -119,20 +119,23 @@ impl NodeRpcClient {
             http_light: Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 .timeout(Duration::from_secs(Self::LIGHT_RPC_TIMEOUT_SECS))
-                .pool_max_idle_per_host(8)
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(Duration::from_secs(15))
                 .build()
                 .unwrap_or_default(),
             http_heavy: Client::builder()
                 .connect_timeout(Duration::from_secs(8))
                 .timeout(Duration::from_secs(Self::HEAVY_RPC_TIMEOUT_SECS))
-                .pool_max_idle_per_host(8)
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(Duration::from_secs(15))
                 .build()
                 .unwrap_or_default(),
             // Block submission (`chain_submitBlock`) can be large + slow; browser → /node-rpc → node.
             http_proxy: Client::builder()
                 .connect_timeout(Duration::from_secs(8))
                 .timeout(Duration::from_secs(300))
-                .pool_max_idle_per_host(8)
+                .pool_max_idle_per_host(4)
+                .pool_idle_timeout(Duration::from_secs(15))
                 .build()
                 .unwrap_or_default(),
         }
@@ -332,6 +335,12 @@ impl NodeRpcClient {
             .await
     }
 
+    /// Next-block mining template (`chain_getMiningWork`) — uses mining upstream list + heavy timeout.
+    pub async fn get_mining_work(&self) -> Result<Value, NodeRpcError> {
+        self.call_on(&self.http_heavy, "chain_getMiningWork", json!([]))
+            .await
+    }
+
     /// Get a block by height.
     pub async fn get_block_by_height(&self, height: u64) -> Result<Value, NodeRpcError> {
         self.call_on(&self.http_heavy, "chain_getBlock", json!([height]))
@@ -348,6 +357,8 @@ impl NodeRpcClient {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(8))
             .timeout(timeout)
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_else(|_| self.http_proxy.clone());
         let mut req = client

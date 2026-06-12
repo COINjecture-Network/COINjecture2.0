@@ -72,7 +72,7 @@ patch_local_rpc_url() {
   remote "$host" bash -s <<REMOTE
 set -euo pipefail
 cd "$path"
-for kv in "NODE_RPC_URL=http://bootnode:9933" "MINING_RPC_URL=http://bootnode:9933"; do
+for kv in "NODE_RPC_URL=http://bootnode:9933,http://host.docker.internal:9933" "MINING_RPC_URL=http://bootnode:9933,http://host.docker.internal:9933"; do
   key="\${kv%%=*}"
   val="\${kv#*=}"
   if grep -q "^\${key}=" .env 2>/dev/null; then

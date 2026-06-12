@@ -10,7 +10,7 @@ use coinjecture_api_server::{
 };
 use http_body_util::BodyExt;
 use serde_json::Value;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tower::ServiceExt;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -57,6 +57,7 @@ fn test_app() -> axum::Router {
         node_rpc: None,
         broadcaster: std::sync::Arc::new(coinjecture_api_server::sse::EventBroadcaster::new(16)),
         engine: None,
+        wallet_scan_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         config,
     };
     build_router(state)
