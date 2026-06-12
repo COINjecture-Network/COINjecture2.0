@@ -30,13 +30,7 @@ fn paginate_rows(rows: &Value, offset: usize, limit: usize) -> Value {
     let Some(arr) = rows.as_array() else {
         return json!([]);
     };
-    Value::Array(
-        arr.iter()
-            .skip(offset)
-            .take(limit)
-            .cloned()
-            .collect(),
-    )
+    Value::Array(arr.iter().skip(offset).take(limit).cloned().collect())
 }
 
 async fn cached_full_chain_activity(state: &AppState, addr: &str) -> Result<Value, String> {
@@ -52,7 +46,10 @@ async fn cached_full_chain_activity(state: &AppState, addr: &str) -> Result<Valu
         .unwrap_or(0);
 
     {
-        let cache = state.wallet_scan_cache.lock().expect("wallet scan cache lock");
+        let cache = state
+            .wallet_scan_cache
+            .lock()
+            .expect("wallet scan cache lock");
         if let Some(entry) = cache.get(addr) {
             if entry.chain_tip == tip && entry.fetched_at.elapsed() < SCAN_CACHE_TTL {
                 return Ok(entry.merged.clone());
@@ -70,7 +67,10 @@ async fn cached_full_chain_activity(state: &AppState, addr: &str) -> Result<Valu
     .await?;
 
     {
-        let mut cache = state.wallet_scan_cache.lock().expect("wallet scan cache lock");
+        let mut cache = state
+            .wallet_scan_cache
+            .lock()
+            .expect("wallet scan cache lock");
         cache.insert(
             addr.to_string(),
             WalletScanCacheEntry {

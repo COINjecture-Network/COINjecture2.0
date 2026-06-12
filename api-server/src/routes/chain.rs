@@ -42,9 +42,10 @@ pub struct ChainInfoResponse {
 /// Simple GET avoids browser CORS preflight on `POST /node-rpc`; nginx 502s without ACAO
 /// otherwise surface as opaque `Failed to fetch` in Solver Lab.
 pub async fn mining_work(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let rpc = state.node_rpc.as_ref().ok_or_else(|| {
-        ApiError::ServiceUnavailable("Node RPC not configured".into())
-    })?;
+    let rpc = state
+        .node_rpc
+        .as_ref()
+        .ok_or_else(|| ApiError::ServiceUnavailable("Node RPC not configured".into()))?;
     let result = tokio::time::timeout(Duration::from_secs(90), rpc.get_mining_work())
         .await
         .map_err(|_| ApiError::ServiceUnavailable("Mining work request timed out".into()))?

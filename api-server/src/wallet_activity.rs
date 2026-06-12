@@ -612,14 +612,13 @@ fn enum_variant_name(value: &Value) -> Option<(String, Value)> {
 }
 
 fn snake_case_event_type(name: &str) -> String {
-    name.chars()
-        .fold(String::new(), |mut acc, c| {
-            if c.is_uppercase() && !acc.is_empty() {
-                acc.push('_');
-            }
-            acc.push(c.to_ascii_lowercase());
-            acc
-        })
+    name.chars().fold(String::new(), |mut acc, c| {
+        if c.is_uppercase() && !acc.is_empty() {
+            acc.push('_');
+        }
+        acc.push(c.to_ascii_lowercase());
+        acc
+    })
 }
 
 fn marketplace_amount(payload: &Value) -> Option<Value> {
