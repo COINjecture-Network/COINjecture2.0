@@ -1,15 +1,15 @@
 # REGISTRY — DARQ AGI Mode / COINjecture 2.0
 
-**38 findings / 18 root causes.**
+**39 findings / 18 root causes.**
 
-Schema authority: `loop/LOOP_SPEC.md` §7. Root-cause map: §7 canonical table (v1.2).
+Schema authority: `loop/LOOP_SPEC.md` §7. Root-cause map: §7 canonical table (v1.3).
 Verified at: `28c50a122f2caab70582e8215b670b0ddc4d236d` unless a row says otherwise.
 
 > Supersedes the provisional 19-row schema the Cycle 0 builder designed when §7 was unavailable.
 > DARQ-IDs are **one per root cause** (the §7 example maps `DARQ-001 → RC-01 → C1, C2`).
-> Two exceptions: `DARQ-019` is a composition spanning two root causes, and `DARQ-020` is an
-> operational finding with no code root cause. Both carry their own ID per §8 without inventing a
-> 19th root cause.
+> Exceptions: `DARQ-019` is a composition spanning two root causes; `DARQ-020` and `DARQ-022` are
+> **operational** findings with no code root cause. Each carries its own ID per §8 without inventing
+> a 19th root cause.
 
 ## Verdict vocabulary (§7 — use exactly these)
 
@@ -42,7 +42,8 @@ A `NOT-FOUND` is a **valuable** result.
 | DARQ-018 | Unchecked time / expiry arithmetic | Low | Integer | RC-18 | L4 | UNVERIFIED | — | Open | P-010 |
 | DARQ-019 | Disk-exhaustion DoS composed from NEW-2 × H11 | **High (PROVISIONAL)** | Composition | RC-11 × RC-12 | NEW-3 | composition of `node/src/validator.rs:102-130` and the unrated `/node-rpc` route | — | Open | P-009 |
 | DARQ-020 | Floating CI toolchain silently disables the security gate | Operational | SupplyChain | — (operational) | NEW-4 | `.github/workflows/ci.yml` `RUST_TOOLCHAIN: stable` + `needs: lint` fan-out | **CONFIRMED** | In Progress | P-002-H |
-| DARQ-021 | Block validation checks the signature but not the sender binding; `is_valid()` is dead on the block path | **Critical (UNSIZED)** | Auth | RC-02 (extends) | NEW-5 | `node/src/validator.rs:169` and `mempool/src/pool.rs:160` call `verify_signature()`; the binding lives only in `Transaction::is_valid()` (`core/src/transaction.rs:437-439`), reached only from `core/src/block.rs:215`, which `node/src` never calls | **NEEDS-HUMAN** (needs its own packet) | Open | unassigned |
+| DARQ-021 | Block validation checks the signature but not the sender binding; `is_valid()` is dead on the block path | **Critical (UNSIZED)** | Auth | RC-02 (extends) | NEW-5 | `node/src/validator.rs:169` and `mempool/src/pool.rs:160` call `verify_signature()`; the binding lives only in `Transaction::is_valid()` (`core/src/transaction.rs:437-439`), reached only from `core/src/block.rs:215`, which `node/src` never calls | **NEEDS-HUMAN** (needs its own packet) | Open | **P-021-V** → P-021 |
+| DARQ-022 | Dangling `latest-upstream` submodule pin aborts every Dependabot run — updater dark across all ecosystems | Operational | SupplyChain | — (operational) | NEW-6 | `.gitmodules` `latest-upstream` → `Quigles1337/COINjecture2.0` pinned at `6a32fbfc7094fe82c02a91b231b52798c9f42972`, unreachable in that remote | **CONFIRMED** | Open | P-002 |
 
 ## Codex program cross-reference
 
@@ -62,8 +63,8 @@ into P-006 alongside C7, per §5 merge rationale.
 
 | | Count |
 |---|---|
-| Root causes with a verified Location | **3** of 18 (DARQ-001, 004, and partially 012) + DARQ-020 (operational) |
-| Findings covered by those | 6 of 38 (C1, C2, C3, NEW-2, NEW-4, NEW-5) |
+| Root causes with a verified Location | **3** of 18 (DARQ-001, 004, and partially 012) + DARQ-020, DARQ-022 (operational) |
+| Findings covered by those | 7 of 39 (C1, C2, C3, NEW-2, NEW-4, NEW-5, NEW-6) |
 | Rows carrying `UNVERIFIED` | 15 |
 
 Only C1/C2/C3 were assigned for verification in Cycle 0. Everything else is seeded from audit text
@@ -120,5 +121,25 @@ validator*, this is *the validator performing the weaker of two available checks
 written would not fix it. **Not traced to the apply path and deliberately unsized** — needs its own
 verification packet before anyone assigns severity. If it holds it outranks C3 and expands P-005.
 
+**DARQ-022** — NEW-6, found during Phase −1 while enumerating CI runs on `main` for an unrelated
+reason. `.gitmodules` registers `latest-upstream` → `Quigles1337/COINjecture2.0`; the tree pins it at
+`6a32fbfc7094fe82c02a91b231b52798c9f42972`, which **does not exist in that remote** (`git ls-remote`
+does not list it). Dependabot clones with submodules and therefore fails at clone time — *before* any
+ecosystem update logic runs — which is why the failure is total rather than ecosystem-specific.
+Confirmed failing across **npm_and_yarn and cargo**, in `/web-wallet`, `/web/coinjecture-evolved-main`
+and `/.`, on every run from at least 2026-07-13 through 2026-08-02.
+
+**Consequence:** no Dependabot fix PRs are being generated — the open-PR list contains zero
+(only #46, #48, #54, #55, all Al's). This is a strong candidate explanation for the 18–19 open alerts.
+⚠️ **Those counts are stale by an unknown margin** and must not be reconciled against until the
+updater runs. No code root cause — like DARQ-020 it is a pipeline-topology defect, and it is the same
+*class* of failure: an unrelated fault silently disabling a security mechanism while the workflow
+appears to run. Assigned to P-002; fix shape needs Al's decision (§8).
+
 **Audit coordinate reliability** — both audits' *findings* have held; their *coordinates* have not.
 Treat every `UNVERIFIED` Location as a hypothesis, not a fact.
+
+**Provenance note — both operational findings were incidental.** DARQ-020 was found while landing a
+docs-only PR; DARQ-022 while listing CI runs during crash recovery; DARQ-021 while probing C3. None
+was found by looking for it. Three for three, the pipeline defects surfaced as side effects of
+unrelated work — which is itself evidence that nothing in this repo is *watching* for them.

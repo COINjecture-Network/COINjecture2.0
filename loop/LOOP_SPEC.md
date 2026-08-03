@@ -1,7 +1,29 @@
 # DARQ AGI Mode — COINjecture 2.0 Remediation Loop
 
-**Spec v1.2** · Supersedes v1.1 · Target: `COINjecture-Network/COINjecture2.0`
+**Spec v1.3** · Supersedes v1.2 · Target: `COINjecture-Network/COINjecture2.0`
 Baseline anchored at `28c50a12` · **Commit over `loop/LOOP_SPEC.md`**
+
+---
+
+## §0.1 Changelog — v1.2 → v1.3
+
+Landed as **P-000-A**, a docs-only amendment packet on `feat/p000-loop-scaffolding`, authorized by
+Al after the Phase −1 state detection that followed a mid-session network fault.
+
+| v1.2 said | Reality (Cycle 1, Phase D + Phase −1) | v1.3 |
+|---|---|---|
+| **D12** — green before merge, *no exceptions* | D12 as written forbids the merge Al ruled for. PR #55 is green everywhere except a Security Audit failure it did not introduce and cannot fix in scope. Holding it would keep the security gate dark to preserve a rule whose purpose is a live security gate. | **D12 rewritten to the bounded-exception form**, with both precedents recorded |
+| **GATE-1** — stranded genesis balances *and* live testnet state | `node/src/genesis.rs:47` sets `initial_supply: 0`. **There are no genesis allocations** — verified at HEAD, no allocation/premine/balance-insert code exists in that file. | **GATE-1 halved.** Only the live-state question survives |
+| Lean count 89 **unreconciled**, 586 untested hypothesis | 89 **re-measured untruncated and confirmed** under three independent commands. Both submodules are unpopulated, so 89 counts only the 19 tracked in-repo `.lean` files. | §2 records the confirmed count *and the exact command*; 586 stays unreconciled but is now a sharper question |
+| Dependency alerts sit open, cause unexamined | **Dependabot has not run successfully on `main` since at least 2026-07-13.** Root cause found: a dangling submodule pin aborts the clone before any ecosystem logic runs. Zero Dependabot PRs exist. | **DARQ-022** registered, assigned to P-002 |
+| Three workflows still float (noted in passing) | An unpinned `release.yml` means a release can be cut on a compiler CI never tested. | **P-002-H2** registered |
+| DARQ-021 unsized, unassigned | It is the highest-value open question in the queue: it decides whether an arbitrary-theft path exists. | **P-021-V** (verification) and **P-021** (fix, GATE-2) registered |
+
+**The through-line of this revision:** three separate mechanisms were found silently disabling
+security machinery — a floating toolchain darkening the audit job (DARQ-020), a dangling submodule
+darkening the dependency updater (DARQ-022), and a validator calling the weaker of two available
+checks (DARQ-021). None announced itself. Each was found while looking for something else. **Treat
+"the gate is present" and "the gate is running" as different claims requiring separate evidence.**
 
 ---
 
@@ -44,7 +66,12 @@ as a deliberate deviation with a one-line reason.
   baseline exactly — zero drift.
 - **982** tests passing / 0 failed / 4 ignored (49 test binaries) · **89** Lean theorems / 19 files ·
   **15** crates
-- Lean count **unreconciled**, not corrected. Untested hypothesis: 586 may be *Eigenverse's* number.
+- ✅ **Lean 89 re-measured and CONFIRMED in Cycle 1 (P-000-A)** — see "Measurement discipline" below.
+  The 586 figure remains **unreconciled**, not corrected. Hypothesis, now mechanically concrete:
+  `.gitmodules` registers `proofs/eigenverse` → `beanapologist/Eigenverse`, and that submodule is
+  **unpopulated** in this worktree. 89 therefore counts only the repo's own tracked `.lean` files. A
+  count taken with that submodule checked out would include Eigenverse's theorems. **That is a
+  testable next step, not a conclusion — do not record 586 as explained until someone runs it.**
 - ⚠️ **CORRECTED in Cycle 1 — the 936 figure carried by v1.0/v1.1 was wrong.** It was a builder
   measurement error, not a code change: the Cycle 0 baseline command ended in `| head -60`, which
   truncated the stream at 60 matching lines, and the total was summed from the 30 `test result:`
@@ -55,9 +82,50 @@ as a deliberate deviation with a one-line reason.
   The true total under the *old* 1.91 toolchain was never established, so the 936→982 delta cannot
   be attributed to the toolchain change — the evidence points entirely at the truncation.
 
-**⚠️ Clone hazard.** A second clone at `C:\Users\LEET\COINjecture2.0` (Quigles1337 remote) is also
-v4.8.4 / 15 crates but is **dirty with 20 live worktrees and has no `lean4/`**. Clean it up or
-rename it unmistakably.
+### Measurement discipline *(New — v1.3)*
+
+**Any count derived from a piped, `head`ed, or `tail`ed stream is suspect by default.** The 936-test
+figure was not a wrong measurement, it was a *truncated* one — `| head -60` cut the stream and the
+total was summed from the 30 `test result:` lines that survived. It then propagated through three
+spec revisions as if it were data, and generated a phantom "−15 tests" regression signal that cost
+real analysis time. A truncated count does not announce itself; it looks exactly like a count.
+
+Rules:
+
+1. **State the exact command next to any number you record.** A number without its command is a
+   rumour. Every figure in this section carries its command below.
+2. **Never `head`/`tail` a stream you are about to sum.** Redirect to a file and count the file, or
+   use a counter that cannot truncate.
+3. **A count that changes when the regex changes is not yet a measurement.** Run at least two
+   independent formulations and reconcile them *before* recording, not after.
+4. **Re-measure inherited numbers before trusting them**, even ones this spec previously asserted.
+   §2 says the repo at the SHA is ground truth; that binds this document too.
+
+**Baseline: 982 passed / 0 failed / 4 ignored**, 49 test binaries, under pinned 1.97.1. Hosted
+reports 1964 / 0 / 8 — exactly 2×, because tarpaulin re-runs the suite. **That doubling is expected;
+do not file it as a discrepancy.**
+
+**Lean: 89 theorems across 19 tracked `.lean` files — CONFIRMED (P-000-A).** Re-measured after the
+936 defect put every same-session count in doubt. Three independent formulations agree:
+
+```bash
+git ls-files '*.lean' | xargs grep -hcE '\b(theorem|lemma)\b'          | awk '{s+=$1} END {print s}'   # 89
+git ls-files '*.lean' | xargs grep -ohE '\b(theorem|lemma)\b' | wc -l                                  # 89
+git ls-files '*.lean' | xargs grep -hcE '^[[:space:]]*(private |protected |nonrec |@\[[^]]*\] *)*(theorem|lemma)\b' | awk '{s+=$1} END {print s}'   # 89
+```
+
+A fourth, naive formulation — line-start with no prefix allowance — returns **88**, undercounting a
+single declaration that carries a modifier or attribute prefix. **That one-count sensitivity is
+exactly what rule 3 exists to catch**, and it is why 89 is recorded as confirmed rather than
+assumed: the agreement of three formulations is the evidence, not any single run.
+
+**⚠️ Clone hazard — now a supply-chain dependency, not just a workspace nuisance.** A second clone at
+`C:\Users\LEET\COINjecture2.0` (Quigles1337 remote) is also v4.8.4 / 15 crates but is **dirty with 20
+live worktrees and has no `lean4/`**. Beyond the local confusion, **the org repo depends on that fork
+in-tree**: `.gitmodules` registers `latest-upstream` → `Quigles1337/COINjecture2.0`, pinned at
+`6a32fbfc7094fe82c02a91b231b52798c9f42972`, **a commit that no longer exists in that remote**. That
+dangling pin is the root cause of DARQ-022. Renaming or deleting the local clone does not fix it —
+the submodule entry is committed to `main` and must be resolved in the repo.
 
 **Remediation state on `main`: zero.** SEC-PR-001 exists as branch `ff6e65c4`, not an ancestor of
 main. SEC-PR-002…005 are unimplemented specs in `first-five-prs.md`.
@@ -101,15 +169,65 @@ every upstream lint release can red the pipeline with zero code changes, and bec
 `needs: lint`, that **silently disables the security gate**. There must be exactly one source of
 truth for the toolchain version — `rust-toolchain.toml` and any CI env var must not disagree.
 
-**D12 — Green before merge, no exceptions.** *(New — Cycle 1, ruled by Al.)* A red pipeline is never
-merged past, even when the failure is pre-existing and unrelated to the PR at hand. The correct
-response to unrelated red is a hotfix that preempts the queue.
+**D12 — Green before merge, with one bounded exception.** *(Amended v1.3, ruled by Al. Supersedes
+the "no exceptions" form of v1.2.)*
+
+No PR merges with a failure **it introduced**, or with a failure **it could have fixed within its own
+legitimate scope**. A pre-existing failure that is (a) **correctly attributed**, (b) **tracked to a
+named packet**, and (c) **outside the current packet's scope** does not block a PR that strictly
+improves the pipeline's honesty.
+
+**The test is not "is it red?" but "is this red fixable inside this packet?"** If yes, fix it — the
+exception does not apply and never applies to convenience. If no, and it has a named owner, merge the
+improvement.
+
+*Both precedents, recorded so the boundary is drawn by cases and not by adjectives:*
+
+| | **PR #54 — HELD** | **PR #55 — MERGED** |
+|---|---|---|
+| The red | `Lint` — two clippy lints under a floating toolchain | `Security Audit` — RUSTSEC-2026-0185, RUSTSEC-2026-0204 |
+| Introduced by the PR? | No — #54 changed zero `.rs` files | No — #55 is what made the job run at all |
+| **Fixable in scope?** | **Yes** — a two-line syntax hotfix (P-002-H) | **No** — needs dependency triage: a `quinn-proto` ≥0.11.15 / `crossbeam-epoch` ≥0.9.20 bump, lockfile churn, and possibly a minor/major version review of its own |
+| Named owner | P-002-H, created for it | P-002, already scoped for it |
+| **Ruling** | **Hold.** Cheap fix available → fix it, don't merge over it | **Merge.** The alternative is holding a security-gate restoration hostage to the advisories it exists to surface |
+
+**The asymmetry is the whole rule.** #54's red was cheap, so "fix it" was the honest answer. #55's
+red is a genuine finding that #55 itself *uncovered* — the job had not executed on any PR for 51
+days. Refusing #55 would leave the audit dark in order to avoid seeing what the audit reports.
+
+**A job reporting a true failure beats a job reporting nothing.** A red that tells the truth is a
+working gate; a green that never ran is not. When those two conflict, prefer the one that produces
+signal — and log the deferred red in `LEDGER.md` against its owning packet, so "tracked to a named
+packet" stays a fact and does not decay into a phrase.
 
 ---
 
 ## §4 Gates
 
-### GATE-1 — C3 is genesis- *and* consensus-breaking ⚠️
+### GATE-1 — C3 is consensus-breaking ⚠️ *(narrowed in v1.3 — the genesis half does not exist)*
+
+> **NARROWED — half this gate was answered by reading the code, not by asking a human.**
+>
+> `node/src/genesis.rs:47` sets `initial_supply: 0`, commented *"Zero initial supply - tokens created
+> through mining rewards only."* Verified at HEAD: that file contains **no allocation, premine,
+> initial-balance, or genesis-balance-insert code of any kind** — greps for `allocation`, `premine`,
+> `initial_balance`, `genesis_balance`, and for any balance/account map insertion all return empty.
+>
+> **There are no genesis allocations. The "stranded genesis balances" half of GATE-1 does not exist,
+> and never did.** No balance can be stranded at an address that was never credited.
+>
+> This does **not** weaken DARQ-004 (C3). Three incompatible address derivations are still CONFIRMED
+> and still consensus-breaking on the transaction path. What changed is the *blast radius* and the
+> *cost of the decision*: there is no premined state to migrate, so the reset-vs-migration question
+> collapses to the far cheaper one below.
+>
+> ⚠️ Note for whoever runs P-003-V's successor: the P-003-V method as written in §11 opens with
+> *"obtain a genesis-allocated address and its private key."* **That step is now known to be
+> unsatisfiable** — re-scope the repro around a mined or transacted address before running it.
+
+**What survives, and it is one question, not two:** is there **live testnet state from mining or
+transactions** — balances anyone cares about? That is narrower than v1.2's framing, it is Sarah's to
+answer from the droplet, and reset-vs-migration is correspondingly cheaper either way.
 
 Three derivations confirmed, not the two reported:
 
@@ -122,16 +240,18 @@ Three derivations confirmed, not the two reported:
 `Address::from_pubkey` is the natural canonical helper and is already public, but only `core` calls
 it. Fix shape: **one helper, four open-coded call sites.**
 
-**Al + Sarah decide:** is there live testnet state with balances anyone cares about? **Chain reset**
-(clean, correct, pre-mainnet, costs history) or **migration** (preserves state, materially more code
-and risk)?
+**Al + Sarah decide:** is there live **mined or transacted** testnet state with balances anyone cares
+about? **Chain reset** (clean, correct, pre-mainnet, costs history) or **migration** (preserves
+state, materially more code and risk)? With no genesis allocations, reset is materially cheaper than
+v1.2 assumed.
 
 **Split the question — this was conflated in v1.1:**
 
-| | Question | Who | Blocked by |
-|---|---|---|---|
-| **Local repro** | Does the split actually break spending at runtime? | **Builder** (P-003-V) | nothing |
-| **Live state** | Is there deployed state with balances anyone cares about? | **Sarah** | droplet access |
+| | Question | Who | Blocked by | Status |
+|---|---|---|---|---|
+| **Genesis state** | Are genesis-allocated balances stranded? | — | — | ✅ **ANSWERED — no allocations exist** (v1.3) |
+| **Local repro** | Does the split actually break spending at runtime? | **Builder** (P-003-V) | nothing | ⚠️ Method needs re-scoping — see the note above |
+| **Live state** | Is there deployed mined/transacted state anyone cares about? | **Sarah** | droplet access | ⛔ Open — the only surviving half |
 
 The local repro is a builder task, not a human one, and needs no droplet.
 
@@ -166,11 +286,15 @@ invalidate proofs. She is the only person who can see both sides.
 
 | ID | Scope | Gate | Status |
 |---|---|---|---|
-| **P-000** | Commit `loop/` + `LOOP_SPEC.md` | none | 🟡 PR #54 open, blocked on red main |
+| **P-000** | Commit `loop/` + `LOOP_SPEC.md` | none | 🟡 PR #54 open, awaiting #55 then rebase |
+| **P-000-A** | **Spec v1.3 amendments** — D12, GATE-1, §2 discipline, new packets, DARQ-022 | none | 🟡 **This packet.** Docs-only, folds into PR #54 |
 | **P-001** | Registry + verification of C3/C1/C2 | — | ✅ complete (Cycle 0) |
-| **P-002-H** | **CI hotfix — pin toolchain, clear two lints** | none | 🔴 **DO FIRST — preempts queue** |
-| **P-002** | `deny.toml` + `cargo-deny` + multi-ecosystem reconciliation | none | Blocked on P-000 merge |
-| **P-003-V** | **C3 local repro — spend from a genesis address** | none | **Ready — parallel, blocked by nothing** |
+| **P-002-H** | **CI hotfix — pin toolchain, clear two lints** | none | 🔵 PR #55 draft, hosted verified — **Al merges** |
+| **P-002-H2** | **Pin `release.yml`, `api-server-ci.yml`, `lean4.yml`** | none | ⚪ **Small, ungated, anytime** |
+| **P-002** | `deny.toml` + `cargo-deny` + multi-ecosystem reconciliation + **DARQ-022** | none | Blocked on P-000 merge |
+| **P-003-V** | C3 local repro — ⚠️ **method invalidated by the GATE-1 narrowing, re-scope first** | none | Ran in Cycle 1; re-scope needed |
+| **P-021-V** | **DARQ-021 apply-path verification — does the debit site index `from`?** | none | 🔴 **Highest value in the queue — do first once #55/#54 land** |
+| **P-021** | DARQ-021 fix — enforce from/pubkey binding on all ingest paths | **GATE-2** (hard fork) | ⛔ Blocked until P-021-V sizes it |
 | **P-003** | C3 address derivation unification | **GATE-1** | Blocked. Adversary mandatory. |
 | **P-004** | C1 canonical problem regeneration | **GATE-2** | Blocked. Adversary mandatory. |
 | **P-004-D** | C2 fork-choice metric — **design packet** | **GATE-3** | Blocked on Sarah. Not a build packet. |
@@ -189,9 +313,21 @@ refuses to start until P-000 merges. Al ruled **fix, don't merge over red** [D12
 
 1. **P-002-H** branches from `main`, goes green, merges → main green, security gate live again
 2. **P-000** rebases onto green main → goes green → merges
-   *(No conflict is possible: P-000 is docs-only, P-002-H is src+config only.)*
+   *(No conflict is possible: P-000 is docs-only, P-002-H is src+config only. Verified in Phase −1 by
+   file-level set intersection of the two diffs: **empty**.)*
 3. **P-002** starts, re-scoped per §0
 4. **P-003-V** runs in parallel with any of the above — it depends on nothing
+
+**Amended by v1.3 at step 1:** P-002-H merges **despite** its red Security Audit, per the bounded
+exception in D12. The original ordering assumed a fully green #55 was achievable inside P-002-H's
+scope; it is not — the red is the two RUSTSEC advisories, which are P-002's work. **Waiting for green
+here would deadlock the queue for the second time, on the same shape of reasoning as the first.**
+
+**After step 2, the queue re-prioritises: P-021-V goes first, ahead of P-002.** DARQ-021 is
+unsized, and it is the only open item that could turn out to be an arbitrary-theft path. Sizing it
+is cheap (read-only) and it dominates every scheduling decision downstream — if it confirms, it
+outranks C3 and expands P-005; if it does not, the queue is unchanged and the cost was one
+verification packet.
 
 ### P-002 re-scope
 
@@ -199,6 +335,31 @@ Not "build a pipeline." The real delta is now: **write `deny.toml`** (without it
 run at all), **wire `cargo-deny` into the existing job**, and **reconcile the four dependency
 numbers across ecosystems**. Do **not** add CodeQL. Do **not** duplicate the existing Security Audit
 job.
+
+### P-002 sharpened again *(v1.3)*
+
+`cargo deny check` is **already present in `ci.yml` and toothless twice over**: it carries
+`continue-on-error: true`, *and* it never executes at all because `cargo audit` fails first in the
+same job. Either defect alone would make the gate decorative; both together mean it has never once
+produced a verdict. **P-002 must do all three of the following, or the gate stays decorative:**
+
+1. **Add `deny.toml`.** Without it `cargo-deny` cannot run at all — this is why "wire up cargo-deny"
+   was never sufficient as a scope.
+2. **Remove `continue-on-error: true`.** A gate that cannot fail the build is documentation.
+3. **Resolve the two RUSTSEC advisories** — patch-level bump where available
+   (`quinn-proto` ≥ 0.11.15, `crossbeam-epoch` ≥ 0.9.20); otherwise a `deny.toml` ignore **with a
+   written reason and an expiry date**. Never a silent ignore, and never an ignore without a date —
+   an undated ignore is how an advisory becomes permanent.
+
+Plus **DARQ-022** (Dependabot has not run successfully on `main`), and the multi-ecosystem
+reconciliation: 18/19 Dependabot alerts across all ecosystems vs 2 `cargo audit` findings in Rust
+only. CodeQL scans javascript-typescript and python, so the ~16 gap is real and **larger than the
+Rust one**. "Fixed the 2 Rust advisories" must never be recorded as "dependencies clean."
+
+⚠️ **Sequencing note:** DARQ-022 should be settled *before* the reconciliation, not after. Until
+Dependabot runs, the 18/19 alert counts are stale by an unknown margin — they reflect whatever the
+last successful run saw, which was at least three weeks before this writing. Reconciling against a
+frozen number produces a confident wrong answer.
 
 ---
 
@@ -292,6 +453,61 @@ Fixing either half mitigates; fixing H11 is cheaper.
 **DARQ-NEW-4** · Operational · `.github/workflows/ci.yml` — floating `RUST_TOOLCHAIN: stable` with
 `needs: lint` fan-out means an upstream lint release silently disables the security gate. Closed by
 P-002-H + D11.
+
+**DARQ-021 (NEW-5)** · **Critical — UNSIZED** · `node/src/validator.rs:169`, `mempool/src/pool.rs:160`
+Block validation and mempool admission both call `verify_signature()`, which checks the Ed25519
+signature **only**. The `from == public_key.to_address()` binding lives solely in
+`Transaction::is_valid()` (`core/src/transaction.rs:437-439`), reached only via `Block::verify()`
+(`core/src/block.rs:215`) — **which `node/src` never calls.** Every ingest route uses
+`validate_block_with_options`. Runtime probe (P-003-V): a transfer naming an arbitrary victim as
+`from`, signed by an attacker key, returns `verify_signature = true`. **Severity deliberately
+withheld pending P-021-V** — it turns entirely on whether the ledger apply path debits `tx.from` or
+an address derived from the signing key. Do not assign a severity before that is traced.
+
+**DARQ-022 (NEW-6)** · Operational · `.gitmodules` + submodule pin — **Dependabot has not run
+successfully on `main`, across every ecosystem, for at least three weeks**
+
+> Found during Phase −1 state detection, while enumerating CI runs on `main` for an unrelated reason.
+>
+> Every `Dependabot Updates` run on `main` fails — **npm_and_yarn *and* cargo**, both `/web-wallet`
+> and `/web/coinjecture-evolved-main` and `/.` — from at least 2026-07-13 through 2026-08-02.
+> **Root cause, read from the run log, is not ecosystem-specific and not a dependency problem at
+> all:**
+>
+> ```
+> Submodule 'latest-upstream' (https://github.com/Quigles1337/COINjecture2.0.git) registered
+> fatal: remote error: upload-pack: not our ref 6a32fbfc7094fe82c02a91b231b52798c9f42972
+> fatal: Fetched in submodule path 'latest-upstream', but it did not contain 6a32fbfc...
+> ```
+>
+> `.gitmodules` registers `latest-upstream` → `Quigles1337/COINjecture2.0`, and the tree pins it at
+> `6a32fbfc7094fe82c02a91b231b52798c9f42972`. **That commit is not reachable in that remote** —
+> confirmed independently with `git ls-remote`, which does not list it. Dependabot clones with
+> submodules, fails at clone time, and aborts **before any ecosystem update logic runs**. That is why
+> the failure is total rather than partial.
+>
+> **Consequence — this is the part that matters.** Dependabot's automated fix PRs are not being
+> generated. Confirmed by observation: the open-PR list contains **zero** Dependabot PRs (only #46,
+> #48, #54, #55, all authored by Al). **This is a strong candidate explanation for why 18–19 alerts
+> sit open** — not neglect, but a broken updater that fails silently in a workflow nobody reads
+> because it is "expected to be noisy."
+>
+> ⚠️ **The 18/19 alert counts are therefore stale by an unknown margin**, frozen at whatever the last
+> successful run saw. Any reconciliation of the four dependency numbers (§9) that treats them as
+> current will produce a confident wrong answer. Settle DARQ-022 first.
+>
+> **Same class as DARQ-020, different mechanism.** DARQ-020: a floating toolchain darkens the audit
+> *job*. DARQ-022: a dangling submodule darkens the dependency *updater*. In both cases an unrelated
+> failure disabled a security mechanism, in both cases nothing announced it, and in both cases the
+> workflow was "running" the whole time. **Assigned to P-002.**
+>
+> **Fix shape — needs a decision, not just a commit.** Three options, in increasing order of
+> commitment: (a) update the pin to a commit that exists in the fork; (b) remove the `latest-upstream`
+> submodule entirely, if it serves no build purpose — nothing in the workspace appears to consume it;
+> (c) re-point it at the org repo. **(b) is the likely right answer and it is Al's call**, because it
+> also severs the org repo's in-tree dependency on the personal fork — see the clone hazard in §2.
+> Note that `proofs/eigenverse` is a second submodule and is **not** implicated in the failure; do not
+> remove it while fixing this.
 
 ---
 
@@ -488,13 +704,112 @@ GUARDRAILS
 
 ---
 
+## §11.1 PHASE A — P-021-V BUILDER PROMPT (DARQ-021 apply-path verification)
+
+*Committed here so it never needs re-pasting. This is the first packet to run once #55 and #54 land.*
+
+```text
+You are the BUILDER seat of the DARQ AGI Mode loop for COINjecture 2.0.
+Read loop/LOOP_SPEC.md — it binds you.
+
+PACKET: P-021-V — DARQ-021 apply-path verification
+PHASE: A — verification. READ-ONLY. No fix.
+
+WHAT THE LAST SESSION FOUND (while probing C3, not while looking for this)
+verify_signature() validates the signature only. The binding
+    from == public_key.to_address()
+lives solely in is_valid(). Block::verify() is the only caller of is_valid()
+and is never invoked anywhere in node/src. Both block validation
+(validator.rs:169) and mempool admission (pool.rs:160) call ONLY
+verify_signature(). Every ingest route uses validate_block_with_options.
+
+The probe demonstrated directly: a transaction whose `from` is an arbitrary
+victim address the signing key does not own returns verify_signature = true.
+
+THE ONE QUESTION THAT SETS SEVERITY
+Does the ledger apply path debit the `from` field, or an address derived from
+the signing public key?
+
+  debits `from`            -> arbitrary theft from any account. Critical.
+                              Outranks C3 and everything else open.
+  debits derived address   -> not theft. Impact is spoofed attribution or
+                              accounting corruption. Size it honestly.
+
+Do not assume. Trace it. Do not assign severity before step 2 is answered.
+
+METHOD
+1. Map every path from ingest (RPC and gossip) through mempool admission and
+   block application to the point where a balance is mutated.
+2. At each debit site, record EXACTLY which value indexes the account:
+   tx.from, or something derived from tx.public_key. path:line.
+3. Record which derivation the debit site uses — raw, SHA-256, or BLAKE3.
+   C3 and DARQ-021 interact: the debit site may use a different derivation
+   than is_valid() does, and that changes what the exploit actually yields.
+4. Determine whether ANY path reaching balance mutation enforces the
+   from/pubkey binding by any means.
+5. Only if 1-4 show a theft path, write a local probe demonstrating it end to
+   end. Same discipline as P-003-V: written, run, deleted, never committed.
+
+ALSO SETTLE
+  - Network reachability: is this reachable from the RPC or gossip boundary,
+    or only from a local API? Trace inward from the ingest boundary.
+  - Do mempool admission and block application differ in exposure? Both were
+    named; they may not be equally reachable.
+  - Distinctness from M3: M3 is callers bypassing the validator. DARQ-021 is
+    the validator performing the weaker of two checks that both exist.
+    Confirm they are distinct and that fixing M3 as written would NOT close
+    DARQ-021.
+
+REPORT loop/reports/C2-p021v-builder.md
+  1. Verdict: CONFIRMED-THEFT / CONFIRMED-NON-THEFT / NOT-FOUND / NEEDS-HUMAN
+  2. The exact debit site, path:line, and what indexes the account
+  3. Which derivation the debit site uses, and the C3 interaction
+  4. Network reachability, per ingest route
+  5. Proposed severity WITH reasoning, never a bare label
+  6. Fix shape: one check in one place, or N ingest sites?
+  7. Consensus impact: adding a validation check means old nodes accept what
+     new nodes reject. Confirm whether this is a hard fork [D5, GATE-2].
+  8. 2-4 things you want a second opinion on
+
+GUARDRAILS
+  - Read-only. Do NOT fix. The fix is consensus-affecting and gated.
+  - Probe code temporary, deleted after, never committed.
+  - Severity is determined by the debit site, not by intuition.
+  - If you cannot settle the debit site from the code, NEEDS-HUMAN is the
+    correct verdict. Do not reason toward a severity.
+```
+
+---
+
 ## §12 Al's Track — decisions, no code
 
-1. ☐ **Confirm the clone** — `-network` on three signals. 30 seconds. Every verdict depends on it.
-2. ☐ **GATE-1 with Sarah** — live testnet state, and therefore reset vs. migration.
-3. ☐ **GATE-3 to Sarah** — the three fork-choice options in §4, with the Lean-proof interaction
+*Updated v1.3. Items resolved by evidence are struck through with the resolution, not deleted — the
+record of what was once open is part of the audit trail.*
+
+1. ☑ ~~**Confirm the clone**~~ — **RESOLVED.** `origin` is `COINjecture-Network/COINjecture2.0`,
+   re-confirmed in Phase −1. All verdicts stand. *(The second clone is now item 5, and it grew teeth.)*
+2. ☐ **Merge PR #55 (P-002-H)** — ruled: **merge despite the red Security Audit**, per the amended
+   D12 above. The red is the two RUSTSEC advisories, owned by P-002. This unblocks everything.
+3. ☐ **Merge PR #54 (P-000 + P-000-A)** after #55, once the builder rebases it and hosted CI confirms.
+   Docs-only; conflict is impossible (verified by diff intersection).
+4. ☐ **GATE-1 to Sarah — now materially narrower.** No genesis allocations exist, so the only
+   surviving question is live **mined or transacted** testnet state. Reset is cheaper than assumed.
+5. ☐ **GATE-3 to Sarah** — the three fork-choice options in §4, with the Lean-proof interaction
    flagged explicitly.
-4. ☐ **Reconcile the Lean count** — is 586 actually Eigenverse's number?
-5. ☐ Clean up or rename the second clone.
-6. ☐ **Review the dark window** once P-002-H reports it — if anything merged blind, decide whether
-   it needs re-verification now that the audit job runs again.
+6. ☑ ~~**Reconcile the Lean count**~~ — **half resolved.** 89 is re-measured and CONFIRMED under
+   three independent commands (§2). 586 remains unreconciled, but is now a concrete testable
+   question: `proofs/eigenverse` is a registered, **unpopulated** submodule. ☐ Someone should
+   populate it and re-count. That is a 5-minute task, not a decision.
+7. ☐ **Decide DARQ-022's fix shape — this one is genuinely yours.** The `latest-upstream` submodule
+   points at the personal fork and its pin is dangling, which has silently disabled Dependabot across
+   all ecosystems for at least three weeks. Options in §8: re-pin, **remove**, or re-point at the org
+   repo. Removing it also severs the org repo's in-tree dependency on the personal fork — which
+   subsumes what used to be item 5 below.
+8. ☐ **Clean up or rename the second clone** — no longer cosmetic. See item 7; the local directory is
+   the smaller half of this problem, and fixing the local clone alone does **not** fix `main`.
+9. ☑ ~~**Review the dark window**~~ — **RESOLVED: nothing to review.** Last CI run 2026-06-12 (green,
+   `28c50a12`); next 2026-08-02 (red, PR #54). **Zero commits to `main` in between.** Rust 1.97.1
+   landed inside a 51-day dormancy, so `main` went retroactively red without a commit. Nothing merged
+   blind; nothing needs re-verification.
+10. ☐ **Authorize P-021-V** once #54 lands — §11.1 carries the full prompt. It is read-only, ungated,
+    and it is the only open item that could turn out to be arbitrary theft.

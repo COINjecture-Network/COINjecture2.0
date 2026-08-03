@@ -3,13 +3,16 @@
 ```
 CYCLE: 1
 PHASE: D
-PACKET: P-002-H  (P-000 also open, awaiting P-002-H)
-BRANCH: fix/ci-pin-toolchain-clippy
+PACKET: P-000-A  (P-002-H / PR #55 and P-000 / PR #54 both open, awaiting Al's merges)
+BRANCH: feat/p000-loop-scaffolding
 CAPACITY_FLAG: none
 SEAT: BUILDER
 ```
 
-Spec authority: `loop/LOOP_SPEC.md` v1.2.
+Spec authority: `loop/LOOP_SPEC.md` **v1.3**.
+
+**Next builder action, pre-authorized:** once Al merges #55, rebase `feat/p000-loop-scaffolding` onto
+the new `main`, push, confirm hosted CI per job, and stop. (Resume-pack Branch B.) Then P-021-V.
 
 | Field | Value |
 |---|---|
@@ -27,6 +30,8 @@ Spec authority: `loop/LOOP_SPEC.md` v1.2.
 | 0 | P-001 | A | ✅ Registry + C3/C1/C2 verified — all three CONFIRMED. `reports/C0-builder.md` |
 | 1 | P-000 | D | PR #54 open. Spec upgraded to v1.2. Waits on P-002-H per the §5 ordering. |
 | 1 | P-002-H | D | PR #55 draft. Lint green on hosted; **Security Audit executes again**, and fails on the 2 known RUSTSEC advisories. |
+| 1 | — | −1 | 🔌 **Session lost to a network fault.** State re-detected from scratch, nothing assumed. Clone, both PRs, all CI, worktree and reflog verified: **no commit lost, no regression, no crash debris.** #55 exactly as left. Found **DARQ-022** while enumerating CI. |
+| 1 | P-000-A | D | Spec **v1.3** on branch: D12 bounded exception (both precedents), GATE-1 halved, §2 measurement discipline, P-021-V/P-021/P-002-H2 registered, DARQ-022 registered, P-002 sharpened. Docs-only, folds into PR #54. |
 
 ## P-000 — what landed on the branch
 
@@ -62,15 +67,23 @@ pre-existing, and P-002's work. `api-server-ci.yml`, `release.yml` and `lean4.ym
 
 | Item | Owner | Blocks |
 |---|---|---|
-| **D12 vs. reality** — P-002-H makes Lint green, but Security Audit now reports red on the 2 advisories. Nothing can be fully green until P-002 triages them. Merge anyway, or fold triage in? | **Al** | P-002-H, P-000 |
-| Merge P-002-H (PR #55), then P-000 (PR #54) | Al | **P-002** |
-| GATE-1 — testnet state? reset vs migrate | Al + Sarah | P-003 |
-| GATE-2 — testnet topology for coordinated restart | Al | P-004 |
+| ✅ ~~**D12 vs. reality**~~ — **RULED.** D12 amended to the bounded-exception form in v1.3; #55 merges despite the red it did not introduce and cannot fix in scope. | ~~Al~~ **done** | — |
+| **Merge PR #55 (P-002-H)**, then rebase + merge PR #54 (P-000 + P-000-A) | Al | **everything** |
+| **DARQ-022 fix shape** — re-pin / **remove** / re-point the `latest-upstream` submodule | Al | P-002 |
+| GATE-1 — live **mined/transacted** state? reset vs migrate *(genesis half answered)* | Al + Sarah | P-003 |
+| GATE-2 — testnet topology for coordinated restart | Al | P-004, **P-021** |
 | GATE-3 — fork-choice metric, 3 options in §4 | Sarah | P-004-D |
-| Lean count 586 vs measured 89 | Al | nothing — recorded as unreconciled |
-| Second clone (`Quigles1337`) cleanup/rename | Al | nothing — hazard only |
+| Lean 586 vs **confirmed** 89 — populate `proofs/eigenverse` and re-count | anyone | nothing — 5-minute task |
+| SEC-PR-001 (`ff6e65c4`) exists on local disk only — push it? | **Al** | nothing — durability risk |
+| Second clone: `latest-upstream` submodule ties `main` to the personal fork | Al | folded into DARQ-022 |
 
 ## Next
 
-P-002 (CI security pipeline + `deny.toml`), branch `feat/p002-ci-security-pipeline`.
-**Gated on P-000 merging first** — per its own STEP 0.
+1. **Al merges #55** → builder rebases #54 onto new main, pushes, confirms hosted CI, stops.
+2. **Al merges #54** → the spec is on `main` and the re-pasting problem is finally closed.
+3. **P-021-V** — DARQ-021 apply-path verification, prompt committed at `LOOP_SPEC.md` §11.1.
+   Read-only, ungated, and the only open item that could turn out to be arbitrary theft. **Do this
+   before P-002.**
+4. **P-002** (CI security pipeline + `deny.toml` + DARQ-022), branch `feat/p002-ci-security-pipeline`.
+   Settle DARQ-022 before reconciling dependency counts — they are stale until the updater runs.
+5. **P-002-H2** (pin the three remaining floating workflows) — small and ungated, fits anywhere.
