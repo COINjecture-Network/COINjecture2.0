@@ -22,6 +22,21 @@ version: 2
 #      arrives; it arrives as one PR instead of N. `applies-to: security-updates`
 #      is what lets a backlog wave land as one reviewable PR per root.
 #
+# WHERE TO GROUP AND WHERE NOT TO — the governing principle (ruled by Al):
+#
+#   Group where the items are individually unremarkable.
+#   Separate where each item deserves its own merge decision.
+#
+#   Grouping trades review VOLUME for review GRANULARITY. That is the right trade
+#   for a wave of npm transitive bumps, where the batch is the unit anyone would
+#   actually reason about. It is the WRONG trade when a single PR would couple
+#   unrelated subsystems: a reviewer approving a batch is not making the same
+#   decision as a reviewer approving each member of it.
+#
+#   Applied here: npm security updates ARE grouped (21 alerts, 12 packages, two
+#   roots, overwhelmingly transitive). Cargo security updates are NOT grouped —
+#   see the cargo entry below.
+#
 #   3. `ignore` DOES reach security updates — but is scoped by `update-types`:
 #      "update-types only affects version updates, not security updates.
 #       Security updates will always be created regardless of the update-types
@@ -72,11 +87,20 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
-      # The throttle that matters for the post-DARQ-022 backlog: every pending
-      # Rust security update arrives as ONE PR, not one per advisory.
-      cargo-security-updates:
-        applies-to: security-updates
-        patterns: ["*"]
+      #
+      # NOTE: there is deliberately NO `applies-to: security-updates` group here.
+      #
+      # Cargo security updates arrive UNGROUPED — one PR per vulnerable crate.
+      # Ruled by Al, and the reasoning is the principle in the header: a cargo
+      # security group would couple a crypto-adjacent fix to a network-layer fix
+      # in a single merge decision, and it would save exactly one PR. The two
+      # currently pending are `quinn-proto` (QUIC transport) and `rand` (RNG
+      # crate, transitively). Those want separate judgement, separate rollback,
+      # and separate blame; one saved PR does not buy that away.
+      #
+      # npm is the opposite case and IS grouped — see both npm entries below.
+
+
     ignore:
       # Pin major versions manually — breaking changes require review.
       # `update-types` MUST remain on every rule here. See header note 3.
