@@ -5,12 +5,59 @@ Authority: `loop/LOOP_SPEC.md` §6 (Phase D writes the entry).
 
 | Date | Cycle | Packet | RC / DARQ | Findings closed | PR | Merge SHA | Tests before → after | Adversary |
 |---|---|---|---|---|---|---|---|---|
-| — | — | — | — | — | — | — | — | — |
+| 2026-08-03 | 1 | **P-002-H** | DARQ-020 (NEW-4) | **1** — DARQ-020 closed | [#55](https://github.com/COINjecture-Network/COINjecture2.0/pull/55) | `b1aaf59b` | 982 → 982 / 0 failed / 4 ignored | `SKIPPED — CI-config hotfix; both src changes are provably syntax-only, no behaviour to adversarially verify` |
 
-**No entries yet.** Cycle 0 (P-001) was read-only. Cycle 1 (P-000) is in draft PR, not merged.
+**First entry.** Cycle 0 (P-001) was read-only. P-000 (+ P-000-A) is still in PR #54.
 
 Per §1, the Adversary column records `CLEAN` / `MERGE-WITH-NOTES` / `BLOCK` for P-003, P-004 and
 P-005, and `SKIPPED — <one-line reason>` everywhere else.
+
+### P-002-H — merged under the amended D12 bounded exception ⚠️ deferred red
+
+**This is the first application of the amended D12, and D12 requires the deferred red be logged
+against its owning packet. This section is that log. It is not a formality — it is the mechanism that
+keeps "tracked to a named packet" a fact rather than a phrase.**
+
+| | |
+|---|---|
+| Merged | 2026-08-03T20:26:32Z, merge commit `b1aaf59b`, head `26ff50a8` |
+| Green | Lint · Test (default) · Test (adzdb) · Build (release) ×2 · Docker Build · Analyze ×4 (actions, js-ts, python, rust) · CodeQL |
+| **Red at merge** | **`Security Audit` — merged anyway, deliberately** |
+
+**The deferred red, itemised and owned:**
+
+| Advisory | Crate | Severity | Fix available | Owner |
+|---|---|---|---|---|
+| [RUSTSEC-2026-0185](https://rustsec.org/advisories/RUSTSEC-2026-0185) | `quinn-proto` 0.11.14 | **7.5 High** — remote memory exhaustion via unbounded out-of-order stream reassembly | ≥ 0.11.15 | **P-002** |
+| [RUSTSEC-2026-0204](https://rustsec.org/advisories/RUSTSEC-2026-0204) | `crossbeam-epoch` 0.9.18 | Invalid pointer deref in `fmt::Pointer` for `Atomic`/`Shared` | ≥ 0.9.20 | **P-002** |
+
+Plus 3 *allowed* warnings that do not fail the job and are not deferred red: `bincode` 1.3.3
+unmaintained (RUSTSEC-2025-0141), `anyhow` 1.0.102 unsound (RUSTSEC-2026-0190), `spin` 0.9.8 yanked.
+
+**D12's three conditions, checked individually rather than asserted:**
+
+1. **Correctly attributed** — ✅ Not introduced by P-002-H. The opposite: the `Security Audit` job had
+   not executed on *any* PR for 51 days because `needs: lint` gated it behind a red Lint. P-002-H is
+   what made it run. **These advisories were already true and already invisible.**
+2. **Tracked to a named packet** — ✅ P-002, scoped for exactly this before P-002-H existed. Recorded
+   here with advisory IDs, affected versions and fix versions so the successor packet inherits facts,
+   not a pointer.
+3. **Outside the current packet's scope** — ✅ P-002-H was scoped to `rust-toolchain.toml`, `ci.yml`,
+   and two syntax-only lint fixes. Resolving these requires dependency bumps, lockfile churn, and a
+   `quinn-proto` review that touches the QUIC layer of a P2P chain. Folding that into a hotfix would
+   have broken D1 and D8 both.
+
+**Why this was the right call and not merely a permitted one:** holding #55 would have kept the
+security gate dark in order to avoid seeing what the security gate reports. The pipeline was
+*already* failing these advisories — silently, for 51 days. #55 changed nothing about the repo's
+security posture except making it **legible**. A job reporting a true failure beats a job reporting
+nothing.
+
+**Standing obligation created by this entry:** `main` is now red on `Security Audit` and will stay
+red until P-002 lands. That red is **expected and accounted for** — it is not a new signal and must
+not be re-diagnosed as one. **But it also must not become wallpaper.** If P-002 slips, a *third*
+advisory could appear and be mistaken for the two already logged here. P-002 must therefore
+re-enumerate `cargo audit` output from scratch rather than assume this list is still complete.
 
 ## Baseline for future deltas
 
