@@ -638,11 +638,7 @@ impl BlockValidator {
                             // Balances are u128 (Balance type), always non-negative
                             // TODO: Verify balances match channel capacity
                         }
-                        coinject_core::ChannelType::UnilateralClose {
-                            balance_a: _,
-                            balance_b: _,
-                            ..
-                        } => {
+                        coinject_core::ChannelType::UnilateralClose { .. } => {
                             // TODO: Verify channel exists and dispute proof
                             // TODO: Credit balances to participants after dispute period
                             // Balances are u128 (Balance type), always non-negative

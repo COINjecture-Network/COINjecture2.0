@@ -27,11 +27,7 @@ pub async fn list_problems(client: &RpcClient) -> Result<()> {
             println!();
 
             for (i, problem) in problems.iter().enumerate() {
-                println!(
-                    "{}. Problem #{}",
-                    i + 1,
-                    &problem.problem_id[0..16].dimmed()
-                );
+                println!("{}. Problem #{}", i + 1, problem.problem_id[0..16].dimmed());
                 println!("   Submitter:  {}", problem.submitter);
                 println!(
                     "   Bounty:     {} BEANS",

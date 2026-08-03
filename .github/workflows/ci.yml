@@ -10,7 +10,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # Used both in shell guards and passed to dtolnay/rust-toolchain with a fallback so it can never be empty.
-  RUST_TOOLCHAIN: stable
+  # PINNED — must stay identical to [toolchain].channel in rust-toolchain.toml; every job's Guard step
+  # asserts they match and rejects a floating channel (D11). Bump both together, in one PR.
+  RUST_TOOLCHAIN: "1.97.1"
 
 jobs:
   # ─── Stage 1: Lint ──────────────────────────────────────────────────────────
@@ -20,12 +22,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Guard — ensure toolchain is set
+      - name: Guard — toolchain is set, pinned, and agrees with rust-toolchain.toml
+        shell: bash
         run: |
           set -euo pipefail
           : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+          pinned="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          : "${pinned:?could not read [toolchain].channel from rust-toolchain.toml}"
+          if [ "$pinned" != "$RUST_TOOLCHAIN" ]; then
+            echo "::error::Toolchain drift — rust-toolchain.toml pins '$pinned' but RUST_TOOLCHAIN is '$RUST_TOOLCHAIN'. These must match (D11: one source of truth)."
+            exit 1
+          fi
+          case "$pinned" in
+            stable|beta|nightly*)
+              echo "::error::Toolchain channel '$pinned' is floating. A floating channel lets an upstream lint release red this pipeline with zero code changes, which silently disables the Security Audit job (needs: lint). Pin an explicit version (D11)."
+              exit 1
+              ;;
+          esac
+          echo "Toolchain pinned and consistent: $pinned"
 
-      - name: Install Rust toolchain (stable + rustfmt + clippy)
+      - name: Install Rust toolchain (pinned + rustfmt + clippy)
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN || 'stable' }}
@@ -68,10 +84,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Guard — ensure toolchain is set
+      - name: Guard — toolchain is set, pinned, and agrees with rust-toolchain.toml
+        shell: bash
         run: |
           set -euo pipefail
           : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+          pinned="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          : "${pinned:?could not read [toolchain].channel from rust-toolchain.toml}"
+          if [ "$pinned" != "$RUST_TOOLCHAIN" ]; then
+            echo "::error::Toolchain drift — rust-toolchain.toml pins '$pinned' but RUST_TOOLCHAIN is '$RUST_TOOLCHAIN'. These must match (D11: one source of truth)."
+            exit 1
+          fi
+          case "$pinned" in
+            stable|beta|nightly*)
+              echo "::error::Toolchain channel '$pinned' is floating. A floating channel lets an upstream lint release red this pipeline with zero code changes, which silently disables the Security Audit job (needs: lint). Pin an explicit version (D11)."
+              exit 1
+              ;;
+          esac
+          echo "Toolchain pinned and consistent: $pinned"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -145,10 +175,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Guard — ensure toolchain is set
+      - name: Guard — toolchain is set, pinned, and agrees with rust-toolchain.toml
+        shell: bash
         run: |
           set -euo pipefail
           : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+          pinned="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          : "${pinned:?could not read [toolchain].channel from rust-toolchain.toml}"
+          if [ "$pinned" != "$RUST_TOOLCHAIN" ]; then
+            echo "::error::Toolchain drift — rust-toolchain.toml pins '$pinned' but RUST_TOOLCHAIN is '$RUST_TOOLCHAIN'. These must match (D11: one source of truth)."
+            exit 1
+          fi
+          case "$pinned" in
+            stable|beta|nightly*)
+              echo "::error::Toolchain channel '$pinned' is floating. A floating channel lets an upstream lint release red this pipeline with zero code changes, which silently disables the Security Audit job (needs: lint). Pin an explicit version (D11)."
+              exit 1
+              ;;
+          esac
+          echo "Toolchain pinned and consistent: $pinned"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1
@@ -216,10 +260,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Guard — ensure toolchain is set
+      - name: Guard — toolchain is set, pinned, and agrees with rust-toolchain.toml
+        shell: bash
         run: |
           set -euo pipefail
           : "${RUST_TOOLCHAIN:?RUST_TOOLCHAIN must be set}"
+          pinned="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          : "${pinned:?could not read [toolchain].channel from rust-toolchain.toml}"
+          if [ "$pinned" != "$RUST_TOOLCHAIN" ]; then
+            echo "::error::Toolchain drift — rust-toolchain.toml pins '$pinned' but RUST_TOOLCHAIN is '$RUST_TOOLCHAIN'. These must match (D11: one source of truth)."
+            exit 1
+          fi
+          case "$pinned" in
+            stable|beta|nightly*)
+              echo "::error::Toolchain channel '$pinned' is floating. A floating channel lets an upstream lint release red this pipeline with zero code changes, which silently disables the Security Audit job (needs: lint). Pin an explicit version (D11)."
+              exit 1
+              ;;
+          esac
+          echo "Toolchain pinned and consistent: $pinned"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@v1

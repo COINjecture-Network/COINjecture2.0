@@ -1,4 +1,20 @@
+# Single source of truth for the Rust toolchain — CI and local development alike.
+#
+# PINNED, deliberately. Do not set this back to "stable".
+#
+# Why: CI runs `cargo clippy -- -D warnings`, and `test`, `build` and `security`
+# all declare `needs: lint`. With a floating channel, any upstream clippy release
+# can introduce a new lint that reds the pipeline with zero code changes — which
+# silently disables the Security Audit job along with everything else downstream.
+# That is exactly what happened here: stable moved to 1.97.1 (released 2026-07-14)
+# during a period with no CI runs, and `main` went red without a single commit.
+#
+# `.github/workflows/ci.yml` sets RUST_TOOLCHAIN to this same version and asserts
+# agreement with this file in its "Guard" step, so the two cannot drift apart.
+#
+# To upgrade: bump `channel` here AND RUST_TOOLCHAIN in ci.yml in one PR, let the
+# guard prove they match, and clear any new lints in that same PR.
 [toolchain]
-channel = "stable"
+channel = "1.97.1"
 profile = "minimal"
 components = ["rustfmt", "clippy"]
