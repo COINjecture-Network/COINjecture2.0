@@ -1,6 +1,6 @@
 # REGISTRY — DARQ AGI Mode / COINjecture 2.0
 
-**37 findings / 18 root causes.**
+**38 findings / 18 root causes.**
 
 Schema authority: `loop/LOOP_SPEC.md` §7. Root-cause map: §7 canonical table (v1.2).
 Verified at: `28c50a122f2caab70582e8215b670b0ddc4d236d` unless a row says otherwise.
@@ -42,6 +42,7 @@ A `NOT-FOUND` is a **valuable** result.
 | DARQ-018 | Unchecked time / expiry arithmetic | Low | Integer | RC-18 | L4 | UNVERIFIED | — | Open | P-010 |
 | DARQ-019 | Disk-exhaustion DoS composed from NEW-2 × H11 | **High (PROVISIONAL)** | Composition | RC-11 × RC-12 | NEW-3 | composition of `node/src/validator.rs:102-130` and the unrated `/node-rpc` route | — | Open | P-009 |
 | DARQ-020 | Floating CI toolchain silently disables the security gate | Operational | SupplyChain | — (operational) | NEW-4 | `.github/workflows/ci.yml` `RUST_TOOLCHAIN: stable` + `needs: lint` fan-out | **CONFIRMED** | In Progress | P-002-H |
+| DARQ-021 | Block validation checks the signature but not the sender binding; `is_valid()` is dead on the block path | **Critical (UNSIZED)** | Auth | RC-02 (extends) | NEW-5 | `node/src/validator.rs:169` and `mempool/src/pool.rs:160` call `verify_signature()`; the binding lives only in `Transaction::is_valid()` (`core/src/transaction.rs:437-439`), reached only from `core/src/block.rs:215`, which `node/src` never calls | **NEEDS-HUMAN** (needs its own packet) | Open | unassigned |
 
 ## Codex program cross-reference
 
@@ -62,7 +63,7 @@ into P-006 alongside C7, per §5 merge rationale.
 | | Count |
 |---|---|
 | Root causes with a verified Location | **3** of 18 (DARQ-001, 004, and partially 012) + DARQ-020 (operational) |
-| Findings covered by those | 5 of 37 (C1, C2, C3, NEW-2, NEW-4) |
+| Findings covered by those | 6 of 38 (C1, C2, C3, NEW-2, NEW-4, NEW-5) |
 | Rows carrying `UNVERIFIED` | 15 |
 
 Only C1/C2/C3 were assigned for verification in Cycle 0. Everything else is seeded from audit text
@@ -107,6 +108,17 @@ and runs `clippy -- -D warnings`; `test`, `build` and `security` all declare `ne
 upstream lint release therefore darkens the security gate with zero code changes. Confirmed
 empirically: a PR touching **zero** `.rs` files fails Lint while `main`'s last run was green.
 No code root cause — it is a pipeline-topology defect. Closed by P-002-H + D11.
+
+**DARQ-021** — found during P-003-V, not sought. `Transaction::verify_signature()` checks only the
+Ed25519 signature; the `from == public_key.to_address()` binding is in `Transaction::is_valid()`.
+Runtime probe: a transfer naming an arbitrary **victim** as `from`, signed by an attacker key,
+returns `verify_signature = true`. Block validation (`node/src/validator.rs:169`) and mempool
+admission (`mempool/src/pool.rs:160`) both call only `verify_signature()`. `Block::verify()` —
+the one path that calls `is_valid()` — is **never invoked anywhere in `node/src`**; every ingest
+route uses `validate_block_with_options`. Adjacent to M3 but distinct: M3 is *callers bypassing the
+validator*, this is *the validator performing the weaker of two available checks*, so fixing M3 as
+written would not fix it. **Not traced to the apply path and deliberately unsized** — needs its own
+verification packet before anyone assigns severity. If it holds it outranks C3 and expands P-005.
 
 **Audit coordinate reliability** — both audits' *findings* have held; their *coordinates* have not.
 Treat every `UNVERIFIED` Location as a hypothesis, not a fact.
