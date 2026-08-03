@@ -164,6 +164,15 @@ Run **30842995637** on `fix/ci-pin-toolchain-clippy`:
 | Test (adzdb) | ⏭️ skipped | ▶️ executing |
 | Build (release) ×2 | ⏭️ skipped | ▶️ executing |
 | **Security Audit** | ⏭️ **skipped (dark)** | ▶️ **RAN** — ❌ fails |
+
+Final: **Lint ✅ · Test (default) ✅ · Test (adzdb) ✅ · Build (release) ×2 ✅ · Security Audit ❌ ·
+CodeQL + Analyze ×4 ✅.** Every job that was dark now executes.
+
+**Cross-platform confirmation of the corrected baseline:** the hosted `Test (default)` log sums to
+1964 passed / 0 failed / 8 ignored — exactly **2×** my local figure, because the job runs
+`cargo test --all` and then `cargo tarpaulin --all`, which re-runs the whole suite. The single-run
+hosted total is therefore **982 passed / 0 failed / 4 ignored**, matching the local Windows
+measurement exactly. **982 is confirmed on both platforms; 936 is definitively wrong.**
 | CodeQL / Analyze ×4 | ✅ pass | ✅ pass |
 
 **The packet's stated deliverable is met: the Security Audit job executes again.** Its step-level
