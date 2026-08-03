@@ -3,13 +3,13 @@
 ```
 CYCLE: 1
 PHASE: D
-PACKET: P-000
-BRANCH: feat/p000-loop-scaffolding
+PACKET: P-002-H  (P-000 also open, awaiting P-002-H)
+BRANCH: fix/ci-pin-toolchain-clippy
 CAPACITY_FLAG: none
 SEAT: BUILDER
 ```
 
-Spec authority: `loop/LOOP_SPEC.md` v1.1.
+Spec authority: `loop/LOOP_SPEC.md` v1.2.
 
 | Field | Value |
 |---|---|
@@ -18,14 +18,15 @@ Spec authority: `loop/LOOP_SPEC.md` v1.1.
 | Base SHA | `28c50a122f2caab70582e8215b670b0ddc4d236d` |
 | Worktree | clean at branch point |
 | `Cargo.lock` SHA-256 | `9930a209663dd812d03dd654d5ea8f850152667de455191b7c4645eb1cdb1bea` |
-| Baseline | 936 tests passing / 0 failed / 4 ignored · 89 Lean theorems · 15 crates |
+| Baseline | **982** passing / 0 failed / 4 ignored (49 bins, pinned 1.97.1) · 89 Lean theorems · 15 crates |
 
 ## Cycle history
 
 | Cycle | Packet | Phase | Outcome |
 |---|---|---|---|
 | 0 | P-001 | A | ✅ Registry + C3/C1/C2 verified — all three CONFIRMED. `reports/C0-builder.md` |
-| 1 | P-000 | D | Draft PR open, awaiting Al. Scaffolding + spec committed to branch. |
+| 1 | P-000 | D | PR #54 open. Spec upgraded to v1.2. Waits on P-002-H per the §5 ordering. |
+| 1 | P-002-H | D | PR #55 draft. Lint green on hosted; **Security Audit executes again**, and fails on the 2 known RUSTSEC advisories. |
 
 ## P-000 — what landed on the branch
 
@@ -38,37 +39,31 @@ Spec authority: `loop/LOOP_SPEC.md` v1.1.
 
 No `src/` change. No `Cargo.toml` / `Cargo.lock` change. Docs only.
 
-## ⚠️ DISCOVERED — CI is already red on `main`, and it is a time bomb
+## DARQ-020 — CI dark window: diagnosed and fixed (P-002-H)
 
-Found while landing P-000. **PR #54 changes zero `.rs` files** (`git diff --name-only main...HEAD |
-grep -c '\.rs$'` → 0) yet `Lint` **fails**, while the last `main` run at `28c50a12` **passed**.
+Found while landing P-000: PR #54 changed **zero** `.rs` files yet `Lint` failed, while `main`'s last
+run was green. Cause was a floating `RUST_TOOLCHAIN: stable` plus `clippy -- -D warnings`, with
+`test`, `build` and `security` all `needs: lint` — so an upstream lint release silently disabled the
+security gate.
 
-Cause: `.github/workflows/ci.yml` sets `RUST_TOOLCHAIN: stable` — a **floating** toolchain — and
-runs `cargo clippy -- -D warnings`. Stable advanced to **1.97.0** (local is 1.91.0); two lints that
-did not exist at merge time are now hard errors:
+**The window was benign.** Last CI run of any kind: 2026-06-12 (`main` @ `28c50a12`, green). Next:
+2026-08-02 (PR #54, red). **Zero commits to `main` and zero CI runs in between** — Rust 1.97.1
+(2026-07-14) landed inside a 51-day dormancy. **Nothing merged blind; nothing needs re-verification.**
+§12 item 6 resolves to "nothing to review."
 
-| Lint | Site |
-|---|---|
-| `clippy::unneeded_wildcard_pattern` | `node/src/validator.rs:642` |
-| `clippy::useless_borrows_in_formatting` | `wallet/src/commands/marketplace.rs:33` |
+Fixed by P-002-H: toolchain pinned to `1.97.1` in `rust-toolchain.toml` (which already existed and
+was itself floating), `RUST_TOOLCHAIN` pinned to match, and every job's Guard step now asserts the
+two agree **and** rejects a floating channel. Verified on the hosted runner.
 
-**`main` is red right now**; its last green run simply predates the toolchain bump. This is D4's
-failure mode arriving on its own schedule: a gate pinned to `-D warnings` on a floating toolchain
-goes red with no code change, on a date nobody chose.
-
-**Blast radius:** `test`, `build` and `security` all declare `needs: lint`, and `docker` needs
-`[test, build]`. So a clippy nit kills the entire pipeline — **including the `Security Audit` job
-that already exists in `ci.yml`**. There is currently no test signal and no audit signal on any PR.
-
-**Not fixed here.** The fix is two `src/` edits, which P-000 (docs-only) may not make, and D1
-forbids a second packet on this branch. See "Blocked" below for the ordering problem this creates.
+**Residual:** `Security Audit` now runs and **fails** on the 2 known RUSTSEC advisories — genuine,
+pre-existing, and P-002's work. `api-server-ci.yml`, `release.yml` and `lean4.yml` still float.
 
 ## Blocked / awaiting
 
 | Item | Owner | Blocks |
 |---|---|---|
-| **Ordering deadlock** — P-000 can't go green until clippy is fixed; the clippy fix is P-002's business; P-002 is gated on P-000 merging | **Al** | **everything** |
-| Merge the P-000 PR | Al | **P-002** — its STEP 0 stops unless P-000 is merged |
+| **D12 vs. reality** — P-002-H makes Lint green, but Security Audit now reports red on the 2 advisories. Nothing can be fully green until P-002 triages them. Merge anyway, or fold triage in? | **Al** | P-002-H, P-000 |
+| Merge P-002-H (PR #55), then P-000 (PR #54) | Al | **P-002** |
 | GATE-1 — testnet state? reset vs migrate | Al + Sarah | P-003 |
 | GATE-2 — testnet topology for coordinated restart | Al | P-004 |
 | GATE-3 — fork-choice metric, 3 options in §4 | Sarah | P-004-D |

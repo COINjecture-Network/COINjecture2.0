@@ -18,15 +18,17 @@ Measured at `28c50a122f2caab70582e8215b670b0ddc4d236d`:
 
 | Metric | Value |
 |---|---|
-| Tests passing | 936 (+4 ignored, 0 failed, 30 test binaries) |
+| Tests passing | **982** (+4 ignored, 0 failed, 49 test binaries) — under pinned 1.97.1 |
 | Lean theorems | 89 (`theorem`/`lemma` decls across 19 `.lean` files) |
 | Workspace crates | 15 |
 | `cargo audit` | 2 vulnerabilities, 3 allowed warnings |
 | `Cargo.lock` SHA-256 | `9930a209663dd812d03dd654d5ea8f850152667de455191b7c4645eb1cdb1bea` |
 
-Two of these disagree with numbers previously carried in memory (951 tests, 586 Lean theorems).
-Per §2 the repo at this SHA is ground truth; the Lean gap is recorded as **unreconciled**, not
-corrected. Do not treat either as a regression signal without reading §2 first.
+⚠️ **The 936 figure previously recorded here was wrong** — a Cycle 0 `| head -60` truncation, not a
+measurement. Corrected to 982 in Cycle 1. See `LOOP_SPEC.md` §2 and `reports/C1-hotfix-builder.md` §5.
 
-Clippy, `cargo fmt` and `cargo geiger` baselines are **not yet measured** — that is STEP 2 of P-002,
-and per D4 no CI gate may be set until they are.
+The Lean gap (89 vs 586) remains **unreconciled**, not corrected. Per §2 the repo at this SHA is
+ground truth; do not treat either as a regression signal without reading §2 first.
+
+Clippy and `cargo fmt` are **clean** under the pinned 1.97.1 toolchain as of P-002-H.
+`cargo geiger` is still unmeasured — that is P-002, and per D4 no gate may be set until it is.

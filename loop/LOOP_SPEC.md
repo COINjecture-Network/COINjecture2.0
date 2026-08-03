@@ -42,11 +42,18 @@ as a deliberate deviation with a one-line reason.
 
 - Clone: `COINjecture2.0-network` (org remote). HEAD and `Cargo.lock` SHA-256 match the Codex scan
   baseline exactly — zero drift.
-- **936** tests passing / 0 failed / 4 ignored · **89** Lean theorems / 19 files · **15** crates
+- **982** tests passing / 0 failed / 4 ignored (49 test binaries) · **89** Lean theorems / 19 files ·
+  **15** crates
 - Lean count **unreconciled**, not corrected. Untested hypothesis: 586 may be *Eigenverse's* number.
-- ⚠️ **Baseline caveat (new):** 936 was measured under an **older local toolchain**. Nobody has run
-  this suite under current stable, because `test` `needs: lint` and lint has been red. Treat 936 as
-  provisional until P-002-H confirms it under the pinned toolchain.
+- ⚠️ **CORRECTED in Cycle 1 — the 936 figure carried by v1.0/v1.1 was wrong.** It was a builder
+  measurement error, not a code change: the Cycle 0 baseline command ended in `| head -60`, which
+  truncated the stream at 60 matching lines, and the total was summed from the 30 `test result:`
+  lines that survived. The captured output is exactly 61 lines and stops mid-suite. **982 / 0 / 4 is
+  the first correctly measured total**, taken under the pinned toolchain (P-002-H, run 30842995637).
+  Note 982 *exceeds* the original 951 claim rather than falling short of it, so the Cycle 0 report's
+  "−15 tests" discrepancy was an artifact of the same truncation and should be disregarded.
+  The true total under the *old* 1.91 toolchain was never established, so the 936→982 delta cannot
+  be attributed to the toolchain change — the evidence points entirely at the truncation.
 
 **⚠️ Clone hazard.** A second clone at `C:\Users\LEET\COINjecture2.0` (Quigles1337 remote) is also
 v4.8.4 / 15 crates but is **dirty with 20 live worktrees and has no `lean4/`**. Clean it up or
