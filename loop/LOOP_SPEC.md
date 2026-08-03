@@ -1,24 +1,25 @@
 # DARQ AGI Mode — COINjecture 2.0 Remediation Loop
 
-**Spec v1.1** · Supersedes v1.0 · Target: `COINjecture-Network/COINjecture2.0` @ `28c50a12`
-**Commit to `loop/LOOP_SPEC.md` as packet P-000, before anything else.**
+**Spec v1.2** · Supersedes v1.1 · Target: `COINjecture-Network/COINjecture2.0`
+Baseline anchored at `28c50a12` · **Commit over `loop/LOOP_SPEC.md`**
 
 ---
 
-## §0 Changelog — what v1.0 got wrong
+## §0 Changelog — v1.1 → v1.2
 
-Recorded rather than quietly patched, because these are the kind of errors that recur.
-
-| v1.0 claim | Reality (per C0 verification) | Fix in v1.1 |
+| v1.1 said | Reality (Cycle 1 discovery) | v1.2 |
 |---|---|---|
-| SEC-PR-002…005 are existing code to dedupe against | They are **specs** in `first-five-prs.md` marked *do not implement without authorization*. Only SEC-PR-001 is built, and it is unmerged. `main` carries zero security remediation. | §2 corrected; P-006 now *implements* SEC-PR-002 rather than reconciling with it |
-| Baseline: 951 tests, 586 Lean theorems | **936 / 89** at `28c50a12`, suite green. No counting convention reaches 586 from this tree. | Baseline re-anchored to the SHA; §2 |
-| ~14 dependency vulnerabilities | **2** (`cargo audit`), tooling already installed | P-002 destaged — but see the revised caveat, which moved rather than vanished |
-| The prompt in §8 is sufficient | The builder never received §7, so it designed the registry schema itself and invented its own packet numbering | **P-000 commits the spec.** Future prompts reference it by path instead of re-pasting. |
-| Cluster count should be ~14–15 | I did the clustering myself and got **18**. The builder's 19 was fine. | §7 carries the canonical 18-row map; the pushback is withdrawn |
+| P-002 builds a CI security pipeline | **CodeQL already runs** (GitHub default setup — actions, javascript-typescript, python, rust; no workflow file). **A Security Audit job already exists** in `ci.yml`. | P-002 **amends**. Adding CodeQL would be pure duplication. |
+| ~14 Dependabot alerts vs 2 cargo-audit findings | **Four numbers now**: 18 (API) / 19 (push banner) / ~14 (stale spec) / 2 (cargo audit) | §9 rewritten — and the gap is **not** a counting error, see below |
+| CI is a working pipeline to add gates to | **CI is dark.** Lint red on main; `test`, `build`, `security` all `needs: lint`. No test signal and no audit signal on any PR. | **P-002-H** preempts the queue |
+| The floating toolchain is a nuisance | It is the **root cause**. `RUST_TOOLCHAIN: stable` means any new clippy lint reds the pipeline — and therefore darkens the security gate — with zero code changes. | **D11** added |
 
-**The structural lesson:** a prompt that is not self-contained *and* a spec that is not committed
-leaves the builder inventing schema. P-000 exists to end that permanently.
+**The dependency insight that changes P-002's meaning:** CodeQL scans
+*javascript-typescript and python*. COINjecture is not a pure-Rust repo. `cargo audit` sees only the
+Rust graph — its 2 findings are Rust/RustSec. The remaining ~16 alerts are almost certainly JS and
+Python dependencies that `cargo audit` is structurally blind to. **The dependency blind spot is
+multi-ecosystem, not a Rust gap.** "Fixed the 2 Rust advisories" must never be recorded as
+"dependencies clean."
 
 ---
 
@@ -27,11 +28,11 @@ leaves the builder inventing schema. P-000 exists to end that permanently.
 | Seat | Who | Role |
 |---|---|---|
 | **BUILDER** (empirical) | Claude Code | Only seat with repo access. Ground truth for the others. |
-| **ADVERSARY** | Pre-loaded (Codex + third-party), re-invoked on demand | **Fix-verification only** — pointed at a patch, never at the codebase. |
+| **ADVERSARY** | Pre-loaded (Codex + third-party), re-invoked on demand | **Fix-verification only** — pointed at a patch, never the codebase. |
 | **SYNTHESIS** | Claude / Opus | Arbitrates, rules on flags, holds gates, writes go/no-go. |
 
-Adversary pass is **mandatory** for P-003, P-004, P-005 (consensus / address / ledger).
-**Skipped** elsewhere — logged in the LEDGER as a deliberate deviation with a one-line reason.
+Adversary pass **mandatory** for P-003, P-004, P-005. **Skipped** elsewhere — logged in the LEDGER
+as a deliberate deviation with a one-line reason.
 
 ---
 
@@ -39,62 +40,71 @@ Adversary pass is **mandatory** for P-003, P-004, P-005 (consensus / address / l
 
 **The repo at this SHA is ground truth. Numbers carried in memory are not.**
 
-- Clone: `COINjecture2.0-network` (org remote). HEAD and `Cargo.lock` SHA-256 both match the Codex
-  scan baseline exactly — zero drift.
-- **936** tests passing / 0 failed / 4 ignored · **89** Lean theorems across 19 files · **15** crates
-- Lean count is **unreconciled**, not corrected. 586 appears nowhere in this tree. One untested
-  hypothesis: 586 may be *Eigenverse's* count, mislabelled as COINjecture's. Do not adopt either
-  number until someone checks.
+- Clone: `COINjecture2.0-network` (org remote). HEAD and `Cargo.lock` SHA-256 match the Codex scan
+  baseline exactly — zero drift.
+- **936** tests passing / 0 failed / 4 ignored · **89** Lean theorems / 19 files · **15** crates
+- Lean count **unreconciled**, not corrected. Untested hypothesis: 586 may be *Eigenverse's* number.
+- ⚠️ **Baseline caveat (new):** 936 was measured under an **older local toolchain**. Nobody has run
+  this suite under current stable, because `test` `needs: lint` and lint has been red. Treat 936 as
+  provisional until P-002-H confirms it under the pinned toolchain.
 
 **⚠️ Clone hazard.** A second clone at `C:\Users\LEET\COINjecture2.0` (Quigles1337 remote) is also
-v4.8.4 / 15 crates, but is **dirty with 20 live worktrees and has no `lean4/`**. It is a
-verdict-against-the-wrong-tree waiting to happen. Clean it up or rename it unmistakably.
+v4.8.4 / 15 crates but is **dirty with 20 live worktrees and has no `lean4/`**. Clean it up or
+rename it unmistakably.
 
 **Remediation state on `main`: zero.** SEC-PR-001 exists as branch `ff6e65c4`, not an ancestor of
-main. SEC-PR-002…005 are unimplemented specs.
+main. SEC-PR-002…005 are unimplemented specs in `first-five-prs.md`.
 
-**Audit reliability, now calibrated.** Both audits' *findings* have held; their *coordinates* have
-not. The third-party report cites `core/src/crypto.rs:423` in a 397-line file, and missed a third
-address derivation entirely. **Every uncited specific in either report is a hypothesis.**
+**Audit reliability, calibrated.** Both audits' *findings* have held; their *coordinates* have not.
+The third-party report cites `core/src/crypto.rs:423` in a 397-line file and missed a third address
+derivation. **Every uncited specific in either report is a hypothesis.**
 
 ---
 
 ## §3 Guardrails
 
-**D1 — Approved packets only.** One packet per branch, per cycle.
+**D1 — Approved packets only.** One packet, one concern, one branch, one cycle.
 
 **D2 — Integer money only.** Any `f64` near a balance, fee, or supply figure is a Critical you
-created. *(Note: `work_score` is `f64` today — see P-004-D.)*
+created. *(`work_score` is `f64` today — see GATE-3.)*
 
 **D3 — Checked arithmetic on money and nonce paths.** `checked_add` / `checked_sub` returning
 errors. **Never `saturating_*` on balances** — saturation silently destroys supply.
 
 **D4 — Never set a CI gate below the measured baseline.** Inventory first, gate at the measured
-value, tighten as its own PR. This is the v1.0 caveat generalised: it was never really about
-`cargo audit`, it was about clippy and geiger too. See P-002.
+value, tighten as its own PR.
 
-**D5 — Consensus-affecting changes are hard forks.** Gated (§4).
+**D5 — Consensus-affecting changes are hard forks.** Gated (§4). Anything touching `validator.rs`,
+fork choice, or block validation is consensus code even when the change looks cosmetic.
 
 **D6 — No deployment.** Box C access unresolved; parked as a known gap. Repo work only.
 
 **D7 — One root cause per packet.** Report "N findings / M root causes."
 
-**D8 — Small reviewable changes**, green against baseline 936.
+**D8 — Small reviewable changes**, green against the current verified baseline.
 
-**D9 — Windows-authored scripts need the exec bit set in the git index and must be invoked through
-`bash`.** BEANlet lost a hosted-CI run to exactly this (`exit 126`), and it was the third defect in
-that arc that local green never caught. Al develops on Windows; CI runs on Linux.
+**D9 — Windows-authored scripts need the exec bit set in the git index** (`git update-index
+--chmod=+x`) **and must be invoked through `bash`.** Al develops on Windows; CI runs Linux.
 
-**D10 — PRs, not direct-to-main.** BEANlet's C0 committed to main because that repo was empty.
-COINjecture is shared with Sarah and has an established PR workflow.
+**D10 — PRs, not direct-to-main.** COINjecture is shared with Sarah and has an established PR
+workflow.
+
+**D11 — Pin the toolchain. No floating `stable`.** *(New — Cycle 1.)* A floating toolchain means
+every upstream lint release can red the pipeline with zero code changes, and because `security`
+`needs: lint`, that **silently disables the security gate**. There must be exactly one source of
+truth for the toolchain version — `rust-toolchain.toml` and any CI env var must not disagree.
+
+**D12 — Green before merge, no exceptions.** *(New — Cycle 1, ruled by Al.)* A red pipeline is never
+merged past, even when the failure is pre-existing and unrelated to the PR at hand. The correct
+response to unrelated red is a hotfix that preempts the queue.
 
 ---
 
 ## §4 Gates
 
-### GATE-1 — C3 is genesis- *and* consensus-breaking ⚠️ (escalated since v1.0)
+### GATE-1 — C3 is genesis- *and* consensus-breaking ⚠️
 
-Verification found **three** derivations, not two:
+Three derivations confirmed, not the two reported:
 
 | Derivation | Site | Notes |
 |---|---|---|
@@ -102,28 +112,35 @@ Verification found **three** derivations, not two:
 | SHA-256(pubkey) | wallet + genesis | |
 | BLAKE3(pubkey) | validator's own keystore | **missed by the audit entirely** |
 
-`Address::from_pubkey` is the natural canonical helper and is already public — but only `core` calls
+`Address::from_pubkey` is the natural canonical helper and is already public, but only `core` calls
 it. Fix shape: **one helper, four open-coded call sites.**
 
-**Al + Sarah must decide:** is there live testnet state with balances anyone cares about? Chain
-reset (clean, correct, pre-mainnet, costs history) or migration (preserves state, materially more
-code and risk)?
+**Al + Sarah decide:** is there live testnet state with balances anyone cares about? **Chain reset**
+(clean, correct, pre-mainnet, costs history) or **migration** (preserves state, materially more code
+and risk)?
 
-**Cheapest confirmation, no code:** try to spend from a genesis-allocated address. One transaction.
+**Split the question — this was conflated in v1.1:**
+
+| | Question | Who | Blocked by |
+|---|---|---|---|
+| **Local repro** | Does the split actually break spending at runtime? | **Builder** (P-003-V) | nothing |
+| **Live state** | Is there deployed state with balances anyone cares about? | **Sarah** | droplet access |
+
+The local repro is a builder task, not a human one, and needs no droplet.
 
 ### GATE-2 — C1 is a hard fork
 
 Changing block validation means old and new nodes disagree. Coordinated restart, not rolling
 upgrade. Confirm testnet topology before P-004 opens.
 
-### GATE-3 — C2 is a protocol design decision, not a patch ⚠️ NEW
+### GATE-3 — C2 is a protocol design decision, not a patch ⚠️
 
 The audit says *"recompute work score from verified inputs."* **There are no verified inputs.**
 `solve_time` is miner wall-clock; no other node can check it. Current validation is exactly
-`is_finite() && >= 0`, with `min_work_score: 0.0`. A `WorkScoreCalculator` exists, but its only
+`is_finite() && >= 0` with `min_work_score: 0.0`. A `WorkScoreCalculator` exists, but its only
 non-test consumer is the miner computing the value it then self-declares.
 
-Options, as input to Sarah — not a recommendation:
+Options for Sarah — input, not recommendation:
 
 1. **Fork choice on header-hash PoW.** Safest; reduces to standard Nakamoto. Useful work becomes a
    *validity gate* rather than the weight metric. Costs the PoUW narrative.
@@ -138,34 +155,43 @@ invalidate proofs. She is the only person who can see both sides.
 
 ---
 
-## §5 Packet Queue (canonical numbering — supersedes anything the C0 builder invented)
+## §5 Packet Queue
 
 | ID | Scope | Gate | Status |
 |---|---|---|---|
-| **P-000** | Commit `loop/` scaffolding + `LOOP_SPEC.md` | none | **Do first** — trivial, unblocks self-bootstrapping |
+| **P-000** | Commit `loop/` + `LOOP_SPEC.md` | none | 🟡 PR #54 open, blocked on red main |
 | **P-001** | Registry + verification of C3/C1/C2 | — | ✅ complete (Cycle 0) |
-| **P-002** | CI security pipeline + `deny.toml` | none | **Ready — next build packet** |
-| **P-003** | C3 address derivation unification | **GATE-1** | Blocked. Adversary pass mandatory. |
-| **P-004** | C1 canonical problem regeneration | **GATE-2** | Blocked. Adversary pass mandatory. |
+| **P-002-H** | **CI hotfix — pin toolchain, clear two lints** | none | 🔴 **DO FIRST — preempts queue** |
+| **P-002** | `deny.toml` + `cargo-deny` + multi-ecosystem reconciliation | none | Blocked on P-000 merge |
+| **P-003-V** | **C3 local repro — spend from a genesis address** | none | **Ready — parallel, blocked by nothing** |
+| **P-003** | C3 address derivation unification | **GATE-1** | Blocked. Adversary mandatory. |
+| **P-004** | C1 canonical problem regeneration | **GATE-2** | Blocked. Adversary mandatory. |
 | **P-004-D** | C2 fork-choice metric — **design packet** | **GATE-3** | Blocked on Sarah. Not a build packet. |
-| **P-005** | C4, C5, C6, M4 + `rpc/src/server.rs:1583` — ledger apply path | none | Ready after P-002. Adversary mandatory. |
-| **P-006** | SEC-PR-002 transport gate **+** C7 per-account authz **+** H8, H10 | none | Ready. One PR — same files, same concern. |
+| **P-005** | C4, C5, C6, M4 + `rpc/src/server.rs:1583` — ledger apply path | none | After P-002. Adversary mandatory. |
+| **P-006** | SEC-PR-002 transport gate **+** C7 per-account authz **+** H8, H10 | none | One PR — same files, same concern. |
 | **P-007** | H6, H7 — escrow signature verification | none | |
 | **P-008** | H1–H5, M8, M9 — gossip auth + bounded ingress | none | Codex "bounded ingress" (~25) |
-| **P-009** | H9, H11, M10 + telemetry amplification | none | Includes DARQ-NEW-3 (§8) |
+| **P-009** | H9, H11, M10 + telemetry amplification (DARQ-019) | none | Verify the 64 MiB / 300 s figures first |
 | **P-010** | M1, M2, M5, M6, L1–L5 — sweep | none | |
 | **P-011** | ~668 `unwrap`/`expect` on reachable paths | none | Network layer alone: 329 + 28 |
 
-**P-004 split rationale:** C1 is implementable — a deterministic generator already exists at
-`miner.rs:663`; the blocker is structural (it's an async method borrowing the miner's difficulty
-adjuster, so it must be lifted to a free function and the difficulty input made consensus-visible).
-C2 has no implementable fix until GATE-3 resolves. Bundling them would block a solvable packet
-behind an unsolvable one.
+### Ordering — the deadlock, resolved
 
-**P-006 merge rationale:** SEC-PR-002 fixes the transport bearer-key gate in `middleware.rs`; C7 is
-missing per-account authorization in `server.rs`. **An API key authenticates the connection, not the
-account** — after SEC-PR-002, any valid key holder can still name an arbitrary solver and take the
-bounty. Filing C7 as covered would silently drop a Critical. Same files, same concern, one PR.
+P-000 can't go green until clippy is fixed → the clippy fix was P-002's business → P-002's STEP 0
+refuses to start until P-000 merges. Al ruled **fix, don't merge over red** [D12]:
+
+1. **P-002-H** branches from `main`, goes green, merges → main green, security gate live again
+2. **P-000** rebases onto green main → goes green → merges
+   *(No conflict is possible: P-000 is docs-only, P-002-H is src+config only.)*
+3. **P-002** starts, re-scoped per §0
+4. **P-003-V** runs in parallel with any of the above — it depends on nothing
+
+### P-002 re-scope
+
+Not "build a pipeline." The real delta is now: **write `deny.toml`** (without it `cargo-deny` cannot
+run at all), **wire `cargo-deny` into the existing job**, and **reconcile the four dependency
+numbers across ecosystems**. Do **not** add CodeQL. Do **not** duplicate the existing Security Audit
+job.
 
 ---
 
@@ -180,14 +206,11 @@ bounty. Filing C7 as covered would silently drop a Critical. Same files, same co
 | **C** | Adversary — fix-verification only | BLOCK / MERGE-WITH-NOTES / CLEAN |
 | **D** | Synthesis — Al + Opus | Gate ruling, LEDGER entry, merge or return to B |
 
-Phase C is conditional (P-003, P-004, P-005 only). `CAPACITY_FLAG: remediation-priority` STOPs the
-loop.
+Phase C conditional (P-003, P-004, P-005). `CAPACITY_FLAG: remediation-priority` STOPs the loop.
 
 ---
 
 ## §7 Registry Schema + Canonical Root-Cause Map
-
-### Schema (the §7 that was missing)
 
 ```
 DARQ-ID       | DARQ-001
@@ -201,17 +224,16 @@ Location      | <verified path:line at HEAD — or DRIFTED / NOT-FOUND / ALREADY
 Verified at   | <commit SHA>
 Status        | Open | In Progress | Resolved | Accepted Risk | Won't Fix
 Packet        | P-004
-Notes         | <free text — audit citation errors, composition risks, blockers>
+Notes         | <audit citation errors, composition risks, blockers>
 ```
 
-**Verification verdicts — use exactly these, never guess:**
-`CONFIRMED` · `DRIFTED` (record new location) · `ALREADY-FIXED` (record the SHA) ·
-`NOT-FOUND` (false positive — say why) · `NEEDS-HUMAN` (unsettleable by reading code)
+**Verdicts — use exactly these, never guess:** `CONFIRMED` · `DRIFTED` (record new location) ·
+`ALREADY-FIXED` (record the SHA) · `NOT-FOUND` (false positive — say why) · `NEEDS-HUMAN`.
 
 A `NOT-FOUND` is a **valuable** result. Human audits fail by under-reporting false positives just as
 automated ones fail by over-reporting them.
 
-### Canonical root-cause map — 36 findings / 18 root causes
+### 36 findings / 18 root causes · DARQ-001…019
 
 | RC | Root cause | Findings | Packet |
 |---|---|---|---|
@@ -219,14 +241,14 @@ automated ones fail by over-reporting them.
 | RC-02 | Validation bypass on direct apply paths | M3 | P-005 |
 | RC-03 | Dual bincode/JSON hashing — acceptance ambiguity | M7 | P-004 |
 | RC-04 | Inconsistent address derivation (×3) | C3 | P-003 |
-| RC-05 | Ledger apply path performs no validation | C4, C5, C6, M4, **NEW-1** | P-005 |
+| RC-05 | Ledger apply path performs no validation | C4, C5, C6, M4, NEW-1 | P-005 |
 | RC-06 | Unauthenticated state-mutating endpoints | C7, H8 | P-006 |
 | RC-07 | Client IP taken from spoofable headers | H10 | P-006 |
 | RC-08 | Escrow signature verification incomplete | H6, H7 | P-007 |
 | RC-09 | Gossip accepted without verified sender | H1, H2, M8 | P-008 |
 | RC-10 | Unbounded peer / mempool ingress | H3, H4, H5, M9 | P-008 |
 | RC-11 | Missing rate limits on public API | H11, L5 | P-009 |
-| RC-12 | Attacker-drivable disk / log amplification | **NEW-2**, L3 | P-009 |
+| RC-12 | Attacker-drivable disk / log amplification | NEW-2, L3 | P-009 |
 | RC-13 | Panic on malformed consensus input | M1, M2, M6 | P-010 |
 | RC-14 | Non-atomic multi-table writes | M5 | P-010 |
 | RC-15 | Query injection via unencoded interpolation | H9 | P-009 |
@@ -234,168 +256,238 @@ automated ones fail by over-reporting them.
 | RC-17 | Key and credential handling weaknesses | L1, L2 | P-010 |
 | RC-18 | Unchecked time / expiry arithmetic | L4 | P-010 |
 
+**DARQ-019** is a composition (RC-11 × RC-12) and correctly carries its own ID without inventing a
+19th root cause.
+
 ---
 
-## §8 New Findings — neither audit saw these
+## §8 New Findings
 
-**DARQ-NEW-1** · Medium · Integer · `rpc/src/server.rs:1583`
-Uncited instance of the C5 unchecked-arithmetic class. Folds into RC-05 / P-005.
+**DARQ-NEW-1** · Medium · Integer · `rpc/src/server.rs:1583` — uncited C5-class unchecked
+arithmetic. Folds into RC-05 / P-005.
 
-**DARQ-NEW-2** · Medium alone · Panic/Logic · `node/src/validator.rs:102–130`
-Debug telemetry writes JSON to disk on **every bad-parent block**. Attacker-drivable.
+**DARQ-NEW-2** · Medium alone · `node/src/validator.rs:102–130` — debug telemetry writes JSON to
+disk on **every bad-parent block**. Attacker-drivable. **Confirmed at HEAD.**
 
-**DARQ-NEW-3** · **High** · Composition · `NEW-2` × `H11`
-Neither audit connected these because neither was holding both halves.
+**DARQ-019 (NEW-3)** · **High — PROVISIONAL** · Composition of NEW-2 × H11
 
-> `/node-rpc` accepts **64 MiB** `chain_submitBlock` bodies with a **300-second timeout** and
-> **no rate limiting** (H11). Every bad-parent block triggers a **disk write** (NEW-2).
+> `/node-rpc` accepts **64 MiB** `chain_submitBlock` bodies with a **300-second timeout** and **no
+> rate limiting** (H11). Every bad-parent block triggers a **disk write** (NEW-2).
 >
 > ⇒ Unauthenticated remote attacker → unlimited 64 MiB submissions → unbounded disk writes.
 > **Disk-exhaustion DoS assembled from two separately-filed findings.**
 
-Register NEW-3 with its own ID. Fixing either half mitigates it; fixing H11 is cheaper.
+⚠️ **Severity is provisional.** The amplifier half (NEW-2) is confirmed at HEAD. The ingest half —
+the 64 MiB and 300 s figures — is **carried from the third-party report and unverified at this
+HEAD**. Given that report's demonstrated citation errors, verify before P-009 locks the severity.
+Fixing either half mitigates; fixing H11 is cheaper.
+
+**DARQ-NEW-4** · Operational · `.github/workflows/ci.yml` — floating `RUST_TOOLCHAIN: stable` with
+`needs: lint` fan-out means an upstream lint release silently disables the security gate. Closed by
+P-002-H + D11.
 
 ---
 
-## §9 Dependency Baseline
+## §9 Dependency Baseline — multi-ecosystem
 
 `cargo-audit 0.22.2` and `cargo-deny 0.20.2` installed. **No `deny.toml`, so deny cannot run.**
+CodeQL runs via GitHub default setup (actions, javascript-typescript, python, rust). A Security
+Audit job exists in `ci.yml` — currently never executing, because `needs: lint`.
 
-`cargo audit` → 2 vulnerabilities + 3 warnings:
+Four numbers for the same question:
 
-- **RUSTSEC-2026-0185** — `quinn-proto`, High 7.5. **QUIC — your network layer, on a P2P chain.**
-  This advisory postdates my knowledge cutoff. **Pull the advisory text before triaging; do not let
-  me or anyone else hand-wave its severity.**
+| Source | Count | Scope |
+|---|---|---|
+| Dependabot (API) | 18 | all ecosystems |
+| Dependabot (push banner) | 19 | all ecosystems |
+| v1.1 spec | ~14 | stale |
+| `cargo audit` | **2** | Rust/RustSec only |
+
+**These are not in conflict — they measure different graphs.** `cargo audit` is structurally blind
+to JS and Python dependencies. The ~16 difference is the multi-ecosystem blind spot, and it is
+larger than the Rust one.
+
+Rust advisories:
+- **RUSTSEC-2026-0185** — `quinn-proto`, High 7.5. **QUIC — the network layer of a P2P chain.**
+  Postdates my knowledge cutoff. **Pull the advisory text before triaging.**
 - **RUSTSEC-2026-0204** — `crossbeam-epoch`
-
-Note: ~14 Dependabot alerts → 2 `cargo audit` findings. Different scanners, different graphs — but
-that is counts inflating for the third time. Reconcile the two lists in P-002 rather than assuming
-either is complete.
 
 ---
 
-## §10 PHASE B — P-002 BUILDER PROMPT
-
-Paste into Claude Code. **Run P-000 first** (see §11).
+## §10 PHASE B — P-002-H BUILDER PROMPT (CI hotfix)
 
 ```text
 You are the BUILDER seat of the DARQ AGI Mode loop for COINjecture 2.0.
-Read loop/LOOP_SPEC.md first — it is committed and it binds you. This prompt
-adds packet-specific scope only.
+Read loop/LOOP_SPEC.md — it binds you. This prompt adds packet scope only.
 
-PACKET: P-002 — CI security pipeline + deny.toml
-CYCLE: 1 · PHASE: B · BRANCH: feat/p002-ci-security-pipeline
+PACKET: P-002-H — CI hotfix: pin toolchain, clear two lints
+CYCLE: 1 · PHASE: B · BRANCH: fix/ci-pin-toolchain-clippy
+
+WHY THIS PREEMPTS THE QUEUE
+main is red. Lint fails; test, build and security all `needs: lint`, so the
+Security Audit job has not run on any PR since stable advanced. The pipeline
+is dark. A dark security gate outranks the packet queue. Al ruled: fix, do
+not merge over red [D12].
 
 STEP 0 — STATE DETECTION
-- If loop/STATE.md says PHASE: B with PACKET: P-002 — resume from BRANCH.
-- If PHASE: A and P-000 is not merged — STOP. P-000 must land first.
-- If CAPACITY_FLAG: remediation-priority — STOP.
-- Confirm the clone is COINjecture2.0-network at 28c50a12 (or a descendant).
-  If the remote is Quigles1337, STOP — that is the wrong clone.
-- Otherwise: create feat/p002-ci-security-pipeline and set PHASE: B.
+- Confirm the clone is COINjecture2.0-network. If the remote is Quigles1337,
+  STOP — wrong clone.
+- If loop/STATE.md shows PHASE: B with PACKET: P-002-H, resume from BRANCH.
+- P-000 (PR #54) is open and NOT merged. That is expected. This packet
+  branches from main, NOT from feat/p000-loop-scaffolding.
+- Create fix/ci-pin-toolchain-clippy from current main.
 
-STEP 1 — READ EXISTING CI BEFORE WRITING ANY
-PR #47 was a CI fix that merged; CI already exists. Read every workflow under
-.github/workflows/ and report what already runs. You are ADDING to a working
-pipeline, not replacing it. If a gate already exists, do not duplicate it.
+STEP 1 — ESTABLISH THE DARK WINDOW (read-only; do this first)
+Determine when CI went dark and what merged blind:
+  gh run list --branch main --workflow ci.yml --limit 50
+Identify the last green run and the first red run; record both SHAs and dates.
+Then git log between them: what merged while lint was failing?
 
-STEP 2 — MEASURE THE BASELINE BEFORE SETTING ANY GATE  [D4 — the core of this packet]
-Do NOT assume any gate can be set to zero. This repo is ~87k LOC of existing
-code; BEANlet's zero-unsafe rule was a greenfield rule and does not transfer.
-Measure first, then gate at the measured value.
+Report the window and the merged commits. Do NOT act on it — this is
+information for Al, not a task. If PRs #46/#47/#48 or the five Dependabot
+bumps fall inside the window, say so explicitly: they merged with no test
+signal and no audit signal.
 
-Report actual current counts for:
-  (a) cargo clippy --all-targets --all-features 2>&1 | count warnings
-      — by lint, top 10. On 87k LOC this may be in the hundreds.
-  (b) cargo geiger — is it even installed? If not, say so; do not install
-      without authorization. If installed, report unsafe expression counts
-      per workspace crate, separating first-party from dependencies.
-  (c) cargo fmt --check — how many files would change?
-  (d) cargo test — confirm 936 passing / 0 failed / 4 ignored.
-  (e) Is Cargo.lock committed?
+STEP 2 — PIN THE TOOLCHAIN (root cause; the lints are symptoms) [D11]
+Add rust-toolchain.toml at the repo root pinning the CURRENT stable version —
+the one hosted CI is actually running. Determine it; do not assume a number.
+Include components = ["rustfmt", "clippy"].
 
-For each gate, state explicitly: CAN-ENFORCE-NOW (already clean) or
-BASELINE-ONLY (record the number, enforce no-regression, tighten later).
-A gate set below the current baseline turns CI red on day one and makes every
-later PR fight a red baseline. That is the failure mode this step prevents.
+CRITICAL — ONE SOURCE OF TRUTH. ci.yml currently sets RUST_TOOLCHAIN: stable.
+That env var and rust-toolchain.toml must not disagree. Either make ci.yml
+consume the toolchain file, or set the env var to the identical pinned
+version. State which you chose and why.
 
-STEP 3 — TRIAGE THE TWO ADVISORIES
-For RUSTSEC-2026-0185 (quinn-proto) and RUSTSEC-2026-0204 (crossbeam-epoch),
-report from the local advisory DB:
-  - direct or transitive dependency? which crate pulls it?
-  - is there a patched version, and what is the semver distance?
-  - what does the advisory actually describe? Quote the summary.
+TEAM IMPACT — say this plainly in the report: rust-toolchain.toml changes the
+toolchain for EVERY developer, not just CI. rustup will auto-download the
+pinned version for Sarah and anyone else on this repo. That is the intended
+effect — local finally matches hosted — but it is not a CI-only change and
+must not be described as one.
 
-Then apply this rule and say which branch you took:
-  - PATCH-level bump available AND tests stay green → take it, in this PR.
-  - MINOR or MAJOR bump → DO NOT take it. Report the upgrade path and stop.
-    quinn-proto is QUIC on a P2P chain's network layer; that bump deserves
-    its own review, not a ride-along in a CI PR.
-  - No patched version → deny.toml ignore with a written reason AND an
-    expiry date. Never a silent ignore.
+STEP 3 — CLEAR THE TWO LINTS
+  clippy::unneeded_wildcard_pattern     — node/src/validator.rs:642
+  clippy::useless_borrows_in_formatting — wallet/src/commands/marketplace.rs:33
 
-Separately: reconcile the ~14 open Dependabot alerts against these 2 findings.
-Different scanners see different graphs. Report which alerts cargo-audit does
-not see and why (transitive-only? different manifest? already patched?).
+HARD GUARDRAIL: both fixes must be PROVABLY BEHAVIOUR-PRESERVING — syntax
+only. validator.rs is consensus code [D5]. If either fix requires changing
+logic rather than syntax, STOP AND REPORT: it is not a hotfix and does not
+belong on this branch.
 
-STEP 4 — WRITE deny.toml
-Cover all four sections: advisories, bans, licenses, sources.
-LICENSES IS THE TRAP: an allowlist written from intuition will flag dozens of
-transitive crates and turn CI red immediately. Enumerate the licenses actually
-present in the dep graph FIRST, then write the allowlist from that set, then
-flag anything genuinely objectionable (AGPL, unlicensed, unknown) as findings
-for Al — do not silently allow them and do not silently ban them.
+For each, quote before and after and state in one line why the change cannot
+alter behaviour.
 
-STEP 5 — LAND THE PIPELINE
-Add the security gates to CI per the measured baselines from STEP 2.
-Enforce what is clean; record-and-no-regress what is not.
+Then run the FULL clippy sweep under the pinned toolchain and report the
+COMPLETE warning list, not just these two. -D warnings fails the job, but
+clippy still enumerates everything before failing. If the pinned version
+flags more than these two, report the full set and STOP before fixing — the
+packet needs re-scoping.
 
-D9 IS NOT OPTIONAL: any script you author on Windows needs its exec bit set
-in the git index (git update-index --chmod=+x) and must be invoked through
-bash in the workflow. BEANlet lost a hosted run to exit 126 on exactly this.
+STEP 4 — VERIFY THE WHOLE PIPELINE, NOT JUST LINT
+The 936-test baseline was measured under an older local toolchain. NOBODY has
+run this suite under current stable, because test needs: lint and lint has
+been red. Expect surprises downstream; do not panic if they appear.
 
-CI must be green ON THE HOSTED RUNNER, not just locally. Push and confirm.
-Three defects in the BEANlet arc were invisible to local green.
+Locally, under the pinned toolchain: cargo fmt --check, cargo clippy
+-D warnings, cargo build, cargo test. Report results against the
+936 passing / 0 failed / 4 ignored baseline. Any deviation is a FINDING to
+report, not a thing to fix on this branch.
 
-STEP 6 — REPORT
-Write loop/reports/C1-builder.md:
-  1. What CI already did before you touched it
-  2. Baseline table: each gate, measured value, CAN-ENFORCE-NOW or BASELINE-ONLY
-  3. Advisory triage + which rule branch you took + Dependabot reconciliation
-  4. deny.toml decisions, especially the license set and anything flagged
-  5. Hosted run ID and job status
-  6. 2-4 things you want a second opinion on rather than let stand
-  7. What you did NOT do and why
+Then push and confirm on the HOSTED runner that lint, test, build AND the
+existing Security Audit job all execute and report. Getting the audit job to
+actually run is the real deliverable of this packet — a green lint that still
+leaves the audit dark is a failed packet.
 
-Ferry back C1-builder.md and C1-diff.patch. Open the PR as a draft; do not
-merge. Set PHASE: D.
+STEP 5 — REPORT
+Write loop/reports/C1-hotfix-builder.md:
+  1. Dark window — dates, SHAs, what merged blind
+  2. Pinned version, where the pin lives, how the two-sources problem resolved
+  3. Both lint fixes: before/after + behaviour-preservation argument
+  4. Complete clippy output under the pinned toolchain
+  5. Local results vs the 936 baseline
+  6. Hosted run ID and per-job status, especially Security Audit
+  7. 2-4 things you want a second opinion on rather than let stand
+  8. What you did NOT do and why
+
+Open as a DRAFT PR. Do not merge — that is Phase D. Set PHASE: D.
 
 GUARDRAILS
-- CI and deny.toml only. No src/ changes. The ONLY permitted Cargo.toml /
-  Cargo.lock change is a patch-level bump per STEP 3, and you must say so.
-- No gate below the measured baseline [D4].
+- Scope: rust-toolchain.toml, ci.yml if needed, exactly two lint fixes.
+  Nothing else. No deny.toml (that is P-002), no dependency bumps, no CodeQL.
+- Behaviour-preserving only. Consensus code is involved [D5].
 - Draft PR, no merge, no direct-to-main [D10].
-- Do not install tooling without authorization.
 
 STOP CONDITIONS — report rather than work around
-- Wrong clone, dirty worktree, or unexpected HEAD
-- Test baseline differs materially from 936
-- Clippy or geiger baseline so large the packet needs re-scoping
-- An advisory needs a MINOR/MAJOR bump
-- Any gate cannot be made green on the hosted runner
+- More than the two known lints fire under the pinned toolchain
+- Either lint fix would require a behaviour change
+- Tests deviate from 936 / 0 / 4 under the pinned toolchain
+- The hosted Security Audit job still does not run after lint goes green
 ```
 
 ---
 
-## §11 Al's Track — decisions, no code
+## §11 PHASE A — P-003-V BUILDER PROMPT (C3 local repro, parallel)
 
-1. ☐ **Confirm the clone** — `-network` looks right on all three signals. 30 seconds. Every verdict
-   depends on it.
-2. ☐ **Authorize P-000** — commit `loop/` + this spec **as a PR** [D10]. Trivial, and it ends the
-   re-pasting problem permanently.
-3. ☐ **GATE-1 with Sarah** — live testnet state? Plus the genesis spend test. One transaction,
-   highest-value move available this week.
-4. ☐ **GATE-3 to Sarah** — hand her the three fork-choice options in §4 as a design question. Flag
-   the Lean-proof interaction explicitly.
-5. ☐ **Reconcile the Lean count** — is 586 actually Eigenverse's number?
-6. ☐ Clean up or rename the second clone before it bites someone.
+```text
+You are the BUILDER seat of the DARQ AGI Mode loop for COINjecture 2.0.
+Read loop/LOOP_SPEC.md — it binds you.
+
+PACKET: P-003-V — C3 runtime verification (local genesis spend test)
+PHASE: A — verification. READ-ONLY with respect to the repo.
+
+This packet is independent. It does not need CI, P-000, P-002-H, or any
+server access. It can run in parallel with anything.
+
+WHY THIS EXISTS
+Static analysis proved three incompatible address derivations exist. It did
+NOT prove nothing reconciles them at runtime — a translation layer, a
+compatibility shim, or a lookup that tries multiple derivations would change
+the picture entirely. Only execution settles it.
+
+THE HYPOTHESIS TO TEST
+Genesis credits a balance to address A = SHA-256(pubkey). The consensus
+transaction path derives the sender's address as B = raw 32-byte pubkey. If
+nothing reconciles them, a genesis-allocated balance is visible in state and
+UNSPENDABLE by the key that owns it.
+
+METHOD
+1. Start a local node from genesis (cargo run — testnet/dev config, fresh
+   data dir, no external peers).
+2. Obtain a genesis-allocated address and its private key from the genesis
+   config / keystore.
+3. Query the balance at that address. Record what the node reports.
+4. Sign and submit a transfer from that address.
+5. Record EXACTLY what happens: accepted, rejected, error text, and which
+   address the validator actually looked up.
+
+Instrument if needed — a temporary debug print of the derived address on the
+validation path is fine. Do NOT commit it.
+
+REPORT loop/reports/C1-p003v-builder.md:
+  - Verdict: CONFIRMED (spend fails as predicted) / NOT-FOUND (spend succeeds
+    — something reconciles them; explain what) / NEEDS-HUMAN (couldn't run)
+  - The exact failure mode and error text
+  - Which derivation each side actually used at runtime
+  - Whether ANY reconciliation layer exists anywhere in the path
+  - If CONFIRMED: does the balance appear in state queries while being
+    unspendable? That determines whether the bug is silent or visible.
+
+GUARDRAILS
+- No src/ commits. Temporary local instrumentation only, reverted after.
+- Do not attempt to FIX C3. That is P-003 and it is gated [GATE-1].
+- Local node only. No droplet, no deployed network, no external peers.
+- A NOT-FOUND verdict is valuable, not a failure — it would mean the audit
+  and the static verification both missed a reconciliation layer.
+```
+
+---
+
+## §12 Al's Track — decisions, no code
+
+1. ☐ **Confirm the clone** — `-network` on three signals. 30 seconds. Every verdict depends on it.
+2. ☐ **GATE-1 with Sarah** — live testnet state, and therefore reset vs. migration.
+3. ☐ **GATE-3 to Sarah** — the three fork-choice options in §4, with the Lean-proof interaction
+   flagged explicitly.
+4. ☐ **Reconcile the Lean count** — is 586 actually Eigenverse's number?
+5. ☐ Clean up or rename the second clone.
+6. ☐ **Review the dark window** once P-002-H reports it — if anything merged blind, decide whether
+   it needs re-verification now that the audit job runs again.

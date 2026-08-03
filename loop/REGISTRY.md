@@ -1,14 +1,15 @@
 # REGISTRY — DARQ AGI Mode / COINjecture 2.0
 
-**36 findings / 18 root causes.**
+**37 findings / 18 root causes.**
 
-Schema authority: `loop/LOOP_SPEC.md` §7. Root-cause map: §7 canonical table (v1.1).
+Schema authority: `loop/LOOP_SPEC.md` §7. Root-cause map: §7 canonical table (v1.2).
 Verified at: `28c50a122f2caab70582e8215b670b0ddc4d236d` unless a row says otherwise.
 
 > Supersedes the provisional 19-row schema the Cycle 0 builder designed when §7 was unavailable.
 > DARQ-IDs are **one per root cause** (the §7 example maps `DARQ-001 → RC-01 → C1, C2`).
-> `DARQ-019` is the sole exception: a composition finding spanning two root causes, registered with
-> its own ID per §8.
+> Two exceptions: `DARQ-019` is a composition spanning two root causes, and `DARQ-020` is an
+> operational finding with no code root cause. Both carry their own ID per §8 without inventing a
+> 19th root cause.
 
 ## Verdict vocabulary (§7 — use exactly these)
 
@@ -39,7 +40,8 @@ A `NOT-FOUND` is a **valuable** result.
 | DARQ-016 | Information disclosure / IDOR | Medium | Auth | RC-16 | M10 | UNVERIFIED | — | Open | P-009 |
 | DARQ-017 | Key and credential handling weaknesses | Low | Crypto | RC-17 | L1, L2 | UNVERIFIED | — | Open | P-010 |
 | DARQ-018 | Unchecked time / expiry arithmetic | Low | Integer | RC-18 | L4 | UNVERIFIED | — | Open | P-010 |
-| DARQ-019 | Disk-exhaustion DoS composed from NEW-2 × H11 | **High** | Composition | RC-11 × RC-12 | NEW-3 | composition of `node/src/validator.rs:102-130` and the unrated `/node-rpc` route | — | Open | P-009 |
+| DARQ-019 | Disk-exhaustion DoS composed from NEW-2 × H11 | **High (PROVISIONAL)** | Composition | RC-11 × RC-12 | NEW-3 | composition of `node/src/validator.rs:102-130` and the unrated `/node-rpc` route | — | Open | P-009 |
+| DARQ-020 | Floating CI toolchain silently disables the security gate | Operational | SupplyChain | — (operational) | NEW-4 | `.github/workflows/ci.yml` `RUST_TOOLCHAIN: stable` + `needs: lint` fan-out | **CONFIRMED** | In Progress | P-002-H |
 
 ## Codex program cross-reference
 
@@ -59,8 +61,8 @@ into P-006 alongside C7, per §5 merge rationale.
 
 | | Count |
 |---|---|
-| Root causes with a verified Location | **3** of 18 (DARQ-001, 004, and partially 012) |
-| Findings covered by those | 4 of 36 (C1, C2, C3, NEW-2) |
+| Root causes with a verified Location | **3** of 18 (DARQ-001, 004, and partially 012) + DARQ-020 (operational) |
+| Findings covered by those | 5 of 37 (C1, C2, C3, NEW-2, NEW-4) |
 | Rows carrying `UNVERIFIED` | 15 |
 
 Only C1/C2/C3 were assigned for verification in Cycle 0. Everything else is seeded from audit text
@@ -99,6 +101,12 @@ fix is `checked_add`/`checked_sub` returning errors — **never `saturating_*` o
 composition of RC-11 and RC-12. Fixing either half mitigates it; H11 (rate limiting) is the cheaper
 half. The `/node-rpc` 64 MiB body limit and 300 s timeout are carried from the third-party report
 and are **not** independently verified at this HEAD — verify before scoping P-009.
+
+**DARQ-020** — NEW-4, found while landing P-000. `ci.yml` sets `RUST_TOOLCHAIN: stable` (floating)
+and runs `clippy -- -D warnings`; `test`, `build` and `security` all declare `needs: lint`. An
+upstream lint release therefore darkens the security gate with zero code changes. Confirmed
+empirically: a PR touching **zero** `.rs` files fails Lint while `main`'s last run was green.
+No code root cause — it is a pipeline-topology defect. Closed by P-002-H + D11.
 
 **Audit coordinate reliability** — both audits' *findings* have held; their *coordinates* have not.
 Treat every `UNVERIFIED` Location as a hypothesis, not a fact.
