@@ -1,7 +1,31 @@
 # DARQ AGI Mode — COINjecture 2.0 Remediation Loop
 
-**Spec v1.3** · Supersedes v1.2 · Target: `COINjecture-Network/COINjecture2.0`
+**Spec v1.4** · Supersedes v1.3 · Target: `COINjecture-Network/COINjecture2.0`
 Baseline anchored at `28c50a12` · **Commit over `loop/LOOP_SPEC.md`**
+
+---
+
+## §0.2 Changelog — v1.3 → v1.4
+
+Landed as **P-000-B**, docs-only on `feat/p000-loop-scaffolding`, from findings made while building
+P-023.
+
+| v1.3 said | Reality (Cycle 2, P-023) | v1.4 |
+|---|---|---|
+| The Dependabot/`cargo audit` gap is **inter**-ecosystem: cargo audit sees Rust, the gap is JS+Python | **There is an intra-Rust gap too.** `quinn-proto` seen by both; `crossbeam-epoch` by cargo audit only; `rand` by Dependabot only. Neither scanner is a superset. | **P-002 must UNION both scanners.** Mechanism of the omission is unexplained and flagged as such |
+| Dependency alerts span "all ecosystems" | **npm had no `dependabot.yml` entry at all** while holding 21 of 23 alerts. Security updates ran anyway, so it looked covered. | **DARQ-023** registered; closed by **P-023** (PR #56) |
+| CodeQL scans python, so python is watched | CodeQL scans python **code**. There is **no python dependency manifest anywhere**, so nothing watches python **dependencies**. | **DARQ-024** registered — not closable by config |
+| — | `rand` sits near key generation, so its advisory needed sizing before anyone panicked | **GHSA-cq8v-f236-94qc analysed in full (§8): a soundness bug, NOT an RNG defect. No keys implicated.** |
+
+**Ordering rule established:** **P-023 lands before P-022.** `dependabot.yml` is read from the default
+branch at run time, so configuring first means the first successful run after the unblock is already
+governed. Unblock first and the backlog arrives ungoverned. *(Same shape as provisioning a
+destination before flipping a switch.)*
+
+**Grouping principle established** (ruled by Al, recorded in `dependabot.yml`): **group where items
+are individually unremarkable; separate where each deserves its own merge decision.** Grouping trades
+review *volume* for review *granularity*. Right for a wave of npm transitive bumps; wrong where one PR
+would couple unrelated subsystems. Applied: npm grouped, **cargo security updates ungrouped**.
 
 ---
 
@@ -291,6 +315,9 @@ invalidate proofs. She is the only person who can see both sides.
 | **P-001** | Registry + verification of C3/C1/C2 | — | ✅ complete (Cycle 0) |
 | **P-002-H** | **CI hotfix — pin toolchain, clear two lints** | none | 🔵 PR #55 draft, hosted verified — **Al merges** |
 | **P-002-H2** | **Pin `release.yml`, `api-server-ci.yml`, `lean4.yml`** | none | ⚪ **Small, ungated, anytime** |
+| **P-023** | **Dependabot config — npm coverage + grouping** (DARQ-023) | none | 🔵 **PR #56 draft.** Lands BEFORE P-022 by design |
+| **P-022** | DARQ-022 fix — resolve the `latest-upstream` submodule | none | ⛔ Blocked on Al's fix-shape ruling. **Run AFTER P-023** |
+| **P-024** | DARQ-024 — Python dependency governance (needs a manifest first) | none | ⛔ **Unassigned — Al's decision**, not a config change |
 | **P-002** | `deny.toml` + `cargo-deny` + multi-ecosystem reconciliation + **DARQ-022** | none | Blocked on P-000 merge |
 | **P-003-V** | C3 local repro — ⚠️ **method invalidated by the GATE-1 narrowing, re-scope first** | none | Ran in Cycle 1; re-scope needed |
 | **P-021-V** | **DARQ-021 apply-path verification — does the debit site index `from`?** | none | 🔴 **Highest value in the queue — do first once #55/#54 land** |
@@ -351,10 +378,48 @@ produced a verdict. **P-002 must do all three of the following, or the gate stay
    written reason and an expiry date**. Never a silent ignore, and never an ignore without a date —
    an undated ignore is how an advisory becomes permanent.
 
-Plus **DARQ-022** (Dependabot has not run successfully on `main`), and the multi-ecosystem
-reconciliation: 18/19 Dependabot alerts across all ecosystems vs 2 `cargo audit` findings in Rust
-only. CodeQL scans javascript-typescript and python, so the ~16 gap is real and **larger than the
-Rust one**. "Fixed the 2 Rust advisories" must never be recorded as "dependencies clean."
+Plus **DARQ-022** (Dependabot has not run successfully on `main`), **DARQ-023** (npm unconfigured —
+closed by P-023), and the multi-ecosystem reconciliation. "Fixed the 2 Rust advisories" must never be
+recorded as "dependencies clean."
+
+#### ⚠️ P-002 must UNION both scanners — the inter-ecosystem framing above was incomplete *(v1.4)*
+
+v1.3 framed the Dependabot/`cargo audit` gap as purely **inter**-ecosystem: `cargo audit` sees Rust,
+Dependabot sees everything, the difference is JS and Python. **That is wrong. There is an
+intra-Rust gap as well.** Measured at `b1aaf59b` during P-023:
+
+| Crate | Version in `Cargo.lock` | `cargo audit` (RustSec) | Dependabot (GHSA) |
+|---|---|---|---|
+| `quinn-proto` | 0.11.14 | ✅ RUSTSEC-2026-0185 | ✅ GHSA-4w2j-m93h-cj5j → 0.11.15 |
+| `crossbeam-epoch` | 0.9.18 | ✅ RUSTSEC-2026-0204 | ❌ **not reported** |
+| `rand` | 0.8.5 | ❌ **not reported** | ✅ GHSA-cq8v-f236-94qc → 0.8.6 |
+
+All three versions verified present in `Cargo.lock`. **Each scanner reports exactly two of the three.
+Neither is a superset of the other.**
+
+**Therefore P-002's Rust scope is the UNION, not either list.** Resolving "the two RUSTSEC
+advisories" as originally written would leave `rand` 0.8.5 untouched, because `cargo audit` never
+names it. Conversely, working only from the Dependabot alert list would leave `crossbeam-epoch`
+untouched.
+
+⚠️ **The mechanism of the discrepancy is NOT explained, and P-002 should not proceed as if it were.**
+`rand`'s advisory exists in RustSec as **RUSTSEC-2026-0097** — the same database `cargo audit` loaded
+1186 advisories from on that run — and `cargo audit` *does* surface `informational = unsound`
+advisories, as it did for `anyhow` (RUSTSEC-2026-0190) in the same output. So "it's only
+informational" does **not** account for the omission. Confirmed from the full audit log, not a
+partial grep.
+
+*Untested hypothesis, recorded as a hypothesis:* RUSTSEC-2026-0097 carries `affected functions`
+metadata (`rand::thread_rng`, `rand::rng`) which RUSTSEC-2026-0190 may not, and `cargo audit` may
+filter on it. **Do not act on this until it is tested.** Until the mechanism is known, assume
+`cargo audit` may be silently omitting other advisories on the same grounds — which makes the union
+requirement a floor, not a ceiling.
+
+**Consequence for D12 bookkeeping:** the LEDGER entry for PR #55 records "the two advisories"
+accurately *as a record of what the Security Audit job reported* — which is what it claims to be —
+but that list understates Rust exposure by one crate. **Annotate it; do not rewrite it.** The
+standing obligation in that entry (P-002 must re-enumerate from scratch rather than trust the
+recorded list) is now empirically vindicated: the list was already incomplete when it was written.
 
 ⚠️ **Sequencing note:** DARQ-022 should be settled *before* the reconciliation, not after. Until
 Dependabot runs, the 18/19 alert counts are stale by an unknown margin — they reflect whatever the
@@ -508,6 +573,70 @@ successfully on `main`, across every ecosystem, for at least three weeks**
 > also severs the org repo's in-tree dependency on the personal fork — see the clone hazard in §2.
 > Note that `proofs/eigenverse` is a second submodule and is **not** implicated in the failure; do not
 > remove it while fixing this.
+
+**DARQ-023 (NEW-7)** · Operational · `.github/dependabot.yml` — npm held **21 of 23 open alerts** with
+**no `updates` entry at all**. Security updates ran for npm regardless (they do not require an entry),
+so the ecosystem looked covered while version updates — the routine bumps that pre-empt alerts — were
+never generated. **"Dependabot is running for npm" and "npm is configured" were different claims.**
+Closed by **P-023** (PR #56).
+
+**DARQ-024 (NEW-8)** · Operational · no Python manifest — 17 `.py` files import `requests` and
+`huggingface_hub`; no `requirements.txt`, `pyproject.toml`, `setup.py`, `Pipfile` or lockfile exists.
+**CodeQL scans the Python code while nothing watches the Python dependencies.** Not closable by
+configuration — with no manifest there is nothing to parse. Needs a manifest first, which is a real
+change (it pins currently-implicit versions and touches the HF scripts and the test harness).
+**Unassigned; Al's decision.**
+
+### Advisory sizing — `rand` GHSA-cq8v-f236-94qc is NOT an RNG defect *(v1.4)*
+
+*Belongs to P-002's Rust union scope (see §5). Not related to DARQ-021, which is the sender-binding
+finding.*
+
+Pulled during P-023 because `rand` sits near key generation on this chain and an RNG defect there
+would be critical. **It is not one. Recorded in full so nobody re-opens this question from the crate
+name alone.**
+
+**RUSTSEC-2026-0097 / GHSA-cq8v-f236-94qc — "Rand is unsound with a custom logger using
+`rand::rng()`".** Classification **INFO / Unsound**, severity **low**, **no CVE**, no CVSS. It is a
+*soundness* bug — safe code can trigger Undefined Behaviour — **not a defect in randomness quality,
+entropy, or predictability.** The mechanism is an aliased mutable reference: `ThreadRng`'s
+`RngCore`/`TryRng` methods cast `*mut BlockRng<ReseedingCore>` to `&mut`, and reentrancy produces two
+live mutable references, violating Stacked Borrows.
+
+**It requires all five of these simultaneously:** the `log` *and* `thread_rng` features enabled; a
+**custom logger** defined; that logger calling `rand::rng()`/`thread_rng()` and invoking RNG methods;
+the `ThreadRng` reseeding *during* that logger call (every 64 kB); and trace-level logging, or
+warn-level with `getrandom` failing to supply a seed.
+
+**Are already-generated keys implicated? No — on four independent grounds, any one of which suffices:**
+
+1. **Wrong failure mode.** The bug cannot produce weak, biased or predictable output. It produces UB
+   through aliasing. There is no path from this defect to a guessable key.
+2. **The affected copy is not in the crypto path.** `rand 0.8.5` is **transitive only**, reachable
+   from exactly six third-party crates — `jsonrpsee-core`, `jsonwebtoken`, `num-bigint-dig`,
+   `rust_decimal`, `soketto`, `tungstenite`. RPC transport, JWT, decimals, bigints. **No first-party
+   crate depends on it.**
+3. **First-party `rand` is 0.9.4, which is not affected.** The workspace declares `rand = "0.9"`, and
+   the advisory patches the 0.9 line at **0.9.3**. `0.9.4 ≥ 0.9.3`. So even where first-party code
+   does use `rand`, it is not the vulnerable copy.
+4. **Key generation does not use the affected functions at all.** Every `SigningKey::generate` site
+   passes **`OsRng`** (`api-server/src/crypto.rs:41,56`, `consensus/src/coordinator/commit.rs:255,309`,
+   and the test sites). `ed25519-dalek 2.2.0` depends on **`rand_core 0.6.4`**, not on `rand`. The
+   advisory's affected functions are `rand::thread_rng` and `rand::rng` — neither is `OsRng`.
+
+**And the precondition is unmet anyway:** a repo-wide search for `impl log::Log`, `set_boxed_logger`
+and `log::set_logger` finds **no custom logger implementation**. Condition 2 of five does not hold, so
+the bug is unreachable in this codebase as written.
+
+**On "signing nonces" specifically:** Ed25519 signing is *deterministic* by construction (RFC 8032) —
+the per-signature nonce is derived by hashing the private key with the message, **not sampled from an
+RNG**. There is no RNG consumer on the Ed25519 signing path to be affected. Key *generation* consumes
+randomness; signing does not.
+
+**Verdict: patch it as routine hygiene, not as an incident.** It stays in P-002's union scope because
+it is a real advisory against a version in the tree — the fix is a transitive bump to `rand` 0.8.6 —
+but there is **no key rotation, no re-issuance, and no retroactive exposure**. Nothing generated by
+this chain is called into question by it.
 
 ---
 

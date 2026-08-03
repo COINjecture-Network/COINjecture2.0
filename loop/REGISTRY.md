@@ -1,15 +1,15 @@
 # REGISTRY — DARQ AGI Mode / COINjecture 2.0
 
-**39 findings / 18 root causes.**
+**41 findings / 18 root causes.**
 
 Schema authority: `loop/LOOP_SPEC.md` §7. Root-cause map: §7 canonical table (v1.3).
 Verified at: `28c50a122f2caab70582e8215b670b0ddc4d236d` unless a row says otherwise.
 
 > Supersedes the provisional 19-row schema the Cycle 0 builder designed when §7 was unavailable.
 > DARQ-IDs are **one per root cause** (the §7 example maps `DARQ-001 → RC-01 → C1, C2`).
-> Exceptions: `DARQ-019` is a composition spanning two root causes; `DARQ-020` and `DARQ-022` are
-> **operational** findings with no code root cause. Each carries its own ID per §8 without inventing
-> a 19th root cause.
+> Exceptions: `DARQ-019` is a composition spanning two root causes; `DARQ-020`, `DARQ-022`,
+> `DARQ-023` and `DARQ-024` are **operational** findings with no code root cause. Each carries its
+> own ID per §8 without inventing a 19th root cause.
 
 ## Verdict vocabulary (§7 — use exactly these)
 
@@ -44,6 +44,8 @@ A `NOT-FOUND` is a **valuable** result.
 | DARQ-020 | Floating CI toolchain silently disables the security gate | Operational | SupplyChain | — (operational) | NEW-4 | `.github/workflows/ci.yml` `RUST_TOOLCHAIN: stable` + `needs: lint` fan-out | **CONFIRMED** | In Progress | P-002-H |
 | DARQ-021 | Block validation checks the signature but not the sender binding; `is_valid()` is dead on the block path | **Critical (UNSIZED)** | Auth | RC-02 (extends) | NEW-5 | `node/src/validator.rs:169` and `mempool/src/pool.rs:160` call `verify_signature()`; the binding lives only in `Transaction::is_valid()` (`core/src/transaction.rs:437-439`), reached only from `core/src/block.rs:215`, which `node/src` never calls | **NEEDS-HUMAN** (needs its own packet) | Open | **P-021-V** → P-021 |
 | DARQ-022 | Dangling `latest-upstream` submodule pin aborts every Dependabot run — updater dark across all ecosystems | Operational | SupplyChain | — (operational) | NEW-6 | `.gitmodules` `latest-upstream` → `Quigles1337/COINjecture2.0` pinned at `6a32fbfc7094fe82c02a91b231b52798c9f42972`, unreachable in that remote | **CONFIRMED** | Open | P-002 |
+| DARQ-023 | npm had no Dependabot entry at all while holding 21 of 23 open alerts | Operational | SupplyChain | — (operational) | NEW-7 | `.github/dependabot.yml` — cargo/github-actions/docker configured, **npm absent**; manifests at `web-wallet/package.json`, `web/coinjecture-evolved-main/package.json` | **CONFIRMED** | In Progress | **P-023** (PR #56) |
+| DARQ-024 | Python dependencies are wholly ungoverned — third-party imports with no manifest anywhere | Operational | SupplyChain | — (operational) | NEW-8 | 17 `.py` files under `scripts/` and `tests/harness/` import `requests` and `huggingface_hub`; **no `requirements.txt`, `pyproject.toml`, `setup.py`, `Pipfile` or lockfile exists in the repo** | **CONFIRMED** | Open | **unassigned — Al's decision** |
 
 ## Codex program cross-reference
 
@@ -63,8 +65,8 @@ into P-006 alongside C7, per §5 merge rationale.
 
 | | Count |
 |---|---|
-| Root causes with a verified Location | **3** of 18 (DARQ-001, 004, and partially 012) + DARQ-020, DARQ-022 (operational) |
-| Findings covered by those | 7 of 39 (C1, C2, C3, NEW-2, NEW-4, NEW-5, NEW-6) |
+| Root causes with a verified Location | **3** of 18 (DARQ-001, 004, and partially 012) + DARQ-020, 022, 023, 024 (operational) |
+| Findings covered by those | 9 of 41 (C1, C2, C3, NEW-2, NEW-4, NEW-5, NEW-6, NEW-7, NEW-8) |
 | Rows carrying `UNVERIFIED` | 15 |
 
 Only C1/C2/C3 were assigned for verification in Cycle 0. Everything else is seeded from audit text
@@ -139,7 +141,37 @@ appears to run. Assigned to P-002; fix shape needs Al's decision (§8).
 **Audit coordinate reliability** — both audits' *findings* have held; their *coordinates* have not.
 Treat every `UNVERIFIED` Location as a hypothesis, not a fact.
 
-**Provenance note — both operational findings were incidental.** DARQ-020 was found while landing a
-docs-only PR; DARQ-022 while listing CI runs during crash recovery; DARQ-021 while probing C3. None
-was found by looking for it. Three for three, the pipeline defects surfaced as side effects of
-unrelated work — which is itself evidence that nothing in this repo is *watching* for them.
+**DARQ-023** — NEW-7, found during P-023's STEP 1 inventory [D4]. `.github/dependabot.yml` configured
+cargo, github-actions and docker, but **not npm** — while npm held **21 of the 23 open alerts**
+(10 in `web-wallet/package-lock.json`, 11 in `web/coinjecture-evolved-main/package-lock.json`).
+
+**Why it stayed invisible:** npm *security* updates were already running — that is why failing runs
+are named `npm_and_yarn in /web-wallet` despite npm being absent from the config. Security updates do
+not require an `updates` entry; **version updates do.** So the ecosystem looked covered while the
+routine minor/patch bumps that would have pre-empted several of those 21 alerts were never generated.
+**"Dependabot is running for npm" and "npm is configured" were different claims, and only the first
+was true.** Closed by P-023 (PR #56).
+
+**DARQ-024** — NEW-8, found during the same inventory. 17 Python files under `scripts/` and
+`tests/harness/` import third-party packages (`requests`, `huggingface_hub`), and **no dependency
+manifest of any kind exists anywhere in the repo** — no `requirements.txt`, `pyproject.toml`,
+`setup.py`, `Pipfile`, or lockfile.
+
+**Not closable by configuration.** With no manifest there is nothing for Dependabot to parse, so no
+`pip` entry is possible in `dependabot.yml`; P-023 could not fix this and did not try. The asymmetry
+is the finding: **CodeQL scans the Python *code* (it is one of the four configured Analyze jobs),
+while nothing at all watches the Python *dependencies*.** Python is currently the only ecosystem in
+this repo with **zero** dependency governance — not weak governance, none.
+
+Creating a manifest is a real change: it pins versions that are currently floating implicitly, and it
+can affect both the HuggingFace scripts and the test harness. **That makes it its own packet, and the
+decision is Al's** — the options are to add a manifest and configure `pip`, to declare the scripts
+out of scope and record it as accepted risk, or to vendor them elsewhere.
+
+**Provenance note — the operational findings keep arriving sideways.** DARQ-020 was found while
+landing a docs-only PR; DARQ-021 while probing C3; DARQ-022 while listing CI runs during crash
+recovery; DARQ-023 and DARQ-024 while inventorying manifests for an unrelated config packet. **Five
+for five, none was found by looking for it** — which is itself the finding. Nothing in this repo
+watches for gaps in its own supervision, so every one of them has surfaced as a side effect of
+someone doing something else. That is not a sustainable detection strategy, and it is worth a packet
+of its own.
