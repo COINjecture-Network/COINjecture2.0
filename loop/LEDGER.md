@@ -6,8 +6,9 @@ Authority: `loop/LOOP_SPEC.md` §6 (Phase D writes the entry).
 | Date | Cycle | Packet | RC / DARQ | Findings closed | PR | Merge SHA | Tests before → after | Adversary |
 |---|---|---|---|---|---|---|---|---|
 | 2026-08-03 | 1 | **P-002-H** | DARQ-020 (NEW-4) | **1** — DARQ-020 closed | [#55](https://github.com/COINjecture-Network/COINjecture2.0/pull/55) | `b1aaf59b` | 982 → 982 / 0 failed / 4 ignored | `SKIPPED — CI-config hotfix; both src changes are provably syntax-only, no behaviour to adversarially verify` |
+| 2026-08-04 | 1 | **P-000 + P-000-A + P-000-B** | — (process) · registers DARQ-023, DARQ-024 | 0 — process packet | [#54](https://github.com/COINjecture-Network/COINjecture2.0/pull/54) | `28007c36` | 982 → 982 / 0 failed / 4 ignored | `SKIPPED — docs-only; no behaviour to adversarially verify` |
 
-**First entry.** Cycle 0 (P-001) was read-only. P-000 (+ P-000-A) is still in PR #54.
+Cycle 0 (P-001) was read-only, so it has no row.
 
 Per §1, the Adversary column records `CLEAN` / `MERGE-WITH-NOTES` / `BLOCK` for P-003, P-004 and
 P-005, and `SKIPPED — <one-line reason>` everywhere else.
@@ -58,6 +59,56 @@ red until P-002 lands. That red is **expected and accounted for** — it is not 
 not be re-diagnosed as one. **But it also must not become wallpaper.** If P-002 slips, a *third*
 advisory could appear and be mistaken for the two already logged here. P-002 must therefore
 re-enumerate `cargo audit` output from scratch rather than assume this list is still complete.
+
+> ⚠️ **VINDICATED, 2026-08-04 — and faster than expected.** That obligation was written as a
+> precaution. It was already necessary when written. P-023's inventory found a **third** vulnerable
+> Rust crate, `rand` 0.8.5 (GHSA-cq8v-f236-94qc / RUSTSEC-2026-0097), which `cargo audit` does **not**
+> report at all. The list above was incomplete on the day it was recorded.
+>
+> **Do not rewrite the list above.** It is accurate as what it claims to be — a record of what the
+> `Security Audit` job reported. This annotation is the correction. See `LOOP_SPEC.md` §5 "P-002 must
+> UNION both scanners" and §8 for the `rand` sizing (it is a soundness bug, not an RNG defect; no keys
+> implicated).
+
+---
+
+### P-000 + P-000-A + P-000-B — merged under the amended D12 bounded exception ⚠️ deferred red
+
+**Second application of amended D12.** Merged 2026-08-04T01:26:31Z as `28007c36` — a true merge
+commit (parents `b1aaf59b` + `7eac7915`), not a squash.
+
+| | |
+|---|---|
+| Green at merge | Lint · Test (default) · Test (adzdb) · Build (release) ×2 · Docker Build · Analyze ×4 · CodeQL |
+| **Red at merge** | **`Security Audit`** — the same two advisories, unchanged |
+
+Three packets rode in this one PR, all docs-only under `loop/`:
+
+- **P-000** — the loop scaffolding and `LOOP_SPEC.md`. **This is what ends the re-pasting problem:**
+  the spec is now on `main` and future prompts reference it by path.
+- **P-000-A** — spec v1.3: D12 amended to the bounded-exception form, GATE-1 halved, §2 measurement
+  discipline, P-021-V / P-021 / P-002-H2 registered, DARQ-022 registered, P-002 sharpened.
+- **P-000-B** — spec v1.4: P-002 amended to union both scanners, DARQ-023 and DARQ-024 registered,
+  the `rand` advisory sized, the P-023-before-P-022 ordering rule and Al's grouping principle recorded.
+
+**D12's three conditions, checked individually rather than asserted:**
+
+1. **Correctly attributed** — ✅ Docs-only under `loop/`; it changed no `Cargo.toml`, no `Cargo.lock`,
+   and no `.rs` file, so it cannot affect `cargo audit`. It inherited this red from `main` at the
+   moment it rebased onto `b1aaf59b`. **A cleaner case than #55's:** #55 at least touched CI config,
+   whereas this PR touches no code at all.
+2. **Tracked to a named packet** — ✅ P-002, itemised in the #55 entry above with advisory IDs and fix
+   versions — **now with the `rand` annotation added, because that list proved incomplete.**
+3. **Outside the current packet's scope** — ✅ a documentation packet cannot bump `quinn-proto`.
+
+**Verification performed before merge, not assumed:** the rebase onto `b1aaf59b` replayed 7/7 commits
+with zero conflicts, and `loop/` was confirmed **byte-identical** pre- and post-rebase by tree diff
+rather than by inspection. Six of the jobs listed green above had **never executed on this PR before**
+— they were all `skipping` behind a red Lint until #55 landed the toolchain pin. The hosted suite
+returned **1964 / 0 / 8**, exactly 2× the 982 / 0 / 4 baseline (tarpaulin re-runs the suite), summed
+from all 85 `test result:` lines with no truncation per §2.
+
+**Consequence:** `main` remains red on `Security Audit` until P-002 lands. Expected, logged, owned.
 
 ## Baseline for future deltas
 
