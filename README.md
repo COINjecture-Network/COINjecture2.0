@@ -314,13 +314,26 @@ graph TB
 
 ### Mathematical Parameters
 
-| Pool | Dimensionless Time (tau) | Scale Factor (D_n) | Allocation (p_n) | Economic Horizon |
-|------|------------------------|-------------------|------------------|------------------|
-| **D1 Genesis** | 0.00 | 1.000 | 56.1% | Instant settlement |
-| **D2 Coupling** | 0.20 | 0.867 | 48.6% | Short-term (days) |
-| **D3 First Harmonic** | 0.41 | 0.750 | 42.1% | Medium-term (weeks) |
+| Pool | Dimensionless Time (τ) | Scale Factor (D_n) | Normalized (D̃_n) | Economic Horizon |
+|------|------------------------|---------------------|---------------------|------------------|
+| **D1 Genesis** | 0.00 | 1.000 | 0.561 | Instant settlement |
+| **D2 Coupling** | 0.20 | 0.868 | 0.487 | Short-term (days) |
+| **D3 First Harmonic** | 0.41 | 0.748 | 0.420 | Medium-term (weeks) |
 
 **Swap Formula**: `amount_out = amount_in * (D_from / D_to)`
+
+The scale factor `D_n = e^(-η·τ_n)` governs swap ratios; the normalized
+`D̃_n = D_n / √(Σ D_k²)` satisfies `Σ D̃_n² = 1` (unit-circle conservation).
+The full 8-pool supply allocation
+`p_n = D̃_n / Σ D̃_k` — D1 ≈ 22.2%, D8 ≈ 3.2%, Σ = 1.0 — is computed in
+[`core/src/dimensional.rs::allocation_ratios()`](core/src/dimensional.rs)
+and enforced by `test_allocation_ratios` at line 388.
+
+**Allocation ratios** (fraction of reward emission per pool, all 8 tiers):
+D1 22.2% · D2 19.2% · D3 16.6% · D4 13.7% · D5 11.1% · D6 8.5% ·
+D7 5.5% · D8 3.2% · Σ = 100.0%. Computed by
+`core/src/dimensional.rs::allocation_ratios()`, enforced by
+`test_allocation_ratios`.
 
 ---
 
