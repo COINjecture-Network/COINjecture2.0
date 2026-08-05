@@ -1,7 +1,71 @@
 version: 2
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# P-023 / DARQ-023 — Dependabot coverage and throttling.
+#
+# WHY THIS LANDS BEFORE THE DARQ-022 UNBLOCK.
+# Dependabot reads this file from the DEFAULT BRANCH at run time. Landing the
+# guardrails first means the first successful run after the submodule unblock is
+# already governed. Unblock first and the accumulated backlog arrives ungoverned.
+#
+# SUPPRESSION SAFETY — verified against GitHub's documentation, not assumed.
+# The governing rule for this file is: rate-limiting ARRIVAL is fine; preventing
+# arrival re-darkens a gate that two packets were spent un-darkening.
+#
+#   1. `open-pull-requests-limit` applies to VERSION updates ONLY.
+#      "Security update pull requests are not subject to this limit and do not
+#       count toward it. There is no limit on the number of open pull requests
+#       for security updates."
+#      => No limit in this file can stop a security update from appearing.
+#
+#   2. `groups` throttles by BATCHING, never by dropping. A grouped update still
+#      arrives; it arrives as one PR instead of N. `applies-to: security-updates`
+#      is what lets a backlog wave land as one reviewable PR per root.
+#
+# WHERE TO GROUP AND WHERE NOT TO — the governing principle (ruled by Al):
+#
+#   Group where the items are individually unremarkable.
+#   Separate where each item deserves its own merge decision.
+#
+#   Grouping trades review VOLUME for review GRANULARITY. That is the right trade
+#   for a wave of npm transitive bumps, where the batch is the unit anyone would
+#   actually reason about. It is the WRONG trade when a single PR would couple
+#   unrelated subsystems: a reviewer approving a batch is not making the same
+#   decision as a reviewer approving each member of it.
+#
+#   Applied here: npm security updates ARE grouped (21 alerts, 12 packages, two
+#   roots, overwhelmingly transitive). Cargo security updates are NOT grouped —
+#   see the cargo entry below.
+#
+#   3. `ignore` DOES reach security updates — but is scoped by `update-types`:
+#      "update-types only affects version updates, not security updates.
+#       Security updates will always be created regardless of the update-types
+#       setting."
+#      => The four cargo ignores below are safe ONLY because each carries an
+#         explicit `update-types:` key.
+#
+#      ⚠️ DO NOT delete `update-types:` from an ignore rule. Without it the rule
+#         becomes a blanket ignore that WILL suppress security updates for that
+#         crate — silently, with no failing job to notice it. That is the exact
+#         failure shape of DARQ-020 and DARQ-022.
+#
+#   4. P-023 adds NO new `ignore` rules, and removes none (pre-existing, D1).
+#
+# COVERAGE GAP THIS FILE CANNOT CLOSE.
+# `scripts/` and `tests/harness/` contain 17 Python files importing third-party
+# packages (`requests`, `huggingface_hub`) with NO requirements.txt, pyproject.toml,
+# Pipfile or lockfile anywhere in the repo. With no manifest there is nothing for
+# Dependabot to parse, so no `pip` entry is possible here. Those dependencies are
+# entirely ungoverned. Config alone cannot fix it — it needs a manifest first.
+# ═══════════════════════════════════════════════════════════════════════════════
+
 updates:
   # ── Rust / Cargo dependencies ──────────────────────────────────────────────
+  # One workspace at the root: 15 members, a single Cargo.lock, 519 crate deps.
+  # `directory: /` covers every member via that lockfile — per-member entries
+  # would be redundant and would fragment the grouping.
+  # Weekly, not daily: a Rust bump here can reach consensus code, so these want
+  # a deliberate review slot rather than a trickle.
   - package-ecosystem: cargo
     directory: /
     schedule:
@@ -16,13 +80,30 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       include: scope
-    # Group all patch updates to reduce noise
     groups:
-      patch-updates:
+      # Minor + patch collapse into one PR. Majors are deliberately EXCLUDED so
+      # they arrive individually and get reviewed on their own merits.
+      cargo-version-updates:
+        applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      #
+      # NOTE: there is deliberately NO `applies-to: security-updates` group here.
+      #
+      # Cargo security updates arrive UNGROUPED — one PR per vulnerable crate.
+      # Ruled by Al, and the reasoning is the principle in the header: a cargo
+      # security group would couple a crypto-adjacent fix to a network-layer fix
+      # in a single merge decision, and it would save exactly one PR. The two
+      # currently pending are `quinn-proto` (QUIC transport) and `rand` (RNG
+      # crate, transitively). Those want separate judgement, separate rollback,
+      # and separate blame; one saved PR does not buy that away.
+      #
+      # npm is the opposite case and IS grouped — see both npm entries below.
+
+
     ignore:
-      # Pin major versions manually — breaking changes require review
+      # Pin major versions manually — breaking changes require review.
+      # `update-types` MUST remain on every rule here. See header note 3.
       - dependency-name: tokio
         update-types: ["version-update:semver-major"]
       - dependency-name: serde
@@ -32,7 +113,69 @@ updates:
       - dependency-name: redb
         update-types: ["version-update:semver-major"]
 
+  # ── npm — /web-wallet ──────────────────────────────────────────────────────
+  # NEW in P-023 (DARQ-023).
+  # npm had NO entry in this file at all, yet 21 of the 23 currently-open alerts
+  # are npm. Security updates were already reaching these roots — that is why the
+  # failing runs are named `npm_and_yarn in /web-wallet` despite npm being absent
+  # here — but VERSION updates were never configured, so routine bumps that would
+  # have prevented several of those alerts never arrived.
+  #
+  # Two roots are configured as two separate entries rather than one `directories:`
+  # list. `directories` is documented and would work, but this config has to parse
+  # correctly on the FIRST run after the unblock; a parse error there costs another
+  # blind window. Duplication is the cheaper risk.
+  - package-ecosystem: npm
+    directory: /web-wallet
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - javascript
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      web-wallet-version-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      web-wallet-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # ── npm — /web/coinjecture-evolved-main ────────────────────────────────────
+  # NEW in P-023 (DARQ-023). Same rationale as /web-wallet above.
+  - package-ecosystem: npm
+    directory: /web/coinjecture-evolved-main
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - javascript
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      evolved-main-version-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      evolved-main-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
   # ── GitHub Actions ─────────────────────────────────────────────────────────
+  # `directory: /` is correct for this ecosystem — Dependabot reads
+  # .github/workflows/ relative to the repo root. Four workflows today.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -49,9 +192,29 @@ updates:
       include: scope
     groups:
       actions-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      actions-security-updates:
+        applies-to: security-updates
         patterns: ["*"]
 
   # ── Docker base images ─────────────────────────────────────────────────────
+  # ⚠️ UNVERIFIED COVERAGE — flagged rather than assumed.
+  # The repo has `Dockerfile` and `Dockerfile.api` at the root, plus six archived
+  # files under docker/archive/. GitHub's docs state only that Dependabot will
+  # "look for a Dockerfile in the root directory" and document NO filename pattern
+  # for variants, so whether `Dockerfile.api` is picked up by `directory: /` could
+  # not be settled from documentation. It also cannot be settled empirically yet:
+  # Dependabot has never completed a run on this repo (DARQ-022), so there is no
+  # observed behaviour to read.
+  #
+  # Left as `directory: /` — unchanged from the pre-P-023 config, so this packet
+  # neither widens nor narrows Docker coverage. Confirm against the first
+  # successful post-DARQ-022 run; if Dockerfile.api is not covered, that is its
+  # own packet.
+  #
+  # docker/archive/ is deliberately NOT configured: archived artifacts, not
+  # runtime images. Adding them would generate noise, not signal.
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -66,3 +229,10 @@ updates:
     commit-message:
       prefix: "chore(docker)"
       include: scope
+    groups:
+      docker-version-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      docker-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
