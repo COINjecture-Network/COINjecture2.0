@@ -80,7 +80,7 @@ graph TB
 
         VERIFY["3 Blockchain Verifies<br/>━━━━━━━━━━━━━━━<br/>Polynomial-time verification<br/>Work score calculation<br/>Solution quality check"]
 
-        PAYOUT["4 Autonomous Payout<br/>━━━━━━━━━━━━━━━<br/>Bounty released automatically<br/>No manual claim needed<br/>Atomic in one block"]
+        PAYOUT["4 Autonomous Payout<br/>━━━━━━━━━━━━━━━<br/>Bounty released automatically<br/>No manual claim needed<br/>Settled within one block"]
 
         SUBMIT -->|"On-chain<br/>via RPC"| MINE
         MINE -->|"Submit<br/>solution tx"| VERIFY
@@ -262,7 +262,7 @@ let tx = Transaction::Marketplace(
 // Solve the problem (indices of numbers that sum to target)
 let solution = Solution::SubsetSum(vec![0, 1, 6]); // indices 0,1,6 → [15, 22, 16] = 53 ✓
 
-// Submit solution - BOUNTY PAID AUTOMATICALLY IN THE SAME BLOCK!
+// Submit solution — settlement is composed in one block-apply call.
 let tx = Transaction::Marketplace(
     MarketplaceTransaction::new_solution_submission(
         problem_id,
@@ -274,12 +274,19 @@ let tx = Transaction::Marketplace(
     )
 );
 
-// On successful submission:
-// 1. Solution verified (polynomial time)
-// 2. Work score calculated
-// 3. Bounty released from escrow
-// 4. Solver credited automatically
-// ALL ATOMIC IN ONE BLOCK - TRUE WEB4 AUTONOMY!
+// On successful block apply, `node/src/service/block_processing.rs:1333-1370`
+// sequences four steps along one execution path:
+//   1. Solution verified (polynomial time)         — core/src/problem.rs
+//   2. Work score calculated                       — consensus/src/work_score.rs
+//   3. Bounty released from escrow                 — state/src/marketplace.rs::claim_bounty
+//   4. Solver credited                             — state/src/accounts.rs::set_balance
+//
+// Each step is durable per-redb-commit; together they are NOT a single
+// storage commit. A SubmitSolution lands ~5 sequential redb commits
+// (fee, problem-update, escrow-release, solver-credit, nonce). Cross-layer
+// consistency on crash or partition is enforced by chain consensus and
+// reorg recovery — see `docs/FORKING_AND_REORG.md`. Mainnet-grade
+// single-block-write_txn composition is on the roadmap.
 ```
 
 ---
